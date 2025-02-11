@@ -11,6 +11,9 @@ def transform(input):
 
     try:
         # Initialize counters
+        if 'response' in input:
+            input = input['response']
+            
         mfa_enrolled = [obj for obj in input if hasattr(obj, 'type') and getattr(obj, 'type') == "MFA_ENROLL"]
         mfa_info = {
             "isMFAEnforcedForUsers": True if mfa_enrolled is not None and len(mfa_enrolled) > 0 else False
