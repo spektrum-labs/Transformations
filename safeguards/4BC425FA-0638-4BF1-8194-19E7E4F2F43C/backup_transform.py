@@ -23,6 +23,8 @@ def transform(input):
             raise ValueError("JSON input must be an object (dictionary).")
 
         # Extract response safely
+        input = input.get("response",input)
+
         response = input.get("DescribeDBInstanceAutomatedBackupsResponse", {})
         result = response.get("DescribeDBInstanceAutomatedBackupsResult", {})
         db_instances = result.get("DBInstanceAutomatedBackups", [])
