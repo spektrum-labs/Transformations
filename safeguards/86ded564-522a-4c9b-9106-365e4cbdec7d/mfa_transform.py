@@ -14,7 +14,7 @@ def transform(input):
         if 'response' in input:
             input = input['response']
             
-        mfa_enrolled = [obj for obj in input if 'type' in obj and obj['type'] == "MFA_ENROLL"]
+        mfa_enrolled = [obj for obj in input if 'type' in obj and str(obj['type']).lower() == "mfa_enroll" and 'status' in obj and str(obj['status']).lower() == "active"]
         mfa_info = {
             "isMFAEnforcedForUsers": True if mfa_enrolled is not None and len(mfa_enrolled) > 0 else False
         }
