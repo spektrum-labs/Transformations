@@ -29,11 +29,10 @@ def transform(input):
         result = response.get("DescribeDBInstanceAutomatedBackupsResult", {})
         db_instances = result.get("DBInstanceAutomatedBackups", [])
 
-        # Ensure the extracted data is a list
-        if not isinstance(db_instances, list):
-            raise TypeError("Expected 'DBInstanceAutomatedBackups' to be a list.")
-
         # Count total backups
+        if isinstance(db_instances, dict):
+            db_instances = [db_instances]
+            
         total_db_backups = len(db_instances)
 
         # Construct the output
