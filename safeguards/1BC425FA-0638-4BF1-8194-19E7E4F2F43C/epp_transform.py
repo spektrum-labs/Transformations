@@ -25,6 +25,7 @@ def evaluate_safeguards_with_coverage_scores(endpoints_response):
 
     safeguard_counters = {
         "Endpoint Protection": 0,
+        "Endpoint Security": 0,
         "Server Protection": 0,
         "MDR": 0,
         "Network Protection": 0,
@@ -56,6 +57,10 @@ def evaluate_safeguards_with_coverage_scores(endpoints_response):
         if endpoint_type == "computer" and "endpointProtection" in assigned_products:
             safeguard_counters["Endpoint Protection"] += 1
 
+        # 1.1 Endpoint Security
+        if endpoint_type == "computer" and "endpointProtection" in assigned_products:
+            safeguard_counters["Endpoint Security"] += 1
+            
         # 2. Server Protection
         if endpoint_type == "server" and "endpointProtection" in assigned_products:
             safeguard_counters["Server Protection"] += 1
@@ -100,6 +105,11 @@ def evaluate_safeguards_with_coverage_scores(endpoints_response):
     # Calculate scores
     coverage_scores["Endpoint Protection"] = (
         (safeguard_counters["Endpoint Protection"] / total_computers) * 100
+        if total_computers > 0 else 0
+    )
+
+    coverage_scores["Endpoint Security"] = (
+        (safeguard_counters["Endpoint Security"] / total_computers) * 100
         if total_computers > 0 else 0
     )
 
