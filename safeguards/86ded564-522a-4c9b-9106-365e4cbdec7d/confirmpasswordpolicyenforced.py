@@ -17,8 +17,8 @@ def transform(input):
         #Add checks for password complexity, expiration, and history
         password_policy_enforced = {}    
         password_policy_info = {
-            "confirmPasswordPolicyEnabled": True if password_policy_enforced is not None else False
+            "confirmPasswordPolicyEnforced": True if password_policy_enforced is not None else False
         }
         return password_policy_info
     except Exception as e:
-        return {"confirmPasswordPolicyEnabled": False, "error": str(e)}
+        return {"confirmPasswordPolicyEnforced": False, "error": str(e)}
