@@ -20,8 +20,11 @@ def transform(input):
         failed = [obj for obj in input if 'Compliance' in obj and 'Status' in obj['Compliance'] and str(obj['Compliance']['Status']).lower() == "failed"]
         
         total = len(passed) + len(failed)
+        compliancePercentage = (len(passed) / total) * 100 if total > 0 else 0
+        
         compliance_percentage = {
-            "compliancePercentage": (len(passed) / total) * 100 if total > 0 else 0,
+            "compliancePercentage": compliancePercentage,
+            "CIScompliancePercentage": compliancePercentage,
             "totalPassed": len(passed),
             "totalFailed": len(failed),
             "totalFindings": total,
@@ -30,5 +33,5 @@ def transform(input):
         }
         return compliance_percentage
     except Exception as e:
-        return {"compliancePercentage": 0, "error": str(e)}
+        return {"compliancePercentage": 0,"CIScompliancePercentage": 0, "error": str(e)}
         
