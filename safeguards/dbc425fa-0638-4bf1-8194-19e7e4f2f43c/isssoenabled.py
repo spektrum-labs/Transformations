@@ -19,9 +19,9 @@ def transform(input):
         if 'idpInfo' in input:
             input = input['idpInfo']
             
-        sso_enabled = [obj for obj in input if '@name' in obj and str(obj['@name']).lower() == "enableSSO"]
+        sso_enabled = [obj for obj in input if '@name' in obj and str(obj['@name']).lower() == "enablesso"]
         if len(sso_enabled) > 0 and '@value' in sso_enabled[0]:            
-            isSSOEnabled = sso_enabled[0]['@value']
+            isSSOEnabled = bool(str(sso_enabled[0]['@value']))
 
         sso_info = {
             "isSSOEnabled": isSSOEnabled
