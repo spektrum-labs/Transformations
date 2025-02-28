@@ -18,11 +18,13 @@ def transform(input):
 
         passed = [obj for obj in input if 'Compliance' in obj and 'Status' in obj['Compliance'] and str(obj['Compliance']['Status']).lower() == "passed"]
         failed = [obj for obj in input if 'Compliance' in obj and 'Status' in obj['Compliance'] and str(obj['Compliance']['Status']).lower() == "failed"]
+        
+        total = len(passed) + len(failed)
         compliance_percentage = {
-            "compliancePercentage": len(passed) / (len(passed) + len(failed)),
+            "compliancePercentage": (len(passed) / total) * 100 if total > 0 else 0,
             "totalPassed": len(passed),
             "totalFailed": len(failed),
-            "totalFindings": len(input),
+            "totalFindings": total,
             "passedFindings": passed,
             "failedFindings": failed
         }
