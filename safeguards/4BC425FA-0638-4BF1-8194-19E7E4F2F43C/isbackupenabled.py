@@ -24,25 +24,60 @@ def transform(input):
 
         # Extract response safely
         input = input.get("response",input)
+        input = input.get("result",input)
 
-        response = input.get("DescribeDBInstanceAutomatedBackupsResponse", {})
+        if 'dbBackups' in input:
+            dbBackups = input.get("dbBackups",input)
+        
+        if 'dbManualSnapshots' in input:
+            dbManualSnapshots = input.get("dbManualSnapshots",input)
+        
+        if 'volumeSnapshots' in input:
+            volumeSnapshots = input.get("volumeSnapshots",input)
+            
+        #Check for Automated DB Backups
+        response = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
         result = response.get("DescribeDBInstanceAutomatedBackupsResult", {})
-        db_instances = result.get("DBInstanceAutomatedBackups", [])
+        automated_backups = result.get("DBInstanceAutomatedBackups", [])
 
         # Count total backups
-        if isinstance(db_instances, dict):
-            db_instances = [db_instances]
+        if isinstance(automated_backups, dict):
+            automated_backups = [automated_backups]
             
-        total_db_backups = len(db_instances)
+        total_db_backups = len(automated_backups)
 
+        #Check for Manual DB Backups
+        response = dbManualSnapshots.get("DescribeDBSnapshotsResponse", {})
+        result = response.get("DescribeDBSnapshotsResult", {})
+        manual_backups = result.get("DBSnapshots", {})
+        manual_backups = manual_backups.get("DBSnapshot", [])
+        
+        # Count total backups
+        if isinstance(manual_backups, dict):
+            manual_backups = [manual_backups]
+            
+        total_db_backups += len(manual_backups)
+
+        #Check for Volume Snapshots
+        response = volumeSnapshots.get("DescribeSnapshotsResponse", {})
+        result = response.get("DescribeSnapshotsResult", {})
+        volume_snapshots = result.get("Snapshots", {})
+
+        # Count total volume backups
+        if isinstance(volume_snapshots, dict):
+            volume_snapshots = [volume_snapshots]
+            
+        volume_backups = len(volume_snapshots)
+        
         # Construct the output
-        db_info = {
-            "DBInstancesWithBackup": db_instances,
-            "DBBackups": total_db_backups,
-            "isBackupEnabled": total_db_backups > 0
+        backup_info = {
+            "automatedBackups": automated_backups,
+            "manualBackups": manual_backups,
+            "volumeBackups": volume_backups,
+            "isBackupEnabled": total_db_backups > 0 or volume_backups > 0
         }
 
-        return db_info
+        return backup_info
 
     except json.JSONDecodeError:
         return {"isBackupEnabled": False, "error": "Invalid JSON format."}
