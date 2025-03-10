@@ -18,9 +18,9 @@ def transform(input):
 
         license_purchased = input.get('licensePurchased', default_value)
         license_info = {
-            "confirmLicensePurchased": license_purchased
+            "confirmedLicensePurchased": license_purchased
         }
         return license_info
     except Exception as e:
-        return {"confirmLicensePurchased": False, "error": str(e)}
+        return {"confirmedLicensePurchased": False, "error": str(e)}
         
