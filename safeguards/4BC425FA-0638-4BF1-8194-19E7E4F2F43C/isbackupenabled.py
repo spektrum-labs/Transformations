@@ -71,9 +71,6 @@ def transform(input):
         
         # Construct the output
         backup_info = {
-            "automatedBackups": automated_backups,
-            "manualBackups": manual_backups,
-            "volumeBackups": volume_backups,
             "isBackupEnabled": total_db_backups > 0 or volume_backups > 0
         }
 
