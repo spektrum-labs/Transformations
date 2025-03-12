@@ -37,8 +37,6 @@ def transform(input):
 
         # Construct the output
         db_info = {
-            "DBInstancesWithBackup": db_instances,
-            "DBBackups": total_db_backups,
             "isBackupEnabled": total_db_backups > 0
         }
 
