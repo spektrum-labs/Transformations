@@ -27,9 +27,7 @@ def transform(input):
             "CIScompliancePercentage": compliancePercentage,
             "totalPassed": len(passed),
             "totalFailed": len(failed),
-            "totalFindings": total,
-            "passedFindings": passed,
-            "failedFindings": failed
+            "totalFindings": total
         }
         return compliance_percentage
     except Exception as e:
