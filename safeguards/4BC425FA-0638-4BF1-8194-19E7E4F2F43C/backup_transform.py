@@ -1,50 +1,60 @@
+# isbackupenabled.py
+
 import json
 
 def transform(input):
     """
-    Evaluates the backup status of DB instances.
-
-    Parameters:
-        input (str | dict): The JSON data containing DB Backup information. 
-                            If a string is provided, it will be parsed.
-
-    Returns:
-        dict: A dictionary summarizing the DB backup information.
+    Evaluates whether any backups exist across RDS automated, RDS manual, or EBS snapshots.
+    Returns: {"isBackupEnabled": bool}
     """
-
     try:
-        # Ensure input is a dictionary by parsing if necessary
-        if isinstance(input, str):
-            input = json.loads(input)  # Convert JSON string to dictionary
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))  # Decode bytes then parse JSON
-        
-        if not isinstance(input, dict):
-            raise ValueError("JSON input must be an object (dictionary).")
+        # Parse JSON if needed
+        data = _parse_input(input)
 
-        # Extract response safely
-        input = input.get("response",input)
+        # Drill down past response/result wrappers if present
+        data = data.get("response", data).get("result", data)
 
-        response = input.get("DescribeDBInstanceAutomatedBackupsResponse", {})
-        result = response.get("DescribeDBInstanceAutomatedBackupsResult", {})
-        db_instances = result.get("DBInstanceAutomatedBackups", [])
+        # Extract each backup category
+        dbBackups          = data.get("dbBackups", {})
+        dbManualSnapshots  = data.get("dbManualSnapshots", {})
+        volumeSnapshots    = data.get("volumeSnapshots", {})
 
-        # Count total backups
-        if isinstance(db_instances, dict):
-            db_instances = [db_instances]
-            
-        total_db_backups = len(db_instances)
+        # Automated RDS
+        auto_resp   = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
+        auto_res    = auto_resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
+        auto_group  = auto_res.get("DBInstanceAutomatedBackups", [])
+        if isinstance(auto_group, dict):
+            auto_group = [auto_group]
+        automated   = auto_group
 
-        # Construct the output
-        db_info = {
-            "DBInstancesWithBackup": db_instances,
-            "DBBackups": total_db_backups,
-            "isBackupEnabled": total_db_backups > 0
-        }
+        # Manual RDS
+        man_resp    = dbManualSnapshots.get("DescribeDBSnapshotsResponse", {})
+        man_res     = man_resp.get("DescribeDBSnapshotsResult", {})
+        man_group   = man_res.get("DBSnapshots", {}).get("DBSnapshot", [])
+        if isinstance(man_group, dict):
+            man_group = [man_group]
+        manual      = man_group
 
-        return db_info
+        # EBS snapshots
+        ebs_resp    = volumeSnapshots.get("DescribeSnapshotsResponse", {})
+        ebs_group   = ebs_resp.get("snapshotSet", {}).get("item", [])
+        if isinstance(ebs_group, dict):
+            ebs_group = [ebs_group]
+        ebs         = ebs_group
+
+        return {"isBackupEnabled": bool(automated or manual or ebs)}
 
     except json.JSONDecodeError:
-        return {"isBackupEnabled": False, "error": "Invalid JSON format."}
+        return {"isBackupEnabled": False, "error": "Invalid JSON"}
     except Exception as e:
         return {"isBackupEnabled": False, "error": str(e)}
+
+
+def _parse_input(input):
+    if isinstance(input, str):
+        return json.loads(input)
+    if isinstance(input, bytes):
+        return json.loads(input.decode("utf-8"))
+    if isinstance(input, dict):
+        return input
+    raise ValueError("Input must be JSON string, bytes, or dict")
