@@ -8,6 +8,15 @@ def transform(input):
     Returns: {"isBackupEnabledForCriticalSystems": bool}
     """
     try:
+        def _parse_input(input):
+            if isinstance(input, str):
+                return json.loads(input)
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
+    
         data = _parse_input(input).get("response", {}).get("result", _parse_input(input))
 
         dbBackups         = data.get("dbBackups", {})
@@ -41,13 +50,3 @@ def transform(input):
         return {"isBackupEnabledForCriticalSystems": False, "error": "Invalid JSON"}
     except Exception as e:
         return {"isBackupEnabledForCriticalSystems": False, "error": str(e)}
-
-
-def _parse_input(input):
-    if isinstance(input, str):
-        return json.loads(input)
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")
