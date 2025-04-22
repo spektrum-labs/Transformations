@@ -155,7 +155,20 @@ def transform(endpoints_response):
     # Round scores to nearest integer
     for key in coverage_scores:
         coverage_scores[key] = round(coverage_scores[key])
+    
+    #Endpoint Protection
+    coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0
+    coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0
+    coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
+    coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
 
+    #Endpoint Security
+    coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
+    
+    #MDR
+    coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0    
+    coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
     coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
-
+    coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
+    
     return coverage_scores
