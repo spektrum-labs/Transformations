@@ -7,6 +7,10 @@ def transform(input):
     Checks that all backups (RDS automated, RDS manual, EBS) are encrypted at rest.
     Returns: {"isBackupEncrypted": bool}
     """
+    all_enc = True
+    auto_enc=True
+    man_enc=True
+    ebs_enc=True
     try:
         data              = _parse_input(input).get("response", {}).get("result", _parse_input(input))
         dbBackups         = data.get("dbBackups", {})
@@ -40,23 +44,24 @@ def transform(input):
         ebs_list   = ebs_group if isinstance(ebs_group, list) else [ebs_group] if isinstance(ebs_group, dict) else []
 
         # Check encryption flags
-        all_enc = True
         for item in auto_list:
             if str(item.get("Encrypted", "")).lower() != "true":
-                all_enc = False
+                auto_enc = False
         for item in manual_list:
             if str(item.get("Encrypted", "")).lower() != "true":
-                all_enc = False
+                man_enc = False
         for item in ebs_list:
             if str(item.get("encrypted", "")).lower() != "true":
-                all_enc = False
+                ebs_enc = False
 
-        return {"isBackupEncrypted": all_enc}
+        all_enc = auto_enc and man_enc and ebs_enc
+        
+        return {"isBackupEncrypted": all_enc, "isAutoBackupEncrypted": auto_enc, "isManualBackupEncrypted": man_enc, "isEbsBackupEncrypted": ebs_enc}
 
     except json.JSONDecodeError:
-        return {"isBackupEncrypted": False, "error": "Invalid JSON"}
+        return {"isBackupEncrypted": False, "isAutoBackupEncrypted": auto_enc, "isManualBackupEncrypted": man_enc, "isEbsBackupEncrypted": ebs_enc, "error": "Invalid JSON"}
     except Exception as e:
-        return {"isBackupEncrypted": False, "error": str(e)}
+        return {"isBackupEncrypted": False, "isAutoBackupEncrypted": auto_enc, "isManualBackupEncrypted": man_enc, "isEbsBackupEncrypted": ebs_enc, "error": str(e)}
 
 
 def _parse_input(input):
