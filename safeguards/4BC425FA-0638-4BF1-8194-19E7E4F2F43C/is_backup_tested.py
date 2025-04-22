@@ -8,6 +8,15 @@ def transform(input):
     Returns: {"isBackupTested": bool}
     """
     try:
+        def _parse_input(input):
+            if isinstance(input, str):
+                return json.loads(input)
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
+    
         data = _parse_input(input).get("response", {}).get("result", _parse_input(input))
 
         # No restore/test records in this payload → always False
@@ -18,13 +27,3 @@ def transform(input):
         return {"isBackupTested": False, "error": "Invalid JSON"}
     except Exception as e:
         return {"isBackupTested": False, "error": str(e)}
-
-
-def _parse_input(input):
-    if isinstance(input, str):
-        return json.loads(input)
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")
