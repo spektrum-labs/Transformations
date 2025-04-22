@@ -30,11 +30,7 @@ def transform(input):
             retention = int(entry.get("BackupRetentionPeriod", 0))
         scheduled_auto = retention > 0
 
-        # Manual & EBS have no schedule metadata → assume False
-        scheduled_manual = False
-        scheduled_ebs    = False
-
-        return {"isBackupTypesScheduled": scheduled_auto and scheduled_manual and scheduled_ebs}
+        return {"isBackupTypesScheduled": scheduled_auto}
 
     except json.JSONDecodeError:
         return {"isBackupTypesScheduled": False, "error": "Invalid JSON"}
