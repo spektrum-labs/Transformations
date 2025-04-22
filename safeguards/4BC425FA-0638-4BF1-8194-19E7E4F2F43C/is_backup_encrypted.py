@@ -8,6 +8,15 @@ def transform(input):
     Returns: {"isBackupEncrypted": bool}
     """
     try:
+        def _parse_input(input):
+            if isinstance(input, str):
+                return json.loads(input)
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
+    
         data              = _parse_input(input).get("response", {}).get("result", _parse_input(input))
         dbBackups         = data.get("dbBackups", {})
         dbManualSnapshots = data.get("dbManualSnapshots", {})
@@ -57,13 +66,3 @@ def transform(input):
         return {"isBackupEncrypted": False, "error": "Invalid JSON"}
     except Exception as e:
         return {"isBackupEncrypted": False, "error": str(e)}
-
-
-def _parse_input(input):
-    if isinstance(input, str):
-        return json.loads(input)
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")
