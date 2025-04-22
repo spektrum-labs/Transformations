@@ -41,3 +41,10 @@ def transform(input_json):
     }
     return transformed_data
 ```
+
+# Testing locally
+
+The local_tester.py was created to easily download a raw response and then use the transformationLogic URL to run a raw response through a transformer.  This can be used locally with Python by downloading the raw response and locating the URL (or file location) of the transformer in question, then by running:
+
+```python
+python local_tester.py <url or file path of transfomrer> <file path to raw response>
