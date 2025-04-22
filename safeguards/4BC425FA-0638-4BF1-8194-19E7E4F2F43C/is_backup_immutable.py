@@ -20,6 +20,19 @@ def transform(input):
       {"isBackupImmutable": False} otherwise (or on error)
     """
     try:
+        def _parse_input(input):
+            """
+            Normalize input to a Python dict.
+            Accepts JSON string, bytes, or dict.
+            """
+            if isinstance(input, dict):
+                return input
+            if isinstance(input, str):
+                return json.loads(input)
+            if isinstance(input, (bytes, bytearray)):
+                return json.loads(input.decode("utf-8"))
+            raise ValueError("Input must be a dict, JSON string, or bytes")
+    
         data = _parse_input(input)
         # Grab the lock configuration block
         lock_conf = data.get("BackupVaultLockConfiguration", {})
@@ -31,15 +44,3 @@ def transform(input):
         return {"isBackupImmutable": False, "error": "Invalid JSON"}
     except Exception as e:
         return {"isBackupImmutable": False, "error": str(e)}
-def _parse_input(input):
-    """
-    Normalize input to a Python dict.
-    Accepts JSON string, bytes, or dict.
-    """
-    if isinstance(input, dict):
-        return input
-    if isinstance(input, str):
-        return json.loads(input)
-    if isinstance(input, (bytes, bytearray)):
-        return json.loads(input.decode("utf-8"))
-    raise ValueError("Input must be a dict, JSON string, or bytes")

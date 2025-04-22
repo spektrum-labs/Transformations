@@ -12,6 +12,15 @@ def transform(input):
     man_enc=True
     ebs_enc=True
     try:
+        def _parse_input(input):
+            if isinstance(input, str):
+                return json.loads(input)
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
+
         data              = _parse_input(input).get("response", {}).get("result", _parse_input(input))
         dbBackups         = data.get("dbBackups", {})
         dbManualSnapshots = data.get("dbManualSnapshots", {})
@@ -62,13 +71,3 @@ def transform(input):
         return {"isBackupEncrypted": False, "isAutoBackupEncrypted": auto_enc, "isManualBackupEncrypted": man_enc, "isEbsBackupEncrypted": ebs_enc, "error": "Invalid JSON"}
     except Exception as e:
         return {"isBackupEncrypted": False, "isAutoBackupEncrypted": auto_enc, "isManualBackupEncrypted": man_enc, "isEbsBackupEncrypted": ebs_enc, "error": str(e)}
-
-
-def _parse_input(input):
-    if isinstance(input, str):
-        return json.loads(input)
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")
