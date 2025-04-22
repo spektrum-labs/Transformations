@@ -15,9 +15,9 @@ def transform(input):
             input = input['response']
             
         audit_logging_info = {  
-            "isAuditLoggingEnabled": True if input is not None else False
+            "isMFALoggingEnabled": True if input is not None else False
         }
         return audit_logging_info
     except Exception as e:
-        return {"isAuditLoggingEnabled": False, "error": str(e)}
+        return {"isMFALoggingEnabled": False, "error": str(e)}
         
