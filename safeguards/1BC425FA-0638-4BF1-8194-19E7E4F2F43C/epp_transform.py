@@ -11,6 +11,7 @@ def transform(endpoints_response):
     """
 
     # Initialize counters
+    isEPPMisconfigured = endpoints_response.get("isEPPMisconfigured", True)
     total_endpoints = len(endpoints_response.get("items", []))
     total_computers = 0
     total_servers = 0
@@ -170,5 +171,7 @@ def transform(endpoints_response):
     coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
     coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
     coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
+    
+    coverage_scores["isEPPMisconfigured"] = isEPPMisconfigured
     
     return coverage_scores
