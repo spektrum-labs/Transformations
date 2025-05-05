@@ -159,6 +159,7 @@ def transform(endpoints_response):
     
     #Endpoint Protection
     coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0
+    coverage_scores["isEPPDeployed"] = coverage_scores["Endpoint Protection"] > 0
     coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0
     coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
     coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
