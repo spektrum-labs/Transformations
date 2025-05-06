@@ -44,12 +44,21 @@ def transform(input):
         # Manual
         man_resp   = dbManualSnapshots.get("DescribeDBSnapshotsResponse", {})
         man_res    = man_resp.get("DescribeDBSnapshotsResult", {})
-        man_group  = man_res.get("DBSnapshots", {}).get("DBSnapshot", [])
+        man_group  = man_res.get("DBSnapshots", {})
+        #Check for "None"
+        if isinstance(man_group, dict):
+            man_group = man_group.get("DBSnapshot", [])
+            
         manual_list= man_group if isinstance(man_group, list) else [man_group] if isinstance(man_group, dict) else []
 
         # EBS
         ebs_resp   = volumeSnapshots.get("DescribeSnapshotsResponse", {})
-        ebs_group  = ebs_resp.get("snapshotSet", {}).get("item", [])
+        ebs_group  = ebs_resp.get("snapshotSet", {})
+        
+        #Check for "None"
+        if isinstance(ebs_group, dict):
+            ebs_group = ebs_group.get("item", [])
+
         ebs_list   = ebs_group if isinstance(ebs_group, list) else [ebs_group] if isinstance(ebs_group, dict) else []
 
         # Check encryption flags
