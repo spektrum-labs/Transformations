@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 def transform(input):
     """
@@ -23,10 +24,18 @@ def transform(input):
             raise ValueError("JSON input must be an object (dictionary).")
 
         # Extract response safely
-        saml_providers = input.get("SAMLProviders", [])
+        saml_providers = input.get("ListSAMLProvidersResponse", []).get("ListSAMLProvidersResult", {}).get("SAMLProviderList", []).get("member", [])
         
         # Construct the output
-        is_saml_enforced = len(saml_providers) > 0
+        is_saml_enforced = False
+        for provider in saml_providers:
+            validUntil = provider.get("ValidUntil", "")
+            if validUntil != "":
+                # Convert ValidUntil to datetime and compare with today
+                valid_until_date = datetime.strptime(validUntil, "%Y-%m-%dT%H:%M:%SZ")
+                if valid_until_date > datetime.utcnow():
+                    is_saml_enforced = True
+                    break
 
         return { "isSAMLEnforced": is_saml_enforced }
 
