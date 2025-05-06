@@ -8,6 +8,14 @@ def transform(input):
     Returns: {"isBackupEnabled": bool}
     """
     try:
+        def _parse_input(input):
+            if isinstance(input, str):
+                return json.loads(input)
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
         # Parse JSON if needed
         data = _parse_input(input)
 
@@ -49,12 +57,3 @@ def transform(input):
     except Exception as e:
         return {"isBackupEnabled": False, "error": str(e)}
 
-
-def _parse_input(input):
-    if isinstance(input, str):
-        return json.loads(input)
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")

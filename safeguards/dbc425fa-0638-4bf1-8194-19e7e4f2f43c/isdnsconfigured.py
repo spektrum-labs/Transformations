@@ -1,3 +1,6 @@
+import json
+import ast
+
 def transform(input):
     """
     Evaluates if DMARC, DKIM and SPF records are set up properly
@@ -14,17 +17,43 @@ def transform(input):
     is_spf_configured = False
     try:
         # Initialize counters
+        def _parse_input(input):
+            if isinstance(input, str):
+                # First try to parse as literal Python string representation
+                try:
+                    # Use ast.literal_eval to safely parse Python literal
+                    parsed = ast.literal_eval(input)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+                
+                # If that fails, try to parse as JSON
+                try:
+                    # Replace single quotes with double quotes for JSON
+                    input = input.replace("'", '"')
+                    return json.loads(input)
+                except:
+                    raise ValueError("Input string is neither valid Python literal nor JSON")
+                    
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
+        
+        input = _parse_input(input)
+        
         if 'response' in input:
-            input = input['response']
+            input = _parse_input(input['response'])
+        if 'result' in input:
+            input = _parse_input(input['result'])
 
-        if 'dmarc' in input:
-            is_dmarc_configured = input['dmarc']
+        is_dmarc_configured = True if input.get('DMARC',False) else False
             
-        if 'dkim' in input:
-            is_dkim_configured = input['dkim']
+        is_dkim_configured = True if input.get('DKIM',False) else False
             
-        if 'spf' in input:
-            is_spf_configured = input['spf']
+        is_spf_configured = True if input.get('SPF',False) else False
             
         dns_info = {
             "isDMARCConfigured": is_dmarc_configured,
@@ -34,5 +63,6 @@ def transform(input):
         }
         return dns_info
     except Exception as e:
+        print(f"Error occurred: {str(e)}")
         return {"isDNSConfigured": False, "isDMARCConfigured": is_dmarc_configured,"isDKIMConfigured": is_dkim_configured,"isSPFConfigured": is_spf_configured,"error": str(e)}
         
