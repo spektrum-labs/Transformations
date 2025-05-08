@@ -12,7 +12,11 @@ def transform(input):
 
         for item in data:
             if item.get('status').lower() == 'active':
-                authTypes.append(item.get('factorType'))
+                if item.get('factorType').lower() != 'sms':
+                    if item.get('factorType').lower() == 'token:software:totp':
+                        authTypes.append('TOTP')
+                    else:
+                        authTypes.append(item.get('factorType'))
 
         return { "authTypesAllowed": authTypes }
 
