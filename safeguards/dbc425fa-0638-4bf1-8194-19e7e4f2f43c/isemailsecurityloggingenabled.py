@@ -16,11 +16,11 @@ def transform(input):
         
         default_value = True if input is not None else False
 
-        email_security_logging_enabled = input.get('emailSecurityLoggingEnabled', default_value)
+        email_security_logging_enabled = input.get('isEmailSecurityLoggingEnabled', default_value)
         email_security_logging_info = {
-            "emailSecurityLoggingEnabled": email_security_logging_enabled
+            "isEmailSecurityLoggingEnabled": email_security_logging_enabled
         }
         return email_security_logging_info
     except Exception as e:
-        return {"emailSecurityLoggingEnabled": False, "error": str(e)}
+        return {"isEmailSecurityLoggingEnabled": False, "error": str(e)}
         
