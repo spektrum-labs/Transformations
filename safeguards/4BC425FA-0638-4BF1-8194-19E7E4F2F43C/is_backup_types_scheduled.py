@@ -24,10 +24,18 @@ def transform(input):
         resp        = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
         result      = resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
         container   = result.get("DBInstanceAutomatedBackups", {})
+        backup_info = container.get("DBInstanceAutomatedBackup", {})
         retention   = 0
-        if isinstance(container, dict) and "DBInstanceAutomatedBackup" in container:
-            entry = container["DBInstanceAutomatedBackup"]
-            retention = int(entry.get("BackupRetentionPeriod", 0))
+        
+        if isinstance(backup_info, list):
+            for entry in backup_info:
+                retention = int(entry.get("BackupRetentionPeriod", 0))
+                if retention == 0:
+                    scheduled_auto = False
+                    break
+        else:
+            retention = int(backup_info.get("BackupRetentionPeriod", 0))
+        
         scheduled_auto = retention > 0
 
         return {"isBackupTypesScheduled": scheduled_auto}
