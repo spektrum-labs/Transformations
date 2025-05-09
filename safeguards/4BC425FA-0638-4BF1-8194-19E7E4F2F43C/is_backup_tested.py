@@ -17,11 +17,21 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
     
-        data = _parse_input(input).get("response", {}).get("result", _parse_input(input))
+        # Get the response from the input
+        response = _parse_input(input)
+        result = response.get("result",response)
+        resource_members = result.get("apiResponse", result).get("LookupEventsResponse", {}).get("LookupEventsResult", {}).get("Events", {}).get("member", {}).get("Resources", {}).get("member", [])
 
-        # No restore/test records in this payload → always False
-        tested = bool(data.get("restoreJobs", []))
-        return {"isBackupTested": tested}
+        # Check if any event is a DBInstance restore operation
+        is_backup_tested = False
+        for resource_member in resource_members:
+            resource_type = resource_member.get("ResourceType", "")
+            if "dbinstance" in resource_type.lower():
+                # Check if the event has values or items
+                is_backup_tested = True
+                break
+        
+        return {"isBackupTested": is_backup_tested}
 
     except json.JSONDecodeError:
         return {"isBackupTested": False, "error": "Invalid JSON"}
