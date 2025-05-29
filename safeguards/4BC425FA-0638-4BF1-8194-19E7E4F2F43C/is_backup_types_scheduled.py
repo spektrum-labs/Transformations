@@ -17,7 +17,7 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
     
-        data = _parse_input(input).get("response", {}).get("result", _parse_input(input))
+        data = _parse_input(input).get("response", _parse_input(input)).get("result", _parse_input(input))
 
         # Automated RDS: scheduled if BackupRetentionPeriod > 0
         dbBackups   = data.get("dbBackups", {})
