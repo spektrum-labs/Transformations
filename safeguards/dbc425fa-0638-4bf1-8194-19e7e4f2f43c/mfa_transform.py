@@ -13,7 +13,9 @@ def transform(input):
         # Initialize counters
         if 'response' in input:
             input = input['response']
-        
+        if 'result' in input:
+            input = input['result']
+            
         isMFAEnforcedForUsers = False
         mfa_info = {
             "totalUsers": 0,
