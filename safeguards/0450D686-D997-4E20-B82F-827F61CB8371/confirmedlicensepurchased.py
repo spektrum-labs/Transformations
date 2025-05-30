@@ -16,6 +16,9 @@ def transform(input):
         
         default_value = True if input is not None else False
 
+        if 'errors' in input:
+            default_value = False
+            
         license_purchased = input.get('licensePurchased', default_value)
         license_info = {
             "confirmedLicensePurchased": license_purchased
