@@ -1,9 +1,9 @@
 def transform(input):
     """
-    Evaluates if the license has been purchased for the given Firewall
+    Evaluates if the license has been purchased for the given IDP
 
     Parameters:
-        input (dict): The JSON data containing Firewall information.
+        input (dict): The JSON data containing IDP information.
 
     Returns:
         dict: A dictionary summarizing the license purchase information.
@@ -16,9 +16,6 @@ def transform(input):
         
         default_value = True if input is not None else False
 
-        if 'errors' in input:
-            default_value = False
-            
         license_purchased = input.get('licensePurchased', default_value)
         license_info = {
             "confirmedLicensePurchased": license_purchased
