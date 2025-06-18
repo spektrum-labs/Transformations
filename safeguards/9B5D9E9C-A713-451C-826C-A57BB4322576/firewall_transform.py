@@ -14,6 +14,8 @@ def transform(input):
 
     is_firewall_enabled = False
     is_firewall_logging_enabled = False
+    is_internet_firewall_enabled = False
+    internet_firewall_rules = []
     try:
         # Initialize counters
         def _parse_input(input):
@@ -50,12 +52,30 @@ def transform(input):
 
         is_firewall_enabled = True if input.get('isFirewallEnabled',False) else False
             
+        if 'data' in input:
+            input = _parse_input(input['data'])
+            if 'policy' in input:
+                input = _parse_input(input['policy'])
+                if 'internetFirewall' in input:
+                    firewall_policy = _parse_input(input['internetFirewall'])
+                    if 'policy' in firewall_policy:
+                        firewall_policy = _parse_input(firewall_policy['policy'])
+                        if 'enabled' in firewall_policy:
+                            is_internet_firewall_enabled = True if firewall_policy.get('enabled',False) else False
+                        if 'rules' in firewall_policy:
+                            #List of rules
+                            internet_firewall_rules_raw = firewall_policy['rules']
+                            for rule in internet_firewall_rules_raw:
+                                if 'rule' in rule and 'name' in rule['rule']:
+                                    internet_firewall_rules.append(rule['rule']['name'])
+
         is_firewall_logging_enabled = True if input.get('isFirewallLoggingEnabled',False) else False
             
         firewall_info = {
-            "isFirewallEnabled": is_firewall_enabled,
+            "isFirewallEnabled": is_firewall_enabled or is_internet_firewall_enabled,
             "isFirewallLoggingEnabled": is_firewall_logging_enabled,
-            "isFirewallConfigured": is_firewall_enabled and is_firewall_logging_enabled
+            "isFirewallConfigured": True if len(internet_firewall_rules) > 0 else False,
+            "internetFirewallRules": internet_firewall_rules
         }
         return firewall_info
     except Exception as e:
