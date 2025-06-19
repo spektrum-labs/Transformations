@@ -15,7 +15,9 @@ def transform(input):
     is_firewall_enabled = False
     is_firewall_logging_enabled = False
     is_internet_firewall_enabled = False
+    is_wan_network_enabled = False
     internet_firewall_rules = []
+    wan_network_rules = []
     try:
         # Initialize counters
         def _parse_input(input):
@@ -50,14 +52,25 @@ def transform(input):
         if 'result' in input:
             input = _parse_input(input['result'])
 
+        if 'firewall' in input:
+            firewall_data = _parse_input(input['firewall'])
+        else:
+            firewall_data = input
+
+        if 'wanNetwork' in input:
+            wan_network_data = _parse_input(input['wanNetwork'])
+        else:
+            wan_network_data = input
+
         is_firewall_enabled = True if input.get('isFirewallEnabled',False) else False
             
-        if 'data' in input:
-            input = _parse_input(input['data'])
-            if 'policy' in input:
-                input = _parse_input(input['policy'])
-                if 'internetFirewall' in input:
-                    firewall_policy = _parse_input(input['internetFirewall'])
+        if 'data' in firewall_data:
+            firewall_data = _parse_input(firewall_data['data'])
+            if 'policy' in firewall_data:
+                firewall_data = _parse_input(firewall_data['policy'])
+                #Internet Firewall
+                if 'internetFirewall' in firewall_data:
+                    firewall_policy = _parse_input(firewall_data['internetFirewall'])
                     if 'policy' in firewall_policy:
                         firewall_policy = _parse_input(firewall_policy['policy'])
                         if 'enabled' in firewall_policy:
@@ -68,14 +81,39 @@ def transform(input):
                             for rule in internet_firewall_rules_raw:
                                 if 'rule' in rule and 'name' in rule['rule']:
                                     internet_firewall_rules.append(rule['rule']['name'])
+        #WAN Network
+        if 'data' in wan_network_data:
+            wan_network_data = _parse_input(wan_network_data['data'])
+            if 'policy' in wan_network_data:
+                wan_network_data = _parse_input(wan_network_data['policy'])                
+                if 'wanNetwork' in wan_network_data:
+                    wan_network_policy = _parse_input(wan_network_data['wanNetwork'])
+                    if 'policy' in wan_network_policy:
+                        wan_network_policy = _parse_input(wan_network_policy['policy'])
+                        if 'enabled' in wan_network_policy:
+                            is_wan_network_enabled = True if wan_network_policy.get('enabled',False) else False
+                        if 'rules' in wan_network_policy:
+                            wan_network_rules_raw = wan_network_policy['rules']
+                            for rule in wan_network_rules_raw:
+                                if 'rule' in rule and 'name' in rule['rule']:
+                                    wan_network_rules.append(rule['rule']['name'])
 
         is_firewall_logging_enabled = True if input.get('isFirewallLoggingEnabled',False) else False
-            
+        
+        #Audit Logs
+        if 'data' in input:
+            input = _parse_input(input['data'])
+            if 'auditFeed' in input:
+                audit_logs_raw = _parse_input(input['auditFeed'])
+                if 'fetchedCount' in audit_logs_raw:
+                    is_firewall_logging_enabled = True if audit_logs_raw.get('fetchedCount',0) > 0 else False
+
         firewall_info = {
-            "isFirewallEnabled": is_firewall_enabled or is_internet_firewall_enabled,
+            "isFirewallEnabled": is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled),
             "isFirewallLoggingEnabled": is_firewall_logging_enabled,
-            "isFirewallConfigured": True if len(internet_firewall_rules) > 0 else False,
-            "internetFirewallRules": internet_firewall_rules
+            "isFirewallConfigured": True if len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0 else False,
+            "internetFirewallRules": internet_firewall_rules,
+            "wanNetworkRules": wan_network_rules
         }
         return firewall_info
     except Exception as e:
