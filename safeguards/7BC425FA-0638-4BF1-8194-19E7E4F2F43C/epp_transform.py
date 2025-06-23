@@ -12,7 +12,13 @@ def transform(endpoints_response):
 
     # Initialize counters
     isEPPConfigured = endpoints_response.get("isEPPConfigured", True)
-    total_endpoints = len(endpoints_response.get("items", []))
+    if 'value' in endpoints_response:
+        endpoints = endpoints_response['value']
+
+    if not isEPPConfigured:
+        isEPPConfigured = True if len(endpoints) > 0 else False
+
+    total_endpoints = len(endpoints)
     total_computers = 0
     total_servers = 0
     total_mobile_devices = 0
