@@ -29,7 +29,7 @@ def transform(input):
         ratingDetails = data.get("rating_details", {})
         #Loop through each attribute & add rating less than 700 to rating array
         for attribute in ratingDetails:
-            current_rating = getattr(ratingDetails[attribute], "rating", 0)
+            current_rating = ratingDetails[attribute].get('rating', 0)
             if current_rating < 700:
                 low_ratings.append(ratingDetails[attribute])
                 if current_rating < lowest_rating:
