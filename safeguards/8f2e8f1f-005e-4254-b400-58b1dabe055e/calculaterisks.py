@@ -37,6 +37,6 @@ def transform(input):
                 low_count += 1
 
         #Return the risk score and the count of attributes with rating less than 700
-        return {"riskThreshold": True if lowest_rating > 0 else False, "count": low_count, "lowratings": low_ratings}
+        return {"riskThreshold": lowest_rating, "count": low_count, "lowratings": low_ratings}
     except Exception as e:
         return {"riskThreshold": 0, "count": 0, "lowratings": [], "error": str(e)}
