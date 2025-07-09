@@ -1,15 +1,12 @@
-# calculaterisks.py
+# asm_transform.py
 
 import json
 
 def transform(input):
     """
-    Calculates the risk score based on the input data.
-    Returns: {"riskThreshold": bool, "Count": int}
+    Transforms all of the Attack Surface Management data into a single object.
+    Returns: {"isASMEnabled": bool, "isASMLoggingEnabled": bool}
     """
-    low_ratings = []
-    lowest_rating = 0
-    low_count = 0
     try:
         def _parse_input(input):
             if isinstance(input, str):
@@ -24,22 +21,25 @@ def transform(input):
 
         # Drill down past response/result wrappers if present
         data = data.get("response", data).get("result", data)
+        default_value = True if input is not None else False
 
-        #Get RatingDetails
-        ratingDetails = data.get("rating_details", {})
-        #Loop through each attribute & add rating less than 700 to rating array
-        for attribute in ratingDetails:
-            try:
-                current_rating = int(ratingDetails[attribute].get('rating', 0))
-            except:
-                current_rating = -1
-            if current_rating < 700:
-                low_ratings.append(ratingDetails[attribute])
-                if current_rating < lowest_rating:
-                    lowest_rating = current_rating
-                low_count += 1
+        if 'errors' in input:
+            default_value = False
+            
+        is_asm_enabled = input.get('isASMEnabled', default_value)
+        is_asm_logging_enabled = input.get('isASMLoggingEnabled', default_value)
 
-        #Return the risk score and the count of attributes with rating less than 700
-        return {"riskThreshold": lowest_rating, "count": low_count, "lowratings": low_ratings}
+        if 'SCHEDULED_SCAN_LIST_OUTPUT' in input:
+            scheduled_scan_list_output = input.get('SCHEDULED_SCAN_LIST_OUTPUT', {}).get("RESPONSE", {}).get("SCHEDULED_SCAN_LIST", {}).get("SCAN", [])
+            
+            if scheduled_scan_list_output and len(scheduled_scan_list_output) > 0:
+                is_asm_enabled = True
+                is_asm_logging_enabled = True
+
+        asm_info = {
+            "isASMEnabled": is_asm_enabled,
+            "isASMLoggingEnabled": is_asm_logging_enabled
+        }
+        return asm_info
     except Exception as e:
-        return {"riskThreshold": 0, "count": 0, "lowratings": [], "error": str(e)}
+        return {"isASMEnabled": False, "isASMLoggingEnabled": False, "error": str(e)}
