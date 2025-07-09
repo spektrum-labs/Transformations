@@ -1,5 +1,4 @@
 # asm_transform.py
-
 import json
 
 def transform(input):
