@@ -1,9 +1,9 @@
 def transform(input):
     """
-    Evaluates if the license has been purchased for the given Firewall
+    Evaluates if the license has been purchased for the given Attack Surface Management
 
     Parameters:
-        input (dict): The JSON data containing Firewall information.
+        input (dict): The JSON data containing Attack Surface Management information.
 
     Returns:
         dict: A dictionary summarizing the license purchase information.
