@@ -32,7 +32,7 @@ def transform(input):
             try:
                 current_rating = int(ratingDetails[attribute].get('rating', 0))
             except:
-                current_rating = -1
+                current_rating = 0
             if current_rating < 700:
                 low_ratings.append(ratingDetails[attribute])
                 if current_rating < lowest_rating:
