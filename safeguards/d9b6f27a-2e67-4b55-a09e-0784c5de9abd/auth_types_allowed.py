@@ -10,20 +10,21 @@ def transform(input):
         elif isinstance(input, dict):
             data = input.get('response', input)
 
-        for item in data:
-            if item.get('status').lower() == 'active':
-                if item.get('factorType').lower() != 'sms':
-                    if item.get('factorType').lower() == 'token:software:totp':
-                        authTypes.append('OTP')
-                    else:
-                        authTypes.append(item.get('factorType'))
+        # Initialize counters
+        if 'response' in input:
+            input = input['response']
+            
+        if 'authenticationMethodConfigurations' in input:
+            mfa_enrolled = [{"id": obj['id'] if 'id' in obj else '', "state": obj['state'] if 'state' in obj else 'enabled', "includeTargets": obj['includeTargets'] if 'includeTargets' in obj else []} for obj in input['authenticationMethodConfigurations'] if 'state' in obj and str(obj['state']).lower() == "enabled"]
+        else:
+            mfa_enrolled = []
 
         # Filter to keep only auth types that are NOT FIDO or OTP
-        otherAuthTypes = [auth_type for auth_type in authTypes if auth_type.lower() not in ['fido', 'otp']]
+        otherAuthTypes = [auth_type for auth_type in mfa_enrolled if auth_type['id'].lower() not in ['fido2', 'microsoftauthenticator']]
         
         return { 
             "authTypesAllowed": False if len(otherAuthTypes) > 0 else True,
-            "authTypes": authTypes
+            "authTypes": otherAuthTypes
         }
 
     except Exception as e:
