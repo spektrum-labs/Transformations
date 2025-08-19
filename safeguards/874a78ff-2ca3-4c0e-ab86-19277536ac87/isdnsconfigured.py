@@ -48,6 +48,8 @@ def transform(input):
             input = _parse_input(input['response'])
         if 'result' in input:
             input = _parse_input(input['result'])
+            if 'result' in input:
+                input = _parse_input(input['result'])
 
         is_dmarc_configured = True if input.get('DMARC',False) else False
             
