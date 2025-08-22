@@ -35,11 +35,21 @@ def transform(input):
             raise ValueError("Input must be JSON string, bytes, or dict")
     
         data = _parse_input(input).get("response", _parse_input(input)).get("result", _parse_input(input))
-        data = data.get("data", {})
-
-        # Scheduled Backups
-        backupschedules   = data.get("rows", [])
-        scheduled_auto = len(backupschedules) > 0
+        backupschedules = data.get("data", {}).get("rows", [])
+        
+        scheduled_auto = False
+        for schedule in backupschedules:
+            if isinstance(schedule, list):
+                for item in schedule:
+                    if 'properties' in item:
+                        if item['properties'].get('protectedItemsCount', 0) > 0:
+                            scheduled_auto = True
+                            break
+            else:
+                if 'properties' in schedule:
+                    if schedule['properties'].get('protectedItemsCount', 0) > 0:
+                        scheduled_auto = True
+                        break
 
         return {"isBackupTypesScheduled": scheduled_auto}
 
