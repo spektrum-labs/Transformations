@@ -1,4 +1,5 @@
 import json
+import ast
 from datetime import datetime
 
 def transform(input):
@@ -14,28 +15,42 @@ def transform(input):
     """
 
     try:
-        # Ensure input is a dictionary by parsing if necessary
-        if isinstance(input, str):
-            input = json.loads(input)  # Convert JSON string to dictionary
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))  # Decode bytes then parse JSON
-        
-        if not isinstance(input, dict):
-            raise ValueError("JSON input must be an object (dictionary).")
+        def _parse_input(input):
+            if isinstance(input, str):
+                # First try to parse as literal Python string representation
+                try:
+                    # Use ast.literal_eval to safely parse Python literal
+                    parsed = ast.literal_eval(input)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+                
+                # If that fails, try to parse as JSON
+                try:
+                    # Replace single quotes with double quotes for JSON
+                    input = input.replace("'", '"')
+                    return json.loads(input)
+                except:
+                    raise ValueError("Input string is neither valid Python literal nor JSON")
+                    
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")  
 
         # Extract response safely
-        saml_providers = input.get("ListSAMLProvidersResponse", []).get("ListSAMLProvidersResult", {}).get("SAMLProviderList", []).get("member", [])
+        data = _parse_input(input).get("response", _parse_input(input)).get("result", _parse_input(input))
+        data = data.get("apiResponse",data)
+        domains = data.get("value", [])
         
         # Construct the output
         is_saml_enforced = False
-        for provider in saml_providers:
-            validUntil = provider.get("ValidUntil", "")
-            if validUntil != "":
-                # Convert ValidUntil to datetime and compare with today
-                valid_until_date = datetime.strptime(validUntil, "%Y-%m-%dT%H:%M:%SZ")
-                if valid_until_date > datetime.utcnow():
-                    is_saml_enforced = True
-                    break
+        for domain in domains:
+            if domain.get("authenticationType", "managed").lower() == "federated":
+                is_saml_enforced = True
+                break
 
         return { "isSAMLEnforced": is_saml_enforced }
 

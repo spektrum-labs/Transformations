@@ -1,7 +1,7 @@
 # is_backup_logging_enabled.py
 
 import json
-    
+import ast    
 def transform(input):
     """
     Checks whether logging is enabled and sending to SIEM if possible.
@@ -10,12 +10,28 @@ def transform(input):
     try:
         def _parse_input(input):
             if isinstance(input, str):
-                return json.loads(input)
+                # First try to parse as literal Python string representation
+                try:
+                    # Use ast.literal_eval to safely parse Python literal
+                    parsed = ast.literal_eval(input)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+                
+                # If that fails, try to parse as JSON
+                try:
+                    # Replace single quotes with double quotes for JSON
+                    input = input.replace("'", '"')
+                    return json.loads(input)
+                except:
+                    raise ValueError("Input string is neither valid Python literal nor JSON")
+                    
             if isinstance(input, bytes):
                 return json.loads(input.decode("utf-8"))
             if isinstance(input, dict):
                 return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+            raise ValueError("Input must be JSON string, bytes, or dict")  
     
         # Ensure input is a dictionary by parsing if necessary
         input = _parse_input(input)
@@ -23,43 +39,21 @@ def transform(input):
         # Extract response safely
         input = input.get("response",input)
         input = input.get("result",input)
+        input = input.get("apiResponse",input)
+        data = input.get("data",input)
 
-        if 'dbBackups' in input:
-            dbBackups = input.get("dbBackups",input)
-        
-        if 'dbManualSnapshots' in input:
-            dbManualSnapshots = input.get("dbManualSnapshots",input)
-        
-        if 'volumeSnapshots' in input:
-            volumeSnapshots = input.get("volumeSnapshots",input)
-            
-        #Check for Automated DB Backups
-        response = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
-        result = response.get("DescribeDBInstanceAutomatedBackupsResult", {})
-        automated_backups = result.get("DBInstanceAutomatedBackups", [])
+        if 'rows' in data:
+            rows = data.get("rows",[])
+            for row in rows:
+                if isinstance(row,list):
+                    for item in row:
+                        if isinstance(item,dict):
+                            if 'hasDiagnosticSettings' in item:
+                                logging_enabled = True if item['hasDiagnosticSettings'] else False
+                                if logging_enabled and 'logCategories' in item and item['logCategories']:
+                                    return {"isBackupLoggingEnabled": True}
 
-        # Count total backups
-        if isinstance(automated_backups, dict):
-            automated_backups = [automated_backups]
-            
-        total_db_backups = len(automated_backups)
-
-        #Check for Manual DB Backups
-        response = dbManualSnapshots.get("DescribeDBSnapshotsResponse", {})
-        result = response.get("DescribeDBSnapshotsResult", {})
-        manual_backups = result.get("DBSnapshots", {})
-        manual_backups = manual_backups.get("DBSnapshot", [])
-        
-        # Count total backups
-        if isinstance(manual_backups, dict):
-            manual_backups = [manual_backups]
-            
-        total_db_backups += len(manual_backups)
-
-        # No restore/test records in this payload → always False
-        logging_enabled = True if total_db_backups > 0 else False
-        
-        return {"isBackupLoggingEnabled": logging_enabled}
+        return {"isBackupLoggingEnabled": False}
 
     except json.JSONDecodeError:
         return {"isBackupLoggingEnabled": False, "error": "Invalid JSON"}

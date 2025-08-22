@@ -1,6 +1,7 @@
 # is_backup_types_scheduled.py
 
 import json
+import ast
 
 def transform(input):
     """
@@ -10,7 +11,23 @@ def transform(input):
     try:
         def _parse_input(input):
             if isinstance(input, str):
-                return json.loads(input)
+                # First try to parse as literal Python string representation
+                try:
+                    # Use ast.literal_eval to safely parse Python literal
+                    parsed = ast.literal_eval(input)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+                
+                # If that fails, try to parse as JSON
+                try:
+                    # Replace single quotes with double quotes for JSON
+                    input = input.replace("'", '"')
+                    return json.loads(input)
+                except:
+                    raise ValueError("Input string is neither valid Python literal nor JSON")
+                    
             if isinstance(input, bytes):
                 return json.loads(input.decode("utf-8"))
             if isinstance(input, dict):
@@ -18,25 +35,21 @@ def transform(input):
             raise ValueError("Input must be JSON string, bytes, or dict")
     
         data = _parse_input(input).get("response", _parse_input(input)).get("result", _parse_input(input))
-
-        # Automated RDS: scheduled if BackupRetentionPeriod > 0
-        dbBackups   = data.get("dbBackups", {})
-        resp        = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
-        result      = resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
-        container   = result.get("DBInstanceAutomatedBackups", {})
-        backup_info = container.get("DBInstanceAutomatedBackup", {})
-        retention   = 0
+        backupschedules = data.get("data", {}).get("rows", [])
         
-        if isinstance(backup_info, list):
-            for entry in backup_info:
-                retention = int(entry.get("BackupRetentionPeriod", 0))
-                if retention == 0:
-                    scheduled_auto = False
-                    break
-        else:
-            retention = int(backup_info.get("BackupRetentionPeriod", 0))
-        
-        scheduled_auto = retention > 0
+        scheduled_auto = False
+        for schedule in backupschedules:
+            if isinstance(schedule, list):
+                for item in schedule:
+                    if 'properties' in item:
+                        if item['properties'].get('protectedItemsCount', 0) > 0:
+                            scheduled_auto = True
+                            break
+            else:
+                if 'properties' in schedule:
+                    if schedule['properties'].get('protectedItemsCount', 0) > 0:
+                        scheduled_auto = True
+                        break
 
         return {"isBackupTypesScheduled": scheduled_auto}
 
