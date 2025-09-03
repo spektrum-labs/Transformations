@@ -31,7 +31,7 @@ def transform(input):
                 # If that fails, try to parse as JSON
                 try:
                     # Replace single quotes with double quotes for JSON
-                    input = input.replace("'", '"')
+                    #input = input.replace("'", '"')
                     return json.loads(input)
                 except:
                     raise ValueError("Input string is neither valid Python literal nor JSON")
@@ -41,13 +41,14 @@ def transform(input):
             if isinstance(input, dict):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
-        
+
         input = _parse_input(input)
-        
         if 'response' in input:
             input = _parse_input(input['response'])
         if 'result' in input:
             input = _parse_input(input['result'])
+            if 'apiResponse' in input:
+                input = _parse_input(input['apiResponse'])
             if 'result' in input:
                 input = _parse_input(input['result'])
 
