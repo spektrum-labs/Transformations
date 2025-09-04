@@ -1,3 +1,6 @@
+import json
+import ast
+
 def transform(input):
     """
     Evaluates if SSO is enabled for the given Mail Provider
@@ -13,20 +16,49 @@ def transform(input):
         # Initialize variables
         isSSOEnabled = False
 
-        if 'result' in input:
-            input = input['result']
+        def _parse_input(input):
+            if isinstance(input, str):
+                # First try to parse as literal Python string representation
+                try:
+                    # Use ast.literal_eval to safely parse Python literal
+                    parsed = ast.literal_eval(input)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+                
+                # If that fails, try to parse as JSON
+                try:
+                    # Replace single quotes with double quotes for JSON
+                    input = input.replace("'", '"')
+                    return json.loads(input)
+                except:
+                    raise ValueError("Input string is neither valid Python literal nor JSON")
+                    
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
 
-        if 'idpInfo' in input:
-            input = input['idpInfo']
-            
-        sso_enabled = [obj for obj in input if '@name' in obj and str(obj['@name']).lower() == "enablesso"]
-        if len(sso_enabled) > 0 and '@value' in sso_enabled[0]:            
-            isSSOEnabled = bool(str(sso_enabled[0]['@value']))
+            return input
+                    
+        # Initialize data
+        if 'response' in input:
+            input = _parse_input(input['response'])
+
+        if 'result' in input:
+            input = _parse_input(input['result'])
+
+        if 'rawResponse' in input:
+            input = _parse_input(input['rawResponse'])
+
+        providers = input.get('value', [])
+        if len(providers) > 0:
+            isSSOEnabled = True
 
         sso_info = {
-            "isSSOEnabled": isSSOEnabled
+            "isSSOEnabled": isSSOEnabled,
+            "providers": providers
         }
         return sso_info
     except Exception as e:
-        return {"isSSOEnabled": False, "error": str(e)}
+        return {"isSSOEnabled": False, "providers": [], "error": str(e)}
         
