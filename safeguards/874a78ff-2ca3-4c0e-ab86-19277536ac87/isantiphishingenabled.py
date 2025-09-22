@@ -1,3 +1,5 @@
+import json
+import ast
 def transform(input):
     """
     Evaluates the MFA status for  given IDP
@@ -10,24 +12,54 @@ def transform(input):
     """
 
     try:
-        # Initialize counters
+        def _parse_input(input):
+            if isinstance(input, str):
+                # First try to parse as literal Python string representation
+                try:
+                    # Use ast.literal_eval to safely parse Python literal
+                    parsed = ast.literal_eval(input)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except:
+                    pass
+                
+                # If that fails, try to parse as JSON
+                try:
+                    # Replace single quotes with double quotes for JSON
+                    #input = input.replace("'", '"')
+                    return json.loads(input)
+                except:
+                    raise ValueError("Input string is neither valid Python literal nor JSON")
+                    
+            if isinstance(input, bytes):
+                return json.loads(input.decode("utf-8"))
+            if isinstance(input, dict):
+                return input
+            raise ValueError("Input must be JSON string, bytes, or dict")
+
+        input = _parse_input(input)
         if 'response' in input:
-            input = input['response']
-            
-        filter_attributes = ["detectDomainNameSpoofing","detectEmployeeNameSpoofing"]
+            input = _parse_input(input['response'])
+        if 'result' in input:
+            input = _parse_input(input['result'])
+            if 'apiResponse' in input:
+                input = _parse_input(input['apiResponse'])
+            if 'result' in input:
+                input = _parse_input(input['result'])         
+        
+        #Get Configuration Policies
+        if 'Output' in input:
+            input = _parse_input(input['Output'])
+        if 'policies' in input:
+            policies = input['policies']
+        else:
+            policies = []
 
         matching_values = [
-            {key: policy["setting"]["value"][key] for key in policy["setting"]["value"] if key in filter_attributes}
-            for policy in input["policies"]
-            if any(key in policy["setting"]["value"] for key in filter_attributes)
+            policy for policy in policies if policy.get("Enabled") is True
         ]
-
-        isAntiPhishingEnabled = True
-        if len(matching_values) > 0:
-            for key,value in matching_values:
-                if value is None or not bool(value):
-                    isAntiPhishingEnabled = False
-                    break
+        
+        isAntiPhishingEnabled = len(matching_values) > 0
 
         policy_info = {
             "isAntiPhishingEnabled": isAntiPhishingEnabled,
