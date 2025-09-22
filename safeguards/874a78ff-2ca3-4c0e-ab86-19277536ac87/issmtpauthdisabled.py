@@ -2,21 +2,22 @@ import json
 import ast
 def transform(input):
     """
-    Selects secure Score from list returned and evaluates if mfa is enforced 
-    for users.
+    Selects secure Score from list returned and evaluates if
+    legacy authentication is blocked.
 
     Parameters:
         input (dict): The JSON data containing all secure Scores.
 
     Returns:
-        dict: A dictionary summarizing the mfa enforcement status.
+        dict: A dictionary summarizing legacy authentication status
+        for users.
     """
 
     # modify assignment to match specific criteriaKey
-    criteriaKey = "isMFAEnforcedForUsers"
+    criteriaKey = "isSMTPAuthDisabled"
 
     # modify assignment to match specific controlName
-    controlName = "MFARegistrationV2"
+    controlName = "BlockLegacyAuthentication"
 
     try:
         def _parse_input(input):
@@ -51,7 +52,7 @@ def transform(input):
             input = _parse_input(input['result'])
             if 'apiResponse' in input:
                 input = _parse_input(input['apiResponse'])
-            if 'result' in input:   
+            if 'result' in input:
                 input = _parse_input(input['result'])
 
         # controlScores currently doesn't support filtering

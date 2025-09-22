@@ -2,21 +2,22 @@ import json
 import ast
 def transform(input):
     """
-    Selects secure Score from list returned and evaluates if mfa is enforced 
-    for users.
+    Selects secure Score from list returned and evaluates if
+    anti-phishing for administratorsis enabled.
 
     Parameters:
         input (dict): The JSON data containing all secure Scores.
 
     Returns:
-        dict: A dictionary summarizing the mfa enforcement status.
+        dict: A dictionary summarizing anti-phishing status for
+        administrators.
     """
 
     # modify assignment to match specific criteriaKey
-    criteriaKey = "isMFAEnforcedForUsers"
+    criteriaKey = "isAntiPhishingEnabled"
 
     # modify assignment to match specific controlName
-    controlName = "MFARegistrationV2"
+    controlName = "aad_phishing_MFA_strength"
 
     try:
         def _parse_input(input):
@@ -51,8 +52,8 @@ def transform(input):
             input = _parse_input(input['result'])
             if 'apiResponse' in input:
                 input = _parse_input(input['apiResponse'])
-            if 'result' in input:   
-                input = _parse_input(input['result'])
+            if 'result' in input:
+                input = _parse_input(input['result'])  
 
         # controlScores currently doesn't support filtering
         # return all controlScores and matches {controlName}
