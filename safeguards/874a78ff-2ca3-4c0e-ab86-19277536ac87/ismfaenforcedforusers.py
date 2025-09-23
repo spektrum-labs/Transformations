@@ -18,6 +18,10 @@ def transform(input):
     # modify assignment to match specific controlName
     controlName = "MFARegistrationV2"
 
+    mfa_info = None
+    score_in_percentage = 0.0
+    count = 0
+    total = 0
     try:
         def _parse_input(input):
             if isinstance(input, str):
@@ -57,33 +61,45 @@ def transform(input):
         # controlScores currently doesn't support filtering
         # return all controlScores and matches {controlName}
         value = input.get("value",[])
-        control_scores = value[0].get("controlScores",[])
-        matched_object_list = [i for i in control_scores if i['controlName'] == controlName]
+        if len(value) > 0:
+            control_scores = value[0].get("controlScores",[])
+            matched_object_list = [i for i in control_scores if i['controlName'] == controlName]
 
-        if len(matched_object_list) > 1:
-           raise ValueError(f"More than one object has a controlName of {controlName}. (matched_object_count={len(matched_object_list)})")
-        else: 
-           matched_object = matched_object_list[0]
-        
-        default_value = False
+            if len(matched_object_list) > 1:
+                raise ValueError(f"More than one object has a controlName of {controlName}. (matched_object_count={len(matched_object_list)})")
+            else: 
+                matched_object = matched_object_list[0]
+            
+            # currently scoreInPercentage must be 100.00 to be considered enforced/enabled
+            score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
+            is_enabled = True if score_in_percentage == 100.00 else False
 
-        # currently scoreInPercentage must be 100.00 to be considered enforced/enabled
-        score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
-        is_enabled = True if score_in_percentage == 100.00 else False
+            # count = sum of objects/users currently under {controlName}
+            count = matched_object.get("count", 0)
+            
+            # total = parent population of objects/users reachable by {controlName}
+            total = matched_object.get("total", 0)
 
-        # count = sum of objects/users currently under {controlName}
-        count = matched_object.get("count", 0)
-        
-        # total = parent population of objects/users reachable by {controlName}
-        total = matched_object.get("total", 0)
+        else:
+            if 'authenticationMethodConfigurations' in input:
+                mfa_info = {
+                    "mfaTypes": []
+                }
+                mfa_info['mfaTypes'] = [obj for obj in input['authenticationMethodConfigurations'] if 'state' in obj and str(obj['state']).lower() == "enabled"]
 
-        return {
+        if mfa_info is not None:
+            is_enabled = True if mfa_info['mfaTypes'] is not None and len(mfa_info['mfaTypes']) > 0 else False
+
+        result = {
                     criteriaKey: is_enabled,
                     "scoreInPercentage": score_in_percentage,
                     "count": count,
                     "total": total
                 }
-
+        if mfa_info is not None and 'mfaTypes' in mfa_info:
+            result['mfaTypes'] = mfa_info['mfaTypes']
+            
+        return result
     except Exception as e:
         return {criteriaKey: False,"error": str(e)}
     
