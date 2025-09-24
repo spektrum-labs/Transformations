@@ -23,9 +23,9 @@ def transform(input):
         otherAuthTypes = [auth_type for auth_type in mfa_enrolled if auth_type['id'].lower() not in ['fido2', 'microsoftauthenticator']]
         
         return { 
-            "authTypesAllowed": False if len(otherAuthTypes) > 0 else True,
+            "isAdminMFAPhishingResistant": False if len(otherAuthTypes) > 0 else True,
             "authTypes": otherAuthTypes
         }
 
     except Exception as e:
-        return { "authTypesAllowed": False, "authTypes": [], "error": str(e) }
+        return { "isAdminMFAPhishingResistant": False, "authTypes": [], "error": str(e) }
