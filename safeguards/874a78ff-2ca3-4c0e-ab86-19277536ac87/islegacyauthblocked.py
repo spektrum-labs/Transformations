@@ -57,8 +57,8 @@ def transform(input):
 
         # controlScores currently doesn't support filtering
         # return all controlScores and matches {controlName}
-        value = input.get("value",[])
-        control_scores = value[0].get("controlScores",[])
+        values = input.get("value",[])
+        control_scores = values[0].get("controlScores",[])
         matched_object_list = [i for i in control_scores if i['controlName'] == controlName]
 
         if len(matched_object_list) > 1:
