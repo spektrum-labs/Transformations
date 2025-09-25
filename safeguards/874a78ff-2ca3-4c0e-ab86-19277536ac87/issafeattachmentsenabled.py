@@ -13,7 +13,7 @@ def transform(input):
     """
 
     # modify assignment to match specific criteriaKey
-    criteriaKey = "isSafeAttachmentEnabled"
+    criteriaKey = "isSafeAttachmentsEnabled"
 
     # modify assignment to match specific controlName
     controlName = "mdo_safeattachmentpolicy"
