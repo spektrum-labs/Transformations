@@ -55,6 +55,9 @@ def transform(input):
         else:
             policies = []
 
+        if isinstance(policies, dict):
+            policies = [policies]
+            
         matching_values = [
             policy for policy in policies if policy.get("Enabled") is True
         ]
