@@ -13,7 +13,7 @@ def transform(input):
     """
 
     # modify assignment to match specific criteriaKey
-    criteriaKey = "areTransportRulesConfigured"
+    criteriaKey = "areAdminAccountsSeparate"
 
     # modify assignment to match specific controlName
     controlName = "mdo_blockmailforward"
