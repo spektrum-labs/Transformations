@@ -1,3 +1,4 @@
+
 def transform(input):
     """
     Evaluates if email admin audit logging is enabled
@@ -34,6 +35,7 @@ def transform(input):
             else:
                 value = [input.get('value')]
         if len(value) > 0:
+
             criteria_key_result = True
 
         transformed_data = {

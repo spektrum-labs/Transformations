@@ -35,6 +35,7 @@ def transform(input):
                 value = [input.get('value')]
 
         if len(value) > 0:
+
             criteria_key_result = True
 
         transformed_data = {
