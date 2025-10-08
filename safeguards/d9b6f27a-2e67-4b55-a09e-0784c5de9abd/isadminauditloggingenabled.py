@@ -1,4 +1,3 @@
-
 def transform(input):
     """
     Evaluates if email admin audit logging is enabled
