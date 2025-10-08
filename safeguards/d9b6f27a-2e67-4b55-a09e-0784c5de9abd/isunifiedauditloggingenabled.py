@@ -1,15 +1,15 @@
 def transform(input):
     """
-    Evaluates the MFA status for  given IDP
+    Evaluates if unified audit logging is enabled
 
     Parameters:
-        input (dict): The JSON data containing IDP information.
+        input (dict): The JSON data containing unified audit log information.
 
     Returns:
-        dict: A dictionary summarizing the MFA information.
+        dict: A dictionary summarizing the unified audit log information.
     """
 
-    criteria_key_name = "isMFAEnforcedForUsers"
+    criteria_key_name = "isUnifiedAuditLoggingEnabled"
     criteria_key_result = False
 
     try:
@@ -27,19 +27,14 @@ def transform(input):
                     }
 
         # Ensure value is type list, replace None if found
-        value = input.get('authenticationMethodConfigurations',[])
+        value = input.get('value',[])
         if not isinstance(value, list):
             if value is None:
                 value = []
             else:
-                value = [input.get('authenticationMethodConfigurations')]
+                value = [input.get('value')]
 
-        if 'authenticationMethodConfigurations' in input:
-            mfa_enrolled = [{"id": obj['id'] if 'id' in obj else '', "state": obj['state'] if 'state' in obj else 'enabled', "includeTargets": obj['includeTargets'] if 'includeTargets' in obj else []} for obj in value if 'state' in obj and str(obj['state']).lower() == "enabled"]
-        else:
-            mfa_enrolled = []
-
-        if len(mfa_enrolled) > 0:
+        if len(value) > 0:
             criteria_key_result = True
 
         transformed_data = {

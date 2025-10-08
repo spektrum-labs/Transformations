@@ -1,17 +1,17 @@
 def transform(input):
     """
-    Evaluates the MFA status for  given IDP
+    Evaluates if email admin audit logging is enabled
 
     Parameters:
-        input (dict): The JSON data containing IDP information.
+        input (dict): The JSON data containing email admin audit log information.
 
     Returns:
-        dict: A dictionary summarizing the MFA information.
+        dict: A dictionary summarizing the email admin audit log information.
     """
 
-    criteria_key_name = "isMFAEnforcedForUsers"
+    criteria_key_name = "isAdminAuditLoggingEnabled"
     criteria_key_result = False
-
+    
     try:
         # check if an error response body was returned
         if 'error' in input:
@@ -27,19 +27,13 @@ def transform(input):
                     }
 
         # Ensure value is type list, replace None if found
-        value = input.get('authenticationMethodConfigurations',[])
+        value = input.get('value',[])
         if not isinstance(value, list):
             if value is None:
                 value = []
             else:
-                value = [input.get('authenticationMethodConfigurations')]
-
-        if 'authenticationMethodConfigurations' in input:
-            mfa_enrolled = [{"id": obj['id'] if 'id' in obj else '', "state": obj['state'] if 'state' in obj else 'enabled', "includeTargets": obj['includeTargets'] if 'includeTargets' in obj else []} for obj in value if 'state' in obj and str(obj['state']).lower() == "enabled"]
-        else:
-            mfa_enrolled = []
-
-        if len(mfa_enrolled) > 0:
+                value = [input.get('value')]
+        if len(value) > 0:
             criteria_key_result = True
 
         transformed_data = {

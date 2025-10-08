@@ -1,15 +1,15 @@
 def transform(input):
     """
-    Evaluates the MFA status for  given IDP
+    Evaluates if informaton rights management is enabled.
 
     Parameters:
-        input (dict): The JSON data containing IDP information.
+        input (dict): The JSON data containing all sensitivity labels.
 
     Returns:
-        dict: A dictionary summarizing the MFA information.
+        dict: A dictionary summarizing information rights management.
     """
 
-    criteria_key_name = "isMFAEnforcedForUsers"
+    criteria_key_name = "isInformationRightsManagementEnabled"
     criteria_key_result = False
 
     try:
@@ -27,19 +27,15 @@ def transform(input):
                     }
 
         # Ensure value is type list, replace None if found
-        value = input.get('authenticationMethodConfigurations',[])
+        value = input.get('value',[])
         if not isinstance(value, list):
             if value is None:
                 value = []
             else:
-                value = [input.get('authenticationMethodConfigurations')]
+                value = [input.get('value')]
 
-        if 'authenticationMethodConfigurations' in input:
-            mfa_enrolled = [{"id": obj['id'] if 'id' in obj else '', "state": obj['state'] if 'state' in obj else 'enabled', "includeTargets": obj['includeTargets'] if 'includeTargets' in obj else []} for obj in value if 'state' in obj and str(obj['state']).lower() == "enabled"]
-        else:
-            mfa_enrolled = []
-
-        if len(mfa_enrolled) > 0:
+        active_labels = [i for i in value if i.get('isActive') is True]
+        if len(active_labels) > 0:
             criteria_key_result = True
 
         transformed_data = {
