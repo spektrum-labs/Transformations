@@ -1,17 +1,19 @@
 def transform(input):
     """
-    Evaluates if email admin audit logging is enabled
+    Selects secure Score from list returned and evaluates if
+    safe attachments is enabled.
 
     Parameters:
-        input (dict): The JSON data containing email admin audit log information.
+        input (dict): The JSON data containing all secure Scores.
 
     Returns:
-        dict: A dictionary summarizing the email admin audit log information.
+        dict: A dictionary summarizing safe attachments status for users.
     """
 
-    criteria_key_name = "isAdminAuditLoggingEnabled"
+    criteria_key_name = "isSafeAttachmentsEnabled"
     criteria_key_result = False
-    
+    control_name = "mdo_safeattachmentpolicy"
+
     try:
         # check if an error response body was returned
         if 'error' in input:
@@ -33,8 +35,19 @@ def transform(input):
                 value = []
             else:
                 value = [input.get('value')]
-        if len(value) > 0:
 
+        if len(value) > 1:
+            raise ValueError(f"Length of data returned for {criteria_key_name} longer than expected)")
+
+        control_scores = value[0].get('controlScores', [])
+        matched_object_list = [i for i in control_scores if i['controlName'] == control_name]
+
+        if len(matched_object_list) > 1:
+            raise ValueError(f"More than one object has a controlName of {control_name}. (matched_object_count={len(matched_object_list)})")
+
+        matched_object = matched_object_list[0]
+        score_in_percentage = matched_object.get('scoreInPercentage', 0.0)
+        if score_in_percentage == 100.00:
             criteria_key_result = True
 
         transformed_data = {

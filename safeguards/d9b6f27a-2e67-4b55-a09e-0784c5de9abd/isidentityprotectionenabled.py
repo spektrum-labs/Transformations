@@ -1,17 +1,17 @@
 def transform(input):
     """
-    Evaluates if email admin audit logging is enabled
+    Evaluates if identity protection is enabled.
 
     Parameters:
-        input (dict): The JSON data containing email admin audit log information.
+        input (dict): The JSON data containing detected risk for identities.
 
     Returns:
-        dict: A dictionary summarizing the email admin audit log information.
+        dict: A dictionary summarizing the detected risk for identities.
     """
 
-    criteria_key_name = "isAdminAuditLoggingEnabled"
+    criteria_key_name = "isIdentityProtectionEnabled"
     criteria_key_result = False
-    
+
     try:
         # check if an error response body was returned
         if 'error' in input:
@@ -33,8 +33,8 @@ def transform(input):
                 value = []
             else:
                 value = [input.get('value')]
-        if len(value) > 0:
 
+        if len(value) > 0:
             criteria_key_result = True
 
         transformed_data = {
