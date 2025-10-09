@@ -53,7 +53,9 @@ def transform(input):
                 input = _parse_input(input['apiResponse'])
             if 'result' in input:
                 input = _parse_input(input['result'])
-
+        if 'Output' in input:
+            input = _parse_input(input['Output'])
+            
         # controlScores currently doesn't support filtering
         # return all controlScores and matches {controlName}
         value = input.get("value",[])

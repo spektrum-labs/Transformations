@@ -2,18 +2,18 @@ import json
 import ast
 def transform(input):
     """
-    Evaluates if email admin audit logging is enabled
+    Evaluates if access reviews are configured.
 
     Parameters:
-        input (dict): The JSON data containing email admin audit log information.
+        input (dict): The JSON data containing list of access review definitions.
 
     Returns:
-        dict: A dictionary summarizing the email admin audit log information.
+        dict: A dictionary reflecting if at least one access review is configured.
     """
 
-    criteria_key_name = "isAdminAuditLoggingEnabled"
+    criteria_key_name = "areAccessReviewsConfigured"
     criteria_key_result = False
-    
+
     try:
         def _parse_input(input):
             if isinstance(input, str):
@@ -72,8 +72,8 @@ def transform(input):
                 value = []
             else:
                 value = [input.get('value')]
-        if len(value) > 0:
 
+        if len(value) > 0:
             criteria_key_result = True
 
         transformed_data = {

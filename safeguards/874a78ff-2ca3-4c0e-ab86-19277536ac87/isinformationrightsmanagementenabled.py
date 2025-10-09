@@ -2,18 +2,18 @@ import json
 import ast
 def transform(input):
     """
-    Evaluates if email admin audit logging is enabled
+    Evaluates if informaton rights management is enabled.
 
     Parameters:
-        input (dict): The JSON data containing email admin audit log information.
+        input (dict): The JSON data containing all sensitivity labels.
 
     Returns:
-        dict: A dictionary summarizing the email admin audit log information.
+        dict: A dictionary summarizing information rights management.
     """
 
-    criteria_key_name = "isAdminAuditLoggingEnabled"
+    criteria_key_name = "isInformationRightsManagementEnabled"
     criteria_key_result = False
-    
+
     try:
         def _parse_input(input):
             if isinstance(input, str):
@@ -72,8 +72,9 @@ def transform(input):
                 value = []
             else:
                 value = [input.get('value')]
-        if len(value) > 0:
 
+        active_labels = [i for i in value if i.get('isActive') is True]
+        if len(active_labels) > 0:
             criteria_key_result = True
 
         transformed_data = {
