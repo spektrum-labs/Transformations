@@ -11,7 +11,7 @@ def transform(input):
         dict: A dictionary summarizing anti-phishing policy information.
     """
 
-    criteria_key_name = "isAntiPhishingEnabled"
+    criteria_key_name = "areAntiPhishingPoliciesConfigured"
     criteria_key_result = False
 
     try:

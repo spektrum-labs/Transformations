@@ -13,7 +13,7 @@ def transform(input):
         dict: A dictionary with matching rules and summary
     """
 
-    criteriaKey = "isBannerModeEnforced"
+    criteriaKey = "isTransportRuleBannerEnforced"
     
     try:
         # Initialize counters
