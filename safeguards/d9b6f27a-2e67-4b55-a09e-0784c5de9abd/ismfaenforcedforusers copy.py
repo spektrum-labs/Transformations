@@ -2,19 +2,17 @@ import json
 import ast
 def transform(input):
     """
-    Selects secure Score from list returned and evaluates if
-    safe attachments is enabled.
+    Evaluates the MFA status for  given IDP
 
     Parameters:
-        input (dict): The JSON data containing all secure Scores.
+        input (dict): The JSON data containing IDP information.
 
     Returns:
-        dict: A dictionary summarizing safe attachments status for users.
+        dict: A dictionary summarizing the MFA information.
     """
 
-    criteria_key_name = "isAttachmentScanningEnabled"
+    criteria_key_name = "isMFAEnforcedForUsers"
     criteria_key_result = False
-    control_name = "mdo_safeattachmentpolicy"
 
     try:
         def _parse_input(input):
@@ -68,25 +66,19 @@ def transform(input):
                     }
 
         # Ensure value is type list, replace None if found
-        value = input.get('value',[])
+        value = input.get('authenticationMethodConfigurations',[])
         if not isinstance(value, list):
             if value is None:
                 value = []
             else:
-                value = [input.get('value')]
+                value = [input.get('authenticationMethodConfigurations')]
 
-        if len(value) > 1:
-            raise ValueError(f"Length of data returned for {criteria_key_name} longer than expected)")
+        if 'authenticationMethodConfigurations' in input:
+            mfa_enrolled = [{"id": obj['id'] if 'id' in obj else '', "state": obj['state'] if 'state' in obj else 'enabled', "includeTargets": obj['includeTargets'] if 'includeTargets' in obj else []} for obj in value if 'state' in obj and str(obj['state']).lower() == "enabled"]
+        else:
+            mfa_enrolled = []
 
-        control_scores = value[0].get('controlScores', [])
-        matched_object_list = [i for i in control_scores if i['controlName'] == control_name]
-
-        if len(matched_object_list) > 1:
-            raise ValueError(f"More than one object has a controlName of {control_name}. (matched_object_count={len(matched_object_list)})")
-
-        matched_object = matched_object_list[0]
-        score_in_percentage = matched_object.get('scoreInPercentage', 0.0)
-        if score_in_percentage == 100.00:
+        if len(mfa_enrolled) > 0:
             criteria_key_result = True
 
         transformed_data = {

@@ -12,7 +12,7 @@ def transform(input):
         dict: A dictionary summarizing safe links status for users.
     """
 
-    criteria_key_name = "isSafeLinksEnabled"
+    criteria_key_name = "isSafeLinksProtectionEnabled"
     criteria_key_result = False
     control_name = "mdo_safelinksforemail"
 

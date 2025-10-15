@@ -13,7 +13,8 @@ def transform(input):
     """
 
     # modify assignment to match specific criteriaKey
-    criteriaKey = "isAutoForwardDisabled"
+    criteria_key_name = "isAutoForwardDisabled"
+    criteria_key_result = False
 
     # modify assignment to match specific controlName
     controlName = "mdo_autoforwardingmode"
@@ -68,7 +69,8 @@ def transform(input):
 
         # currently scoreInPercentage must be 100.00 to be considered enforced/enabled
         score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
-        is_enabled = True if score_in_percentage == 100.00 else False
+        if score_in_percentage == 100.00:
+            criteria_key_result = True
 
         # count = sum of objects/users currently under {controlName}
         count = matched_object.get("count", 0)
@@ -77,12 +79,12 @@ def transform(input):
         total = matched_object.get("total", 0)
 
         return {
-                    criteriaKey: is_enabled,
+                    criteria_key_name: criteria_key_result,
                     "scoreInPercentage": score_in_percentage,
                     "count": count,
                     "total": total
                 }
 
     except Exception as e:
-        return {criteriaKey: False,"error": str(e)}
+        return {criteria_key_name: False,"error": str(e)}
     
