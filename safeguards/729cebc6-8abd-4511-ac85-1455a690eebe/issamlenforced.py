@@ -48,10 +48,9 @@ def transform(input):
         # Construct the output
         is_saml_enforced = False
         for domain in domains:
-            if domain.get("authenticationType", "managed").lower() == "federated":
+            if domain.get("authenticationType", "unknown").lower() in ("federated", "managed"):
                 is_saml_enforced = True
                 break
-
         return { "isSAMLEnforced": is_saml_enforced }
 
     except json.JSONDecodeError:
