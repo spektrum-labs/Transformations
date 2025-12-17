@@ -21,9 +21,22 @@ def transform(input):
 
         # Filter to keep only auth types that are NOT FIDO or OTP
         otherAuthTypes = [auth_type for auth_type in mfa_enrolled if auth_type['id'].lower() not in ['fido2', 'microsoftauthenticator']]
-        
+        # Check if "temporaryAccess" is in the list
+        has_temporary_access = any(auth_type['id'].lower() == 'temporaryaccess' for auth_type in mfa_enrolled)
+        # Check if "fido2" or "microsoftauthenticator" is in the list
+        has_fido2 = any(auth_type['id'].lower() == 'fido2' for auth_type in mfa_enrolled)
+        has_ms_auth = any(auth_type['id'].lower() == 'microsoftauthenticator' for auth_type in mfa_enrolled)
+
+        #Check if all the auth types are present
+        if len(otherAuthTypes) > 0:
+            if has_temporary_access and (has_fido2 or has_ms_auth):
+                authTypesAllowed = True
+            else:
+                authTypesAllowed = False
+        else:
+            authTypesAllowed = True
         return { 
-            "authTypesAllowed": False if len(otherAuthTypes) > 0 else True,
+            "authTypesAllowed": authTypesAllowed,
             "authTypes": otherAuthTypes
         }
 
