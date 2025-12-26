@@ -73,6 +73,11 @@ def transform(input):
                 if device_logging:
                     logging_enabled = True
                     break
+                else:
+                    backups = device.get("backups", [])
+                    if backups and len(backups) > 0:
+                        logging_enabled = True
+                        break
 
         return {"isBackupLoggingEnabled": logging_enabled}
 
