@@ -57,10 +57,13 @@ def transform(input):
 
         if isinstance(policies, dict):
             policies = [policies]
-            
-        matching_values = [
-            policy for policy in policies if policy.get("Enabled") is True
-        ]
+
+        try:    
+            matching_values = [
+                policy for policy in policies if str(policy.get("Enabled","false")).lower() == "true" or str(policy.get("IsDefault","false")).lower() == "true"
+            ]
+        except Exception as e:
+            matching_values = []
         
         isAntiPhishingEnabled = len(matching_values) > 0
 
