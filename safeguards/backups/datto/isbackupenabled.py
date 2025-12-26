@@ -58,7 +58,11 @@ def transform(input):
                 )
                 if backup_enabled:
                     return {"isBackupEnabled": True}
-
+                else:
+                    backups = device.get("backups", [])
+                    if backups and len(backups) > 0:
+                        return {"isBackupEnabled": True}
+                        
         return {"isBackupEnabled": False}
 
     except json.JSONDecodeError:
