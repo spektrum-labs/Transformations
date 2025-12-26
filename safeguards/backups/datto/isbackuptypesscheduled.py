@@ -43,7 +43,7 @@ def transform(input):
         )
 
         scheduled = False
-
+        
         for device in devices:
             if isinstance(device, list):
                 device = device[0] if len(device) > 0 else {}
@@ -57,7 +57,7 @@ def transform(input):
             elif schedule:
                 scheduled = True
                 break
-            
+
             # Check for scheduled backup flag
             if device.get("scheduledBackup", False):
                 scheduled = True
@@ -68,6 +68,15 @@ def transform(input):
             if interval and interval > 0:
                 scheduled = True
                 break
+
+            isPaused = device.get("isPaused", False)
+            if not isPaused:
+                isArchived = device.get("isArchived", False)
+                if not isArchived:
+                    backups = device.get("backups", [])
+                    if backups and len(backups) > 0:
+                        scheduled = True
+                        break
 
         return {"isBackupTypesScheduled": scheduled}
 
