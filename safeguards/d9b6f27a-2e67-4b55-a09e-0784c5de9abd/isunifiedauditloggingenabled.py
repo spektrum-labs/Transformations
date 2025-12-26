@@ -78,9 +78,10 @@ def transform(input):
             criteria_key_result = True
 
         transformed_data = {
-            criteria_key_name: criteria_key_result
+            criteria_key_name: criteria_key_result,
+            "isUnifiedAuditLogEnabled": criteria_key_result
         }
         return transformed_data
 
     except Exception as e:
-        return {criteria_key_name: False, "error": str(e)}
+        return {criteria_key_name: False, "isUnifiedAuditLogEnabled": False, "error": str(e)}
