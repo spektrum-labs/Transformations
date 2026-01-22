@@ -1,38 +1,79 @@
-# is_backup_types_scheduled.py - Datto BCDR
+"""
+Transformation: isBackupTypesScheduled
+Vendor: Datto BCDR
+Category: Backup / Data Protection
+
+Checks if Datto BCDR backup schedules are configured.
+"""
 
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isBackupTypesScheduled",
+                "vendor": "Datto",
+                "category": "Backup"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Checks if Datto BCDR backup schedules are configured.
-    Returns: {"isBackupTypesScheduled": bool}
-    """
-    try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+    criteriaKey = "isBackupTypesScheduled"
 
-        # Parse input
-        data = _parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
-        data = data.get("apiResponse", data)
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         # Check for backup schedules
         devices = (
@@ -40,34 +81,39 @@ def transform(input):
             data.get("devices", []) or
             data.get("agents", []) or
             data.get("data", {}).get("rows", [])
-        )
+        ) if isinstance(data, dict) else []
 
         scheduled = False
-        
+        scheduled_count = 0
+
         for device in devices:
             if isinstance(device, list):
                 device = device[0] if len(device) > 0 else {}
-            
+
             # Check schedule configuration
             schedule = device.get("schedule", device.get("backupSchedule", {}))
             if isinstance(schedule, dict):
                 if schedule.get("enabled", False) or schedule.get("frequency"):
                     scheduled = True
-                    break
+                    scheduled_count += 1
+                    continue
             elif schedule:
                 scheduled = True
-                break
+                scheduled_count += 1
+                continue
 
             # Check for scheduled backup flag
             if device.get("scheduledBackup", False):
                 scheduled = True
-                break
-            
+                scheduled_count += 1
+                continue
+
             # Check for backup interval
             interval = device.get("backupInterval", device.get("interval", 0))
             if interval and interval > 0:
                 scheduled = True
-                break
+                scheduled_count += 1
+                continue
 
             isPaused = device.get("isPaused", False)
             if not isPaused:
@@ -76,12 +122,29 @@ def transform(input):
                     backups = device.get("backups", [])
                     if backups and len(backups) > 0:
                         scheduled = True
-                        break
+                        scheduled_count += 1
 
-        return {"isBackupTypesScheduled": scheduled}
+        if scheduled:
+            pass_reasons.append(f"Backup schedules configured for {scheduled_count} device(s)")
+        else:
+            fail_reasons.append("No Datto BCDR backup schedules configured")
+            recommendations.append("Configure backup schedules for all Datto BCDR devices")
 
-    except json.JSONDecodeError:
-        return {"isBackupTypesScheduled": False, "error": "Invalid JSON"}
+        return create_response(
+            result={criteriaKey: scheduled},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "totalDevices": len(devices),
+                "scheduledDevices": scheduled_count
+            }
+        )
+
     except Exception as e:
-        return {"isBackupTypesScheduled": False, "error": str(e)}
-
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

@@ -1,177 +1,273 @@
-def transform(endpoints_response):
-    """
-    Evaluates safeguard types coverage based on endpoints response data
-    and assigns a score from 0 to 100 for each safeguard type.
+"""
+Transformation: mdr_transform (comprehensive)
+Vendor: MDR / Managed Detection and Response
+Category: Endpoint Security / MDR
 
-    Parameters:
-        endpoints_response (dict): The JSON data containing endpoints information.
+Evaluates safeguard types coverage based on endpoints response data
+and assigns a score from 0 to 100 for each safeguard type.
+Focuses on MDR-specific metrics.
+"""
 
-    Returns:
-        dict: A dictionary summarizing the coverage score of each safeguard type.
-    """
+import json
+from datetime import datetime
 
-    # Initialize counters
-    isMDRConfigured = endpoints_response.get("isMDRConfigured", True)
-    total_endpoints = len(endpoints_response.get("items", []))
-    total_computers = 0
-    total_servers = 0
-    total_mobile_devices = 0
-    total_cloud_endpoints = 0
 
-    safeguard_counters = {
-        "Endpoint Protection": 0,
-        "Endpoint Security": 0,
-        "Server Protection": 0,
-        "MDR": 0,
-        "Network Protection": 0,
-        "Cloud Security": 0,
-        "Mobile Protection": 0,
-        "Email Security": 0,
-        "Phishing Protection": 0,
-        "Zero Trust Network Access": 0,
-        "Encryption": 0
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "mdr_transform",
+                "vendor": "MDR Provider",
+                "category": "MDR"
+            }
+        }
     }
 
-    for endpoint in endpoints_response.get("items", []):
-        assigned_products = {product["code"]: product for product in endpoint.get("assignedProducts", [])}
-        services = {service["name"]: service for service in endpoint.get("health", {}).get("services", {}).get("serviceDetails", [])}
-        endpoint_type = endpoint.get("type")
 
-        # Count total number of computers, servers, mobile devices, and cloud endpoints
-        if endpoint_type == "computer":
-            total_computers += 1
-        elif endpoint_type == "server":
-            total_servers += 1
-        elif endpoint_type == "mobile":
-            total_mobile_devices += 1
+def transform(input):
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        if "cloud" in endpoint:
-            total_cloud_endpoints += 1
+        data, validation = extract_input(input)
 
-        # 1. Endpoint Protection
-        if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-            safeguard_counters["Endpoint Protection"] += 1
+        if validation.get("status") == "failed":
+            return create_response(
+                result={"isMDREnabled": False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
-        # 1.1 Endpoint Security
-        if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-            safeguard_counters["Endpoint Security"] += 1
-            
-        # 2. Server Protection
-        if endpoint_type == "server" and "endpointProtection" in assigned_products:
-            safeguard_counters["Server Protection"] += 1
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
-        # 3. MDR (Managed Detection and Response)
-        if "mtr" in assigned_products:
-            safeguard_counters["MDR"] += 1
+        # Initialize counters
+        isMDRConfigured = data.get("isMDRConfigured", True) if isinstance(data, dict) else True
 
-        # 4. Network Protection
-        if any("Network Threat Protection" in service_name for service_name in services):
-            safeguard_counters["Network Protection"] += 1
+        items = data.get("items", []) if isinstance(data, dict) else []
+        total_endpoints = len(items)
+        total_computers = 0
+        total_servers = 0
+        total_mobile_devices = 0
+        total_cloud_endpoints = 0
 
-        # 5. Cloud Security
-        if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
-            safeguard_counters["Cloud Security"] += 1
+        safeguard_counters = {
+            "Endpoint Protection": 0,
+            "Endpoint Security": 0,
+            "Server Protection": 0,
+            "MDR": 0,
+            "Network Protection": 0,
+            "Cloud Security": 0,
+            "Mobile Protection": 0,
+            "Email Security": 0,
+            "Phishing Protection": 0,
+            "Zero Trust Network Access": 0,
+            "Encryption": 0
+        }
 
-        # 6. Mobile Protection
-        if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
-            safeguard_counters["Mobile Protection"] += 1
+        for endpoint in items:
+            assigned_products = {product["code"]: product for product in endpoint.get("assignedProducts", [])}
+            services = {service["name"]: service for service in endpoint.get("health", {}).get("services", {}).get("serviceDetails", [])}
+            endpoint_type = endpoint.get("type")
 
-        # 7. Email Security
-        # Assuming email security products have specific codes; adjust as needed
-        if "emailSecurity" in assigned_products:
-            safeguard_counters["Email Security"] += 1
+            # Count total number of computers, servers, mobile devices, and cloud endpoints
+            if endpoint_type == "computer":
+                total_computers += 1
+            elif endpoint_type == "server":
+                total_servers += 1
+            elif endpoint_type == "mobile":
+                total_mobile_devices += 1
 
-        # 8. Phishing Protection
-        if "interceptX" in assigned_products:
-            safeguard_counters["Phishing Protection"] += 1
+            if "cloud" in endpoint:
+                total_cloud_endpoints += 1
 
-        # 9. Zero Trust Network Access
-        ztna_product = assigned_products.get("ztna")
-        if ztna_product and ztna_product["status"] == "installed":
-            safeguard_counters["Zero Trust Network Access"] += 1
+            # 1. Endpoint Protection
+            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
+                safeguard_counters["Endpoint Protection"] += 1
 
-        # 10. Encryption
-        if endpoint.get("encryption", {}).get("volumes"):
-            safeguard_counters["Encryption"] += 1
+            # 1.1 Endpoint Security
+            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
+                safeguard_counters["Endpoint Security"] += 1
 
-    # Initialize coverage scores
-    coverage_scores = {}
+            # 2. Server Protection
+            if endpoint_type == "server" and "endpointProtection" in assigned_products:
+                safeguard_counters["Server Protection"] += 1
 
-    # Calculate scores
-    coverage_scores["Endpoint Protection"] = (
-        (safeguard_counters["Endpoint Protection"] / total_computers) * 100
-        if total_computers > 0 else 0
-    )
+            # 3. MDR (Managed Detection and Response)
+            if "mtr" in assigned_products:
+                safeguard_counters["MDR"] += 1
 
-    coverage_scores["Endpoint Security"] = (
-        (safeguard_counters["Endpoint Security"] / total_computers) * 100
-        if total_computers > 0 else 0
-    )
+            # 4. Network Protection
+            if any("Network Threat Protection" in service_name for service_name in services):
+                safeguard_counters["Network Protection"] += 1
 
-    coverage_scores["Server Protection"] = (
-        (safeguard_counters["Server Protection"] / total_servers) * 100
-        if total_servers > 0 else 0
-    )
+            # 5. Cloud Security
+            if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
+                safeguard_counters["Cloud Security"] += 1
 
-    coverage_scores["MDR"] = (
-        (safeguard_counters["MDR"] / total_endpoints) * 100
-        if total_endpoints > 0 else 0
-    )
+            # 6. Mobile Protection
+            if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
+                safeguard_counters["Mobile Protection"] += 1
 
-    coverage_scores["Network Protection"] = (
-        (safeguard_counters["Network Protection"] / total_endpoints) * 100
-        if total_endpoints > 0 else 0
-    )
+            # 7. Email Security
+            if "emailSecurity" in assigned_products:
+                safeguard_counters["Email Security"] += 1
 
-    coverage_scores["Cloud Security"] = (
-        (safeguard_counters["Cloud Security"] / total_cloud_endpoints) * 100
-        if total_cloud_endpoints > 0 else 0
-    )
+            # 8. Phishing Protection
+            if "interceptX" in assigned_products:
+                safeguard_counters["Phishing Protection"] += 1
 
-    coverage_scores["Mobile Protection"] = (
-        (safeguard_counters["Mobile Protection"] / total_mobile_devices) * 100
-        if total_mobile_devices > 0 else 0
-    )
+            # 9. Zero Trust Network Access
+            ztna_product = assigned_products.get("ztna")
+            if ztna_product and ztna_product.get("status") == "installed":
+                safeguard_counters["Zero Trust Network Access"] += 1
 
-    coverage_scores["Email Security"] = (
-        (safeguard_counters["Email Security"] / total_endpoints) * 100
-        if total_endpoints > 0 else 0
-    )
+            # 10. Encryption
+            if endpoint.get("encryption", {}).get("volumes"):
+                safeguard_counters["Encryption"] += 1
 
-    coverage_scores["Phishing Protection"] = (
-        (safeguard_counters["Phishing Protection"] / total_endpoints) * 100
-        if total_endpoints > 0 else 0
-    )
+        # Initialize coverage scores
+        coverage_scores = {}
 
-    coverage_scores["Zero Trust Network Access"] = (
-        (safeguard_counters["Zero Trust Network Access"] / total_endpoints) * 100
-        if total_endpoints > 0 else 0
-    )
+        # Calculate scores
+        coverage_scores["Endpoint Protection"] = round(
+            (safeguard_counters["Endpoint Protection"] / total_computers) * 100
+            if total_computers > 0 else 0
+        )
 
-    coverage_scores["Encryption"] = (
-        (safeguard_counters["Encryption"] / total_endpoints) * 100
-        if total_endpoints > 0 else 0
-    )
+        coverage_scores["Endpoint Security"] = round(
+            (safeguard_counters["Endpoint Security"] / total_computers) * 100
+            if total_computers > 0 else 0
+        )
 
-    # Round scores to nearest integer
-    for key in coverage_scores:
-        coverage_scores[key] = round(coverage_scores[key])
+        coverage_scores["Server Protection"] = round(
+            (safeguard_counters["Server Protection"] / total_servers) * 100
+            if total_servers > 0 else 0
+        )
 
-    #Endpoint Protection
-    coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0
-    coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0
-    coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
-    coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
+        coverage_scores["MDR"] = round(
+            (safeguard_counters["MDR"] / total_endpoints) * 100
+            if total_endpoints > 0 else 0
+        )
 
-    #Endpoint Security
-    coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
-    
-    #MDR
-    coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0    
-    coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
-    coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
-    coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
+        coverage_scores["Network Protection"] = round(
+            (safeguard_counters["Network Protection"] / total_endpoints) * 100
+            if total_endpoints > 0 else 0
+        )
 
-    coverage_scores["isMDRConfigured"] = isMDRConfigured
+        coverage_scores["Cloud Security"] = round(
+            (safeguard_counters["Cloud Security"] / total_cloud_endpoints) * 100
+            if total_cloud_endpoints > 0 else 0
+        )
 
-    return coverage_scores
+        coverage_scores["Mobile Protection"] = round(
+            (safeguard_counters["Mobile Protection"] / total_mobile_devices) * 100
+            if total_mobile_devices > 0 else 0
+        )
+
+        coverage_scores["Email Security"] = round(
+            (safeguard_counters["Email Security"] / total_endpoints) * 100
+            if total_endpoints > 0 else 0
+        )
+
+        coverage_scores["Phishing Protection"] = round(
+            (safeguard_counters["Phishing Protection"] / total_endpoints) * 100
+            if total_endpoints > 0 else 0
+        )
+
+        coverage_scores["Zero Trust Network Access"] = round(
+            (safeguard_counters["Zero Trust Network Access"] / total_endpoints) * 100
+            if total_endpoints > 0 else 0
+        )
+
+        coverage_scores["Encryption"] = round(
+            (safeguard_counters["Encryption"] / total_endpoints) * 100
+            if total_endpoints > 0 else 0
+        )
+
+        # Endpoint Protection boolean flags
+        coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0
+        coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0
+        coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
+        coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
+
+        # Endpoint Security
+        coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
+
+        # MDR - Primary focus of this transformation
+        coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
+        coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
+        coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
+        coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
+
+        coverage_scores["isMDRConfigured"] = isMDRConfigured
+
+        # Build pass/fail reasons
+        if coverage_scores["isMDREnabled"]:
+            pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
+        else:
+            fail_reasons.append("MDR is not enabled")
+            recommendations.append("Deploy MDR (Managed Detection and Response) to endpoints")
+
+        if coverage_scores["isEPPEnabled"]:
+            pass_reasons.append(f"Endpoint protection: {coverage_scores['Endpoint Protection']}% coverage")
+
+        if coverage_scores["Server Protection"] > 0:
+            pass_reasons.append(f"Server protection: {coverage_scores['Server Protection']}% coverage")
+
+        return create_response(
+            result=coverage_scores,
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "totalEndpoints": total_endpoints,
+                "totalComputers": total_computers,
+                "totalServers": total_servers,
+                "totalMobileDevices": total_mobile_devices,
+                "totalCloudEndpoints": total_cloud_endpoints,
+                "safeguardCounters": safeguard_counters
+            }
+        )
+
+    except Exception as e:
+        return create_response(
+            result={"isMDREnabled": False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

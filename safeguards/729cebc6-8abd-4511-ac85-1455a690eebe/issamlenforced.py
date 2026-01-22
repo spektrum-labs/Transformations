@@ -1,59 +1,116 @@
+"""
+Transformation: isSAMLEnforced
+Vendor: Microsoft
+Category: Identity / Authentication
+
+Evaluates the SAML enforcement status of the account.
+"""
+
 import json
-import ast
 from datetime import datetime
 
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isSAMLEnforced",
+                "vendor": "Microsoft",
+                "category": "Identity"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Evaluates the SAML enforcement status of the account.
-
-    Parameters:
-        input (str | dict): The JSON data containing SAML provider information. 
-                            If a string is provided, it will be parsed.
-
-    Returns:
-        dict: A dictionary summarizing the SAML provider information.
-    """
+    criteriaKey = "isSAMLEnforced"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")  
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        # Extract response safely
-        data = _parse_input(input).get("response", _parse_input(input)).get("result", _parse_input(input))
-        data = data.get("apiResponse",data)
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
         domains = data.get("value", [])
-        
-        # Construct the output
-        is_saml_enforced = False
-        for domain in domains:
-            if domain.get("authenticationType", "unknown").lower() in ("federated", "managed"):
-                is_saml_enforced = True
-                break
-        return { "isSAMLEnforced": is_saml_enforced }
+        if not isinstance(domains, list):
+            domains = [domains] if domains else []
 
-    except json.JSONDecodeError:
-        return { "isSAMLEnforced": False, "error": "Invalid JSON format." }
+        is_saml_enforced = False
+        federated_domains = []
+
+        for domain in domains:
+            if isinstance(domain, dict):
+                auth_type = domain.get("authenticationType", "unknown").lower()
+                if auth_type in ("federated", "managed"):
+                    is_saml_enforced = True
+                    domain_id = domain.get("id", "unknown")
+                    federated_domains.append(domain_id)
+
+        if is_saml_enforced:
+            pass_reasons.append(f"SAML/Federation is enforced for {len(federated_domains)} domain(s)")
+        else:
+            fail_reasons.append("No federated/managed authentication domains found")
+            recommendations.append("Configure SAML/Federation for domain authentication")
+
+        return create_response(
+            result={criteriaKey: is_saml_enforced},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "totalDomains": len(domains),
+                "federatedDomains": len(federated_domains)
+            }
+        )
+
     except Exception as e:
-        return { "isSAMLEnforced": False, "error": str(e) }
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

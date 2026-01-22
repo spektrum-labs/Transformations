@@ -1,38 +1,79 @@
-# is_backup_immutable.py - Datto BCDR
+"""
+Transformation: isBackupImmutable
+Vendor: Datto BCDR
+Category: Backup / Data Protection
+
+Checks that Datto BCDR backups are immutable (Cloud Deletion Defense / Ransomware Shield).
+"""
 
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isBackupImmutable",
+                "vendor": "Datto",
+                "category": "Backup"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Checks that Datto BCDR backups are immutable (Cloud Deletion Defense / Ransomware Shield).
-    Returns: {"isBackupImmutable": bool}
-    """
-    try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+    criteriaKey = "isBackupImmutable"
 
-        # Parse input
-        data = _parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
-        data = data.get("apiResponse", data)
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         # Check for immutability/ransomware shield status
         devices = (
@@ -40,26 +81,30 @@ def transform(input):
             data.get("devices", []) or
             data.get("agents", []) or
             data.get("data", {}).get("rows", [])
-        )
+        ) if isinstance(data, dict) else []
 
         is_immutable = False
-        
+        immutable_count = 0
+
         # Check global immutability settings first
-        global_immutable = (
-            data.get("cloudDeletionDefense", False) or
-            data.get("ransomwareShield", False) or
-            data.get("immutableBackup", False) or
-            data.get("retentionLock", False)
-        )
-        
-        if global_immutable:
-            is_immutable = True
-        else:
+        if isinstance(data, dict):
+            global_immutable = (
+                data.get("cloudDeletionDefense", False) or
+                data.get("ransomwareShield", False) or
+                data.get("immutableBackup", False) or
+                data.get("retentionLock", False)
+            )
+
+            if global_immutable:
+                is_immutable = True
+                pass_reasons.append("Global immutability/ransomware shield enabled")
+
+        if not is_immutable:
             # Check individual devices
             for device in devices:
                 if isinstance(device, list):
                     device = device[0] if len(device) > 0 else {}
-                
+
                 device_immutable = (
                     device.get("immutableBackup", False) or
                     device.get("ransomwareShield", False) or
@@ -68,12 +113,31 @@ def transform(input):
                 )
                 if device_immutable:
                     is_immutable = True
-                    break
+                    immutable_count += 1
 
-        return {"isBackupImmutable": is_immutable}
+        if is_immutable:
+            if immutable_count > 0:
+                pass_reasons.append(f"{immutable_count} device(s) with immutable backup enabled")
+            pass_reasons.append("Datto Cloud Deletion Defense / Ransomware Shield active")
+        else:
+            fail_reasons.append("No immutable backup protection found")
+            recommendations.append("Enable Datto Cloud Deletion Defense or Ransomware Shield")
 
-    except json.JSONDecodeError:
-        return {"isBackupImmutable": False, "error": "Invalid JSON"}
+        return create_response(
+            result={criteriaKey: is_immutable},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "totalDevices": len(devices),
+                "immutableDevices": immutable_count
+            }
+        )
+
     except Exception as e:
-        return {"isBackupImmutable": False, "error": str(e)}
-
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

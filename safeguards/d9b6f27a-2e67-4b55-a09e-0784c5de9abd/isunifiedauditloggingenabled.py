@@ -1,87 +1,122 @@
+"""
+Transformation: isUnifiedAuditLoggingEnabled
+Vendor: Microsoft
+Category: Security / Logging
+
+Evaluates if unified audit logging is enabled by checking for audit log entries.
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isUnifiedAuditLoggingEnabled",
+                "vendor": "Microsoft",
+                "category": "Security"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Evaluates if unified audit logging is enabled
-
-    Parameters:
-        input (dict): The JSON data containing unified audit log information.
-
-    Returns:
-        dict: A dictionary summarizing the unified audit log information.
-    """
-
-    criteria_key_name = "isUnifiedAuditLoggingEnabled"
-    criteria_key_result = False
+    criteriaKey = "isUnifiedAuditLoggingEnabled"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    #input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])
-        if 'Output' in input:
-            input = _parse_input(input['Output'])
+        data, validation = extract_input(input)
 
-        # check if an error response body was returned
-        if 'error' in input:
-            data_error = input.get('error')
-            data_inner_error = data_error.get('innerError')
-            return {
-                    criteria_key_name: False,
-                    'errorSource': 'msgraph_api',
-                    'errorCode': data_error.get('code'),
-                    'errorMessage': data_error.get('message'),
-                    'innerErrorCode': data_inner_error.get('code'),
-                    'innerErrorMessage': data_inner_error.get('message')
-                    }
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False, "isUnifiedAuditLogEnabled": False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        # Check for API error response
+        if 'error' in data:
+            error_info = data.get('error', {})
+            inner_error = error_info.get('innerError', {})
+            return create_response(
+                result={criteriaKey: False, "isUnifiedAuditLogEnabled": False},
+                validation={"status": "error", "errors": [error_info.get('message', 'API error')], "warnings": []},
+                fail_reasons=[f"Microsoft Graph API error: {error_info.get('code', 'unknown')}"],
+                input_summary={
+                    "errorCode": error_info.get('code'),
+                    "innerErrorCode": inner_error.get('code') if inner_error else None
+                }
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         # Ensure value is type list, replace None if found
-        value = input.get('value',[])
+        value = data.get('value', [])
         if not isinstance(value, list):
             if value is None:
                 value = []
             else:
-                value = [input.get('value')]
+                value = [data.get('value')]
 
-        if len(value) > 0:
+        is_enabled = len(value) > 0
 
-            criteria_key_result = True
+        if is_enabled:
+            pass_reasons.append(f"Unified audit logging is enabled with {len(value)} audit log entry(ies) found")
+        else:
+            fail_reasons.append("No unified audit log entries found")
+            recommendations.append("Enable unified audit logging in Microsoft 365 compliance center")
 
-        transformed_data = {
-            criteria_key_name: criteria_key_result,
-            "isUnifiedAuditLogEnabled": criteria_key_result
-        }
-        return transformed_data
+        return create_response(
+            result={criteriaKey: is_enabled, "isUnifiedAuditLogEnabled": is_enabled},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"auditLogEntries": len(value)}
+        )
 
     except Exception as e:
-        return {criteria_key_name: False, "isUnifiedAuditLogEnabled": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False, "isUnifiedAuditLogEnabled": False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

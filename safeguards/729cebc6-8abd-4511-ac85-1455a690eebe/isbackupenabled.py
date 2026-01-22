@@ -1,61 +1,108 @@
+"""
+Transformation: isBackupEnabled
+Vendor: Azure
+Category: Backup / Data Protection
+
+Evaluates the backup status of DB instances.
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isBackupEnabled",
+                "vendor": "Azure",
+                "category": "Backup"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Evaluates the backup status of DB instances.
-
-    Parameters:
-        input (str | dict): The JSON data containing DB Backup information. 
-                            If a string is provided, it will be parsed.
-
-    Returns:
-        dict: A dictionary summarizing the DB backup information.
-    """
+    criteriaKey = "isBackupEnabled"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")       
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        input = _parse_input(input)
+        data, validation = extract_input(input)
 
-        # Extract response safely
-        input = input.get("response",input)
-        input = input.get("result",input)
-        input = input.get("apiResponse",input)
-        data = input.get("data",input)
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
-        if 'rows' in data:
-            rows = data.get("rows",[])
-            if len(rows) > 0:
-                return {"isBackupEnabled": True}
-        
-        # Construct the output
-        return {"isBackupEnabled": False}
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
-    except json.JSONDecodeError:
-        return {"isBackupEnabled": False, "error": "Invalid JSON format."}
+        inner_data = data.get("data", data)
+        is_enabled = False
+        row_count = 0
+
+        if 'rows' in inner_data:
+            rows = inner_data.get("rows", [])
+            row_count = len(rows)
+            if row_count > 0:
+                is_enabled = True
+
+        if is_enabled:
+            pass_reasons.append(f"Backup is enabled with {row_count} backup configuration(s) found")
+        else:
+            fail_reasons.append("No backup configurations found")
+            recommendations.append("Enable backup for database instances")
+
+        return create_response(
+            result={criteriaKey: is_enabled},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"backupConfigurations": row_count}
+        )
+
     except Exception as e:
-        return {"isBackupEnabled": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
