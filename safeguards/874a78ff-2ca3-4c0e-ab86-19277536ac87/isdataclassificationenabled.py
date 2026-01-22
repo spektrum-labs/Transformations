@@ -1,98 +1,125 @@
+"""
+Transformation: isDataClassificationEnabled
+Vendor: Microsoft
+Category: Information Protection / Secure Score
+
+Evaluates if data classification (sensitivity labels) is enabled based on Microsoft Secure Score.
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isDataClassificationEnabled",
+                "vendor": "Microsoft",
+                "category": "Information Protection"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Selects secure Score from list returned and evaluates if
-    data classification is enabled.
-
-    Parameters:
-        input (dict): The JSON data containing all secure Scores.
-
-    Returns:
-        dict: A dictionary summarizing data classification status for users.
-    """
-
-    criteria_key_name = "isDataClassificationEnabled"
-    criteria_key_result = False
-    control_name = "mip_sensitivitylabelspolicies"
+    criteriaKey = "isDataClassificationEnabled"
+    controlName = "mip_sensitivitylabelspolicies"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    #input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])
-        if 'Output' in input:
-            input = _parse_input(input['Output'])
+        data, validation = extract_input(input)
 
-        # check if an error response body was returned
-        if 'error' in input:
-            data_error = input.get('error')
-            data_inner_error = data_error.get('innerError')
-            return {
-                    criteria_key_name: False,
-                    'errorSource': 'msgraph_api',
-                    'errorCode': data_error.get('code'),
-                    'errorMessage': data_error.get('message'),
-                    'innerErrorCode': data_inner_error.get('code'),
-                    'innerErrorMessage': data_inner_error.get('message')
-                    }
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
-        # Ensure value is type list, replace None if found
-        value = input.get('value',[])
-        if not isinstance(value, list):
-            if value is None:
-                value = []
+        # Check for API error response
+        if 'error' in data:
+            error_info = data.get('error', {})
+            inner_error = error_info.get('innerError', {})
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "error", "errors": [error_info.get('message', 'API error')], "warnings": []},
+                fail_reasons=[f"Microsoft Graph API error: {error_info.get('code', 'unknown')}"],
+                input_summary={"errorCode": error_info.get('code'), "innerErrorCode": inner_error.get('code')}
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+        score_in_percentage = 0.0
+        is_enabled = False
+
+        values = data.get("value", [])
+        if len(values) > 0:
+            control_scores = values[0].get("controlScores", [])
+            matched = [i for i in control_scores if i.get('controlName') == controlName]
+
+            if len(matched) == 1:
+                score_in_percentage = matched[0].get("scoreInPercentage", 0.0)
+                is_enabled = score_in_percentage == 100.00
+
+                if is_enabled:
+                    pass_reasons.append("Data classification with sensitivity labels is fully enabled (score: 100%)")
+                else:
+                    fail_reasons.append(f"Data classification score is {score_in_percentage}%")
+                    recommendations.append("Configure sensitivity labels and policies in Microsoft Information Protection")
             else:
-                value = [input.get('value')]
+                fail_reasons.append(f"Control '{controlName}' not found in Secure Score")
+        else:
+            fail_reasons.append("No Secure Score data found")
 
-        if len(value) > 1:
-            raise ValueError(f"Length of data returned for {criteria_key_name} longer than expected)")
-
-        control_scores = value[0].get('controlScores', [])
-        matched_object_list = [i for i in control_scores if i['controlName'] == control_name]
-
-        if len(matched_object_list) > 1:
-            raise ValueError(f"More than one object has a controlName of {control_name}. (matched_object_count={len(matched_object_list)})")
-
-        matched_object = matched_object_list[0]
-        score_in_percentage = matched_object.get('scoreInPercentage', 0.0)
-        if score_in_percentage == 100.00:
-            criteria_key_result = True
-
-        transformed_data = {
-            criteria_key_name: criteria_key_result
-        }
-        return transformed_data
+        return create_response(
+            result={criteriaKey: is_enabled, "scoreInPercentage": score_in_percentage},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"hasSecureScoreData": len(values) > 0, "scoreInPercentage": score_in_percentage}
+        )
 
     except Exception as e:
-        return {criteria_key_name: False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

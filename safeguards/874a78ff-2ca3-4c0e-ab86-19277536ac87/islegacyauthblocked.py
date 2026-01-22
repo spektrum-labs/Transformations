@@ -1,90 +1,186 @@
+"""
+Transformation: isLegacyAuthBlocked
+Vendor: Microsoft
+Category: Identity / Secure Score
+
+Evaluates if legacy authentication is blocked based on Microsoft Secure Score
+(BlockLegacyAuthentication control).
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+# ============================================================================
+# Response Helpers (inline for RestrictedPython compatibility)
+# ============================================================================
+
+def extract_input(input_data):
+    """Extract data and validation from input, handling both new and legacy formats."""
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+
+    validation = {
+        "status": "unknown",
+        "errors": [],
+        "warnings": ["Legacy input format - no schema validation performed"]
+    }
+    return data, validation
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, metadata=None):
+    """Create a standardized transformation response."""
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+
+    response_metadata = {
+        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+        "schemaVersion": "1.0",
+        "transformationId": "isLegacyAuthBlocked",
+        "vendor": "Microsoft",
+        "category": "Identity"
+    }
+    if metadata:
+        response_metadata.update(metadata)
+
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": response_metadata
+        }
+    }
+
+
+# ============================================================================
+# Transformation Logic
+# ============================================================================
+
 def transform(input):
     """
-    Selects secure Score from list returned and evaluates if
-    legacy authentication is blocked.
+    Evaluates if legacy authentication is blocked based on Microsoft Secure Score.
 
     Parameters:
-        input (dict): The JSON data containing all secure Scores.
+        input: Either enriched format {"data": {...}, "validation": {...}}
+               or legacy format (raw API response)
 
     Returns:
-        dict: A dictionary summarizing legacy authentication status
-        for users.
+        dict: Standardized response with transformedResponse and additionalInfo
     """
-
-    # modify assignment to match specific criteriaKey
     criteriaKey = "isLegacyAuthBlocked"
-
-    # modify assignment to match specific controlName
     controlName = "BlockLegacyAuthentication"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    #input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])
+        data, validation = extract_input(input)
 
-        # controlScores currently doesn't support filtering
-        # return all controlScores and matches {controlName}
-        values = input.get("value",[])
-        control_scores = values[0].get("controlScores",[])
-        matched_object_list = [i for i in control_scores if i['controlName'] == controlName]
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
+                recommendations=["Verify the Microsoft integration is configured correctly"]
+            )
 
-        if len(matched_object_list) > 1:
-           raise ValueError(f"More than one object has a controlName of {controlName}. (matched_object_count={len(matched_object_list)})")
-        else: 
-           matched_object = matched_object_list[0]
-        
-        default_value = False
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+        score_in_percentage = 0.0
+        count = 0
+        total = 0
+        is_enabled = False
 
-        # currently scoreInPercentage must be 100.00 to be considered enforced/enabled
-        score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
-        is_enabled = True if score_in_percentage == 100.00 else False
+        # Process Secure Score data
+        values = data.get("value", [])
+        if len(values) > 0:
+            control_scores = values[0].get("controlScores", [])
+            matched_object_list = [i for i in control_scores if i.get('controlName') == controlName]
 
-        # count = sum of objects/users currently under {controlName}
-        count = matched_object.get("count", 0)
-        
-        # total = parent population of objects/users reachable by {controlName}
-        total = matched_object.get("total", 0)
+            if len(matched_object_list) > 1:
+                fail_reasons.append(f"Ambiguous data: {len(matched_object_list)} objects match controlName '{controlName}'")
+                return create_response(
+                    result={criteriaKey: False},
+                    validation=validation,
+                    fail_reasons=fail_reasons,
+                    recommendations=["Check Microsoft Secure Score data for duplicate control entries"]
+                )
+            elif len(matched_object_list) == 1:
+                matched_object = matched_object_list[0]
 
-        return {
-                    criteriaKey: is_enabled,
-                    "scoreInPercentage": score_in_percentage,
-                    "count": count,
-                    "total": total
-                }
+                score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
+                is_enabled = score_in_percentage == 100.00
 
+                count = matched_object.get("count", 0)
+                total = matched_object.get("total", 0)
+
+                if is_enabled:
+                    pass_reasons.append(f"Legacy authentication is fully blocked (score: 100%)")
+                else:
+                    fail_reasons.append(f"Legacy authentication blocking score is {score_in_percentage}%")
+                    recommendations.append("Block legacy authentication for all users via Conditional Access policies")
+            else:
+                fail_reasons.append(f"No control found matching '{controlName}' in Secure Score data")
+                recommendations.append("Verify Microsoft Secure Score is collecting legacy auth data")
+        else:
+            fail_reasons.append("No Secure Score data found")
+            recommendations.append("Verify the Microsoft Graph API integration is returning Secure Score data")
+
+        result = {
+            criteriaKey: is_enabled,
+            "scoreInPercentage": score_in_percentage,
+            "count": count,
+            "total": total
+        }
+
+        input_summary = {
+            "hasSecureScoreData": len(values) > 0,
+            "scoreInPercentage": score_in_percentage,
+            "blockedCount": count,
+            "totalCount": total
+        }
+
+        return create_response(
+            result=result,
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary=input_summary
+        )
+
+    except json.JSONDecodeError as e:
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
+            fail_reasons=["Could not parse input as valid JSON"]
+        )
     except Exception as e:
-        return {criteriaKey: False,"error": str(e)}
-    
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

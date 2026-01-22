@@ -1,77 +1,166 @@
+"""
+Transformation: isAntiPhishingEnabled
+Vendor: Microsoft
+Category: Email Security
+
+Evaluates if anti-phishing policies are enabled in Microsoft 365.
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+# ============================================================================
+# Response Helpers (inline for RestrictedPython compatibility)
+# ============================================================================
+
+def extract_input(input_data):
+    """Extract data and validation from input, handling both new and legacy formats."""
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+
+    validation = {
+        "status": "unknown",
+        "errors": [],
+        "warnings": ["Legacy input format - no schema validation performed"]
+    }
+    return data, validation
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, metadata=None):
+    """Create a standardized transformation response."""
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+
+    response_metadata = {
+        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+        "schemaVersion": "1.0",
+        "transformationId": "isAntiPhishingEnabled",
+        "vendor": "Microsoft",
+        "category": "Email Security"
+    }
+    if metadata:
+        response_metadata.update(metadata)
+
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "validationStatus": validation.get("status", "unknown"),
+            "validationErrors": validation.get("errors", []),
+            "validationWarnings": validation.get("warnings", []),
+            "passReasons": pass_reasons or [],
+            "failReasons": fail_reasons or [],
+            "recommendations": recommendations or [],
+            "inputSummary": input_summary or {},
+            "metadata": response_metadata
+        }
+    }
+
+
+# ============================================================================
+# Transformation Logic
+# ============================================================================
+
 def transform(input):
     """
-    Evaluates the MFA status for  given IDP
+    Evaluates if anti-phishing policies are enabled in Microsoft 365.
 
     Parameters:
-        input (dict): The JSON data containing IDP information.
+        input: Either enriched format {"data": {...}, "validation": {...}}
+               or legacy format (raw API response)
 
     Returns:
-        dict: A dictionary summarizing the MFA information.
+        dict: Standardized response with transformedResponse and additionalInfo
     """
+    criteriaKey = "isAntiPhishingEnabled"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    #input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])         
-        
-        #Get Configuration Policies
-        if 'Output' in input:
-            input = _parse_input(input['Output'])
-        if 'policies' in input:
-            policies = input['policies']
-        else:
-            policies = []
+        data, validation = extract_input(input)
 
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
+                recommendations=["Verify the Microsoft integration is configured correctly"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        # Get policies from data
+        policies = data.get('policies', [])
         if isinstance(policies, dict):
             policies = [policies]
 
-        try:    
-            matching_values = [
-                policy for policy in policies if str(policy.get("Enabled","false")).lower() == "true" or str(policy.get("IsDefault","false")).lower() == "true"
+        # Find enabled or default policies
+        try:
+            enabled_policies = [
+                policy for policy in policies
+                if str(policy.get("Enabled", "false")).lower() == "true" or
+                   str(policy.get("IsDefault", "false")).lower() == "true"
             ]
-        except Exception as e:
-            matching_values = []
-        
-        isAntiPhishingEnabled = len(matching_values) > 0
+        except Exception:
+            enabled_policies = []
 
-        policy_info = {
-            "isAntiPhishingEnabled": isAntiPhishingEnabled,
-            "policyDetails": matching_values
+        is_enabled = len(enabled_policies) > 0
+
+        if is_enabled:
+            policy_names = [p.get("Name", p.get("Identity", "unnamed")) for p in enabled_policies[:5]]
+            pass_reasons.append(f"{len(enabled_policies)} anti-phishing policy/policies enabled: {', '.join(policy_names)}")
+        else:
+            fail_reasons.append("No anti-phishing policies are enabled")
+            recommendations.append("Enable anti-phishing policies in Microsoft Defender for Office 365")
+
+        result = {
+            criteriaKey: is_enabled,
+            "policyDetails": enabled_policies
         }
-        return policy_info
+
+        input_summary = {
+            "totalPolicies": len(policies),
+            "enabledPolicies": len(enabled_policies),
+            "hasPolicyData": len(policies) > 0
+        }
+
+        return create_response(
+            result=result,
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary=input_summary
+        )
+
+    except json.JSONDecodeError as e:
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
+            fail_reasons=["Could not parse input as valid JSON"]
+        )
     except Exception as e:
-        return {"isAntiPhishingEnabled": False, "error": str(e)}
-        
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
