@@ -41,7 +41,7 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, metadata=None, transformation_errors=None):
+                    recommendations=None, input_summary=None, metadata=None, transformation_errors=None, api_errors=None):
     """Create a standardized transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
@@ -63,6 +63,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "validationErrors": validation.get("errors", []),
             "validationWarnings": validation.get("warnings", []),
             "transformationErrors": transformation_errors or [],
+
+            "apiErrors": api_errors or [],
             "passReasons": pass_reasons or [],
 
             "failReasons": fail_reasons or [],
