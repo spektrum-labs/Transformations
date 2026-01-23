@@ -32,7 +32,7 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None):
+                    recommendations=None, input_summary=None, transformation_errors=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -41,7 +41,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "validationStatus": validation.get("status", "unknown"),
             "validationErrors": validation.get("errors", []),
             "validationWarnings": validation.get("warnings", []),
+            "transformationErrors": transformation_errors or [],
             "passReasons": pass_reasons or [],
+
             "failReasons": fail_reasons or [],
             "recommendations": recommendations or [],
             "inputSummary": input_summary or {},
@@ -175,6 +177,7 @@ def transform(input):
     except Exception as e:
         return create_response(
             result={"isBackupEnabled": False},
-            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )

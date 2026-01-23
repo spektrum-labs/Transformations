@@ -29,7 +29,19 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None):
+                    recommendations=None, input_summary=None, transformation_errors=None):
+    """
+    Create standardized transformation response.
+
+    Args:
+        result: The transformed result dict (e.g., {criteriaKey: True/False})
+        validation: Schema validation result from extract_input (status, errors, warnings)
+        pass_reasons: List of reasons why the criteria passed
+        fail_reasons: List of reasons why the criteria failed
+        recommendations: List of actionable recommendations
+        input_summary: Summary of input data processed
+        transformation_errors: List of transformation execution errors (separate from validation)
+    """
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -38,6 +50,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "validationStatus": validation.get("status", "unknown"),
             "validationErrors": validation.get("errors", []),
             "validationWarnings": validation.get("warnings", []),
+            "transformationErrors": transformation_errors or [],
             "passReasons": pass_reasons or [],
             "failReasons": fail_reasons or [],
             "recommendations": recommendations or [],
@@ -76,13 +89,14 @@ def transform(input):
         recommendations = []
 
         # Navigate to resource members in CloudTrail events
+        # Use `or {}` to handle both missing keys AND null values from API
         api_response = data.get("apiResponse", data) if isinstance(data, dict) else {}
-        lookup_response = api_response.get("LookupEventsResponse", {})
-        lookup_result = lookup_response.get("LookupEventsResult", {})
-        events = lookup_result.get("Events", {})
-        member = events.get("member", {})
-        resources = member.get("Resources", {})
-        resource_members = resources.get("member", [])
+        lookup_response = api_response.get("LookupEventsResponse") or {}
+        lookup_result = lookup_response.get("LookupEventsResult") or {}
+        events = lookup_result.get("Events") or {}
+        member = events.get("member") or {}
+        resources = member.get("Resources") or {}
+        resource_members = resources.get("member") or []
 
         if isinstance(resource_members, dict):
             resource_members = [resource_members]
@@ -115,8 +129,12 @@ def transform(input):
         )
 
     except Exception as e:
+        # Separate transformation errors from validation errors
+        # - validationErrors: Schema validation issues (from Pydantic)
+        # - transformationErrors: Runtime execution errors in transformation logic
         return create_response(
             result={criteriaKey: False},
-            validation={"status": "error", "errors": [str(e)], "warnings": []},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
