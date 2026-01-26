@@ -102,15 +102,17 @@ def transform(input):
         expired_providers = []
 
         def parse_iso_date(date_str):
-            """Parse ISO 8601 date without using strptime (which imports _strptime)."""
+            """Parse ISO 8601 date without using strptime or map (not available in RestrictedPython)."""
             try:
                 # Format: "2026-01-26T11:26:33Z" or "2026-01-26T11:26:33.123Z"
                 date_str = date_str.replace("Z", "").split(".")[0]  # Remove Z and microseconds
                 date_part, time_part = date_str.split("T")
-                year, month, day = map(int, date_part.split("-"))
-                hour, minute, second = map(int, time_part.split(":"))
+                date_parts = date_part.split("-")
+                time_parts = time_part.split(":")
+                year, month, day = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
+                hour, minute, second = int(time_parts[0]), int(time_parts[1]), int(time_parts[2])
                 return datetime(year, month, day, hour, minute, second)
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, IndexError):
                 return None
 
         for provider in saml_providers:
