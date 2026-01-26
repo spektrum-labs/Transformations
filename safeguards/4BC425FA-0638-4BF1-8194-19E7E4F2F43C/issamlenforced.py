@@ -101,19 +101,29 @@ def transform(input):
         valid_providers = []
         expired_providers = []
 
+        def parse_iso_date(date_str):
+            """Parse ISO 8601 date without using strptime (which imports _strptime)."""
+            try:
+                # Format: "2026-01-26T11:26:33Z" or "2026-01-26T11:26:33.123Z"
+                date_str = date_str.replace("Z", "").split(".")[0]  # Remove Z and microseconds
+                date_part, time_part = date_str.split("T")
+                year, month, day = map(int, date_part.split("-"))
+                hour, minute, second = map(int, time_part.split(":"))
+                return datetime(year, month, day, hour, minute, second)
+            except (ValueError, AttributeError):
+                return None
+
         for provider in saml_providers:
             valid_until = provider.get("ValidUntil", "")
             provider_arn = provider.get("Arn", "unknown")
             if valid_until:
-                try:
-                    valid_until_date = datetime.strptime(valid_until, "%Y-%m-%dT%H:%M:%SZ")
+                valid_until_date = parse_iso_date(valid_until)
+                if valid_until_date:
                     if valid_until_date > datetime.utcnow():
                         is_saml_enforced = True
                         valid_providers.append(provider_arn)
                     else:
                         expired_providers.append(provider_arn)
-                except ValueError:
-                    pass
 
         if is_saml_enforced:
             pass_reasons.append(f"SAML is enforced with {len(valid_providers)} valid providers")
