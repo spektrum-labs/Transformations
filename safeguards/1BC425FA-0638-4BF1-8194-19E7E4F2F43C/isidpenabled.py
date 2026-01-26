@@ -29,23 +29,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -90,14 +99,29 @@ def transform(input):
             is_sso_enabled = default_value
             is_sso_enabled_mdr = default_value
 
+        additional_findings = []
+
+        # Primary criteria: isSSOEnabled
         if is_sso_enabled:
-            pass_reasons.append("SSO is enabled for MDR platform")
+            pass_reasons.append("Single Sign-On (SSO) enabled for MDR platform")
         else:
             fail_reasons.append("SSO is not enabled")
             recommendations.append("Enable SSO for centralized identity management")
 
+        # Additional finding: isSSOEnabledMDR
         if is_sso_enabled_mdr:
-            pass_reasons.append("SSO is enabled for MDR services")
+            additional_findings.append({
+                "metric": "isSSOEnabledMDR",
+                "status": "pass",
+                "reason": "Single Sign-On (SSO) enabled for MDR services"
+            })
+        else:
+            additional_findings.append({
+                "metric": "isSSOEnabledMDR",
+                "status": "fail",
+                "reason": "SSO is not enabled for MDR services",
+                "recommendation": "Enable SSO for MDR services"
+            })
 
         return create_response(
             result={
@@ -108,6 +132,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
                 "ssoEnabled": is_sso_enabled,
                 "ssoEnabledMDR": is_sso_enabled_mdr

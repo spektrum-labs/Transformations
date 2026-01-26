@@ -47,7 +47,7 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, metadata=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, metadata=None, transformation_errors=None, api_errors=None, additional_findings=None):
     """Create a standardized transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
@@ -65,16 +65,26 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": response_metadata
         }
     }
@@ -149,7 +159,7 @@ def transform(input):
         automated_backup_count = len(auto_backups) if auto_backups else 0
 
         if automated_backup_count > 0:
-            pass_reasons.append(f"{automated_backup_count} RDS automated backup(s) configured")
+            pass_reasons.append(f"{automated_backup_count} RDS automated backups configured")
 
             # Check retention periods
             low_retention = []
@@ -168,7 +178,7 @@ def transform(input):
                     f"Consider increasing backup retention to 7+ days for: {', '.join(low_retention)}"
                 )
         else:
-            fail_reasons.append("No RDS automated backups found")
+            fail_reasons.append("No automated database backups configured")
             recommendations.append("Enable automated backups for RDS instances")
 
         # ----------------------------------------------------------------
@@ -190,7 +200,7 @@ def transform(input):
         manual_snapshot_count = len(manual_snapshots) if manual_snapshots else 0
 
         if manual_snapshot_count > 0:
-            pass_reasons.append(f"{manual_snapshot_count} RDS manual snapshot(s) available")
+            pass_reasons.append(f"{manual_snapshot_count} RDS manual snapshots available")
 
         # ----------------------------------------------------------------
         # Process EBS Volume Snapshots
@@ -212,7 +222,7 @@ def transform(input):
         volume_snapshot_count = len(volume_snapshot_list) if volume_snapshot_list else 0
 
         if volume_snapshot_count > 0:
-            pass_reasons.append(f"{volume_snapshot_count} EBS volume snapshot(s) available")
+            pass_reasons.append(f"{volume_snapshot_count} EBS volume snapshots available")
 
         # ----------------------------------------------------------------
         # Determine overall result
@@ -221,7 +231,7 @@ def transform(input):
         is_backup_enabled = total_backups > 0
 
         if not is_backup_enabled:
-            fail_reasons.append("No backups or snapshots found for any resource type")
+            fail_reasons.append("No backups or snapshots found")
             recommendations.append("Implement a backup strategy for your AWS resources")
 
         # Build response

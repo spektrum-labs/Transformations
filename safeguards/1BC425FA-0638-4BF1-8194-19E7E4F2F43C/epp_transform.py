@@ -30,23 +30,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -241,17 +250,27 @@ def transform(input):
         coverage_scores["isEPPConfigured"] = isEPPConfigured
 
         # Build pass/fail reasons
+        epp_coverage = coverage_scores.get('Endpoint Protection', 0)
         if coverage_scores["isEPPEnabled"]:
-            pass_reasons.append(f"Endpoint protection enabled: {coverage_scores['Endpoint Protection']}% coverage")
+            if epp_coverage > 0:
+                pass_reasons.append(f"Endpoint protection active: {epp_coverage}% of devices protected")
+            else:
+                pass_reasons.append("Endpoint protection configured but no devices currently protected")
+                recommendations.append("Verify endpoint agent deployment status")
         else:
-            fail_reasons.append("Endpoint protection is not enabled")
+            fail_reasons.append("Endpoint protection not deployed or not reporting data")
             recommendations.append("Deploy endpoint protection to all computers")
 
-        if coverage_scores["Server Protection"] > 0:
-            pass_reasons.append(f"Server protection: {coverage_scores['Server Protection']}% coverage")
+        server_coverage = coverage_scores.get("Server Protection", 0)
+        if server_coverage > 0:
+            pass_reasons.append(f"Server protection active: {server_coverage}% of servers protected")
 
+        mdr_coverage = coverage_scores.get("MDR", 0)
         if coverage_scores["isMDREnabled"]:
-            pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
+            if mdr_coverage > 0:
+                pass_reasons.append(f"MDR active: {mdr_coverage}% coverage")
+            else:
+                pass_reasons.append("MDR configured but no devices currently monitored")
 
         return create_response(
             result=coverage_scores,

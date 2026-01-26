@@ -30,23 +30,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -127,27 +136,65 @@ def transform(input):
 
         is_dns_configured = is_dmarc_configured and is_dkim_configured and is_spf_configured
 
-        # Build pass/fail reasons
-        if is_dmarc_configured:
-            pass_reasons.append("DMARC record is configured")
-        else:
-            fail_reasons.append("DMARC record is not configured")
-            recommendations.append("Configure DMARC record for email domain authentication")
+        additional_findings = []
 
-        if is_dkim_configured:
-            pass_reasons.append("DKIM record is configured")
-        else:
-            fail_reasons.append("DKIM record is not configured")
-            recommendations.append("Configure DKIM record for email signing")
-
-        if is_spf_configured:
-            pass_reasons.append("SPF record is configured")
-        else:
-            fail_reasons.append("SPF record is not configured")
-            recommendations.append("Configure SPF record to specify authorized mail servers")
-
+        # Primary criteria: isDNSConfigured (all records present)
         if is_dns_configured:
-            pass_reasons.insert(0, "All email DNS records (DMARC, DKIM, SPF) are properly configured")
+            pass_reasons.append("All email DNS records (DMARC, DKIM, SPF) are properly configured")
+        else:
+            not_configured = []
+            if not is_dmarc_configured:
+                not_configured.append("DMARC")
+            if not is_dkim_configured:
+                not_configured.append("DKIM")
+            if not is_spf_configured:
+                not_configured.append("SPF")
+            fail_reasons.append(f"Missing DNS records: {', '.join(not_configured)}")
+
+        # Additional finding: isDMARCConfigured
+        if is_dmarc_configured:
+            additional_findings.append({
+                "metric": "isDMARCConfigured",
+                "status": "pass",
+                "reason": "DMARC record is configured"
+            })
+        else:
+            additional_findings.append({
+                "metric": "isDMARCConfigured",
+                "status": "fail",
+                "reason": "DMARC DNS record not found",
+                "recommendation": "Configure DMARC record for email domain authentication"
+            })
+
+        # Additional finding: isDKIMConfigured
+        if is_dkim_configured:
+            additional_findings.append({
+                "metric": "isDKIMConfigured",
+                "status": "pass",
+                "reason": "DKIM record is configured"
+            })
+        else:
+            additional_findings.append({
+                "metric": "isDKIMConfigured",
+                "status": "fail",
+                "reason": "DKIM DNS record not found",
+                "recommendation": "Configure DKIM record for email signing"
+            })
+
+        # Additional finding: isSPFConfigured
+        if is_spf_configured:
+            additional_findings.append({
+                "metric": "isSPFConfigured",
+                "status": "pass",
+                "reason": "SPF record is configured"
+            })
+        else:
+            additional_findings.append({
+                "metric": "isSPFConfigured",
+                "status": "fail",
+                "reason": "SPF DNS record not found",
+                "recommendation": "Configure SPF record to specify authorized mail servers"
+            })
 
         return create_response(
             result={
@@ -160,6 +207,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
                 "dmarcConfigured": is_dmarc_configured,
                 "dkimConfigured": is_dkim_configured,

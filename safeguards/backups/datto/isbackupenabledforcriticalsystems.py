@@ -29,23 +29,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -128,10 +137,10 @@ def transform(input):
                     protected_critical_count += 1
 
         if critical_protected:
-            pass_reasons.append(f"Backup enabled for critical systems: {protected_critical_count}/{critical_count} server(s) protected")
+            pass_reasons.append(f"Backup enabled for critical systems: {protected_critical_count}/{critical_count} servers protected")
         else:
             if critical_count > 0:
-                fail_reasons.append(f"No backups enabled for {critical_count} critical system(s)")
+                fail_reasons.append(f"No backups enabled for {critical_count} critical systems")
             else:
                 fail_reasons.append("No critical systems (servers) found in Datto BCDR")
             recommendations.append("Enable Datto BCDR backup for all critical servers")

@@ -30,23 +30,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -107,17 +116,44 @@ def transform(input):
 
         is_firewall_configured = is_firewall_enabled and is_firewall_logging_enabled
 
+        additional_findings = []
+
+        # Primary criteria: isFirewallEnabled
         if is_firewall_enabled:
             pass_reasons.append("Firewall is enabled")
         else:
-            fail_reasons.append("Firewall is not enabled")
+            fail_reasons.append("Firewall not enabled or not reporting")
             recommendations.append("Enable firewall for network security")
 
+        # Additional finding: isFirewallLoggingEnabled
         if is_firewall_logging_enabled:
-            pass_reasons.append("Firewall logging is enabled")
+            additional_findings.append({
+                "metric": "isFirewallLoggingEnabled",
+                "status": "pass",
+                "reason": "Firewall logging is enabled"
+            })
         else:
-            fail_reasons.append("Firewall logging is not enabled")
-            recommendations.append("Enable firewall logging for audit and compliance")
+            additional_findings.append({
+                "metric": "isFirewallLoggingEnabled",
+                "status": "fail",
+                "reason": "Firewall logging is not enabled",
+                "recommendation": "Enable firewall logging for audit and compliance"
+            })
+
+        # Additional finding: isFirewallConfigured
+        if is_firewall_configured:
+            additional_findings.append({
+                "metric": "isFirewallConfigured",
+                "status": "pass",
+                "reason": "Firewall is fully configured (enabled with logging)"
+            })
+        else:
+            additional_findings.append({
+                "metric": "isFirewallConfigured",
+                "status": "fail",
+                "reason": "Firewall configuration incomplete",
+                "recommendation": "Ensure both firewall and logging are enabled"
+            })
 
         return create_response(
             result={
@@ -129,6 +165,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
                 "firewallEnabled": is_firewall_enabled,
                 "loggingEnabled": is_firewall_logging_enabled

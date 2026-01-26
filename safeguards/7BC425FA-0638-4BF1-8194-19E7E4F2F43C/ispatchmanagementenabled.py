@@ -29,23 +29,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -90,18 +99,29 @@ def transform(input):
             is_patch_management_enabled = default_value
             is_patch_management_valid = default_value
 
+        additional_findings = []
+
+        # Primary criteria: isPatchManagementEnabled
         if is_patch_management_enabled:
             pass_reasons.append("Patch management is enabled")
         else:
             fail_reasons.append("Patch management is not enabled")
             recommendations.append("Enable patch management for endpoint security")
 
+        # Additional finding: isPatchManagementValid
         if is_patch_management_valid:
-            pass_reasons.append("Patch management configuration is valid")
+            additional_findings.append({
+                "metric": "isPatchManagementValid",
+                "status": "pass",
+                "reason": "Patch management configuration is valid"
+            })
         else:
-            if is_patch_management_enabled:
-                fail_reasons.append("Patch management configuration is not valid")
-                recommendations.append("Review and correct patch management configuration")
+            additional_findings.append({
+                "metric": "isPatchManagementValid",
+                "status": "fail",
+                "reason": "Patch management configuration is not valid",
+                "recommendation": "Review and correct patch management configuration"
+            })
 
         return create_response(
             result={
@@ -112,6 +132,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
                 "patchManagementEnabled": is_patch_management_enabled,
                 "patchManagementValid": is_patch_management_valid

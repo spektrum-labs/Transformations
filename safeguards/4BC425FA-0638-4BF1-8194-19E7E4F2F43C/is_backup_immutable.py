@@ -30,23 +30,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -88,12 +97,18 @@ def transform(input):
         vault_name = data.get("BackupVaultName", "unknown") if isinstance(data, dict) else "unknown"
 
         if is_immutable:
-            pass_reasons.append(f"Backup vault '{vault_name}' is locked and immutable")
+            if vault_name != "unknown":
+                pass_reasons.append(f"Backup vault '{vault_name}' is locked and immutable")
+            else:
+                pass_reasons.append("Backup vault is locked and immutable")
         else:
             if lock_state:
-                fail_reasons.append(f"Backup vault '{vault_name}' lock state is '{lock_state}' (not LOCKED)")
+                if vault_name != "unknown":
+                    fail_reasons.append(f"Backup vault '{vault_name}' lock state is '{lock_state}' (not LOCKED)")
+                else:
+                    fail_reasons.append(f"Backup vault lock state is '{lock_state}' (not LOCKED)")
             else:
-                fail_reasons.append(f"Backup vault '{vault_name}' has no lock configuration")
+                fail_reasons.append("No backup vault with immutability lock configured")
             recommendations.append("Enable Backup Vault Lock to make backups immutable")
 
         return create_response(

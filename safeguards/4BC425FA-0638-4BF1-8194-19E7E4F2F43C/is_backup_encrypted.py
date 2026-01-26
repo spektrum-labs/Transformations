@@ -29,23 +29,32 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -135,23 +144,66 @@ def transform(input):
 
         all_enc = auto_enc and man_enc and ebs_enc
 
-        if auto_enc and len(auto_list) > 0:
-            pass_reasons.append(f"All {len(auto_list)} automated RDS backups are encrypted")
-        elif not auto_enc:
-            fail_reasons.append(f"{len(unencrypted_auto)} automated RDS backup(s) not encrypted")
-            recommendations.append("Enable encryption for RDS automated backups")
+        additional_findings = []
 
-        if man_enc and len(manual_list) > 0:
-            pass_reasons.append(f"All {len(manual_list)} manual RDS snapshots are encrypted")
-        elif not man_enc:
-            fail_reasons.append(f"{len(unencrypted_manual)} manual RDS snapshot(s) not encrypted")
-            recommendations.append("Enable encryption for RDS manual snapshots")
+        # Primary criteria: isBackupEncrypted (all backups encrypted)
+        if all_enc:
+            total_backups = len(auto_list) + len(manual_list) + len(ebs_list)
+            if total_backups > 0:
+                pass_reasons.append(f"All {total_backups} backups are encrypted")
+            else:
+                pass_reasons.append("No backups found to evaluate encryption")
+        else:
+            unencrypted_total = len(unencrypted_auto) + len(unencrypted_manual) + len(unencrypted_ebs)
+            fail_reasons.append(f"{unencrypted_total} backups are not encrypted")
 
-        if ebs_enc and len(ebs_list) > 0:
-            pass_reasons.append(f"All {len(ebs_list)} EBS snapshots are encrypted")
-        elif not ebs_enc:
-            fail_reasons.append(f"{len(unencrypted_ebs)} EBS snapshot(s) not encrypted")
-            recommendations.append("Enable encryption for EBS snapshots")
+        # Additional finding: isAutoBackupEncrypted
+        if len(auto_list) > 0:
+            if auto_enc:
+                additional_findings.append({
+                    "metric": "isAutoBackupEncrypted",
+                    "status": "pass",
+                    "reason": f"All {len(auto_list)} automated RDS backups are encrypted"
+                })
+            else:
+                additional_findings.append({
+                    "metric": "isAutoBackupEncrypted",
+                    "status": "fail",
+                    "reason": f"{len(unencrypted_auto)} automated RDS backups not encrypted",
+                    "recommendation": "Enable encryption for RDS automated backups"
+                })
+
+        # Additional finding: isManualBackupEncrypted
+        if len(manual_list) > 0:
+            if man_enc:
+                additional_findings.append({
+                    "metric": "isManualBackupEncrypted",
+                    "status": "pass",
+                    "reason": f"All {len(manual_list)} manual RDS snapshots are encrypted"
+                })
+            else:
+                additional_findings.append({
+                    "metric": "isManualBackupEncrypted",
+                    "status": "fail",
+                    "reason": f"{len(unencrypted_manual)} manual RDS snapshots not encrypted",
+                    "recommendation": "Enable encryption for RDS manual snapshots"
+                })
+
+        # Additional finding: isEbsBackupEncrypted
+        if len(ebs_list) > 0:
+            if ebs_enc:
+                additional_findings.append({
+                    "metric": "isEbsBackupEncrypted",
+                    "status": "pass",
+                    "reason": f"All {len(ebs_list)} EBS snapshots are encrypted"
+                })
+            else:
+                additional_findings.append({
+                    "metric": "isEbsBackupEncrypted",
+                    "status": "fail",
+                    "reason": f"{len(unencrypted_ebs)} EBS snapshots not encrypted",
+                    "recommendation": "Enable encryption for EBS snapshots"
+                })
 
         return create_response(
             result={
@@ -164,6 +216,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
                 "autoBackupCount": len(auto_list),
                 "manualSnapshotCount": len(manual_list),

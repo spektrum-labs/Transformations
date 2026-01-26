@@ -30,23 +30,33 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "validationStatus": validation.get("status", "unknown"),
-            "validationErrors": validation.get("errors", []),
-            "validationWarnings": validation.get("warnings", []),
-            "transformationErrors": transformation_errors or [],
-
-            "apiErrors": api_errors or [],
-            "passReasons": pass_reasons or [],
-
-            "failReasons": fail_reasons or [],
-            "recommendations": recommendations or [],
-            "inputSummary": input_summary or {},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
@@ -155,23 +165,44 @@ def transform(input):
         is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
         is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
 
-        if is_firewall_enabled_final:
-            pass_reasons.append("Firewall is enabled")
-        else:
-            fail_reasons.append("Firewall is not enabled")
-            recommendations.append("Enable firewall for network security")
+        additional_findings = []
 
+        # Primary criteria: isFirewallLoggingEnabled
         if is_firewall_logging_enabled:
             pass_reasons.append("Firewall logging is enabled")
         else:
             fail_reasons.append("Firewall logging is not enabled")
             recommendations.append("Enable firewall logging for audit and compliance")
 
-        if is_firewall_configured:
-            pass_reasons.append(f"Firewall is configured with {len(internet_firewall_rules)} internet rules and {len(wan_network_rules)} WAN rules")
+        # Additional finding: isFirewallEnabled
+        if is_firewall_enabled_final:
+            additional_findings.append({
+                "metric": "isFirewallEnabled",
+                "status": "pass",
+                "reason": "Firewall is enabled"
+            })
         else:
-            fail_reasons.append("Firewall rules are not configured")
-            recommendations.append("Configure firewall rules for proper network security")
+            additional_findings.append({
+                "metric": "isFirewallEnabled",
+                "status": "fail",
+                "reason": "Firewall not enabled or not reporting",
+                "recommendation": "Enable firewall for network security"
+            })
+
+        # Additional finding: isFirewallConfigured
+        if is_firewall_configured:
+            additional_findings.append({
+                "metric": "isFirewallConfigured",
+                "status": "pass",
+                "reason": f"Firewall configured with {len(internet_firewall_rules)} internet rules and {len(wan_network_rules)} WAN rules"
+            })
+        else:
+            additional_findings.append({
+                "metric": "isFirewallConfigured",
+                "status": "fail",
+                "reason": "No firewall rules configured",
+                "recommendation": "Configure firewall rules for proper network security"
+            })
 
         return create_response(
             result={
@@ -185,6 +216,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
                 "firewallEnabled": is_firewall_enabled_final,
                 "loggingEnabled": is_firewall_logging_enabled,
