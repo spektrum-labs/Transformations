@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+CLAUDE.md
+
+# API response samples (may contain sensitive infrastructure data)
+**/api_responses/
+
+# Local scripts with hardcoded paths
+move_api_responses.py

@@ -1,56 +1,127 @@
-# is_backup_tested.py
+"""
+Transformation: isBackupTested
+Vendor: Generic
+Category: Backup / Data Protection
+
+Checks whether any backups have been tested via restore operations.
+"""
 
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isBackupTested",
+                "vendor": "Generic",
+                "category": "Backup"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Checks whether any backups have been tested via restore operations.
-    Returns: {"isBackupTested": bool}
-    """
+    criteriaKey = "isBackupTested"
+
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
-    
-        # Get the response from the input
-        response = _parse_input(input)
-        result = response.get("result",response)
-        data = result.get("apiResponse", result)
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        # Check if any event is a DBInstance restore operation
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        # Check if any event is a restore operation
         is_backup_tested = False
-        if 'totalRecords' in data:
-            is_backup_tested = data.get("totalRecords", 0) > 0
-        else:
-            if 'data' in data:
-                data = data.get("rows", [])
-                is_backup_tested = len(data) > 0
-        
-        return {"isBackupTested": is_backup_tested}
+        test_count = 0
 
-    except json.JSONDecodeError:
-        return {"isBackupTested": False, "error": "Invalid JSON"}
+        if isinstance(data, dict):
+            if 'totalRecords' in data:
+                test_count = data.get("totalRecords", 0)
+                is_backup_tested = test_count > 0
+            else:
+                inner_data = data.get("data", data)
+                if 'rows' in inner_data:
+                    rows = inner_data.get("rows", [])
+                    test_count = len(rows)
+                    is_backup_tested = test_count > 0
+
+        if is_backup_tested:
+            pass_reasons.append(f"Backup testing verified with {test_count} restore operations found")
+        else:
+            fail_reasons.append("No backup restore test operations found")
+            recommendations.append("Regularly test backups by performing restore operations")
+
+        return create_response(
+            result={criteriaKey: is_backup_tested},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"restoreOperations": test_count}
+        )
+
     except Exception as e:
-        return {"isBackupTested": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

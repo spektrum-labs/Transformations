@@ -1,85 +1,129 @@
+"""
+Transformation: isAdminAuditLoggingEnabled
+Vendor: Microsoft
+Category: Email Security / Logging
+
+Evaluates if admin audit logging is enabled.
+"""
+
 import json
-import ast
-def transform(input):
-    """
-    Evaluates if email admin audit logging is enabled
+from datetime import datetime
 
-    Parameters:
-        input (dict): The JSON data containing email admin audit log information.
 
-    Returns:
-        dict: A dictionary summarizing the email admin audit log information.
-    """
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
-    criteria_key_name = "isAdminAuditLoggingEnabled"
-    criteria_key_result = False
-    
-    try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    #input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
 
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])
-        if 'Output' in input:
-            input = _parse_input(input['Output'])
-
-        # check if an error response body was returned
-        if 'error' in input:
-            data_error = input.get('error')
-            data_inner_error = data_error.get('innerError')
-            return {
-                    criteria_key_name: False,
-                    'errorSource': 'msgraph_api',
-                    'errorCode': data_error.get('code'),
-                    'errorMessage': data_error.get('message'),
-                    'innerErrorCode': data_inner_error.get('code'),
-                    'innerErrorMessage': data_inner_error.get('message')
-                    }
-
-        # Ensure value is type list, replace None if found
-        value = input.get('value',[])
-        if not isinstance(value, list):
-            if value is None:
-                value = []
-            else:
-                value = [input.get('value')]
-        if len(value) > 0:
-
-            criteria_key_result = True
-
-        transformed_data = {
-            criteria_key_name: criteria_key_result
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isAdminAuditLoggingEnabled",
+                "vendor": "Microsoft",
+                "category": "Email Security"
+            }
         }
-        return transformed_data
+    }
+
+
+def transform(input):
+    criteriaKey = "isAdminAuditLoggingEnabled"
+
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        # Check for API error response
+        if 'error' in data:
+            error_info = data.get('error', {})
+            inner_error = error_info.get('innerError', {})
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "error", "errors": [error_info.get('message', 'API error')], "warnings": []},
+                fail_reasons=[f"Microsoft Graph API error: {error_info.get('code', 'unknown')}"],
+                input_summary={"errorCode": error_info.get('code'), "innerErrorCode": inner_error.get('code') if inner_error else None}
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        audit_logs = data.get('value', [])
+        if not isinstance(audit_logs, list):
+            audit_logs = [audit_logs] if audit_logs else []
+
+        is_enabled = len(audit_logs) > 0
+
+        if is_enabled:
+            pass_reasons.append(f"Admin audit logging is enabled with {len(audit_logs)} log entries found")
+        else:
+            fail_reasons.append("Admin audit logging not enabled or no recent entries")
+            recommendations.append("Enable admin audit logging in Exchange Online")
+
+        return create_response(
+            result={criteriaKey: is_enabled},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"logCount": len(audit_logs)}
+        )
 
     except Exception as e:
-        return {criteria_key_name: False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

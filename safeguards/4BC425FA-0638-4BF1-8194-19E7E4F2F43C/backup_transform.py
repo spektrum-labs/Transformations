@@ -1,59 +1,194 @@
-# isbackupenabled.py
+"""
+Transformation: backup_transform
+Vendor: AWS
+Category: Backups
+
+Evaluates whether backups are enabled for AWS resources including:
+- RDS automated backups
+- RDS manual snapshots
+- EBS volume snapshots
+"""
 
 import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "backup_transform",
+                "vendor": "AWS",
+                "category": "Backups"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Evaluates whether any backups exist across RDS automated, RDS manual, or EBS snapshots.
-    Returns: {"isBackupEnabled": bool}
-    """
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                return json.loads(input)
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
-        # Parse JSON if needed
-        data = _parse_input(input)
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        # Drill down past response/result wrappers if present
-        data = data.get("response", data).get("result", data)
+        data, validation = extract_input(input)
 
-        # Extract each backup category
-        dbBackups          = data.get("dbBackups", {})
-        dbManualSnapshots  = data.get("dbManualSnapshots", {})
-        volumeSnapshots    = data.get("volumeSnapshots", {})
+        if validation.get("status") == "failed":
+            return create_response(
+                result={"isBackupEnabled": False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
-        # Automated RDS
-        auto_resp   = dbBackups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
-        auto_res    = auto_resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
-        auto_group  = auto_res.get("DBInstanceAutomatedBackups", [])
-        if isinstance(auto_group, dict):
-            auto_group = [auto_group]
-        automated   = auto_group
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
-        # Manual RDS
-        man_resp    = dbManualSnapshots.get("DescribeDBSnapshotsResponse", {})
-        man_res     = man_resp.get("DescribeDBSnapshotsResult", {})
-        man_group   = man_res.get("DBSnapshots", {}).get("DBSnapshot", [])
-        if isinstance(man_group, dict):
-            man_group = [man_group]
-        manual      = man_group
+        # Extract backup data
+        db_backups = data.get("dbBackups") or {}
+        db_manual_snapshots = data.get("dbManualSnapshots") or {}
+        volume_snapshots = data.get("volumeSnapshots") or {}
 
-        # EBS snapshots
-        ebs_resp    = volumeSnapshots.get("DescribeSnapshotsResponse", {})
-        ebs_group   = ebs_resp.get("snapshotSet", {}).get("item", [])
-        if isinstance(ebs_group, dict):
-            ebs_group = [ebs_group]
-        ebs         = ebs_group
+        # Process RDS Automated Backups
+        auto_response = db_backups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
+        auto_result = auto_response.get("DescribeDBInstanceAutomatedBackupsResult", {})
+        auto_backups_container = auto_result.get("DBInstanceAutomatedBackups", {})
 
-        return {"isBackupEnabled": bool(automated or manual or ebs)}
+        if isinstance(auto_backups_container, dict):
+            auto_backups = auto_backups_container.get("DBInstanceAutomatedBackup", [])
+            if isinstance(auto_backups, dict):
+                auto_backups = [auto_backups]
+        elif isinstance(auto_backups_container, list):
+            auto_backups = auto_backups_container
+        else:
+            auto_backups = []
 
-    except json.JSONDecodeError:
-        return {"isBackupEnabled": False, "error": "Invalid JSON"}
+        automated_backup_count = len(auto_backups) if auto_backups else 0
+
+        # Process RDS Manual Snapshots
+        manual_response = db_manual_snapshots.get("DescribeDBSnapshotsResponse", {})
+        manual_result = manual_response.get("DescribeDBSnapshotsResult", {})
+        manual_snapshots_container = manual_result.get("DBSnapshots", {})
+
+        if isinstance(manual_snapshots_container, dict):
+            manual_snapshots = manual_snapshots_container.get("DBSnapshot", [])
+            if isinstance(manual_snapshots, dict):
+                manual_snapshots = [manual_snapshots]
+        elif isinstance(manual_snapshots_container, list):
+            manual_snapshots = manual_snapshots_container
+        else:
+            manual_snapshots = []
+
+        manual_snapshot_count = len(manual_snapshots) if manual_snapshots else 0
+
+        # Process EBS Volume Snapshots
+        vol_response = volume_snapshots.get("DescribeSnapshotsResponse", {})
+        vol_snapshots_container = vol_response.get("snapshotSet", {})
+
+        if vol_snapshots_container is None:
+            volume_snapshot_list = []
+        elif isinstance(vol_snapshots_container, dict):
+            volume_snapshot_list = vol_snapshots_container.get("item", [])
+            if isinstance(volume_snapshot_list, dict):
+                volume_snapshot_list = [volume_snapshot_list]
+        elif isinstance(vol_snapshots_container, list):
+            volume_snapshot_list = vol_snapshots_container
+        else:
+            volume_snapshot_list = []
+
+        volume_snapshot_count = len(volume_snapshot_list) if volume_snapshot_list else 0
+
+        # Determine overall result
+        total_backups = automated_backup_count + manual_snapshot_count + volume_snapshot_count
+        is_backup_enabled = total_backups > 0
+
+        if automated_backup_count > 0:
+            pass_reasons.append(f"{automated_backup_count} RDS automated backups configured")
+        else:
+            fail_reasons.append("No automated database backups configured")
+            recommendations.append("Enable automated backups for RDS instances")
+
+        if manual_snapshot_count > 0:
+            pass_reasons.append(f"{manual_snapshot_count} RDS manual snapshots available")
+
+        if volume_snapshot_count > 0:
+            pass_reasons.append(f"{volume_snapshot_count} EBS volume snapshots available")
+
+        if not is_backup_enabled:
+            fail_reasons.append("No backups or snapshots found")
+            recommendations.append("Implement a backup strategy for your AWS resources")
+
+        return create_response(
+            result={
+                "isBackupEnabled": is_backup_enabled,
+                "automatedBackupCount": automated_backup_count,
+                "manualSnapshotCount": manual_snapshot_count,
+                "volumeSnapshotCount": volume_snapshot_count,
+                "totalBackupCount": total_backups
+            },
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "hasDbBackupsData": bool(db_backups),
+                "hasDbManualSnapshotsData": bool(db_manual_snapshots),
+                "hasVolumeSnapshotsData": bool(volume_snapshots),
+                "automatedBackupCount": automated_backup_count,
+                "manualSnapshotCount": manual_snapshot_count,
+                "volumeSnapshotCount": volume_snapshot_count
+            }
+        )
+
     except Exception as e:
-        return {"isBackupEnabled": False, "error": str(e)}
-
+        return create_response(
+            result={"isBackupEnabled": False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
