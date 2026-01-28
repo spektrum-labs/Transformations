@@ -129,48 +129,48 @@ def transform(input):
 
             # 1. Endpoint Protection
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Protection"] += 1
+                safeguard_counters["Endpoint Protection"] = safeguard_counters["Endpoint Protection"] + 1
 
             # 1.1 Endpoint Security
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Security"] += 1
+                safeguard_counters["Endpoint Security"] = safeguard_counters["Endpoint Security"] + 1
 
             # 2. Server Protection
             if endpoint_type == "server" and "endpointProtection" in assigned_products:
-                safeguard_counters["Server Protection"] += 1
+                safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
 
             # 3. MDR (Managed Detection and Response)
             if "mtr" in assigned_products:
-                safeguard_counters["MDR"] += 1
+                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
 
             # 4. Network Protection
             if any("Network Threat Protection" in service_name for service_name in services):
-                safeguard_counters["Network Protection"] += 1
+                safeguard_counters["Network Protection"] = safeguard_counters["Network Protection"] + 1
 
             # 5. Cloud Security
             if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
-                safeguard_counters["Cloud Security"] += 1
+                safeguard_counters["Cloud Security"] = safeguard_counters["Cloud Security"] + 1
 
             # 6. Mobile Protection
             if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
-                safeguard_counters["Mobile Protection"] += 1
+                safeguard_counters["Mobile Protection"] = safeguard_counters["Mobile Protection"] + 1
 
             # 7. Email Security
             if "emailSecurity" in assigned_products:
-                safeguard_counters["Email Security"] += 1
+                safeguard_counters["Email Security"] = safeguard_counters["Email Security"] + 1
 
             # 8. Phishing Protection
             if "interceptX" in assigned_products:
-                safeguard_counters["Phishing Protection"] += 1
+                safeguard_counters["Phishing Protection"] = safeguard_counters["Phishing Protection"] + 1
 
             # 9. Zero Trust Network Access
             ztna_product = assigned_products.get("ztna")
             if ztna_product and ztna_product.get("status") == "installed":
-                safeguard_counters["Zero Trust Network Access"] += 1
+                safeguard_counters["Zero Trust Network Access"] = safeguard_counters["Zero Trust Network Access"] + 1
 
             # 10. Encryption
             if endpoint.get("encryption", {}).get("volumes"):
-                safeguard_counters["Encryption"] += 1
+                safeguard_counters["Encryption"] = safeguard_counters["Encryption"] + 1
 
         # Initialize coverage scores
         coverage_scores = {}

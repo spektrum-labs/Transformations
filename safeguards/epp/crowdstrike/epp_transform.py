@@ -178,41 +178,41 @@ def transform(endpoints_response, debug=False):
             has_epp = bool(has_active_sensor and has_prevention_policy)
 
             if endpoint_type == "computer" and has_epp:
-                safeguard_counters["Endpoint Protection"] += 1
-                safeguard_counters["Endpoint Security"] += 1
+                safeguard_counters["Endpoint Protection"] = safeguard_counters["Endpoint Protection"] + 1
+                safeguard_counters["Endpoint Security"] = safeguard_counters["Endpoint Security"] + 1
 
             if endpoint_type == "server" and has_epp:
-                safeguard_counters["Server Protection"] += 1
+                safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
 
             if has_network_protection:
-                safeguard_counters["Network Protection"] += 1
+                safeguard_counters["Network Protection"] = safeguard_counters["Network Protection"] + 1
 
             if is_cloud and has_epp:
-                safeguard_counters["Cloud Security"] += 1
+                safeguard_counters["Cloud Security"] = safeguard_counters["Cloud Security"] + 1
 
             if endpoint_type == "mobile" and has_active_sensor:
-                safeguard_counters["Mobile Protection"] += 1
+                safeguard_counters["Mobile Protection"] = safeguard_counters["Mobile Protection"] + 1
 
             email_policies = device_policies.get("email", {})
             if email_policies and email_policies != {}:
-                safeguard_counters["Email Security"] += 1
+                safeguard_counters["Email Security"] = safeguard_counters["Email Security"] + 1
 
             url_policies = device_policies.get("url", {})
             has_url_policy = ((url_policies and url_policies != {} and (url_policies.get("policy_id") or url_policies.get("applied", False))) or device.get("threat_intel_enabled", False))
             if has_url_policy:
-                safeguard_counters["Phishing Protection"] += 1
+                safeguard_counters["Phishing Protection"] = safeguard_counters["Phishing Protection"] + 1
 
             zta_status = device.get("zero_trust_assessment", {})
             zta_enabled = ((zta_status and isinstance(zta_status, dict) and zta_status.get("enabled", False)) or device.get("zt_assessment_enabled", False))
             if zta_enabled:
-                safeguard_counters["Zero Trust Network Access"] += 1
+                safeguard_counters["Zero Trust Network Access"] = safeguard_counters["Zero Trust Network Access"] + 1
 
             disk_encryption = device.get("disk_encryption", {})
             if disk_encryption.get("status") == "encrypted" or device.get("encryption_status") == "encrypted":
-                safeguard_counters["Encryption"] += 1
+                safeguard_counters["Encryption"] = safeguard_counters["Encryption"] + 1
 
             if has_mdr:
-                safeguard_counters["MDR"] += 1
+                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
 
         coverage_scores = {}
         coverage_scores["Endpoint Protection"] = round((safeguard_counters["Endpoint Protection"] / total_computers) * 100 if total_computers > 0 else 0)
