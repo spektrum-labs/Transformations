@@ -61,7 +61,7 @@ def transform(endpoints_response):
             safeguard_counters["Server Protection"] += 1
 
         # 3. MDR (Managed Detection and Response)
-        if "mtr" in assigned_products:
+        if "mtr" in assigned_products or "xdr" in assigned_products:
             safeguard_counters["MDR"] += 1
 
         # 4. Network Protection
