@@ -1,6 +1,3 @@
-import json
-import ast
-
 def transform(input):
     """
     Evaluates if the password policy is enforced via conditional access policies.
@@ -17,40 +14,6 @@ def transform(input):
     criteria_key_result = False
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-
-                # If that fails, try to parse as JSON
-                try:
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
-
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])
-        if 'Output' in input:
-            input = _parse_input(input['Output'])
-
         # Check if an error response body was returned
         if 'error' in input:
             data_error = input.get('error')
@@ -94,7 +57,7 @@ def transform(input):
 
             # Check for authentication strength (which can enforce password policies)
             auth_strength = grant_controls.get('authenticationStrength')
-            has_auth_strength = auth_strength is not None and auth_strength.get('id')
+            has_auth_strength = getattr(auth_strength,'id', None)
 
             if has_password_control or has_auth_strength:
                 password_policies.append({
@@ -116,4 +79,10 @@ def transform(input):
         return transformed_data
 
     except Exception as e:
+        import traceback
+        import sys
+
+        # Print the stack trace to help locate the error
+        print("Exception occurred during transformation:", file=sys.stderr)
+        traceback.print_exc()
         return {criteria_key_name: False, "error": str(e)}
