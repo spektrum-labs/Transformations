@@ -1,28 +1,117 @@
-# calculaterisks.py
+"""
+Transformation: compliance
+Vendor: Compliance Management
+Category: Compliance
+
+Calculates the compliance level based on the input data.
+"""
 
 import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "compliance",
+                "vendor": "Compliance Management",
+                "category": "Compliance"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Calculates the compliance level based on the input data.
-    Returns: {"complianceLevel": int}
-    """
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                return json.loads(input)
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
-        # Parse JSON if needed
-        data = _parse_input(input)
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        # Drill down past response/result wrappers if present
-        data = data.get("response", data).get("result", data)
+        data, validation = extract_input(input)
 
-        #Return the compliance level
-        return {"complianceLevel": data.get("complianceLevel", 0)}
+        if validation.get("status") == "failed":
+            return create_response(
+                result={"complianceLevel": 0},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        compliance_level = 0
+        if isinstance(data, dict):
+            compliance_level = data.get("complianceLevel", 0)
+
+        if compliance_level >= 80:
+            pass_reasons.append(f"Compliance level is good: {compliance_level}%")
+        elif compliance_level >= 50:
+            fail_reasons.append(f"Compliance level is moderate: {compliance_level}%")
+            recommendations.append("Improve compliance by addressing identified gaps")
+        else:
+            fail_reasons.append(f"Compliance level is low: {compliance_level}%")
+            recommendations.append("Urgently address compliance gaps to meet requirements")
+
+        return create_response(
+            result={"complianceLevel": compliance_level},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"complianceLevel": compliance_level}
+        )
+
     except Exception as e:
-        return {"complianceLevel": 0, "error": str(e)}
+        return create_response(
+            result={"complianceLevel": 0},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

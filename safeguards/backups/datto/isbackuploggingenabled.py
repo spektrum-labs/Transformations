@@ -1,38 +1,92 @@
-# is_backup_logging_enabled.py - Datto BCDR
+"""
+Transformation: isBackupLoggingEnabled
+Vendor: Datto BCDR
+Category: Backup / Logging
+
+Checks whether logging and alerts are enabled for Datto BCDR.
+"""
 
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isBackupLoggingEnabled",
+                "vendor": "Datto",
+                "category": "Backup"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Checks whether logging and alerts are enabled for Datto BCDR.
-    Returns: {"isBackupLoggingEnabled": bool}
-    """
-    try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+    criteriaKey = "isBackupLoggingEnabled"
 
-        # Parse input
-        data = _parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
-        data = data.get("apiResponse", data)
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         # Check for logging/alerting configuration
         devices = (
@@ -40,49 +94,72 @@ def transform(input):
             data.get("devices", []) or
             data.get("agents", []) or
             data.get("data", {}).get("rows", [])
-        )
+        ) if isinstance(data, dict) else []
 
         logging_enabled = False
+        devices_with_logging = 0
 
         # Check global logging settings
-        global_logging = (
-            data.get("loggingEnabled", False) or
-            data.get("alertsEnabled", False) or
-            data.get("notifications", {}).get("enabled", False)
-        )
-        
-        if global_logging:
-            logging_enabled = True
-        else:
+        if isinstance(data, dict):
+            global_logging = (
+                data.get("loggingEnabled", False) or
+                data.get("alertsEnabled", False) or
+                data.get("notifications", {}).get("enabled", False)
+            )
+
+            if global_logging:
+                logging_enabled = True
+                pass_reasons.append("Global logging/alerts enabled")
+
+        if not logging_enabled:
             # Check individual devices
             for device in devices:
                 if isinstance(device, list):
                     device = device[0] if len(device) > 0 else {}
-                
+
                 device_logging = (
                     device.get("loggingEnabled", False) or
                     device.get("alertsEnabled", False) or
                     device.get("notifications", {}).get("enabled", False)
                 )
-                
+
                 # If device has backups, assume logging is enabled (Datto logs by default)
                 if device.get("backupEnabled", False) or device.get("lastBackup"):
                     logging_enabled = True
-                    break
-                    
-                if device_logging:
+                    devices_with_logging += 1
+                elif device_logging:
                     logging_enabled = True
-                    break
+                    devices_with_logging += 1
                 else:
                     backups = device.get("backups", [])
                     if backups and len(backups) > 0:
                         logging_enabled = True
-                        break
+                        devices_with_logging += 1
 
-        return {"isBackupLoggingEnabled": logging_enabled}
+        if logging_enabled:
+            pass_reasons.append("Datto BCDR logging is enabled")
+            if devices_with_logging > 0:
+                pass_reasons.append(f"{devices_with_logging} devices with backup logging")
+        else:
+            fail_reasons.append("No Datto BCDR logging configuration found")
+            recommendations.append("Enable alerts and notifications for Datto BCDR devices")
 
-    except json.JSONDecodeError:
-        return {"isBackupLoggingEnabled": False, "error": "Invalid JSON"}
+        return create_response(
+            result={criteriaKey: logging_enabled},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "totalDevices": len(devices),
+                "devicesWithLogging": devices_with_logging
+            }
+        )
+
     except Exception as e:
-        return {"isBackupLoggingEnabled": False, "error": str(e)}
-
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

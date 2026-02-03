@@ -1,61 +1,133 @@
-# is_backup_logging_enabled.py
+"""
+Transformation: isBackupLoggingEnabled
+Vendor: Azure
+Category: Backup / Logging
+
+Checks whether logging is enabled and sending to SIEM if possible.
+"""
 
 import json
-import ast    
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isBackupLoggingEnabled",
+                "vendor": "Azure",
+                "category": "Backup"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Checks whether logging is enabled and sending to SIEM if possible.
-    Returns: {"isBackupLoggingEnabled": bool}
-    """
+    criteriaKey = "isBackupLoggingEnabled"
+
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")  
-    
-        # Ensure input is a dictionary by parsing if necessary
-        input = _parse_input(input)
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        # Extract response safely
-        input = input.get("response",input)
-        input = input.get("result",input)
-        input = input.get("apiResponse",input)
-        data = input.get("data",input)
+        data, validation = extract_input(input)
 
-        if 'rows' in data:
-            rows = data.get("rows",[])
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        # Check for diagnostic settings in data rows
+        logging_enabled = False
+        log_categories_found = []
+
+        inner_data = data.get("data", data)
+        if 'rows' in inner_data:
+            rows = inner_data.get("rows", [])
             for row in rows:
-                if isinstance(row,list):
+                if isinstance(row, list):
                     for item in row:
-                        if isinstance(item,dict):
+                        if isinstance(item, dict):
                             if 'hasDiagnosticSettings' in item:
-                                logging_enabled = True if item['hasDiagnosticSettings'] else False
-                                if logging_enabled and 'logCategories' in item and item['logCategories']:
-                                    return {"isBackupLoggingEnabled": True}
+                                if item['hasDiagnosticSettings'] and 'logCategories' in item and item['logCategories']:
+                                    logging_enabled = True
+                                    log_categories_found.extend(item.get('logCategories', []))
 
-        return {"isBackupLoggingEnabled": False}
+        if logging_enabled:
+            pass_reasons.append(f"Backup logging is enabled with diagnostic settings configured")
+            if log_categories_found:
+                pass_reasons.append(f"Log categories: {', '.join(log_categories_found[:5])}")
+        else:
+            fail_reasons.append("Backup logging is not enabled or diagnostic settings not configured")
+            recommendations.append("Enable diagnostic settings for backup resources and configure log categories")
 
-    except json.JSONDecodeError:
-        return {"isBackupLoggingEnabled": False, "error": "Invalid JSON"}
+        return create_response(
+            result={criteriaKey: logging_enabled},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "loggingEnabled": logging_enabled,
+                "logCategoriesCount": len(log_categories_found)
+            }
+        )
+
     except Exception as e:
-        return {"isBackupLoggingEnabled": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
