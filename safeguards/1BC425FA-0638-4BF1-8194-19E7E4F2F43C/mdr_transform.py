@@ -12,63 +12,62 @@ import json
 from datetime import datetime
 
 
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
+def transform(input):
+    def extract_input(input_data):
+        if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+            return input_data["data"], input_data["validation"]
+        data = input_data
+        if isinstance(data, dict):
+            wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+            for _ in range(3):
+                unwrapped = False
+                for key in wrapper_keys:
+                    if key in data and isinstance(data.get(key), dict):
+                        data = data[key]
+                        unwrapped = True
+                        break
+                if not unwrapped:
                     break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+        return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
-
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
-    return {
-        "transformedResponse": result,
-        "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
-            },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
-            "evaluation": {
-                "passReasons": pass_reasons or [],
-                "failReasons": fail_reasons or [],
-                "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
-            },
-            "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-                "schemaVersion": "1.0",
-                "transformationId": "mdr_transform",
-                "vendor": "MDR Provider",
-                "category": "MDR"
+    def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                        recommendations=None, input_summary=None, transformation_errors=None,
+                        api_errors=None, additional_findings=None):
+        if validation is None:
+            validation = {"status": "unknown", "errors": [], "warnings": []}
+        return {
+            "transformedResponse": result,
+            "additionalInfo": {
+                "dataCollection": {
+                    "status": "error" if (api_errors or []) else "success",
+                    "errors": api_errors or []
+                },
+                "validation": {
+                    "status": validation.get("status", "unknown"),
+                    "errors": validation.get("errors", []),
+                    "warnings": validation.get("warnings", [])
+                },
+                "transformation": {
+                    "status": "error" if (transformation_errors or []) else "success",
+                    "errors": transformation_errors or [],
+                    "inputSummary": input_summary or {}
+                },
+                "evaluation": {
+                    "passReasons": pass_reasons or [],
+                    "failReasons": fail_reasons or [],
+                    "recommendations": recommendations or [],
+                    "additionalFindings": additional_findings or []
+                },
+                "metadata": {
+                    "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                    "schemaVersion": "1.0",
+                    "transformationId": "mdr_transform",
+                    "vendor": "MDR Provider",
+                    "category": "MDR"
+                }
             }
         }
-    }
 
-
-def transform(input):
     try:
         if isinstance(input, str):
             input = json.loads(input)
@@ -119,59 +118,59 @@ def transform(input):
 
             # Count total number of computers, servers, mobile devices, and cloud endpoints
             if endpoint_type == "computer":
-                total_computers += 1
+                total_computers = total_computers + 1
             elif endpoint_type == "server":
-                total_servers += 1
+                total_servers = total_servers + 1
             elif endpoint_type == "mobile":
-                total_mobile_devices += 1
+                total_mobile_devices = total_mobile_devices + 1
 
             if "cloud" in endpoint:
-                total_cloud_endpoints += 1
+                total_cloud_endpoints = total_cloud_endpoints + 1
 
             # 1. Endpoint Protection
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Protection"] += 1
+                safeguard_counters["Endpoint Protection"] = safeguard_counters["Endpoint Protection"] + 1
 
             # 1.1 Endpoint Security
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Security"] += 1
+                safeguard_counters["Endpoint Security"] = safeguard_counters["Endpoint Security"] + 1
 
             # 2. Server Protection
             if endpoint_type == "server" and "endpointProtection" in assigned_products:
-                safeguard_counters["Server Protection"] += 1
+                safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
 
         # 3. MDR (Managed Detection and Response)
         if "mtr" in assigned_products or "xdr" in assigned_products:
-            safeguard_counters["MDR"] += 1
+            safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
 
             # 4. Network Protection
             if any("Network Threat Protection" in service_name for service_name in services):
-                safeguard_counters["Network Protection"] += 1
+                safeguard_counters["Network Protection"] = safeguard_counters["Network Protection"] + 1
 
             # 5. Cloud Security
             if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
-                safeguard_counters["Cloud Security"] += 1
+                safeguard_counters["Cloud Security"] = safeguard_counters["Cloud Security"] + 1
 
             # 6. Mobile Protection
             if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
-                safeguard_counters["Mobile Protection"] += 1
+                safeguard_counters["Mobile Protection"] = safeguard_counters["Mobile Protection"] + 1
 
             # 7. Email Security
             if "emailSecurity" in assigned_products:
-                safeguard_counters["Email Security"] += 1
+                safeguard_counters["Email Security"] = safeguard_counters["Email Security"] + 1
 
             # 8. Phishing Protection
             if "interceptX" in assigned_products:
-                safeguard_counters["Phishing Protection"] += 1
+                safeguard_counters["Phishing Protection"] = safeguard_counters["Phishing Protection"] + 1
 
             # 9. Zero Trust Network Access
             ztna_product = assigned_products.get("ztna")
             if ztna_product and ztna_product.get("status") == "installed":
-                safeguard_counters["Zero Trust Network Access"] += 1
+                safeguard_counters["Zero Trust Network Access"] = safeguard_counters["Zero Trust Network Access"] + 1
 
             # 10. Encryption
             if endpoint.get("encryption", {}).get("volumes"):
-                safeguard_counters["Encryption"] += 1
+                safeguard_counters["Encryption"] = safeguard_counters["Encryption"] + 1
 
         # Initialize coverage scores
         coverage_scores = {}
