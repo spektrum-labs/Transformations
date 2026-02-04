@@ -139,9 +139,9 @@ def transform(input):
             if endpoint_type == "server" and "endpointProtection" in assigned_products:
                 safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
 
-        # 3. MDR (Managed Detection and Response)
-        if "mtr" in assigned_products or "xdr" in assigned_products:
-            safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
+            # 3. MDR (Managed Detection and Response)
+            if "mtr" in assigned_products or "xdr" in assigned_products:
+                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
 
             # 4. Network Protection
             if any("Network Threat Protection" in service_name for service_name in services):
