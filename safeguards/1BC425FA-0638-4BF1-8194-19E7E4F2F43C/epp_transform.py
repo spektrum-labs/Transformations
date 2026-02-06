@@ -117,14 +117,14 @@ def transform(input):
 
             # Count total number of computers, servers, mobile devices, and cloud endpoints
             if endpoint_type == "computer":
-                total_computers += 1
+                total_computers = total_computers + 1
             elif endpoint_type == "server":
-                total_servers += 1
+                total_servers = total_servers + 1
             elif endpoint_type == "mobile":
-                total_mobile_devices += 1
+                total_mobile_devices = total_mobile_devices + 1
 
             if "cloud" in endpoint:
-                total_cloud_endpoints += 1
+                total_cloud_endpoints = total_cloud_endpoints + 1
 
             # 1. Endpoint Protection
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
@@ -138,15 +138,15 @@ def transform(input):
             if endpoint_type == "server" and "endpointProtection" in assigned_products:
                 safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
 
-        # 3. MDR (Managed Detection and Response)
-        if "mtr" in assigned_products or "xdr" in assigned_products:
-            safeguard_counters["MDR"] += 1
-        elif "mdrManaged" in endpoint:
-            try:
-                if str(endpoint["mdrManaged"]).lower() != "false":
-                    safeguard_counters["MDR"] += 1
-            except:
-                pass
+            # 3. MDR (Managed Detection and Response)
+            if "mtr" in assigned_products or "xdr" in assigned_products:
+                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
+            elif "mdrManaged" in endpoint:
+                try:
+                    if str(endpoint["mdrManaged"]).lower() != "false":
+                        safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
+                except:
+                    pass
 
             # 4. Network Protection
             if any("Network Threat Protection" in service_name for service_name in services):
