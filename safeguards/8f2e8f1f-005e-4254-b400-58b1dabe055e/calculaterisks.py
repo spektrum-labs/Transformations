@@ -1,45 +1,135 @@
-# calculaterisks.py
+"""
+Transformation: calculaterisks
+Vendor: Security Ratings
+Category: Risk Management
+
+Calculates the risk score based on the input data.
+"""
 
 import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "calculaterisks",
+                "vendor": "Security Ratings",
+                "category": "Risk Management"
+            }
+        }
+    }
+
 
 def transform(input):
-    """
-    Calculates the risk score based on the input data.
-    Returns: {"riskThreshold": bool, "Count": int}
-    """
     low_ratings = []
     lowest_rating = 0
     low_count = 0
+
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                return json.loads(input)
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
-        # Parse JSON if needed
-        data = _parse_input(input)
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        # Drill down past response/result wrappers if present
-        data = data.get("response", data).get("result", data)
+        data, validation = extract_input(input)
 
-        #Get RatingDetails
-        ratingDetails = data.get("rating_details", {})
-        #Loop through each attribute & add rating less than 700 to rating array
-        for attribute in ratingDetails:
+        if validation.get("status") == "failed":
+            return create_response(
+                result={"riskThreshold": 0, "count": 0, "lowratings": []},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        rating_details = data.get("rating_details", {}) if isinstance(data, dict) else {}
+
+        for attribute in rating_details:
             try:
-                current_rating = int(ratingDetails[attribute].get('rating', 0))
+                current_rating = int(rating_details[attribute].get('rating', 0))
             except:
                 current_rating = 0
             if current_rating < 700:
-                low_ratings.append(ratingDetails[attribute])
-                if current_rating < lowest_rating:
+                low_ratings.append(rating_details[attribute])
+                if current_rating < lowest_rating or lowest_rating == 0:
                     lowest_rating = current_rating
                 low_count += 1
 
-        #Return the risk score and the count of attributes with rating less than 700
-        return {"riskThreshold": lowest_rating, "count": low_count, "lowratings": low_ratings}
+        if low_count == 0:
+            pass_reasons.append("All security ratings are above threshold (700)")
+        else:
+            fail_reasons.append(f"{low_count} attributes have ratings below threshold")
+            recommendations.append("Review and address security issues for attributes with low ratings")
+
+        return create_response(
+            result={
+                "riskThreshold": lowest_rating,
+                "count": low_count,
+                "lowratings": low_ratings
+            },
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "lowestRating": lowest_rating,
+                "lowRatingCount": low_count,
+                "totalAttributes": len(rating_details)
+            }
+        )
+
     except Exception as e:
-        return {"riskThreshold": 0, "count": 0, "lowratings": [], "error": str(e)}
+        return create_response(
+            result={"riskThreshold": 0, "count": 0, "lowratings": []},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

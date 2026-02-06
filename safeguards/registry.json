@@ -1,0 +1,78 @@
+{
+  "A6B871E6-DE13-41FA-8636-81A3B6F315F4": {
+    "vendor": "Qualys, Inc.",
+    "category": "Attack Surface Management"
+  },
+  "4BC425FA-0638-4BF1-8194-19E7E4F2F43C": {
+    "vendor": "AWS",
+    "category": "Backups"
+  },
+  "729CEBC6-8ABD-4511-AC85-1455A690EEBE": {
+    "vendor": "Azure",
+    "category": "Backups"
+  },
+  "52BEAA98-6CED-4A84-B6D5-FAEA40E0FFEF": {
+    "vendor": "KnowBe4, Inc.",
+    "category": "Compliance Management"
+  },
+  "8F2E8F1F-005E-4254-B400-58B1DABE055E": {
+    "vendor": "Bitsight",
+    "category": "Cyber Risk Quantification (CRQ)"
+  },
+  "DBC425FA-0638-4BF1-8194-19E7E4F2F43C": {
+    "vendor": "Google",
+    "category": "Email Security"
+  },
+  "874A78FF-2CA3-4C0E-AB86-19277536AC87": {
+    "vendor": "Microsoft",
+    "category": "Email Security"
+  },
+  "0C281CE9-8024-4D70-AC85-D923A6B9635C": {
+    "vendor": "Trend Micro",
+    "category": "Email Security"
+  },
+  "BBC425FA-0638-4BF1-8194-19E7E4F2F43C": {
+    "vendor": "Halcyon",
+    "category": "Endpoint Security"
+  },
+  "7BC425FA-0638-4BF1-8194-19E7E4F2F43C": {
+    "vendor": "Microsoft",
+    "category": "Endpoint Security"
+  },
+  "CAC4B80F-A930-415E-B1E3-DE285FE78452": {
+    "vendor": "NinjaOne",
+    "category": "Endpoint Security"
+  },
+  "2BC425FA-0638-4BF1-8194-19E7E4F2F43C": {
+    "vendor": "SentinelOne",
+    "category": "Endpoint Security"
+  },
+  "9B5D9E9C-A713-451C-826C-A57BB4322576": {
+    "vendor": "Cato Networks",
+    "category": "Firewall"
+  },
+  "2B2849D8-2FEA-4CAE-9A3C-8B315280752A": {
+    "vendor": "Cloudflare, Inc.",
+    "category": "Firewall"
+  },
+  "0450D686-D997-4E20-B82F-827F61CB8371": {
+    "vendor": "Fortinet",
+    "category": "Firewall"
+  },
+  "1BC425FA-0638-4BF1-8194-19E7E4F2F43C": {
+    "vendor": "Sophos",
+    "category": "MDR"
+  },
+  "D9B6F27A-2E67-4B55-A09E-0784C5DE9ABD": {
+    "vendor": "Azure",
+    "category": "Multifactor Authentication"
+  },
+  "A2ABBCF5-6693-4B14-8329-8721302A4EF7": {
+    "vendor": "Duo",
+    "category": "Multifactor Authentication"
+  },
+  "182A41F5-BA7F-42C9-A3CD-7AA8399F5037": {
+    "vendor": "Cisco",
+    "category": "Network Security"
+  }
+}
