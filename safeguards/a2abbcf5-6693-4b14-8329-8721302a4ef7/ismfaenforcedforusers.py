@@ -106,7 +106,7 @@ def transform(input):
         for user in users_list:
             if 'is_enrolled' in user:
                 if str(user['is_enrolled']).lower() == "true":
-                    mfa_enrolled_users += 1
+                    mfa_enrolled_users = mfa_enrolled_users + 1
                 else:
                     if 'status' in user:
                         if str(user['status']).lower() == "active":
