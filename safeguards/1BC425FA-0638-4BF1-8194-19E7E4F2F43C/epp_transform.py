@@ -96,19 +96,18 @@ def transform(input):
         total_mobile_devices = 0
         total_cloud_endpoints = 0
 
-        safeguard_counters = {
-            "Endpoint Protection": 0,
-            "Endpoint Security": 0,
-            "Server Protection": 0,
-            "MDR": 0,
-            "Network Protection": 0,
-            "Cloud Security": 0,
-            "Mobile Protection": 0,
-            "Email Security": 0,
-            "Phishing Protection": 0,
-            "Zero Trust Network Access": 0,
-            "Encryption": 0
-        }
+        # Use simple variables to avoid "augmented assignment of object items" in restricted Python
+        ep_count = 0
+        es_count = 0
+        server_protection_count = 0
+        mdr_count = 0
+        network_protection_count = 0
+        cloud_security_count = 0
+        mobile_protection_count = 0
+        email_security_count = 0
+        phishing_protection_count = 0
+        ztna_count = 0
+        encryption_count = 0
 
         for endpoint in items:
             assigned_products = {product["code"]: product for product in endpoint.get("assignedProducts", [])}
@@ -128,54 +127,68 @@ def transform(input):
 
             # 1. Endpoint Protection
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Protection"] = safeguard_counters["Endpoint Protection"] + 1
+                ep_count = ep_count + 1
 
             # 1.1 Endpoint Security
             if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Security"] = safeguard_counters["Endpoint Security"] + 1
+                es_count = es_count + 1
 
             # 2. Server Protection
             if endpoint_type == "server" and "endpointProtection" in assigned_products:
-                safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
+                server_protection_count = server_protection_count + 1
 
             # 3. MDR (Managed Detection and Response)
             if "mtr" in assigned_products or "xdr" in assigned_products:
-                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
+                mdr_count = mdr_count + 1
             elif "mdrManaged" in endpoint:
                 try:
                     if str(endpoint["mdrManaged"]).lower() != "false":
-                        safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
+                        mdr_count = mdr_count + 1
                 except:
                     pass
 
             # 4. Network Protection
             if any("Network Threat Protection" in service_name for service_name in services):
-                safeguard_counters["Network Protection"] = safeguard_counters["Network Protection"] + 1
+                network_protection_count = network_protection_count + 1
 
             # 5. Cloud Security
             if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
-                safeguard_counters["Cloud Security"] = safeguard_counters["Cloud Security"] + 1
+                cloud_security_count = cloud_security_count + 1
 
             # 6. Mobile Protection
             if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
-                safeguard_counters["Mobile Protection"] = safeguard_counters["Mobile Protection"] + 1
+                mobile_protection_count = mobile_protection_count + 1
 
             # 7. Email Security
             if "emailSecurity" in assigned_products:
-                safeguard_counters["Email Security"] = safeguard_counters["Email Security"] + 1
+                email_security_count = email_security_count + 1
 
             # 8. Phishing Protection
             if "interceptX" in assigned_products:
-                safeguard_counters["Phishing Protection"] = safeguard_counters["Phishing Protection"] + 1
+                phishing_protection_count = phishing_protection_count + 1
 
             # 9. Zero Trust Network Access
             ztna_product = assigned_products.get("ztna")
             if ztna_product and ztna_product.get("status") == "installed":
-                safeguard_counters["Zero Trust Network Access"] = safeguard_counters["Zero Trust Network Access"] + 1
+                ztna_count = ztna_count + 1
 
             # 10. Encryption
             if endpoint.get("encryption", {}).get("volumes"):
-                safeguard_counters["Encryption"] = safeguard_counters["Encryption"] + 1
+                encryption_count = encryption_count + 1
+
+        safeguard_counters = {
+            "Endpoint Protection": ep_count,
+            "Endpoint Security": es_count,
+            "Server Protection": server_protection_count,
+            "MDR": mdr_count,
+            "Network Protection": network_protection_count,
+            "Cloud Security": cloud_security_count,
+            "Mobile Protection": mobile_protection_count,
+            "Email Security": email_security_count,
+            "Phishing Protection": phishing_protection_count,
+            "Zero Trust Network Access": ztna_count,
+            "Encryption": encryption_count
+        }
 
         # Initialize coverage scores
         coverage_scores = {}
@@ -254,28 +267,28 @@ def transform(input):
 
         coverage_scores["isEPPConfigured"] = isEPPConfigured
 
-        # Build pass/fail reasons
+        # Build pass/fail reasons (use concatenation to avoid list mutation in restricted Python)
         epp_coverage = coverage_scores.get('Endpoint Protection', 0)
         if coverage_scores["isEPPEnabled"]:
             if epp_coverage > 0:
-                pass_reasons.append(f"Endpoint protection active: {epp_coverage}% of devices protected")
+                pass_reasons = pass_reasons + [f"Endpoint protection active: {epp_coverage}% of devices protected"]
             else:
-                pass_reasons.append("Endpoint protection configured but no devices currently protected")
-                recommendations.append("Verify endpoint agent deployment status")
+                pass_reasons = pass_reasons + ["Endpoint protection configured but no devices currently protected"]
+                recommendations = recommendations + ["Verify endpoint agent deployment status"]
         else:
-            fail_reasons.append("Endpoint protection not deployed or not reporting data")
-            recommendations.append("Deploy endpoint protection to all computers")
+            fail_reasons = fail_reasons + ["Endpoint protection not deployed or not reporting data"]
+            recommendations = recommendations + ["Deploy endpoint protection to all computers"]
 
         server_coverage = coverage_scores.get("Server Protection", 0)
         if server_coverage > 0:
-            pass_reasons.append(f"Server protection active: {server_coverage}% of servers protected")
+            pass_reasons = pass_reasons + [f"Server protection active: {server_coverage}% of servers protected"]
 
         mdr_coverage = coverage_scores.get("MDR", 0)
         if coverage_scores["isMDREnabled"]:
             if mdr_coverage > 0:
-                pass_reasons.append(f"MDR active: {mdr_coverage}% coverage")
+                pass_reasons = pass_reasons + [f"MDR active: {mdr_coverage}% coverage"]
             else:
-                pass_reasons.append("MDR configured but no devices currently monitored")
+                pass_reasons = pass_reasons + ["MDR configured but no devices currently monitored"]
 
         return create_response(
             result=coverage_scores,
