@@ -1,86 +1,175 @@
+"""
+Transformation: isInformationRightsManagementEnabled
+Vendor: Microsoft
+Category: Information Protection
+
+Evaluates if Information Rights Management (sensitivity labels) is enabled.
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isInformationRightsManagementEnabled",
+                "vendor": "Microsoft",
+                "category": "Information Protection"
+            }
+        }
+    }
+
+
+
+def parse_api_error(raw_error: str, source: str = None) -> tuple:
+    """Parse raw API error into clean message with source."""
+    raw_lower = raw_error.lower() if raw_error else ''
+    src = source or "external service"
+
+    if '401' in raw_error:
+        return (f"Could not connect to {src}: Authentication failed (HTTP 401)",
+                f"Verify {src} credentials and permissions are valid")
+    elif '403' in raw_error:
+        return (f"Could not connect to {src}: Access denied (HTTP 403)",
+                f"Verify the integration has required {src} permissions")
+    elif '404' in raw_error:
+        return (f"Could not connect to {src}: Resource not found (HTTP 404)",
+                f"Verify the {src} resource and configuration exist")
+    elif '429' in raw_error:
+        return (f"Could not connect to {src}: Rate limited (HTTP 429)",
+                "Retry the request after waiting")
+    elif '500' in raw_error or '502' in raw_error or '503' in raw_error:
+        return (f"Could not connect to {src}: Service unavailable (HTTP 5xx)",
+                f"{src} may be temporarily unavailable, retry later")
+    elif 'timeout' in raw_lower:
+        return (f"Could not connect to {src}: Request timed out",
+                "Check network connectivity and retry")
+    elif 'connection' in raw_lower:
+        return (f"Could not connect to {src}: Connection failed",
+                "Check network connectivity and firewall settings")
+    else:
+        clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
+        return (f"Could not connect to {src}: {clean}",
+                f"Check {src} credentials and configuration")
+
 def transform(input):
-    """
-    Evaluates if informaton rights management is enabled.
-
-    Parameters:
-        input (dict): The JSON data containing all sensitivity labels.
-
-    Returns:
-        dict: A dictionary summarizing information rights management.
-    """
-
-    criteria_key_name = "isInformationRightsManagementEnabled"
-    criteria_key_result = False
+    criteriaKey = "isInformationRightsManagementEnabled"
 
     try:
-        def _parse_input(input):
-            if isinstance(input, str):
-                # First try to parse as literal Python string representation
-                try:
-                    # Use ast.literal_eval to safely parse Python literal
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                
-                # If that fails, try to parse as JSON
-                try:
-                    # Replace single quotes with double quotes for JSON
-                    #input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-                    
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        input = _parse_input(input)
-        if 'response' in input:
-            input = _parse_input(input['response'])
-        if 'result' in input:
-            input = _parse_input(input['result'])
-            if 'apiResponse' in input:
-                input = _parse_input(input['apiResponse'])
-            if 'result' in input:
-                input = _parse_input(input['result'])
-        if 'Output' in input:
-            input = _parse_input(input['Output'])
+        data, validation = extract_input(input)
 
-        # check if an error response body was returned
-        if 'error' in input:
-            data_error = input.get('error')
-            data_inner_error = data_error.get('innerError')
-            return {
-                    criteria_key_name: False,
-                    'errorSource': 'msgraph_api',
-                    'errorCode': data_error.get('code'),
-                    'errorMessage': data_error.get('message'),
-                    'innerErrorCode': data_inner_error.get('code'),
-                    'innerErrorMessage': data_inner_error.get('message')
-                    }
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
-        # Ensure value is type list, replace None if found
-        value = input.get('value',[])
-        if not isinstance(value, list):
-            if value is None:
-                value = []
-            else:
-                value = [input.get('value')]
 
-        active_labels = [i for i in value if i.get('isActive') is True]
-        if len(active_labels) > 0:
-            criteria_key_result = True
+        # Check for API error (e.g., OAuth failure)
+        if isinstance(data, dict) and 'PSError' in data:
+            api_error, recommendation = parse_api_error(data.get('PSError', ''), source="Microsoft 365")
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_errors=[api_error],
+                fail_reasons=["Could not retrieve data from Microsoft 365"],
+                recommendations=[recommendation]
+            )
 
-        transformed_data = {
-            criteria_key_name: criteria_key_result
-        }
-        return transformed_data
+        # Check for API error response
+        if 'error' in data:
+            error_info = data.get('error', {})
+            inner_error = error_info.get('innerError', {})
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "error", "errors": [error_info.get('message', 'API error')], "warnings": []},
+                fail_reasons=[f"Microsoft Graph API error: {error_info.get('code', 'unknown')}"],
+                input_summary={"errorCode": error_info.get('code'), "innerErrorCode": inner_error.get('code') if inner_error else None}
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        labels = data.get('value', [])
+        if not isinstance(labels, list):
+            labels = [labels] if labels else []
+
+        active_labels = [i for i in labels if i.get('isActive') is True]
+        is_enabled = len(active_labels) > 0
+
+        if is_enabled:
+            label_names = [l.get('displayName', l.get('name', 'unnamed')) for l in active_labels[:5]]
+            pass_reasons.append(f"Information Rights Management enabled with {len(active_labels)} active sensitivity labels: {', '.join(label_names)}")
+        else:
+            fail_reasons.append("No data sensitivity labels configured")
+            recommendations.append("Configure and activate sensitivity labels in Microsoft Information Protection")
+
+        return create_response(
+            result={criteriaKey: is_enabled, "activeLabelCount": len(active_labels), "totalLabelCount": len(labels)},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"totalLabels": len(labels), "activeLabels": len(active_labels)}
+        )
 
     except Exception as e:
-        return {criteria_key_name: False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

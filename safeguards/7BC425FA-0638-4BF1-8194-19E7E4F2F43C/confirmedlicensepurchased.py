@@ -1,54 +1,144 @@
+"""
+Transformation: confirmedLicensePurchased
+Vendor: Microsoft Defender / Endpoint Protection
+Category: Licensing
+
+Evaluates if the license has been purchased for endpoint protection.
+Searches for SKUs containing: MDE, ATP, DEFENDER, SPE_E3 (Microsoft 365 E3)
+
+Reference:
+https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
+"""
+
+import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "confirmedLicensePurchased",
+                "vendor": "Microsoft Defender",
+                "category": "Licensing"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Evaluates if the license has been purchased for endpoint protection
-
-    Parameters:
-        input (dict): The JSON data containing machine information.
-
-    Returns:
-        dict: A dictionary summarizing the license information.
-
-    Comments:
-        Searches for SKUs that contain the following strings:
-        "MDE", "ATP", "DEFENDER", 
-        "SPE_E3" = Microsoft 365 E3
-
-        For additional information:
-        https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
-        or download a csv version of this information:
-        https://download.microsoft.com/download/e/3/e/e3e9faf2-f28b-490a-9ada-c6089a1fc5b0/Product%20names%20and%20service%20plan%20identifiers%20for%20licensing.csv
-    """
-
-    # modify assignment to match specific criteriaKey
     criteriaKey = "confirmedLicensePurchased"
 
-    # default criteriaKey value
-    criteriaValue = False
-
     try:
-        if 'value' in input:
-            data = input.get("value", [])
-        
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        criteriaValue = False
         defender_skus = []
-        for sku in data:
-            sku_part = sku.get("skuPartNumber", "").upper()
-            if any(keyword in sku_part for keyword in ["MDE", "ATP", "DEFENDER", "SPE_E3"]):
-                defender_skus.append({
-                    "SkuPartNumber": sku.get("skuPartNumber"),
-                    "SkuId": sku.get("skuId"),
-                    "CapabilityStatus": sku.get("capabilityStatus"),
-                    "ConsumedUnits": sku.get("consumedUnits"),
-                    "PrepaidUnits": sku.get("prepaidUnits")
-                })
-                criteriaValue = True
 
-        ### # Uncomment to view matching license detail   
-        ### if (defender_skus):
-        ###     print(defender_skus)
-        ### else:
-        ###     print("No matching skus found")
+        # Get SKU data from value array
+        sku_data = []
+        if isinstance(data, dict) and 'value' in data:
+            sku_data = data.get("value", [])
+        elif isinstance(data, list):
+            sku_data = data
 
-        return {criteriaKey: criteriaValue}
-    
+        for sku in sku_data:
+            if isinstance(sku, dict):
+                sku_part = sku.get("skuPartNumber", "").upper()
+                if any(keyword in sku_part for keyword in ["MDE", "ATP", "DEFENDER", "SPE_E3"]):
+                    defender_skus.append({
+                        "SkuPartNumber": sku.get("skuPartNumber"),
+                        "SkuId": sku.get("skuId"),
+                        "CapabilityStatus": sku.get("capabilityStatus"),
+                        "ConsumedUnits": sku.get("consumedUnits"),
+                        "PrepaidUnits": sku.get("prepaidUnits")
+                    })
+                    criteriaValue = True
+
+        if criteriaValue:
+            pass_reasons.append(f"Endpoint protection license purchased: {len(defender_skus)} matching SKUs")
+            for sku in defender_skus:
+                pass_reasons.append(f"SKU: {sku['SkuPartNumber']} (Status: {sku['CapabilityStatus']})")
+        else:
+            fail_reasons.append("No endpoint protection license SKUs found")
+            recommendations.append("Purchase Microsoft Defender for Endpoint or equivalent license")
+
+        return create_response(
+            result={criteriaKey: criteriaValue},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "totalSkus": len(sku_data),
+                "defenderSkus": len(defender_skus)
+            }
+        )
+
     except Exception as e:
-        return {criteriaKey: False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

@@ -1,74 +1,139 @@
+"""
+Transformation: isMFAEnforcedForSecurityAdminAccess
+Vendor: Microsoft
+Category: Identity / MFA
+
+Evaluates if MFA is enforced for security administrator role access via conditional access policies.
+"""
+
+import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isMFAEnforcedForSecurityAdminAccess",
+                "vendor": "Microsoft",
+                "category": "Identity"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Evaluates if the MFA has been enabled for Security Administrator role
-
-    Parameters:
-        input (dict): The JSON data containing condititional access policies.
-
-    Returns:
-        dict: A dictionary summarizing if MFA has been enabled for the Security Administrator role.
-
-    Comments:
-        additional roles are:
-        Role Name	                                    GUID (Role Template ID)
-        Global Administrator	                        62e90394-69f5-4237-9190-012177145e10
-        Privileged Role Administrator	                e8611ab8-c189-46e8-94e1-60213ab1f814
-        Security Administrator	                        194ae4cb-b126-40b2-bd5b-6091b380977d
-        Conditional Access Administrator	            b0f54661-2d74-4c50-afa3-1ec803f12efe
-        Authentication Administrator	                c4e39d2d-7e9c-4c4c-8c1e-1f4fefb2a1d8
-        User Administrator	                            fe930be7-5e62-47db-91af-98c3a49a38b1
-        Helpdesk Administrator (Password Administrator)	729827e3-9c14-49f7-bb1b-9608f156bbb8
-        Application Administrator	                    5b448b57-3eda-4d05-9e8d-0d63d8e3a6cf
-        Cloud Application Administrator	                158c047a-c907-4f6f-bc65-8fbb3ee4d3d8
-        Exchange Administrator	                        29232cdf-9323-42fd-ade2-1d097af3e4de
-        SharePoint Administrator	                    29232cdf-9323-42fd-ade2-1d097af3e4de (same GUID used for multiple service admins)
-        Teams Administrator	                            29232cdf-9323-42fd-ade2-1d097af3e4de
-        Intune Administrator	                        f28a1f50-6e7c-4c8c-9c3b-1f5f9f8f6f0f
-
-
-        For more information see:
-        https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/privileged-roles-permissions?tabs=admin-center
-    """
-
-    # modify assignment to match specific criteriaKey
     criteriaKey = "isMFAEnforcedForSecurityAdminAccess"
 
-    # default criteriaKey value
-    criteriaValue = False
-
-    policyCountTotal = 0
-
+    # Security Administrator role GUID
     endpoint_security_roles = [
-        "62e90394-69f5-4237-9190-012177145e10"  # Security Administrator role GUID
+        "62e90394-69f5-4237-9190-012177145e10"
     ]
 
-    conditional_access_policies_for_endpoint_security_roles = []
-    conditional_access_policies_not_for_endpoint_security_roles = []
-
     try:
-        if 'value' in input:
-            data = input['value']
-        
-        for policy in data:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False, "policyCountTotal": 0, "policyCountforSecurityRole": 0, "policyCountNotForSecurityRole": 0},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        policies = data.get('value', [])
+        policy_count_total = 0
+        policies_for_security_role = []
+        policies_not_for_security_role = []
+
+        for policy in policies:
             roles = policy.get("conditions", {}).get("users", {}).get("includeRoles", [])
             grant_controls = policy.get("grantControls", {}).get("builtInControls", [])
 
-            # Check if policy applies to endpoint security roles AND requires MFA
             if any(role in endpoint_security_roles for role in roles):
-                requires_mfa = "mfa" in grant_controls
-                criteriaValue = True
-                conditional_access_policies_for_endpoint_security_roles.append(policy.get("displayName"))
+                policies_for_security_role.append(policy.get("displayName"))
             else:
-                conditional_access_policies_not_for_endpoint_security_roles.append(policy.get("displayName"))
-            policyCountTotal += 1
+                policies_not_for_security_role.append(policy.get("displayName"))
+            policy_count_total += 1
 
-        return {
-            criteriaKey: criteriaValue,
-            "policyCountTotal": policyCountTotal,
-            "policyCountforSecurityRole": len(conditional_access_policies_for_endpoint_security_roles),
-            "policyCountNotForSecurityRole": len(conditional_access_policies_not_for_endpoint_security_roles)
-        }
-    
+        is_enforced = len(policies_for_security_role) > 0
+
+        if is_enforced:
+            pass_reasons.append(f"MFA enforced for security admin access via {len(policies_for_security_role)} policies: {', '.join(policies_for_security_role[:3])}")
+        else:
+            fail_reasons.append("No conditional access policies found enforcing MFA for security administrator role")
+            recommendations.append("Create a conditional access policy requiring MFA for Security Administrator role")
+
+        return create_response(
+            result={
+                criteriaKey: is_enforced,
+                "policyCountTotal": policy_count_total,
+                "policyCountforSecurityRole": len(policies_for_security_role),
+                "policyCountNotForSecurityRole": len(policies_not_for_security_role)
+            },
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"totalPolicies": policy_count_total, "policiesForSecurityRole": len(policies_for_security_role)}
+        )
+
     except Exception as e:
-        return {criteriaKey: False, "error": str(e)}
-        
+        return create_response(
+            result={criteriaKey: False, "policyCountTotal": 0, "policyCountforSecurityRole": 0, "policyCountNotForSecurityRole": 0},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
