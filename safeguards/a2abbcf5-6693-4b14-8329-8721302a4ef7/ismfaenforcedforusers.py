@@ -110,17 +110,17 @@ def transform(input):
                 else:
                     if 'status' in user:
                         if str(user['status']).lower() == "active":
-                            offending_users.append(user)
+                            offending_users = offending_users + [user]
                             is_mfa_enforced = False
 
         if is_mfa_enforced:
             if mfa_enrolled_users > 0:
-                pass_reasons.append(f"MFA enforced: {mfa_enrolled_users} users enrolled")
+                pass_reasons = pass_reasons + [f"MFA enforced: {mfa_enrolled_users} users enrolled"]
             else:
-                pass_reasons.append("MFA policy configured (no users currently enrolled)")
+                pass_reasons = pass_reasons + ["MFA policy configured (no users currently enrolled)"]
         else:
-            fail_reasons.append(f"{len(offending_users)} active users do not have MFA enabled")
-            recommendations.append("Enable MFA for all active users to improve security")
+            fail_reasons = fail_reasons + [f"{len(offending_users)} active users do not have MFA enabled"]
+            recommendations = recommendations + ["Enable MFA for all active users to improve security"]
 
         return create_response(
             result={
