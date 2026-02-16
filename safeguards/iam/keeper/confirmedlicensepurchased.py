@@ -2,8 +2,11 @@ def transform(input):
     """
     Validates that a valid Keeper enterprise license is active.
 
+    Evaluates Commander whoami or enterprise info for license status.
+    Commander: whoami
+
     Parameters:
-        input (dict): The JSON data from Keeper whoami command response
+        input (dict): The JSON data from Keeper Commander whoami or enterprise info response
 
     Returns:
         dict: A dictionary with the confirmedLicensePurchased evaluation result
