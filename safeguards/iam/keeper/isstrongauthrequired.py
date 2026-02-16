@@ -2,8 +2,14 @@ def transform(input):
     """
     Validates that MFA/2FA is enforced for all users in Keeper enterprise.
 
+    Evaluates Commander security-audit-report or role enforcement policies.
+    Commander: security-audit-report
+
+    NIST IA-5: Authenticator Management
+    CIS Control 6.5: Require MFA for Administrative Access
+
     Parameters:
-        input (dict): The JSON data from Keeper enterprise-user command response
+        input (dict): The JSON data from Keeper security-audit-report or role enforcement response
 
     Returns:
         dict: A dictionary with the isStrongAuthRequired evaluation result
