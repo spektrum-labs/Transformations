@@ -108,6 +108,7 @@ def transform(input):
             if auth_type.get('id', '').lower() == 'temporaryaccesspass':
                 temp_access_obj = auth_type
                 break
+                
         has_temporary_access = temp_access_obj is not None
         temp_access_timeout = False
         if temp_access_obj:
