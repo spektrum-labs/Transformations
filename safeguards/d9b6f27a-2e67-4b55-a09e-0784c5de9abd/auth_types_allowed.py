@@ -103,7 +103,11 @@ def transform(input):
         ]
 
         # Check for temporary access pass configuration
-        temp_access_obj = next((auth_type for auth_type in enabled_methods if auth_type.get('id', '').lower() == 'temporaryaccesspass'), None)
+        temp_access_obj = None
+        for auth_type in enabled_methods:
+            if auth_type.get('id', '').lower() == 'temporaryaccesspass':
+                temp_access_obj = auth_type
+                break
         has_temporary_access = temp_access_obj is not None
         temp_access_timeout = False
         if temp_access_obj:
