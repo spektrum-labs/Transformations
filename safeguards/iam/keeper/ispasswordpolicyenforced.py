@@ -2,8 +2,14 @@ def transform(input):
     """
     Validates that password policies are enforced in Keeper.
 
+    Evaluates Commander security-audit-report for password policy enforcement.
+    Commander: security-audit-report
+
+    NIST IA-5(1): Password-Based Authentication
+    CIS Control 5.2: Use Unique Passwords (14+ chars for non-MFA, 8+ for MFA)
+
     Parameters:
-        input (dict): The JSON data from Keeper security-audit-report command response
+        input (dict): The JSON data from Keeper Commander security-audit-report response
 
     Returns:
         dict: A dictionary with the isPasswordPolicyEnforced evaluation result

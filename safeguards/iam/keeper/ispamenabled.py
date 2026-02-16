@@ -2,8 +2,14 @@ def transform(input):
     """
     Validates that privileged access management (PAM) is enabled in Keeper.
 
+    Evaluates Commander user-report or enterprise settings for KeeperPAM features.
+    Commander: user-report, enterprise-role
+
+    NIST AC-6(5): Privileged Accounts
+    CIS Control 5.4: Restrict Administrator Privileges to Dedicated Administrator Accounts
+
     Parameters:
-        input (dict): The JSON data from Keeper enterprise-role command response
+        input (dict): The JSON data from Keeper Commander user-report or enterprise-role response
 
     Returns:
         dict: A dictionary with the isPAMEnabled evaluation result

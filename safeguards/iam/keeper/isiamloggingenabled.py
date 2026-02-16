@@ -2,8 +2,15 @@ def transform(input):
     """
     Validates that audit logging is enabled and capturing events in Keeper.
 
+    Evaluates Commander audit-log command response.
+    Commander: audit-log
+
+    NIST AC-2(4): Automated Audit Actions
+    NIST AU-2: Event Logging
+    CIS Control 8: Audit Log Management
+
     Parameters:
-        input (dict): The JSON data from Keeper audit-log command response
+        input (dict): The JSON data from Keeper Commander audit-log response
 
     Returns:
         dict: A dictionary with the isIAMLoggingEnabled evaluation result
