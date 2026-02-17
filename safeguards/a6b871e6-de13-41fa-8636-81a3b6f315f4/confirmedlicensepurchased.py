@@ -93,6 +93,12 @@ def transform(input):
         if isinstance(data, dict) and 'errors' in data:
             default_value = False
 
+        if isinstance(data, dict) and 'error' in data and 'message' in data:
+            if isinstance(data['message'], str) and data['message'].startswith("Integration execution error"):
+                fail_reasons.append("Error authenticating with Attack Surface Management")
+                recommendations.append("Verify the credentials for Attack Surface Management")
+                default_value = False
+
         license_purchased = False
         if isinstance(data, dict):
             license_purchased = data.get('licensePurchased', default_value)

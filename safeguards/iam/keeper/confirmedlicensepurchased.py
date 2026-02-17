@@ -24,7 +24,7 @@ def transform(input):
         if 'data' in input:
             input = input['data']
 
-        license_confirmed = False
+        license_confirmed = True if 'schemas' in input else False
 
         # Check for enterprise license indicators
         if 'enterprise' in input:
