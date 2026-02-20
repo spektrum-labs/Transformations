@@ -81,7 +81,7 @@ def transform(input):
 
         if validation.get("status") == "failed" or legacy_status in ["failed", "error"]:
             return create_response(
-                result={criteriaKey: False, "users": []},
+                result={criteriaKey: False},
                 validation=validation,
                 fail_reasons=[data if legacy_status in ["failed", "error"] else "Input validation failed"]
             )
