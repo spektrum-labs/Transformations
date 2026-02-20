@@ -141,10 +141,16 @@ def transform(input):
         legacy_status = data.get("status", "unknown").lower()
 
         if validation.get("status") == "failed" or legacy_status in ["failed", "error"]:
+            if legacy_status in ["failed", "error"] and isinstance(data, dict) and data.get("message"):
+                fail_msg = str(data["message"])
+            elif legacy_status in ["failed", "error"]:
+                fail_msg = "Input indicated failure or error"
+            else:
+                fail_msg = "Input validation failed"
             return create_response(
                 result={criteriaKey: False, "policies": []},
                 validation=validation,
-                fail_reasons=[data if legacy_status in ["failed", "error"] else "Input validation failed"]
+                fail_reasons=[fail_msg]
             )
 
         pass_reasons = []
