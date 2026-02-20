@@ -77,11 +77,13 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
+        legacy_status = data.get("status", "unknown").lower()
+
+        if validation.get("status") == "failed" or legacy_status in ["failed", "error"]:
             return create_response(
                 result={criteriaKey: False, "authTypes": []},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=[data if legacy_status in ["failed", "error"] else "Input validation failed"]
             )
 
         pass_reasons = []
