@@ -21,17 +21,19 @@ def transform(input):
         # Check for explicit license field or infer from data presence
         license_purchased = input.get('licensePurchased', default_value)
 
+        # If we received any valid data, the platform is licensed
+        if 'apiResponse' in input and input.get('apiResponse'):
+            license_purchased = True
+            
         # Check for status response indicating active subscription
         status = input.get('status', input.get('responseData', {}))
         if isinstance(status, dict) and status:
             license_purchased = True
+        elif isinstance(status, str) and status.lower() in ['error', 'failed', 'invalid']:
+            license_purchased = False
 
         # Check for cloud name or organization info (indicates active subscription)
         if input.get('cloudName') or input.get('orgName') or input.get('organization'):
-            license_purchased = True
-
-        # If we received any valid data, the platform is licensed
-        if 'apiResponse' in input and input.get('apiResponse'):
             license_purchased = True
 
         license_info = {
