@@ -1,44 +1,137 @@
+"""
+Transformation: confirmedLicensePurchased
+Vendor: Zscaler ZIA
+Category: SASE / Licensing
+
+Evaluates if a valid Zscaler ZIA subscription is active.
+The Zscaler ZIA API requires successful authentication to access any endpoint.
+If we receive a valid status response, the subscription is active.
+"""
+
+import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "confirmedLicensePurchased",
+                "vendor": "Zscaler ZIA",
+                "category": "SASE"
+            }
+        }
+    }
+
+
 def transform(input):
-    """
-    Evaluates if a valid Zscaler ZIA subscription is active.
-
-    The Zscaler ZIA API requires successful authentication to access any endpoint.
-    If we receive a valid status response, the subscription is active.
-
-    Parameters:
-        input (dict): The JSON data from Zscaler ZIA status endpoint.
-
-    Returns:
-        dict: A dictionary summarizing the license purchase information.
-    """
+    criteriaKey = "confirmedLicensePurchased"
 
     try:
-        if 'response' in input:
-            input = input['response']
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        default_value = True if input is not None else False
+        data, validation = extract_input(input)
 
-        # Check for explicit license field or infer from data presence
-        license_purchased = input.get('licensePurchased', default_value)
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
-        # If we received any valid data, the platform is licensed
-        if 'apiResponse' in input and input.get('apiResponse'):
-            license_purchased = True
-            
-        # Check for status response indicating active subscription
-        status = input.get('status', input.get('responseData', {}))
-        if isinstance(status, dict) and status:
-            license_purchased = True
-        elif isinstance(status, str) and status.lower() in ['error', 'failed', 'invalid']:
-            license_purchased = False
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
-        # Check for cloud name or organization info (indicates active subscription)
-        if input.get('cloudName') or input.get('orgName') or input.get('organization'):
-            license_purchased = True
+        default_value = data is not None
+        license_purchased = False
 
-        license_info = {
-            "confirmedLicensePurchased": license_purchased
-        }
-        return license_info
+        if isinstance(data, dict):
+            license_purchased = data.get('licensePurchased', default_value)
+
+            # If we received any valid data, the platform is licensed
+            if 'apiResponse' in data and data.get('apiResponse'):
+                license_purchased = True
+
+            # Check for status response indicating active subscription
+            status = data.get('status', data.get('responseData', {}))
+            if isinstance(status, dict) and status:
+                license_purchased = True
+            elif isinstance(status, str) and status.lower() in ['error', 'failed', 'invalid']:
+                license_purchased = False
+
+            # Check for cloud name or organization info (indicates active subscription)
+            if data.get('cloudName') or data.get('orgName') or data.get('organization'):
+                license_purchased = True
+        else:
+            license_purchased = default_value
+
+        if license_purchased:
+            pass_reasons.append("Zscaler ZIA license active and confirmed")
+        else:
+            fail_reasons.append("Zscaler ZIA license has not been purchased or confirmed")
+            recommendations.append("Ensure valid Zscaler ZIA subscription is active")
+
+        return create_response(
+            result={criteriaKey: license_purchased},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"licensePurchased": license_purchased}
+        )
+
     except Exception as e:
-        return {"confirmedLicensePurchased": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
