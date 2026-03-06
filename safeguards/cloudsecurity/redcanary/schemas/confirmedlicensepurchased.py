@@ -9,10 +9,16 @@ class ConfirmedlicensepurchasedInput(BaseModel):
     Expected input schema for the confirmedlicensepurchased transformation.
     Criteria key: confirmedLicensePurchased
 
-    Validates endpoint protection platform license status.
+    Validates Red Canary subscription status by checking the
+    audit_logs endpoint for a valid response.
     """
 
-    licensePurchased: Optional[bool] = None
+    audit_logs: Optional[List[Dict[str, Any]]] = None
+    data: Optional[List[Dict[str, Any]]] = None
+    meta: Optional[Dict[str, Any]] = None
+    id: Optional[str] = None
+    subscription: Optional[Dict[str, Any]] = None
+    account: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
