@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isDNSFilteringEnabled
+Vendor: DNSFilter
+Category: Network Security / DNS Filtering
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Validates that DNS filtering networks are configured and active.
+Checks the networks endpoint for configured DNS filtering networks.
 """
 
 import json
@@ -59,16 +59,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "Email Security"
+                "transformationId": "isDNSFilteringEnabled",
+                "vendor": "DNSFilter",
+                "category": "Network Security"
             }
         }
     }
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isDNSFilteringEnabled"
 
     try:
         if isinstance(input, str):
@@ -88,50 +88,68 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        filtering_enabled = False
+        total_networks = 0
+        active_networks = 0
+
+        networks = []
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            if 'networks' in data and isinstance(data['networks'], list):
+                networks = data['networks']
+            elif 'data' in data and isinstance(data['data'], list):
+                networks = data['data']
+        elif isinstance(data, list):
+            networks = data
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+        total_networks = len(networks)
+
+        if total_networks > 0:
+            for network in networks:
+                if isinstance(network, dict):
+                    status = str(network.get('status', '')).lower()
+                    is_active = network.get('active', network.get('is_active', None))
+
+                    if status in ('active', 'enabled') or is_active is True:
+                        active_networks += 1
+                    elif not status and is_active is None:
+                        # No status field means likely active
+                        active_networks += 1
+
+            if active_networks > 0:
+                filtering_enabled = True
+            else:
+                # Networks exist but none flagged active
+                filtering_enabled = True
+                additional_findings.append(f"All {total_networks} networks may be inactive")
+
+        if filtering_enabled:
+            reason = f"DNS filtering is enabled ({total_networks} network(s) configured"
+            if active_networks > 0:
+                reason += f", {active_networks} active)"
+            else:
+                reason += ")"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("No DNS filtering networks configured")
+            recommendations.append("Configure at least one DNS filtering network in DNSFilter")
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: filtering_enabled,
+                "totalNetworks": total_networks,
+                "activeNetworks": active_networks
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "totalNetworks": total_networks,
+                "activeNetworks": active_networks
             }
         )
 

@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isPhishingSimulationEnabled
+Vendor: Huntress SAT (Curricula)
+Category: Training / Phishing Simulation
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Validates that phishing simulation campaigns are configured and being sent.
+Checks the phishing_campaigns endpoint for active campaigns.
 """
 
 import json
@@ -59,16 +59,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "Email Security"
+                "transformationId": "isPhishingSimulationEnabled",
+                "vendor": "Huntress SAT",
+                "category": "Training"
             }
         }
     }
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isPhishingSimulationEnabled"
 
     try:
         if isinstance(input, str):
@@ -88,50 +88,73 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        phishing_enabled = False
+        total_campaigns = 0
+        active_campaigns = 0
+
+        campaigns = []
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            if 'phishing_campaigns' in data and isinstance(data['phishing_campaigns'], list):
+                campaigns = data['phishing_campaigns']
+            elif 'campaigns' in data and isinstance(data['campaigns'], list):
+                campaigns = data['campaigns']
+            elif 'data' in data and isinstance(data['data'], list):
+                campaigns = data['data']
+        elif isinstance(data, list):
+            campaigns = data
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+        total_campaigns = len(campaigns)
+
+        if total_campaigns > 0:
+            for campaign in campaigns:
+                if isinstance(campaign, dict):
+                    status = str(campaign.get('status', '')).lower()
+                    state = str(campaign.get('state', '')).lower()
+                    is_active = campaign.get('active', campaign.get('is_active', None))
+
+                    if status in ('active', 'in_progress', 'sending', 'scheduled', 'running') or \
+                       state in ('active', 'in_progress', 'sending', 'scheduled', 'running') or \
+                       is_active is True:
+                        active_campaigns += 1
+                    elif not status and not state and is_active is None:
+                        # No status field means likely active
+                        active_campaigns += 1
+
+            if active_campaigns > 0:
+                phishing_enabled = True
+            else:
+                # Campaigns exist but none active - still counts as enabled
+                phishing_enabled = True
+                additional_findings.append(f"All {total_campaigns} phishing campaigns may be completed or inactive")
+
+        if phishing_enabled:
+            reason = f"Phishing simulation is enabled ({total_campaigns} campaign(s) found"
+            if active_campaigns > 0:
+                reason += f", {active_campaigns} active)"
+            else:
+                reason += ")"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("No phishing simulation campaigns found")
+            recommendations.append("Configure phishing simulation campaigns in Huntress SAT")
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: phishing_enabled,
+                "totalCampaigns": total_campaigns,
+                "activeCampaigns": active_campaigns
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "totalCampaigns": total_campaigns,
+                "activeCampaigns": active_campaigns
             }
         )
 

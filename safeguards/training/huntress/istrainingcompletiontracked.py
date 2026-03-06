@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isTrainingCompletionTracked
+Vendor: Huntress SAT (Curricula)
+Category: Training / Completion Tracking
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Ensures training completion is tracked and learners are enrolled.
+Checks the learners endpoint for enrolled users.
 """
 
 import json
@@ -59,16 +59,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "Email Security"
+                "transformationId": "isTrainingCompletionTracked",
+                "vendor": "Huntress SAT",
+                "category": "Training"
             }
         }
     }
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isTrainingCompletionTracked"
 
     try:
         if isinstance(input, str):
@@ -88,50 +88,76 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        completion_tracked = False
+        total_learners = 0
+        completed_learners = 0
+
+        learners = []
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            if 'learners' in data and isinstance(data['learners'], list):
+                learners = data['learners']
+            elif 'data' in data and isinstance(data['data'], list):
+                learners = data['data']
+            elif 'total' in data or 'total_count' in data:
+                # Paginated response with count only
+                total_learners = data.get('total', data.get('total_count', 0))
+                if total_learners > 0:
+                    completion_tracked = True
+        elif isinstance(data, list):
+            learners = data
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+        if learners:
+            total_learners = len(learners)
+
+            for learner in learners:
+                if isinstance(learner, dict):
+                    status = str(learner.get('status', '')).lower()
+                    completed = learner.get('completed', learner.get('is_completed', False))
+                    progress = learner.get('progress', learner.get('completion_percentage', 0))
+
+                    if completed or status == 'completed' or progress == 100:
+                        completed_learners += 1
+
+            if total_learners > 0:
+                completion_tracked = True
+
+        if completion_tracked:
+            reason = f"Training completion is tracked ({total_learners} learner(s) enrolled"
+            if completed_learners > 0:
+                reason += f", {completed_learners} completed)"
+            else:
+                reason += ")"
             pass_reasons.append(reason)
+
+            if total_learners > 0 and completed_learners == 0:
+                additional_findings.append("No learners have completed training yet")
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("No learners enrolled in training")
+            recommendations.append("Enroll users as learners in Huntress SAT to track training completion")
+
+        completion_rate = 0
+        if total_learners > 0:
+            completion_rate = round((completed_learners / total_learners) * 100, 1)
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: completion_tracked,
+                "totalLearners": total_learners,
+                "completedLearners": completed_learners,
+                "completionRate": completion_rate
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "totalLearners": total_learners,
+                "completedLearners": completed_learners,
+                "completionRate": completion_rate
             }
         )
 

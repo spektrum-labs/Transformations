@@ -1,10 +1,11 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isEmailLoggingEnabled
+Vendor: Cloudflare Email Security (formerly Area 1)
+Category: Email Security / Logging
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Checks if email security logging is enabled in Cloudflare Email Security.
+Evaluates the investigate endpoint response to confirm that email detections
+and events are being captured and logged.
 """
 
 import json
@@ -59,8 +60,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
+                "transformationId": "isEmailLoggingEnabled",
+                "vendor": "Cloudflare Email Security",
                 "category": "Email Security"
             }
         }
@@ -68,7 +69,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isEmailLoggingEnabled"
 
     try:
         if isinstance(input, str):
@@ -80,7 +81,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: False, "logCount": 0},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -89,55 +90,53 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        logging_enabled = False
+        log_count = 0
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            # Cloudflare investigate endpoint returns email events
+            messages = data.get('result', data.get('results', data.get('messages', [])))
+            result_info = data.get('result_info', {})
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+            if isinstance(messages, list):
+                log_count = len(messages)
+                # If the investigate endpoint returns data, logging is active
+                logging_enabled = True
+            elif isinstance(result_info, dict) and 'total_count' in result_info:
+                log_count = result_info.get('total_count', 0)
+                logging_enabled = True
+
+            # Check success flag
+            if not logging_enabled and data.get('success') is True:
+                logging_enabled = True
+
+            # Check audit logs or events lists
+            audit_logs = data.get('auditLogs', data.get('logs', data.get('events', [])))
+            if isinstance(audit_logs, list) and len(audit_logs) > 0:
+                log_count = max(log_count, len(audit_logs))
+                logging_enabled = True
+
+        if logging_enabled:
+            reason = "Email security logging is enabled"
+            if log_count > 0:
+                reason += f" ({log_count} email events captured)"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("Email security logging is not enabled or not returning events")
+            recommendations.append("Verify Cloudflare Email Security is properly configured and processing email traffic")
 
         return create_response(
-            result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
-            },
+            result={criteriaKey: logging_enabled, "logCount": log_count},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
-            }
+            input_summary={"logCount": log_count, "loggingEnabled": logging_enabled}
         )
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: False, "logCount": 0},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
