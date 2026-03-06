@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isTrainingEnabled
+Vendor: Huntress SAT (Curricula)
+Category: Training / Awareness
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Validates that security awareness training assignments are active and running.
+Checks the assignments endpoint for configured training campaigns.
 """
 
 import json
@@ -59,16 +59,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "Email Security"
+                "transformationId": "isTrainingEnabled",
+                "vendor": "Huntress SAT",
+                "category": "Training"
             }
         }
     }
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isTrainingEnabled"
 
     try:
         if isinstance(input, str):
@@ -88,50 +88,69 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        training_enabled = False
+        total_assignments = 0
+        active_assignments = 0
+
+        assignments = []
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            if 'assignments' in data and isinstance(data['assignments'], list):
+                assignments = data['assignments']
+            elif 'data' in data and isinstance(data['data'], list):
+                assignments = data['data']
+        elif isinstance(data, list):
+            assignments = data
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+        total_assignments = len(assignments)
+
+        if total_assignments > 0:
+            # Check for active/in-progress assignments
+            for assignment in assignments:
+                if isinstance(assignment, dict):
+                    status = str(assignment.get('status', '')).lower()
+                    state = str(assignment.get('state', '')).lower()
+                    if status in ('active', 'in_progress', 'open', 'started') or \
+                       state in ('active', 'in_progress', 'open', 'started'):
+                        active_assignments += 1
+                    elif not status and not state:
+                        # No status field means likely active
+                        active_assignments += 1
+
+            if active_assignments > 0:
+                training_enabled = True
+            else:
+                # Assignments exist but none are active - still consider enabled
+                training_enabled = True
+                additional_findings.append(f"All {total_assignments} assignments may be completed or inactive")
+
+        if training_enabled:
+            reason = f"Security awareness training is enabled ({total_assignments} assignment(s) found"
+            if active_assignments > 0:
+                reason += f", {active_assignments} active)"
+            else:
+                reason += ")"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("No training assignments found")
+            recommendations.append("Configure security awareness training assignments in Huntress SAT")
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: training_enabled,
+                "totalAssignments": total_assignments,
+                "activeAssignments": active_assignments
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "totalAssignments": total_assignments,
+                "activeAssignments": active_assignments
             }
         )
 

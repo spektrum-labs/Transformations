@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: confirmedLicensePurchased
+Vendor: Cloudflare Email Security (formerly Area 1)
+Category: Email Security / Licensing
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Evaluates if a valid Cloudflare Email Security subscription is active.
+Checks the token verification response for active status and valid token ID.
 """
 
 import json
@@ -59,8 +59,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
+                "transformationId": "confirmedLicensePurchased",
+                "vendor": "Cloudflare Email Security",
                 "category": "Email Security"
             }
         }
@@ -68,7 +68,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "confirmedLicensePurchased"
 
     try:
         if isinstance(input, str):
@@ -89,50 +89,50 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        license_purchased = False
+        license_details = {}
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            # Cloudflare token verify response: {"id": "...", "status": "active"}
+            status = data.get('status', '')
+            if isinstance(status, str) and status.lower() == 'active':
+                license_purchased = True
+                license_details['status'] = status
+                if 'id' in data:
+                    license_details['tokenId'] = data['id']
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
-            pass_reasons.append(reason)
+            # Check for success flag in Cloudflare envelope
+            elif data.get('success') is True:
+                license_purchased = True
+                license_details['status'] = 'active'
+                result_data = data.get('result', {})
+                if isinstance(result_data, dict):
+                    if 'status' in result_data:
+                        license_details['status'] = result_data['status']
+                    if 'id' in result_data:
+                        license_details['tokenId'] = result_data['id']
+
+            # Fallback checks
+            elif 'subscription' in data and data['subscription']:
+                license_purchased = True
+                license_details['subscription'] = data['subscription']
+            elif 'active' in data or 'enabled' in data:
+                license_purchased = bool(data.get('active', data.get('enabled', False)))
+                license_details['status'] = 'active' if license_purchased else 'inactive'
+
+        if license_purchased:
+            pass_reasons.append("Cloudflare Email Security license active and confirmed")
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("Cloudflare Email Security license has not been purchased or confirmed")
+            recommendations.append("Ensure valid Cloudflare Email Security subscription is active")
 
         return create_response(
-            result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
-            },
+            result={criteriaKey: license_purchased, **license_details},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
-            }
+            input_summary={"licensePurchased": license_purchased, **license_details}
         )
 
     except Exception as e:

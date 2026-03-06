@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: confirmedLicensePurchased
+Vendor: DNSFilter
+Category: Network Security / Licensing
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Evaluates if a valid DNSFilter subscription is active.
+Checks the organizations endpoint for active org status or subscription.
 """
 
 import json
@@ -59,16 +59,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "Email Security"
+                "transformationId": "confirmedLicensePurchased",
+                "vendor": "DNSFilter",
+                "category": "Network Security"
             }
         }
     }
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "confirmedLicensePurchased"
 
     try:
         if isinstance(input, str):
@@ -89,50 +89,46 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        license_purchased = False
+        license_details = {}
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            # Check organization status
+            org_status = str(data.get("status", "")).lower()
+            if org_status == "active":
+                license_purchased = True
+                license_details["orgStatus"] = org_status
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
-            pass_reasons.append(reason)
+            # Check subscription if available
+            subscription = data.get("subscription", {})
+            if isinstance(subscription, dict):
+                sub_status = str(subscription.get("status", "")).lower()
+                if sub_status == "active":
+                    license_purchased = True
+                    license_details["subscriptionStatus"] = sub_status
+
+            # Fallback: valid org data with an ID indicates active account
+            if not license_purchased and data.get("id"):
+                license_purchased = True
+                license_details["organizationId"] = data.get("id")
+
+        elif isinstance(data, list) and len(data) > 0:
+            license_purchased = True
+            license_details["organizationCount"] = len(data)
+
+        if license_purchased:
+            pass_reasons.append("DNSFilter subscription is active and confirmed")
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("DNSFilter subscription could not be confirmed")
+            recommendations.append("Ensure a valid DNSFilter subscription is active")
 
         return create_response(
-            result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
-            },
+            result={criteriaKey: license_purchased, **license_details},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
-            }
+            input_summary={"licensePurchased": license_purchased, **license_details}
         )
 
     except Exception as e:

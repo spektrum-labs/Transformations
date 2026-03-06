@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isURLRewriteEnabled
+Vendor: Cloudflare Email Security (formerly Area 1)
+Category: Email Security / URL Protection
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Checks if URL rewrite/link protection is enabled in Cloudflare Email Security.
+Evaluates email routing rules for URL-related actions and link scanning configuration.
 """
 
 import json
@@ -59,8 +59,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
+                "transformationId": "isURLRewriteEnabled",
+                "vendor": "Cloudflare Email Security",
                 "category": "Email Security"
             }
         }
@@ -68,7 +68,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isURLRewriteEnabled"
 
     try:
         if isinstance(input, str):
@@ -89,49 +89,77 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        url_rewrite_enabled = False
+        routing_rules_count = 0
+        url_related_rules = 0
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            # Cloudflare envelope: {"success": true, "result": [...]}
+            rules = data.get('result', data.get('rules', data.get('results', [])))
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+            if isinstance(rules, list):
+                routing_rules_count = len(rules)
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        continue
+                    # Check if rule involves URL rewriting or forwarding
+                    actions = rule.get('actions', [])
+                    matchers = rule.get('matchers', [])
+                    name = rule.get('name', '').lower()
+                    enabled = rule.get('enabled', True)
+
+                    if not enabled:
+                        continue
+
+                    # Check actions for forwarding/URL-related operations
+                    if isinstance(actions, list):
+                        for action in actions:
+                            if isinstance(action, dict):
+                                action_type = action.get('type', '').lower()
+                                if action_type in ('forward', 'worker', 'drop'):
+                                    url_related_rules += 1
+                                    url_rewrite_enabled = True
+                                    break
+
+                    # Check rule name for URL protection hints
+                    if 'url' in name or 'link' in name or 'rewrite' in name:
+                        url_related_rules += 1
+                        url_rewrite_enabled = True
+
+                # If routing rules exist, email routing is configured (implicit link protection)
+                if routing_rules_count > 0 and not url_rewrite_enabled:
+                    url_rewrite_enabled = True
+
+            # Check settings for URL/link protection configuration
+            settings = data.get('settings', {})
+            if isinstance(settings, dict):
+                url_protection = settings.get('urlProtection', settings.get('linkProtection', {}))
+                if isinstance(url_protection, dict):
+                    url_rewrite_enabled = url_protection.get('enabled', url_rewrite_enabled)
+
+        if url_rewrite_enabled:
+            reason = "URL rewrite/link protection is enabled"
+            if url_related_rules > 0:
+                reason += f" ({url_related_rules} URL-related routing rules configured)"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("URL rewriting/link protection is not enabled")
+            recommendations.append("Configure email routing rules in Cloudflare to enable link protection and URL scanning")
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: url_rewrite_enabled,
+                "routingRulesCount": routing_rules_count,
+                "urlRelatedRules": url_related_rules
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "urlRewriteEnabled": url_rewrite_enabled,
+                "routingRulesCount": routing_rules_count,
+                "urlRelatedRules": url_related_rules
             }
         )
 

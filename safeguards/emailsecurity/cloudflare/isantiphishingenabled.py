@@ -1,10 +1,11 @@
 """
 Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
+Vendor: Cloudflare Email Security (formerly Area 1)
 Category: Email Security / Anti-Phishing
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Checks if anti-phishing protection is enabled in Cloudflare Email Security.
+Evaluates the investigate endpoint response for detected threats and dispositions
+(MALICIOUS, SUSPICIOUS, SPOOF) indicating active scanning.
 """
 
 import json
@@ -60,7 +61,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
+                "vendor": "Cloudflare Email Security",
                 "category": "Email Security"
             }
         }
@@ -89,49 +90,75 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        anti_phishing_enabled = False
+        total_detections = 0
+        malicious_count = 0
+        suspicious_count = 0
+        spoof_count = 0
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            # Cloudflare envelope: {"success": true, "result": [...], "result_info": {...}}
+            messages = data.get('result', data.get('results', data.get('messages', [])))
+            result_info = data.get('result_info', {})
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+            if isinstance(messages, list):
+                # If the investigate endpoint responds, scanning is active
+                anti_phishing_enabled = True
+                total_detections = len(messages)
+
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        continue
+                    disposition = msg.get('final_disposition', '').upper()
+                    if disposition == 'MALICIOUS':
+                        malicious_count += 1
+                    elif disposition == 'SUSPICIOUS':
+                        suspicious_count += 1
+                    elif disposition == 'SPOOF':
+                        spoof_count += 1
+
+            elif isinstance(result_info, dict) and 'total_count' in result_info:
+                # Paginated response indicates active scanning
+                anti_phishing_enabled = True
+                total_detections = result_info.get('total_count', 0)
+
+            # Check success flag as fallback
+            elif data.get('success') is True:
+                anti_phishing_enabled = True
+
+        if anti_phishing_enabled:
+            reason = "Anti-phishing protection is active"
+            if total_detections > 0:
+                details = []
+                if malicious_count > 0:
+                    details.append(f"{malicious_count} malicious")
+                if suspicious_count > 0:
+                    details.append(f"{suspicious_count} suspicious")
+                if spoof_count > 0:
+                    details.append(f"{spoof_count} spoofed")
+                reason += f" ({total_detections} detections: {', '.join(details)})" if details else f" ({total_detections} detections)"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("Anti-phishing protection is not enabled or not returning detections")
+            recommendations.append("Enable Cloudflare Email Security and verify email routing is configured")
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: anti_phishing_enabled,
+                "totalDetections": total_detections,
+                "maliciousCount": malicious_count,
+                "suspiciousCount": suspicious_count,
+                "spoofCount": spoof_count
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "totalDetections": total_detections,
+                "maliciousCount": malicious_count,
+                "suspiciousCount": suspicious_count,
+                "spoofCount": spoof_count
             }
         )
 

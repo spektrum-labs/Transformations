@@ -1,10 +1,10 @@
 """
-Transformation: isAntiPhishingEnabled
-Vendor: Mimecast
-Category: Email Security / Anti-Phishing
+Transformation: isDNSLoggingEnabled
+Vendor: DNSFilter
+Category: Network Security / DNS Logging
 
-Ensures that email filters are configured to block phishing and spam.
-Checks for anti-phishing indicators, policies, and filters.
+Validates that DNS query logging is enabled for audit and threat analysis.
+Checks the total_queries traffic report endpoint for query log data.
 """
 
 import json
@@ -59,16 +59,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "Email Security"
+                "transformationId": "isDNSLoggingEnabled",
+                "vendor": "DNSFilter",
+                "category": "Network Security"
             }
         }
     }
 
 
 def transform(input):
-    criteriaKey = "isAntiPhishingEnabled"
+    criteriaKey = "isDNSLoggingEnabled"
 
     try:
         if isinstance(input, str):
@@ -88,50 +88,58 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        antiphishing_enabled = False
-        phishing_policies_count = 0
-        filters_count = 0
+        logging_enabled = False
+        total_queries = 0
 
         if isinstance(data, dict):
-            if 'antiphishingEnabled' in data or 'phishingProtection' in data:
-                antiphishing_enabled = bool(data.get('antiphishingEnabled', data.get('phishingProtection', False)))
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                phishing_policies = [p for p in policies if 'phishing' in str(p).lower() or 'spam' in str(p).lower()]
-                phishing_policies_count = len(phishing_policies)
-                antiphishing_enabled = phishing_policies_count > 0
-            elif 'filters' in data:
-                filters = data['filters'] if isinstance(data['filters'], list) else []
-                filters_count = len(filters)
-                antiphishing_enabled = filters_count > 0
-            elif 'enabled' in data:
-                antiphishing_enabled = bool(data['enabled'])
+            # Check for total query count in traffic report
+            total_queries = data.get('total_queries', data.get('totalQueries',
+                           data.get('total', data.get('count', 0))))
 
-        if antiphishing_enabled:
-            reason = "Anti-phishing protection is enabled"
-            if phishing_policies_count > 0:
-                reason += f" ({phishing_policies_count} phishing/spam policies configured)"
-            elif filters_count > 0:
-                reason += f" ({filters_count} filters configured)"
+            # Check for query log entries
+            queries = data.get('queries', data.get('data', data.get('logs', [])))
+            if isinstance(queries, list) and len(queries) > 0:
+                logging_enabled = True
+                total_queries = total_queries or len(queries)
+
+            # A positive query count indicates logging is active
+            if isinstance(total_queries, (int, float)) and total_queries > 0:
+                logging_enabled = True
+
+            # Check for explicit logging configuration flags
+            logging_config = data.get('logging_enabled', data.get('loggingEnabled',
+                            data.get('query_logging', data.get('queryLogging', None))))
+            if logging_config is not None:
+                logging_enabled = bool(logging_config)
+
+        elif isinstance(data, list) and len(data) > 0:
+            # Direct list of query logs
+            logging_enabled = True
+            total_queries = len(data)
+
+        if logging_enabled:
+            reason = "DNS query logging is enabled"
+            if total_queries > 0:
+                reason += f" ({total_queries} queries recorded)"
             pass_reasons.append(reason)
         else:
-            fail_reasons.append("Anti-phishing protection is not enabled")
-            recommendations.append("Configure anti-phishing and spam filters in Mimecast")
+            fail_reasons.append("DNS query logging does not appear to be enabled")
+            recommendations.append("Enable DNS query logging in DNSFilter for audit and threat analysis")
 
         return create_response(
             result={
-                criteriaKey: antiphishing_enabled,
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                criteriaKey: logging_enabled,
+                "totalQueries": total_queries
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
-                "phishingPolicies": phishing_policies_count,
-                "filtersCount": filters_count
+                "totalQueries": total_queries
             }
         )
 
