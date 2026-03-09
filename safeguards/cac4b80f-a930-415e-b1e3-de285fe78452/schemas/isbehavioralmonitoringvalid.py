@@ -1,17 +1,19 @@
 """Schema for isbehavioralmonitoringvalid transformation input."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 
 class IsbehavioralmonitoringvalidInput(BaseModel):
     """
     Expected input schema for the isbehavioralmonitoringvalid transformation.
-    Criteria key: isbehavioralmonitoringvalid
+    Criteria key: isBehavioralMonitoringValid
+
+    Validates that behavioral monitoring is functioning on the
+    endpoint protection platform.
     """
 
-    message: Optional[str] = None
-    status: Optional[str] = None
+    isBehavioralMonitoringValid: Optional[bool] = None
 
     class Config:
         extra = "allow"

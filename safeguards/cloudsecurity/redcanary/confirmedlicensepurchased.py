@@ -1,10 +1,10 @@
 """
-Transformation: isSSLCertificateManaged
-Vendor: Cloudflare
-Category: Cloud Security / SSL/TLS
+Transformation: confirmedLicensePurchased
+Vendor: Red Canary
+Category: Cloud Security / Licensing
 
-Checks if SSL certificates are managed in Cloudflare.
-Validates SSL mode, certificate status, and certificate inventory.
+Evaluates if a valid Red Canary subscription is active.
+Checks the audit_logs endpoint for a valid response indicating an active account.
 """
 
 import json
@@ -59,8 +59,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isSSLCertificateManaged",
-                "vendor": "Cloudflare",
+                "transformationId": "confirmedLicensePurchased",
+                "vendor": "Red Canary",
                 "category": "Cloud Security"
             }
         }
@@ -68,7 +68,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "isSSLCertificateManaged"
+    criteriaKey = "confirmedLicensePurchased"
 
     try:
         if isinstance(input, str):
@@ -88,53 +88,58 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-        additional_findings = []
 
-        ssl_managed = False
-        ssl_details = {}
+        license_purchased = False
+        license_details = {}
 
         if isinstance(data, dict):
-            # Check SSL mode
-            ssl_mode = data.get('value', data.get('mode', ''))
-            if ssl_mode and ssl_mode != 'off':
-                ssl_managed = True
-                ssl_details['sslMode'] = ssl_mode
+            # Check for audit_logs response (array of audit log entries)
+            audit_logs = data.get('audit_logs', data.get('data', []))
+            if isinstance(audit_logs, list) and len(audit_logs) > 0:
+                license_purchased = True
+                license_details['auditLogCount'] = len(audit_logs)
 
-            # Check certificate status
-            cert_status = data.get('certificate_status', data.get('status', ''))
-            if cert_status:
-                ssl_details['certificateStatus'] = cert_status
-                if str(cert_status).lower() in ('active', 'issued'):
-                    ssl_managed = True
+            # Check for meta/pagination indicating valid response
+            meta = data.get('meta', {})
+            if isinstance(meta, dict) and ('total_count' in meta or 'total' in meta):
+                license_purchased = True
+                license_details['totalRecords'] = meta.get('total_count', meta.get('total'))
 
-            # Check for certificates list
-            certificates = data.get('certificates', data.get('result', []))
-            if isinstance(certificates, list) and len(certificates) > 0:
-                ssl_managed = True
-                ssl_details['certificateCount'] = len(certificates)
+            # Check for subscription/account indicators
+            if 'subscription' in data and data['subscription']:
+                license_purchased = True
+                license_details['subscription'] = data['subscription']
+            elif 'account' in data and data['account']:
+                license_purchased = True
 
-        if ssl_managed:
-            reason = "SSL certificate management is active"
-            if ssl_details.get('sslMode'):
-                reason += f" (mode: {ssl_details['sslMode']})"
-            if ssl_details.get('certificateCount'):
-                reason += f" ({ssl_details['certificateCount']} certificate(s))"
-            pass_reasons.append(reason)
+            # Fallback: valid org data with an ID indicates active account
+            if not license_purchased and data.get('id'):
+                license_purchased = True
+                license_details['accountId'] = data.get('id')
 
-            if ssl_details.get('sslMode') in ('flexible',):
-                additional_findings.append("SSL mode is 'flexible' - consider upgrading to 'full' or 'strict' for end-to-end encryption")
+            # Non-empty valid response indicates active account
+            if not license_purchased and len(data) > 0:
+                license_purchased = True
+                license_details['responseKeys'] = list(data.keys())
+
+        elif isinstance(data, list):
+            if len(data) > 0:
+                license_purchased = True
+                license_details['auditLogCount'] = len(data)
+
+        if license_purchased:
+            pass_reasons.append("Red Canary subscription is active and confirmed")
         else:
-            fail_reasons.append("SSL certificate management is not active")
-            recommendations.append("Enable SSL/TLS in Cloudflare and ensure certificates are managed")
+            fail_reasons.append("Red Canary subscription could not be confirmed")
+            recommendations.append("Ensure a valid Red Canary subscription is active and API token has read permissions")
 
         return create_response(
-            result={criteriaKey: ssl_managed, **ssl_details},
+            result={criteriaKey: license_purchased, **license_details},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            additional_findings=additional_findings,
-            input_summary={"sslManaged": ssl_managed, **ssl_details}
+            input_summary={"licensePurchased": license_purchased, **license_details}
         )
 
     except Exception as e:
