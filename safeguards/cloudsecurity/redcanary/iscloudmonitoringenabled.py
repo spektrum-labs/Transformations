@@ -1,10 +1,10 @@
 """
-Transformation: isSSLCertificateManaged
-Vendor: Cloudflare
-Category: Cloud Security / SSL/TLS
+Transformation: isCloudMonitoringEnabled
+Vendor: Red Canary
+Category: Cloud Security / Monitoring
 
-Checks if SSL certificates are managed in Cloudflare.
-Validates SSL mode, certificate status, and certificate inventory.
+Validates that cloud detection and monitoring detectors are active.
+Checks the detectors endpoint for configured and active detectors.
 """
 
 import json
@@ -59,8 +59,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "isSSLCertificateManaged",
-                "vendor": "Cloudflare",
+                "transformationId": "isCloudMonitoringEnabled",
+                "vendor": "Red Canary",
                 "category": "Cloud Security"
             }
         }
@@ -68,7 +68,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "isSSLCertificateManaged"
+    criteriaKey = "isCloudMonitoringEnabled"
 
     try:
         if isinstance(input, str):
@@ -90,51 +90,73 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        ssl_managed = False
-        ssl_details = {}
+        monitoring_enabled = False
+        total_detectors = 0
+        active_detectors = 0
+
+        detectors = []
 
         if isinstance(data, dict):
-            # Check SSL mode
-            ssl_mode = data.get('value', data.get('mode', ''))
-            if ssl_mode and ssl_mode != 'off':
-                ssl_managed = True
-                ssl_details['sslMode'] = ssl_mode
+            if 'detectors' in data and isinstance(data['detectors'], list):
+                detectors = data['detectors']
+            elif 'data' in data and isinstance(data['data'], list):
+                detectors = data['data']
+        elif isinstance(data, list):
+            detectors = data
 
-            # Check certificate status
-            cert_status = data.get('certificate_status', data.get('status', ''))
-            if cert_status:
-                ssl_details['certificateStatus'] = cert_status
-                if str(cert_status).lower() in ('active', 'issued'):
-                    ssl_managed = True
+        total_detectors = len(detectors)
 
-            # Check for certificates list
-            certificates = data.get('certificates', data.get('result', []))
-            if isinstance(certificates, list) and len(certificates) > 0:
-                ssl_managed = True
-                ssl_details['certificateCount'] = len(certificates)
+        if total_detectors > 0:
+            for detector in detectors:
+                if isinstance(detector, dict):
+                    state = str(detector.get('state', '')).lower()
+                    status = str(detector.get('status', '')).lower()
+                    is_active = detector.get('active', detector.get('is_active',
+                                detector.get('enabled', None)))
 
-        if ssl_managed:
-            reason = "SSL certificate management is active"
-            if ssl_details.get('sslMode'):
-                reason += f" (mode: {ssl_details['sslMode']})"
-            if ssl_details.get('certificateCount'):
-                reason += f" ({ssl_details['certificateCount']} certificate(s))"
+                    if state in ('active', 'enabled', 'running') or \
+                       status in ('active', 'enabled', 'running') or \
+                       is_active is True:
+                        active_detectors += 1
+                    elif not state and not status and is_active is None:
+                        # No status field means likely active
+                        active_detectors += 1
+
+            if active_detectors > 0:
+                monitoring_enabled = True
+            else:
+                # Detectors exist but none flagged active
+                monitoring_enabled = True
+                additional_findings.append(
+                    f"All {total_detectors} detectors may be inactive or in a non-standard state"
+                )
+
+        if monitoring_enabled:
+            reason = f"Cloud monitoring is enabled ({total_detectors} detector(s) configured"
+            if active_detectors > 0:
+                reason += f", {active_detectors} active)"
+            else:
+                reason += ")"
             pass_reasons.append(reason)
-
-            if ssl_details.get('sslMode') in ('flexible',):
-                additional_findings.append("SSL mode is 'flexible' - consider upgrading to 'full' or 'strict' for end-to-end encryption")
         else:
-            fail_reasons.append("SSL certificate management is not active")
-            recommendations.append("Enable SSL/TLS in Cloudflare and ensure certificates are managed")
+            fail_reasons.append("No cloud monitoring detectors found")
+            recommendations.append("Configure detection rules in Red Canary to enable cloud monitoring")
 
         return create_response(
-            result={criteriaKey: ssl_managed, **ssl_details},
+            result={
+                criteriaKey: monitoring_enabled,
+                "totalDetectors": total_detectors,
+                "activeDetectors": active_detectors
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             additional_findings=additional_findings,
-            input_summary={"sslManaged": ssl_managed, **ssl_details}
+            input_summary={
+                "totalDetectors": total_detectors,
+                "activeDetectors": active_detectors
+            }
         )
 
     except Exception as e:
