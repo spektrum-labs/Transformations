@@ -1,6 +1,6 @@
 """
 Transformation: network_transform
-Vendor: Network Security
+Vendor: Cisco Meraki
 Category: Network Security
 
 Evaluates if Network Security is set up properly.
@@ -60,7 +60,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "network_transform",
-                "vendor": "Network Security",
+                "vendor": "Cisco Meraki",
                 "category": "Network Security"
             }
         }
@@ -113,6 +113,9 @@ def transform(input):
             is_continuous_discovery_enabled = True if data.get('isContinuousDiscoveryEnabled', False) else False
             if not is_continuous_discovery_enabled:
                 is_continuous_discovery_enabled = True if data.get('devices', False) else False
+
+            if not is_continuous_discovery_enabled and isinstance(data, list):
+                is_continuous_discovery_enabled = True if len(data) > 0 else False
 
         if is_continuous_discovery_enabled:
             pass_reasons.append("Continuous discovery is enabled")
