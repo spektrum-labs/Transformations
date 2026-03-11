@@ -75,6 +75,7 @@ def transform(input):
 
         data, validation = extract_input(input)
 
+        
         if validation.get("status") == "failed":
             return create_response(
                 result={"confirmedLicensePurchased": False},
@@ -124,7 +125,10 @@ def transform(input):
             license_purchased = True
             license_details['contractExpiryDate'] = attribute_data.get('Contract Exppiry Date', attribute_data.get('contract_expiry_date', ''))
             pass_reasons.append("Axonius instance confirmed via contract expiry date")
-            
+        elif 'meta' in data and 'status' in data['meta'] and data['meta']['status'] != 'error':
+            license_purchased = True
+            pass_reasons.append("Axonius instance confirmed via healthy checkpoint")
+
         if not license_purchased and not fail_reasons:
             fail_reasons.append("No license or instance information found in response")
             recommendations.append("Ensure the Axonius health check API endpoint is accessible")
