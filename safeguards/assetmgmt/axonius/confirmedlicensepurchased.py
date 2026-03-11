@@ -87,33 +87,44 @@ def transform(input):
         recommendations = []
         license_purchased = False
         license_details = {}
+        attribute_data = {}
+
+        if 'data' in data:
+            data = data['data']
+
+        if 'attributes' in data:
+            attribute_data = data['attributes']
 
         # Axonius about endpoint returns instance info
-        if 'Build Date' in data or 'build_date' in data:
+        if 'Build Date' in attribute_data or 'build_date' in attribute_data:
             license_purchased = True
-            license_details['buildDate'] = data.get('Build Date', data.get('build_date', ''))
+            license_details['buildDate'] = attribute_data.get('Build Date', attribute_data.get('build_date', ''))
             pass_reasons.append("Axonius instance confirmed via build date")
-        elif 'Version' in data or 'version' in data:
+        elif 'Version' in attribute_data or 'version' in attribute_data:
             license_purchased = True
-            license_details['version'] = data.get('Version', data.get('version', ''))
+            license_details['version'] = attribute_data.get('Version', attribute_data.get('version', ''))
             pass_reasons.append("Axonius instance confirmed via version info")
-        elif 'subscription' in data and data['subscription']:
+        elif 'subscription' in attribute_data and attribute_data['subscription']:
             license_purchased = True
-            license_details['subscription'] = data['subscription']
+            license_details['subscription'] = attribute_data['subscription']
             pass_reasons.append("Active subscription confirmed")
-        elif 'license' in data and data['license']:
+        elif 'license' in attribute_data and attribute_data['license']:
             license_purchased = True
-            license_details['license'] = data['license']
+            license_details['license'] = attribute_data['license']
             pass_reasons.append("Valid license confirmed")
-        elif 'active' in data or 'enabled' in data:
-            license_purchased = bool(data.get('active', data.get('enabled', False)))
+        elif 'active' in attribute_data or 'enabled' in attribute_data:
+            license_purchased = bool(data.get('active', attribute_data.get('enabled', False)))
             license_details['status'] = 'active' if license_purchased else 'inactive'
             if license_purchased:
                 pass_reasons.append("Axonius instance is active")
             else:
                 fail_reasons.append("Axonius instance is inactive")
                 recommendations.append("Verify Axonius license status and reactivate if needed")
-
+        elif 'Contract Expiry Date' in attribute_data or 'contract_expiry_date' in attribute_data:
+            license_purchased = True
+            license_details['contractExpiryDate'] = attribute_data.get('Contract Exppiry Date', attribute_data.get('contract_expiry_date', ''))
+            pass_reasons.append("Axonius instance confirmed via contract expiry date")
+            
         if not license_purchased and not fail_reasons:
             fail_reasons.append("No license or instance information found in response")
             recommendations.append("Ensure the Axonius health check API endpoint is accessible")
