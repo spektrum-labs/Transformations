@@ -88,6 +88,8 @@ def transform(input):
                 return json.loads(input.decode("utf-8"))
             if isinstance(input, dict):
                 return input
+            if isinstance(input, list):
+                return input
             raise ValueError("Input must be JSON string, bytes, or dict")
 
         input = _parse_input(input)
@@ -114,8 +116,8 @@ def transform(input):
             if not is_continuous_discovery_enabled:
                 is_continuous_discovery_enabled = True if data.get('devices', False) else False
 
-            if not is_continuous_discovery_enabled and isinstance(data, list):
-                is_continuous_discovery_enabled = True if len(data) > 0 else False
+        if not is_continuous_discovery_enabled and isinstance(data, list):
+            is_continuous_discovery_enabled = True if len(data) > 0 else False
 
         if is_continuous_discovery_enabled:
             pass_reasons.append("Continuous discovery is enabled")
