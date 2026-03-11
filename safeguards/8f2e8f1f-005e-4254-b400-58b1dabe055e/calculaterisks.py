@@ -97,11 +97,18 @@ def transform(input):
                 current_rating = int(rating_details[attribute].get('rating', 0))
             except:
                 current_rating = 0
+
             if current_rating < 700:
                 low_ratings.append(rating_details[attribute])
-                if current_rating < lowest_rating or lowest_rating == 0:
-                    lowest_rating = current_rating
-                low_count += 1
+                print(rating_details[attribute])
+                original_rating = rating_details[attribute].get('rating')
+                if isinstance(original_rating, str) and original_rating.lower() not in ['n/a']:
+                    low_count += 1
+                else:
+                    current_rating = lowest_rating
+
+            if current_rating < lowest_rating or lowest_rating == 0:
+                lowest_rating = current_rating
 
         if low_count == 0:
             pass_reasons.append("All security ratings are above threshold (700)")
