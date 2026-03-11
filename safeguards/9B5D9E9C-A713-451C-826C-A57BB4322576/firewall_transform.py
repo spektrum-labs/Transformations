@@ -157,10 +157,14 @@ def transform(input):
 
             if 'data' in data:
                 audit_data = _parse_input(data['data'])
+                
                 if 'auditFeed' in audit_data:
                     audit_logs_raw = _parse_input(audit_data['auditFeed'])
-                    if 'fetchedCount' in audit_logs_raw:
-                        is_firewall_logging_enabled = True if audit_logs_raw.get('fetchedCount', 0) > 0 else False
+                    try:
+                        fetched_count = int(audit_logs_raw['fetchedCount'])
+                    except:
+                        fetched_count = 0
+                    is_firewall_logging_enabled = True if fetched_count > 0 else False
 
         is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
         is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
