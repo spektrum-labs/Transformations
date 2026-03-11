@@ -61,8 +61,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "firewall_transform",
-                "vendor": "Firewall",
-                "category": "Network Security"
+                "vendor": "Cato Networks",
+                "category": "Firewall"
             }
         }
     }
@@ -118,6 +118,7 @@ def transform(input):
 
             firewall_data = _parse_input(data['firewall']) if 'firewall' in data else data
             wan_network_data = _parse_input(data['wanNetwork']) if 'wanNetwork' in data else data
+            audit_data = _parse_input(data['data']) if 'data' in data else data
 
             is_firewall_enabled = True if data.get('isFirewallEnabled', False) else False
 
@@ -155,16 +156,13 @@ def transform(input):
 
             is_firewall_logging_enabled = True if data.get('isFirewallLoggingEnabled', False) else False
 
-            if 'data' in data:
-                audit_data = _parse_input(data['data'])
-                
-                if 'auditFeed' in audit_data:
-                    audit_logs_raw = _parse_input(audit_data['auditFeed'])
-                    try:
-                        fetched_count = int(audit_logs_raw['fetchedCount'])
-                    except:
-                        fetched_count = 0
-                    is_firewall_logging_enabled = True if fetched_count > 0 else False
+            if 'auditFeed' in audit_data:
+                audit_logs_raw = _parse_input(audit_data['auditFeed'])
+                try:
+                    fetched_count = int(audit_logs_raw['fetchedCount'])
+                except:
+                    fetched_count = 0
+                is_firewall_logging_enabled = True if fetched_count > 0 else False
 
         is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
         is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
