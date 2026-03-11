@@ -100,7 +100,7 @@ def transform(input):
 
             if current_rating < 700:
                 low_ratings.append(rating_details[attribute])
-                print(rating_details[attribute])
+                
                 original_rating = rating_details[attribute].get('rating')
                 if isinstance(original_rating, str) and original_rating.lower() not in ['n/a']:
                     low_count += 1
