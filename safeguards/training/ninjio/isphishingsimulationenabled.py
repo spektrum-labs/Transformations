@@ -72,6 +72,7 @@ def evaluate(data):
                 active_count += 1
 
         result = active_count > 0
+        return {"isPhishingSimulationEnabled": result, "activeCampaignCount": active_count, "totalCampaigns": total}
     except Exception as e:
         return {"isPhishingSimulationEnabled": False, "error": str(e)}
 

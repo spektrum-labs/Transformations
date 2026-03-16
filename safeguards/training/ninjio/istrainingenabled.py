@@ -75,6 +75,7 @@ def evaluate(data):
                 active_count += 1
 
         result = active_count > 0
+        return {"isTrainingEnabled": result, "activeSimulationCount": active_count, "totalSimulations": total}
     except Exception as e:
         return {"isTrainingEnabled": False, "error": str(e)}
 

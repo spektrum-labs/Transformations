@@ -5,7 +5,7 @@ Evaluates: Whether the aggregate training completion rate across all active trai
 """
 import json
 from datetime import datetime
-
+COMPLETION_THRESHOLD = 80
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:

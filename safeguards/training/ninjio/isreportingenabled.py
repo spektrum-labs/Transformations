@@ -94,7 +94,7 @@ def evaluate(data):
             result = True
         else:
             result = False
-        return {"isReportingEnabled": result}
+        return {"isReportingEnabled": result, "phishingCampaignCount": active_campaign_count}
     except Exception as e:
         return {"isReportingEnabled": False, "error": str(e)}
 
