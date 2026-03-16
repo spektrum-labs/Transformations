@@ -94,7 +94,7 @@ def evaluate(data):
             if is_remedial:
                 remediation_count += 1
 
-        result = remediation_count > 0
+        return {"isPhishingRemediationConfigured": remediation_count > 0, "remediationSimulationCount": remediation_count}
     except Exception as e:
         return {"isPhishingRemediationConfigured": False, "error": str(e)}
 
