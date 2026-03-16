@@ -56,7 +56,7 @@ def evaluate(data):
             }
 
         count = len(custom_categories)
-        result = count > 0
+        return {"isDefaultDenyConfigured": count > 0, "customCategoryCount": count}
     except Exception as e:
         return {"isDefaultDenyConfigured": False, "error": str(e)}
 

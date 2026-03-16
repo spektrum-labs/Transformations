@@ -48,13 +48,16 @@ def evaluate(data):
         result = False
 
         # Bundles may be returned as a list at root level or under 'bundles'/'data'/'results'
-        bundles = (
-            data.get("bundles") or
-            data.get("data") or
-            data.get("results") or
-            data.get("items") or
-            (data if isinstance(data, list) else [])
-        )
+        if isinstance(data, list):
+            bundles = data
+        else:
+            bundles = (
+                data.get("bundles") or
+                data.get("data") or
+                data.get("results") or
+                data.get("items") or
+                []
+            )
 
         if not isinstance(bundles, list):
             bundles = [bundles] if bundles else []
@@ -94,6 +97,8 @@ def evaluate(data):
                 elif str(status).lower() in ("active", "enabled", "true", "1", "current"):
                     result = True
                     break
+
+        return {"confirmedLicensePurchased": result, "bundleCount": len(bundles)}
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
@@ -117,7 +122,7 @@ def transform(input):
 
         # Run core evaluation
         eval_result = evaluate(data)
-
+        print(eval_result)
         # Extract the boolean result and any extra fields
         result_value = eval_result.get(criteriaKey, False)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
