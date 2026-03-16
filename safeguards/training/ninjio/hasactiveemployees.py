@@ -82,7 +82,7 @@ def evaluate(data):
             if status not in inactive_statuses:
                 active_count += 1
 
-        result = active_count > 0
+        return {"hasActiveEmployees": active_count > 0, "activeEmployeeCount": active_count, "totalEmployees": total}
     except Exception as e:
         return {"hasActiveEmployees": False, "error": str(e)}
 
