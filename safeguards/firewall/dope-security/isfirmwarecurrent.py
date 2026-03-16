@@ -5,6 +5,9 @@ Evaluates: Whether all enrolled dope.endpoint agents are running a supported
 """
 import json
 from datetime import datetime
+# Update this as Dope Security releases new versions.
+# Check https://inflight.dope.security/release-notes for latest.
+MINIMUM_SUPPORTED_VERSION = "1.0.17958"
 
 
 def extract_input(input_data):
@@ -44,10 +47,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
-    # Update this as Dope Security releases new versions.
-    # Check https://inflight.dope.security/release-notes for latest.
-    MINIMUM_SUPPORTED_VERSION = "3.0.0"
-
+    
     def parse_version(version_str):
         """Parse a version string into a comparable tuple of ints."""
         if not version_str:
@@ -65,8 +65,7 @@ def evaluate(data):
 
     min_version_tuple = parse_version(MINIMUM_SUPPORTED_VERSION)
 
-    # Parse input
-    data = parse_input(input)
+    data, validation = extract_input(data)
 
     # Standard response unwrapping chain
     data = data.get("response", data)
@@ -75,19 +74,19 @@ def evaluate(data):
 
 
     def parse_version(version_str):
-                """Parse a version string into a comparable tuple of ints."""
-                if not version_str:
-                    return (0, 0, 0)
-                parts = str(version_str).split(".")
-                result = []
-                for part in parts[:3]:  # take first 3 segments only
-                    try:
-                        result.append(int(part))
-                    except ValueError:
-                        result.append(0)
-                while len(result) < 3:
-                    result.append(0)
-                return tuple(result)
+        """Parse a version string into a comparable tuple of ints."""
+        if not version_str:
+            return (0, 0, 0)
+        parts = str(version_str).split(".")
+        result = []
+        for part in parts[:3]:  # take first 3 segments only
+            try:
+                result.append(int(part))
+            except ValueError:
+                result.append(0)
+        while len(result) < 3:
+            result.append(0)
+        return tuple(result)
     min_version_tuple = parse_version(MINIMUM_SUPPORTED_VERSION)
 
     try:
@@ -112,7 +111,6 @@ def evaluate(data):
         for ep in endpoints:
             agent_version = ep.get("agentVersion", "")
             device_name = ep.get("deviceName", ep.get("emailId", "unknown"))
-
             if not agent_version:
                 # Unknown version — treat as outdated
                 outdated.append(f"{device_name} (version=unknown)")
@@ -122,7 +120,7 @@ def evaluate(data):
             if ep_version_tuple < min_version_tuple:
                 outdated.append(f"{device_name} (version={agent_version})")
 
-        result = len(outdated) == 0
+        return {"isFirmwareCurrent": len(outdated) == 0, "currentVersion":MINIMUM_SUPPORTED_VERSION, "outdatedEndpoints": outdated, "outdatedEndpointCount": len(outdated), "totalEndpointCount": total}
     except Exception as e:
         return {"isFirmwareCurrent": False, "error": str(e)}
 
@@ -163,7 +161,11 @@ def transform(input):
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Dope Security configuration for {criteriaKey}")
+            if "outdatedEndpoints" in eval_result:
+                fail_reasons.append(f"Outdated endpoints: {eval_result['outdatedEndpoints']}")
+                recommendations.append(f"Review Dope Security configuration for outadated Endpoints")
+            else:
+                recommendations.append(f"Review Dope Security configuration for {criteriaKey}")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
