@@ -78,7 +78,7 @@ def evaluate(data):
                 location_str = f" ({city})" if city else ""
                 fallback_endpoints.append(f"{device_name}{location_str}")
 
-        result = len(fallback_endpoints) == 0
+        return {"isFallbackModeDisabled": len(fallback_endpoints) == 0, "fallbackEndpoints": fallback_endpoints[:20], "fallbackEndpointCount": len(fallback_endpoints), "totalEndpointCount": total}
     except Exception as e:
         return {"isFallbackModeDisabled": False, "error": str(e)}
 
@@ -119,7 +119,11 @@ def transform(input):
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Dope Security configuration for {criteriaKey}")
+            if "fallbackEndpoints" in eval_result:
+                fail_reasons.append(f"Fallback endpoints: {eval_result['fallbackEndpoints']}")
+                recommendations.append(f"Review Dope Security configuration for fallback Endpoints")
+            else:
+                recommendations.append(f"Review Dope Security configuration for given Endpoints")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},

@@ -5,7 +5,7 @@ Evaluates: The percentage of enrolled endpoints that have the dope.swg agent
 """
 import json
 from datetime import datetime
-
+COVERAGE_THRESHOLD = 95.0
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -44,7 +44,6 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
-    COVERAGE_THRESHOLD = 95.0
 
     try:
         api_data = data.get("data", data)
@@ -94,7 +93,7 @@ def evaluate(data):
                 unprotected_names.append(f"{device_name} (status={status})")
 
         coverage = (protected / total) * 100
-        result = coverage >= COVERAGE_THRESHOLD
+        return {"requiredCoveragePercentage": coverage >= COVERAGE_THRESHOLD, "coveragePercent": coverage, "protectedEndpointCount": protected, "totalEndpointCount": total, "unprotectedEndpointCount": len(unprotected_names)}
     except Exception as e:
         return {"requiredCoveragePercentage": False, "error": str(e)}
 
