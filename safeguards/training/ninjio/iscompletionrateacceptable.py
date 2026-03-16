@@ -73,24 +73,38 @@ def evaluate(data):
                     "totalCompleted": total_completed
                 }
 
-        # Case 3: Response is a list of templates, each with enrollment/completion fields
+        # Case 3: Response is a list of templates with elapsed_time_average/elapsed_time_counts
+        # (NINJIO templates endpoint). Compute a weighted average completion rate.
         templates = (
+            data.get("templates") or
             data.get("results") or
             data.get("data") or
-            data.get("templates") or
             data.get("items") or
             (data if isinstance(data, list) else [])
         )
 
         if isinstance(templates, list) and len(templates) > 0:
-            total_enrolled = 0
-            total_completed = 0
+            weighted_sum = 0.0
+            total_counts = 0
+            templates_evaluated = 0
 
             for tmpl in templates:
                 if not isinstance(tmpl, dict):
                     continue
 
-                # Try various field name patterns for enrollment/completion
+                avg = tmpl.get("elapsed_time_average")
+                counts = tmpl.get("elapsed_time_counts")
+
+                if avg is not None and counts is not None:
+                    avg = float(avg)
+                    counts = int(float(counts))
+                    if counts > 0:
+                        weighted_sum += avg * counts
+                        total_counts += counts
+                        templates_evaluated += 1
+                    continue
+
+                # Fallback: explicit enrolled/completed fields
                 enrolled = int(tmpl.get(
                     "total_enrolled", tmpl.get("enrolled", tmpl.get(
                         "totalEnrolled", tmpl.get("enrollment_count", 0)
@@ -101,39 +115,27 @@ def evaluate(data):
                         "totalCompleted", tmpl.get("completion_count", 0)
                     ))
                 ))
+                if enrolled > 0:
+                    weighted_sum += (completed / enrolled) * 100 * enrolled
+                    total_counts += enrolled
+                    templates_evaluated += 1
 
-                # If template has a direct completion_rate, use that proportionally
-                if enrolled == 0 and completed == 0:
-                    direct_rate = tmpl.get("completion_rate", tmpl.get("completionRate"))
-                    if direct_rate is not None:
-                        # Single template with direct rate: use as proxy for pass/fail
-                        rate = float(direct_rate)
-                        return {
-                            "isCompletionRateAcceptable": rate >= COMPLETION_THRESHOLD,
-                            "completionRate": round(rate, 2),
-                            "totalEnrolled": 0,
-                            "totalCompleted": 0
-                        }
-
-                total_enrolled += enrolled
-                total_completed += completed
-
-            if total_enrolled > 0:
-                rate = (total_completed / total_enrolled) * 100
+            if total_counts > 0:
+                rate = weighted_sum / total_counts
                 result = rate >= COMPLETION_THRESHOLD
                 return {
                     "isCompletionRateAcceptable": result,
                     "completionRate": round(rate, 2),
-                    "totalEnrolled": total_enrolled,
-                    "totalCompleted": total_completed
+                    "totalAssignments": total_counts,
+                    "templatesEvaluated": templates_evaluated
                 }
 
         # Insufficient data to evaluate
         return {
             "isCompletionRateAcceptable": False,
             "completionRate": 0.0,
-            "totalEnrolled": 0,
-            "totalCompleted": 0,
+            "totalAssignments": 0,
+            "templatesEvaluated": 0,
             "error": "Insufficient data to calculate completion rate"
         }
     except Exception as e:

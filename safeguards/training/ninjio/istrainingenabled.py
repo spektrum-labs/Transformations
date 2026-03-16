@@ -51,6 +51,7 @@ def evaluate(data):
             data.get("data") or
             data.get("simulations") or
             data.get("items") or
+            data.get("trainings") or
             (data if isinstance(data, list) else [])
         )
 
@@ -72,13 +73,29 @@ def evaluate(data):
             if status in active_statuses or status == "" :
                 # If no status field, count existence as active (NINJIO returns
                 # simulations only when they are scheduled or running)
-                active_count += 1
-
-        result = active_count > 0
-        return {"isTrainingEnabled": result, "activeSimulationCount": active_count, "totalSimulations": total}
+                if "end" in sim:
+                    try:
+                        # Try parsing the end date
+                        end_str = sim["end"]
+                        # Handle both date and datetime strings
+                        if len(end_str) == 10:
+                            end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                        else:
+                            # Try ISO datetime with and without 'Z'
+                            try:
+                                end_dt = datetime.fromisoformat(end_str.replace("Z", ""))
+                            except Exception:
+                                end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                        if end_dt >= datetime.now():
+                            active_count += 1
+                    except Exception:
+                        # If parsing fails, be conservative and include as active
+                        active_count += 1
+                else:
+                    active_count += 1
+        return {"isTrainingEnabled": active_count > 0, "activeSimulationCount": active_count, "totalSimulations": total}
     except Exception as e:
         return {"isTrainingEnabled": False, "error": str(e)}
-
 
 def transform(input):
     criteriaKey = "isTrainingEnabled"

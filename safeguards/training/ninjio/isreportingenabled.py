@@ -45,13 +45,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        campaigns = (
-            data.get("results") or
-            data.get("data") or
-            data.get("campaigns") or
-            data.get("items") or
-            (data if isinstance(data, list) else [])
-        )
+        if isinstance(data, list):
+            campaigns = data
+        else:
+            campaigns = (
+                data.get("results") or
+                data.get("data") or
+                data.get("campaigns") or
+                data.get("items") or
+                []
+            )
 
         if not isinstance(campaigns, list):
             campaigns = [campaigns] if campaigns else []
