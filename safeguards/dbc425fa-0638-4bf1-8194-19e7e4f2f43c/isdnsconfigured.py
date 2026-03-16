@@ -67,7 +67,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _parse_input(input):
+def parse_input(input):
     if isinstance(input, str):
         # First try to parse as literal Python string representation
         try:
@@ -97,7 +97,7 @@ def transform(input):
     is_spf_configured = False
 
     try:
-        input = _parse_input(input)
+        input = parse_input(input)
 
         # Check for enriched input format
         if isinstance(input, dict) and "data" in input and "validation" in input:
@@ -125,9 +125,9 @@ def transform(input):
 
         # Unwrap response/result wrappers
         if isinstance(data, dict) and 'response' in data:
-            data = _parse_input(data['response'])
+            data = parse_input(data['response'])
         if isinstance(data, dict) and 'result' in data:
-            data = _parse_input(data['result'])
+            data = parse_input(data['result'])
 
         if isinstance(data, dict):
             is_dmarc_configured = True if data.get('DMARC', False) else False
