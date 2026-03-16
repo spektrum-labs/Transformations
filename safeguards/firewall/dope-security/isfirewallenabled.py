@@ -73,7 +73,7 @@ def evaluate(data):
             if status == "healthy" and enabled:
                 healthy_count += 1
 
-        result = healthy_count > 0
+        return {"isFirewallEnabled": healthy_count > 0, "healthyEndpointCount": healthy_count, "totalEndpointCount": total}
     except Exception as e:
         return {"isFirewallEnabled": False, "error": str(e)}
 
