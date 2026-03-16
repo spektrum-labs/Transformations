@@ -53,7 +53,7 @@ def evaluate(data):
             return {"confirmedLicensePurchased": False, "error": "Unexpected endpoints format", "enrolledEndpoints": 0}
 
         enrolled_count = len(endpoints)
-        result = enrolled_count > 0
+        return {"confirmedLicensePurchased": enrolled_count > 0, "enrolledEndpoints": enrolled_count}
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
