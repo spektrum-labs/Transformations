@@ -98,7 +98,7 @@ def evaluate(data):
                     result = True
                     break
 
-        return {"confirmedLicensePurchased": len(bundles) > 0, "bundleCount": len(bundles)}
+        return {"confirmedLicensePurchased": result or (len(bundles) > 0), "bundleCount": len(bundles)}
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
@@ -122,7 +122,7 @@ def transform(input):
 
         # Run core evaluation
         eval_result = evaluate(data)
-        print(eval_result)
+
         # Extract the boolean result and any extra fields
         result_value = eval_result.get(criteriaKey, False)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
