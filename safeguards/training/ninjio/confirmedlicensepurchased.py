@@ -98,7 +98,7 @@ def evaluate(data):
                     result = True
                     break
 
-        return {"confirmedLicensePurchased": result, "bundleCount": len(bundles)}
+        return {"confirmedLicensePurchased": len(bundles) > 0, "bundleCount": len(bundles)}
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
