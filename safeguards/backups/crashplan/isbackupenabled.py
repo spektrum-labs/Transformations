@@ -16,7 +16,7 @@ def transform(input):
         dict: A dictionary indicating if backups are enabled.
     """
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -36,7 +36,7 @@ def transform(input):
             raise ValueError("Input must be JSON string, bytes, or dict")
 
         # Parse input
-        data = _parse_input(input)
+        data = parse_input(input)
 
         # Drill down past response/result wrappers if present
         data = data.get("response", data)

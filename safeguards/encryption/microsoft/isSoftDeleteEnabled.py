@@ -19,7 +19,7 @@ def transform(input):
     Returns: {"isSoftDeleteEnabled": bool}
     """
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -38,7 +38,7 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
 
-        data = _parse_input(input)
+        data = parse_input(input)
         data = data.get("response", data)
         data = data.get("result", data)
         data = data.get("apiResponse", data)

@@ -15,7 +15,7 @@ def transform(input):
         dict: A dictionary with backup coverage information for critical systems.
     """
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -35,7 +35,7 @@ def transform(input):
             raise ValueError("Input must be JSON string, bytes, or dict")
 
         # Parse input
-        data = _parse_input(input)
+        data = parse_input(input)
         data = data.get("response", data)
         data = data.get("result", data)
         data = data.get("apiResponse", data)

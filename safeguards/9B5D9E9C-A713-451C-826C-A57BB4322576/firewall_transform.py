@@ -77,7 +77,7 @@ def transform(input):
     wan_network_rules = []
 
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -96,7 +96,7 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
 
-        input = _parse_input(input)
+        input = parse_input(input)
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
@@ -112,24 +112,24 @@ def transform(input):
 
         if isinstance(data, dict):
             if 'response' in data:
-                data = _parse_input(data['response'])
+                data = parse_input(data['response'])
             if 'result' in data:
-                data = _parse_input(data['result'])
+                data = parse_input(data['result'])
 
-            firewall_data = _parse_input(data['firewall']) if 'firewall' in data else data
-            wan_network_data = _parse_input(data['wanNetwork']) if 'wanNetwork' in data else data
-            audit_data = _parse_input(data['data']) if 'data' in data else data
+            firewall_data = parse_input(data['firewall']) if 'firewall' in data else data
+            wan_network_data = parse_input(data['wanNetwork']) if 'wanNetwork' in data else data
+            audit_data = parse_input(data['data']) if 'data' in data else data
 
             is_firewall_enabled = True if data.get('isFirewallEnabled', False) else False
 
             if 'data' in firewall_data:
-                firewall_data = _parse_input(firewall_data['data'])
+                firewall_data = parse_input(firewall_data['data'])
                 if 'policy' in firewall_data:
-                    firewall_data = _parse_input(firewall_data['policy'])
+                    firewall_data = parse_input(firewall_data['policy'])
                     if 'internetFirewall' in firewall_data:
-                        firewall_policy = _parse_input(firewall_data['internetFirewall'])
+                        firewall_policy = parse_input(firewall_data['internetFirewall'])
                         if 'policy' in firewall_policy:
-                            firewall_policy = _parse_input(firewall_policy['policy'])
+                            firewall_policy = parse_input(firewall_policy['policy'])
                             if 'enabled' in firewall_policy:
                                 is_internet_firewall_enabled = True if firewall_policy.get('enabled', False) else False
                             if 'rules' in firewall_policy:
@@ -139,13 +139,13 @@ def transform(input):
                                         internet_firewall_rules.append(rule['rule']['name'])
 
             if 'data' in wan_network_data:
-                wan_network_data = _parse_input(wan_network_data['data'])
+                wan_network_data = parse_input(wan_network_data['data'])
                 if 'policy' in wan_network_data:
-                    wan_network_data = _parse_input(wan_network_data['policy'])
+                    wan_network_data = parse_input(wan_network_data['policy'])
                     if 'wanNetwork' in wan_network_data:
-                        wan_network_policy = _parse_input(wan_network_data['wanNetwork'])
+                        wan_network_policy = parse_input(wan_network_data['wanNetwork'])
                         if 'policy' in wan_network_policy:
-                            wan_network_policy = _parse_input(wan_network_policy['policy'])
+                            wan_network_policy = parse_input(wan_network_policy['policy'])
                             if 'enabled' in wan_network_policy:
                                 is_wan_network_enabled = True if wan_network_policy.get('enabled', False) else False
                             if 'rules' in wan_network_policy:
@@ -157,7 +157,7 @@ def transform(input):
             is_firewall_logging_enabled = True if data.get('isFirewallLoggingEnabled', False) else False
 
             if 'auditFeed' in audit_data:
-                audit_logs_raw = _parse_input(audit_data['auditFeed'])
+                audit_logs_raw = parse_input(audit_data['auditFeed'])
                 try:
                     fetched_count = int(audit_logs_raw['fetchedCount'])
                 except:

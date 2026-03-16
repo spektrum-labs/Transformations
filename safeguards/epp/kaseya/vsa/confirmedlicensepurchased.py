@@ -14,7 +14,7 @@ def transform(input):
         dict: A dictionary indicating if a license has been purchased.
     """
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -33,7 +33,7 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
 
-        data = _parse_input(input)
+        data = parse_input(input)
 
         # Navigate through response wrappers
         data = data.get("response", data)

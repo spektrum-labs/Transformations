@@ -42,7 +42,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _evaluate(data):
+def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
         has_full = False
@@ -52,7 +52,7 @@ def _evaluate(data):
         FULL_KEYWORDS = {"full", "full_backup", "synth_full", "synthetic_full"}
         INCR_KEYWORDS = {"incremental", "incr", "differential", "diff", "delta"}
 
-        def _check_schedule_entry(entry):
+        def check_schedule_entry(entry):
             """Extract backup type from a schedule entry."""
             backup_type = str(
                 entry.get("backupType",
@@ -64,7 +64,7 @@ def _evaluate(data):
             is_incr = any(k in backup_type for k in INCR_KEYWORDS)
             return is_full, is_incr
 
-        def _scan_plan(plan_obj):
+        def scan_plan(plan_obj):
             nonlocal has_full, has_incremental, scheduled_plans
             plan_full = False
             plan_incr = False
@@ -85,14 +85,14 @@ def _evaluate(data):
             for s in schedules:
                 if not isinstance(s, dict):
                     continue
-                is_f, is_i = _check_schedule_entry(s)
+                is_f, is_i = check_schedule_entry(s)
                 plan_full = plan_full or is_f
                 plan_incr = plan_incr or is_i
                 # Check nested schedule patterns
                 for nested_key in ("scheduleFrequency", "backupOpts", "dataBackupOption"):
                     nested = s.get(nested_key, {})
                     if isinstance(nested, dict):
-                        is_f2, is_i2 = _check_schedule_entry(nested)
+                        is_f2, is_i2 = check_schedule_entry(nested)
                         plan_full = plan_full or is_f2
                         plan_incr = plan_incr or is_i2
 
@@ -111,14 +111,14 @@ def _evaluate(data):
         if isinstance(plans, list) and len(plans) > 0:
             for plan in plans:
                 summary = plan.get("summary", plan)
-                _scan_plan(summary)
-                _scan_plan(plan)
+                scan_plan(summary)
+                scan_plan(plan)
         else:
             # Single plan response
-            _scan_plan(data)
+            scan_plan(data)
             plan_detail = data.get("plan", {})
             if isinstance(plan_detail, dict):
-                _scan_plan(plan_detail)
+                scan_plan(plan_detail)
 
         result = has_full and has_incremental
     except Exception as e:
@@ -143,7 +143,7 @@ def transform(input):
             )
 
         # Run core evaluation
-        eval_result = _evaluate(data)
+        eval_result = evaluate(data)
 
         # Extract the boolean result and any extra fields
         result_value = eval_result.get(criteriaKey, False)

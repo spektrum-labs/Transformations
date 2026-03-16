@@ -94,7 +94,7 @@ def transform(input):
         db_manual_snapshots = data.get("dbManualSnapshots", {})
         volume_snapshots = data.get("volumeSnapshots", {})
 
-        def _listify(container, key=None):
+        def listify(container, key=None):
             if key and isinstance(container, dict) and key in container:
                 entry = container[key]
                 return entry if isinstance(entry, list) else [entry]
@@ -106,7 +106,7 @@ def transform(input):
         auto_resp = db_backups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
         auto_res = auto_resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
         auto_group = auto_res.get("DBInstanceAutomatedBackups", {})
-        auto_list = _listify(auto_group, "DBInstanceAutomatedBackup")
+        auto_list = listify(auto_group, "DBInstanceAutomatedBackup")
 
         # Manual snapshots
         man_resp = db_manual_snapshots.get("DescribeDBSnapshotsResponse", {})

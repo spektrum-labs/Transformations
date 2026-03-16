@@ -79,7 +79,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _parse_major_version(os_name, version_str):
+def parse_major_version(os_name, version_str):
     """Extract major version number from OS version string."""
     if not version_str:
         return None
@@ -159,7 +159,7 @@ def transform(input):
                 continue
             os_name = device.get("operatingSystem", "Unknown")
             os_version = device.get("osVersion", "")
-            major = _parse_major_version(os_name, os_version)
+            major = parse_major_version(os_name, os_version)
             if major is not None:
                 if os_name not in os_versions:
                     os_versions[os_name] = {"max": major, "devices": []}
