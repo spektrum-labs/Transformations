@@ -71,7 +71,7 @@ def transform(input):
     is_continuous_discovery_enabled = False
 
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -92,7 +92,7 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
 
-        input = _parse_input(input)
+        input = parse_input(input)
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
@@ -108,9 +108,9 @@ def transform(input):
 
         if isinstance(data, dict):
             if 'response' in data:
-                data = _parse_input(data['response'])
+                data = parse_input(data['response'])
             if 'result' in data:
-                data = _parse_input(data['result'])
+                data = parse_input(data['result'])
 
             is_continuous_discovery_enabled = True if data.get('isContinuousDiscoveryEnabled', False) else False
             if not is_continuous_discovery_enabled:

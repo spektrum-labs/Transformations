@@ -20,7 +20,7 @@ def transform(input):
     is_spf_configured = False
     
     try:
-        def _parse_input(input):
+        def parse_input(input):
             if isinstance(input, str):
                 try:
                     parsed = ast.literal_eval(input)
@@ -39,12 +39,12 @@ def transform(input):
                 return input
             raise ValueError("Input must be JSON string, bytes, or dict")
         
-        input = _parse_input(input)
+        input = parse_input(input)
         
         if 'response' in input:
-            input = _parse_input(input['response'])
+            input = parse_input(input['response'])
         if 'result' in input:
-            input = _parse_input(input['result'])
+            input = parse_input(input['result'])
 
         # Check for DMARC configuration
         dmarc_data = input.get('DMARC', input.get('dmarc', None))

@@ -42,7 +42,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _evaluate(data):
+def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
         campaigns = (
@@ -94,7 +94,7 @@ def transform(input):
             )
 
         # Run core evaluation
-        eval_result = _evaluate(data)
+        eval_result = evaluate(data)
 
         # Extract the boolean result and any extra fields
         result_value = eval_result.get(criteriaKey, False)

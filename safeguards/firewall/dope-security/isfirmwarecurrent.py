@@ -42,7 +42,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _evaluate(data):
+def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     # Update this as Dope Security releases new versions.
     # Check https://inflight.dope.security/release-notes for latest.
@@ -66,7 +66,7 @@ def _evaluate(data):
     min_version_tuple = parse_version(MINIMUM_SUPPORTED_VERSION)
 
     # Parse input
-    data = _parse_input(input)
+    data = parse_input(input)
 
     # Standard response unwrapping chain
     data = data.get("response", data)
@@ -145,7 +145,7 @@ def transform(input):
             )
 
         # Run core evaluation
-        eval_result = _evaluate(data)
+        eval_result = evaluate(data)
 
         # Extract the boolean result and any extra fields
         result_value = eval_result.get(criteriaKey, False)
