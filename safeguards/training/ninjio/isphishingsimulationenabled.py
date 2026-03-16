@@ -45,13 +45,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        campaigns = (
-            data.get("results") or
-            data.get("data") or
-            data.get("campaigns") or
-            data.get("items") or
-            (data if isinstance(data, list) else [])
-        )
+        if isinstance(data, list):
+            campaigns = data
+        else:
+            campaigns = (
+                data.get("results")
+                or data.get("data")
+                or data.get("campaigns")
+                or data.get("items")
+                or []
+            )
 
         if not isinstance(campaigns, list):
             campaigns = [campaigns] if campaigns else []
@@ -69,10 +72,28 @@ def evaluate(data):
                 continue
             status = str(campaign.get("status", campaign.get("state", campaign.get("campaignStatus", "")))).lower()
             if status in active_statuses or status == "":
-                active_count += 1
+                if "end_date" in campaign:
+                    try:
+                        # Try parsing the end date
+                        end_str = campaign["end_date"]
+                        # Handle both date and datetime strings
+                        if len(end_str) == 10:
+                            end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                        else:
+                            # Try ISO datetime with and without 'Z'
+                            try:
+                                end_dt = datetime.fromisoformat(end_str.replace("Z", ""))
+                            except Exception:
+                                end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                        if end_dt >= datetime.now():
+                            active_count += 1
+                    except Exception:
+                        # If parsing fails, be conservative and include as active
+                        active_count += 1
+                else:
+                    active_count += 1
 
-        result = active_count > 0
-        return {"isPhishingSimulationEnabled": result, "activeCampaignCount": active_count, "totalCampaigns": total}
+        return {"isPhishingSimulationEnabled": active_count > 0, "activeCampaignCount": active_count, "totalCampaigns": total}
     except Exception as e:
         return {"isPhishingSimulationEnabled": False, "error": str(e)}
 
@@ -113,7 +134,9 @@ def transform(input):
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review NINJIO configuration for {criteriaKey}")
+            if "activeCampaignCount" in eval_result:
+                fail_reasons.append(f"Active campaign count: {eval_result['activeCampaignCount']}")
+            recommendations.append(f"Review NINJIO configuration for given campaigns")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
