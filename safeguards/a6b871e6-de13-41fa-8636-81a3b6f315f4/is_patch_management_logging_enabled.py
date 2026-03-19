@@ -50,7 +50,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for i in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -107,7 +107,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _extract_hosts(data):
+def extract_hosts(data):
     """Extract HOST list from HOST_LIST_VM_DETECTION_OUTPUT response."""
     response = {}
     if isinstance(data, dict):
@@ -125,7 +125,7 @@ def _extract_hosts(data):
     return hosts, response.get("DATETIME", "")
 
 
-def _count_hosts_with_detections(hosts):
+def count_hosts_with_detections(hosts):
     """Count hosts that have DETECTION_LIST data logged."""
     hosts_with_detections = 0
     total_detections = 0
@@ -174,9 +174,9 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        hosts, response_datetime = _extract_hosts(data)
+        hosts, response_datetime = extract_hosts(data)
         host_count = len(hosts)
-        hosts_with_detections, total_detections = _count_hosts_with_detections(hosts)
+        hosts_with_detections, total_detections = count_hosts_with_detections(hosts)
 
         logging_enabled = hosts_with_detections > 0
 
