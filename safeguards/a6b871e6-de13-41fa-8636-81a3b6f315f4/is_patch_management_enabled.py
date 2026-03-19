@@ -48,7 +48,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for i in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -105,7 +105,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _extract_hosts(data):
+def extract_hosts(data):
     """Extract HOST list from HOST_LIST_VM_DETECTION_OUTPUT response."""
     response = {}
     if isinstance(data, dict):
@@ -123,7 +123,7 @@ def _extract_hosts(data):
     return hosts, response.get("DATETIME", "")
 
 
-def _count_detections(hosts):
+def count_detections(hosts):
     """Count total patchable detections across all hosts."""
     total = 0
     for host in hosts:
@@ -169,9 +169,9 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        hosts, response_datetime = _extract_hosts(data)
+        hosts, response_datetime = extract_hosts(data)
         host_count = len(hosts)
-        detection_count = _count_detections(hosts)
+        detection_count = count_detections(hosts)
 
         is_enabled = host_count > 0
 
