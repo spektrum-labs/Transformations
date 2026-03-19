@@ -22,7 +22,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for i in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -79,7 +79,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _check_scheduled_scans(data):
+def check_scheduled_scans(data):
     """Check SCHEDULED_SCAN_LIST_OUTPUT for ASM enabled/logging status."""
     scan_output = data.get("SCHEDULED_SCAN_LIST_OUTPUT", {})
     response = scan_output.get("RESPONSE", {})
@@ -93,7 +93,7 @@ def _check_scheduled_scans(data):
     return has_scans, has_scans, len(scans) if scans else 0
 
 
-def _check_vm_detections(data):
+def check_vm_detections(data):
     """Check HOST_LIST_VM_DETECTION_OUTPUT for detection activity."""
     output = data.get("HOST_LIST_VM_DETECTION_OUTPUT", {})
     response = output.get("RESPONSE", {})
@@ -168,7 +168,7 @@ def transform(input):
 
             # Check SCHEDULED_SCAN_LIST_OUTPUT response
             if "SCHEDULED_SCAN_LIST_OUTPUT" in data:
-                scans_enabled, scans_logging, scan_count = _check_scheduled_scans(data)
+                scans_enabled, scans_logging, scan_count = check_scheduled_scans(data)
                 if scans_enabled:
                     is_asm_enabled = True
                 if scans_logging:
@@ -176,7 +176,7 @@ def transform(input):
 
             # Check HOST_LIST_VM_DETECTION_OUTPUT response
             if "HOST_LIST_VM_DETECTION_OUTPUT" in data:
-                has_hosts, has_detections, host_count, detection_count = _check_vm_detections(data)
+                has_hosts, has_detections, host_count, detection_count = check_vm_detections(data)
                 if has_hosts:
                     is_asm_enabled = True
                 if has_detections:
