@@ -1,13 +1,39 @@
 """
-Transformation: asm_transform
+Transformation: isPatchManagementEnabled
 Vendor: Qualys
 Category: Security / Attack Surface Management
 
-Transforms Attack Surface Management data to check if ASM is enabled and logging.
+Evaluates whether patch management is enabled by querying the Qualys
+Host List VM Detection API filtered by is_patchable=1 and status=Fixed.
+If any hosts with Fixed (patched) detections are returned, patch
+management is considered enabled.
 
-Handles two response formats:
-1. SCHEDULED_SCAN_LIST_OUTPUT - from getScheduledScans API
-2. HOST_LIST_VM_DETECTION_OUTPUT - from getVulnerabilities/getPatchableDetections API
+Expected response structure:
+{
+    "HOST_LIST_VM_DETECTION_OUTPUT": {
+        "RESPONSE": {
+            "DATETIME": "2026-03-19T16:53:03Z",
+            "HOST_LIST": {              # absent when no patched hosts
+                "HOST": [               # single dict or list
+                    {
+                        "ID": "12345",
+                        "IP": "10.0.0.1",
+                        "DNS": "host.example.com",
+                        "DETECTION_LIST": {
+                            "DETECTION": [
+                                {
+                                    "QID": "1234",
+                                    "STATUS": "Fixed",
+                                    "IS_PATCHABLE": "1"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
 """
 
 import json
@@ -71,7 +97,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": {
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
-                "transformationId": "asm_transform",
+                "transformationId": "isPatchManagementEnabled",
                 "vendor": "Qualys",
                 "category": "Attack Surface Management"
             }
@@ -79,35 +105,27 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _check_scheduled_scans(data):
-    """Check SCHEDULED_SCAN_LIST_OUTPUT for ASM enabled/logging status."""
-    scan_output = data.get("SCHEDULED_SCAN_LIST_OUTPUT", {})
-    response = scan_output.get("RESPONSE", {})
-    scan_list = response.get("SCHEDULED_SCAN_LIST", {})
-    scans = scan_list.get("SCAN", [])
+def _extract_hosts(data):
+    """Extract HOST list from HOST_LIST_VM_DETECTION_OUTPUT response."""
+    response = {}
+    if isinstance(data, dict):
+        output = data.get("HOST_LIST_VM_DETECTION_OUTPUT", data)
+        response = output.get("RESPONSE", output)
 
-    if isinstance(scans, dict):
-        scans = [scans]
-
-    has_scans = len(scans) > 0 if scans else False
-    return has_scans, has_scans, len(scans) if scans else 0
-
-
-def _check_vm_detections(data):
-    """Check HOST_LIST_VM_DETECTION_OUTPUT for detection activity."""
-    output = data.get("HOST_LIST_VM_DETECTION_OUTPUT", {})
-    response = output.get("RESPONSE", {})
     host_list = response.get("HOST_LIST", None)
-
     if host_list is None:
-        return False, False, 0, 0
+        return [], response.get("DATETIME", "")
 
     hosts = host_list.get("HOST", [])
     if isinstance(hosts, dict):
         hosts = [hosts]
 
-    host_count = len(hosts)
-    detection_count = 0
+    return hosts, response.get("DATETIME", "")
+
+
+def _count_detections(hosts):
+    """Count total patchable detections across all hosts."""
+    total = 0
     for host in hosts:
         detection_list = host.get("DETECTION_LIST", {})
         if not detection_list:
@@ -115,14 +133,13 @@ def _check_vm_detections(data):
         detections = detection_list.get("DETECTION", [])
         if isinstance(detections, dict):
             detections = [detections]
-        detection_count = detection_count + len(detections)
-
-    has_hosts = host_count > 0
-    has_detections = detection_count > 0
-    return has_hosts, has_detections, host_count, detection_count
+        total = total + len(detections)
+    return total
 
 
 def transform(input):
+    criteriaKey = "isPatchManagementEnabled"
+
     try:
         if isinstance(input, str):
             input = json.loads(input)
@@ -133,16 +150,16 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={"isASMEnabled": False, "isASMLoggingEnabled": False},
+                result={criteriaKey: False},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))]
             )
 
         # Check for integration execution errors
         if isinstance(data, dict) and "error" in data and "message" in data:
             if isinstance(data["message"], str) and data["message"].startswith("Integration execution error"):
                 return create_response(
-                    result={"isASMEnabled": False, "isASMLoggingEnabled": False},
+                    result={criteriaKey: False},
                     validation=validation,
                     fail_reasons=["Error communicating with Qualys API"],
                     recommendations=["Verify the Qualys API credentials and base URL are correct"]
@@ -152,67 +169,51 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        default_value = data is not None
+        hosts, response_datetime = _extract_hosts(data)
+        host_count = len(hosts)
+        detection_count = _count_detections(hosts)
 
-        if isinstance(data, dict) and "errors" in data:
-            default_value = False
+        is_enabled = host_count > 0
 
-        is_asm_enabled = False
-        is_asm_logging_enabled = False
-        scan_count = 0
-
-        if isinstance(data, dict):
-            # Check explicit flags first
-            is_asm_enabled = data.get("isASMEnabled", False)
-            is_asm_logging_enabled = data.get("isASMLoggingEnabled", False)
-
-            # Check SCHEDULED_SCAN_LIST_OUTPUT response
-            if "SCHEDULED_SCAN_LIST_OUTPUT" in data:
-                scans_enabled, scans_logging, scan_count = _check_scheduled_scans(data)
-                if scans_enabled:
-                    is_asm_enabled = True
-                if scans_logging:
-                    is_asm_logging_enabled = True
-
-            # Check HOST_LIST_VM_DETECTION_OUTPUT response
-            if "HOST_LIST_VM_DETECTION_OUTPUT" in data:
-                has_hosts, has_detections, host_count, detection_count = _check_vm_detections(data)
-                if has_hosts:
-                    is_asm_enabled = True
-                if has_detections:
-                    is_asm_logging_enabled = True
-
-            # Fallback to default if no specific response format matched
-            if not is_asm_enabled and "SCHEDULED_SCAN_LIST_OUTPUT" not in data and "HOST_LIST_VM_DETECTION_OUTPUT" not in data:
-                is_asm_enabled = data.get("isASMEnabled", default_value)
-                is_asm_logging_enabled = data.get("isASMLoggingEnabled", default_value)
+        if is_enabled:
+            pass_reasons.append(
+                f"Patch management is enabled - {host_count} host(s) with {detection_count} patched (Fixed) detection(s) found"
+            )
+        else:
+            fail_reasons.append(
+                "No patched hosts found - no vulnerabilities with status Fixed were returned"
+            )
+            recommendations.append(
+                "Verify that Qualys VM/VMDR is configured and that patches are being deployed to remediate detected vulnerabilities"
+            )
 
         additional_findings = []
+        if host_count > 0:
+            statuses = {}
+            for host in hosts:
+                detection_list = host.get("DETECTION_LIST", {})
+                if not detection_list:
+                    continue
+                detections = detection_list.get("DETECTION", [])
+                if isinstance(detections, dict):
+                    detections = [detections]
+                for det in detections:
+                    status = det.get("STATUS", "Unknown")
+                    count = statuses.get(status, 0)
+                    statuses[status] = count + 1
 
-        if is_asm_enabled:
-            pass_reasons.append("Attack Surface Management is enabled")
-        else:
-            fail_reasons.append("Attack Surface Management is not enabled")
-            recommendations.append("Enable Attack Surface Management for visibility into your external attack surface")
-
-        if is_asm_logging_enabled:
-            additional_findings.append({
-                "metric": "isASMLoggingEnabled",
-                "status": "pass",
-                "reason": "ASM logging is enabled"
-            })
-        else:
-            additional_findings.append({
-                "metric": "isASMLoggingEnabled",
-                "status": "fail",
-                "reason": "ASM logging is not enabled",
-                "recommendation": "Enable ASM logging for audit and compliance"
-            })
+            for status_name in statuses:
+                additional_findings.append({
+                    "metric": f"patchableDetections_{status_name}",
+                    "value": statuses[status_name],
+                    "reason": f"{statuses[status_name]} patchable detection(s) with status '{status_name}'"
+                })
 
         return create_response(
             result={
-                "isASMEnabled": is_asm_enabled,
-                "isASMLoggingEnabled": is_asm_logging_enabled
+                criteriaKey: is_enabled,
+                "hostCount": host_count,
+                "patchedDetectionCount": detection_count
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -220,14 +221,22 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "asmEnabled": is_asm_enabled,
-                "asmLoggingEnabled": is_asm_logging_enabled
+                "responseDateTime": response_datetime,
+                "hostCount": host_count,
+                "patchedDetectionCount": detection_count,
+                "hasHostList": host_count > 0
             }
         )
 
+    except json.JSONDecodeError as e:
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
+            fail_reasons=["Could not parse input as valid JSON"]
+        )
     except Exception as e:
         return create_response(
-            result={"isASMEnabled": False, "isASMLoggingEnabled": False},
+            result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
