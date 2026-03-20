@@ -2,6 +2,7 @@
 Transformation: isSSOEnforced
 Vendor: AppOmni  |  Category: Cloud Security
 Evaluates: SSO/SAML is enabled AND enforced (local login disabled) for AppOmni access
+API: GET /api/v1/settings/sso/
 """
 import json
 from datetime import datetime
@@ -59,6 +60,12 @@ def transform(input):
         recommendations = []
 
         # === EVALUATION LOGIC ===
+        # GET /api/v1/settings/sso/ returns SSO configuration object
+        # If response is a paginated list, extract the first result
+        sso_data = data
+        if isinstance(data.get("results"), list) and len(data.get("results", [])) > 0:
+            sso_data = data["results"][0]
+
         def to_bool(val):
             if isinstance(val, bool):
                 return val
@@ -66,16 +73,19 @@ def transform(input):
                 return val.lower() in ("true", "1", "yes", "enabled")
             return bool(val)
 
-        sso_enabled = to_bool(data.get("sso_enabled", False))
-        sso_enforced = to_bool(
-            data.get("sso_enforced", data.get("enforce_sso", False))
+        sso_enabled = to_bool(
+            sso_data.get("sso_enabled", sso_data.get("enabled", sso_data.get("is_enabled", False)))
         )
-        # local_login_allowed defaults to True (unsafe) when absent -- conservative
-        local_login_allowed = to_bool(data.get("local_login_allowed", True))
-        sso_provider = data.get("sso_provider", data.get("provider", "unknown"))
+        sso_enforced = to_bool(
+            sso_data.get("sso_enforced", sso_data.get("enforce_sso", sso_data.get("is_enforced", False)))
+        )
+        local_login_allowed = to_bool(
+            sso_data.get("local_login_allowed", sso_data.get("allow_local_login", sso_data.get("password_login_enabled", True)))
+        )
+        sso_provider = sso_data.get("sso_provider", sso_data.get("provider", sso_data.get("idp_name", "unknown")))
 
         # All three conditions required:
-        # 1. SSO is configured
+        # 1. SSO is configured and enabled
         # 2. SSO is enforced (required, not optional)
         # 3. Local login backdoor is disabled
         result = sso_enabled and sso_enforced and not local_login_allowed

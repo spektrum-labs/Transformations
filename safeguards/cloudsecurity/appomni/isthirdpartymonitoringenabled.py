@@ -2,6 +2,7 @@
 Transformation: isThirdPartyMonitoringEnabled
 Vendor: AppOmni  |  Category: Cloud Security
 Evaluates: At least one connected service has third-party OAuth app monitoring enabled
+API: GET /api/v1/core/monitoredservice/
 """
 import json
 from datetime import datetime
@@ -59,6 +60,8 @@ def transform(input):
         recommendations = []
 
         # === EVALUATION LOGIC ===
+        # GET /api/v1/core/monitoredservice/ returns DRF paginated response
+        # Each service object has: id, name, service_type, account_id, slug, enabled
         services = data.get("results", data.get("data", data.get("items", [])))
 
         if not isinstance(services, list):
@@ -76,21 +79,25 @@ def transform(input):
             s for s in services
             if s.get("enabled", False) and (
                 s.get("third_party_apps_monitored", False) or
-                s.get("third_party_monitoring_enabled", False)
+                s.get("third_party_monitoring_enabled", False) or
+                s.get("oauth_app_monitoring_enabled", False)
             )
         ]
 
+        service_types = [s.get("service_type", "unknown") for s in monitored if s.get("service_type")]
         result = len(monitored) >= 1
         # === END EVALUATION LOGIC ===
 
         if result:
             pass_reasons.append(f"{len(monitored)} of {total} service(s) have third-party app monitoring enabled")
+            if service_types:
+                pass_reasons.append(f"Service types with monitoring: {', '.join(service_types)}")
         else:
             fail_reasons.append(f"No enabled services have third-party app monitoring (total services: {total})")
             recommendations.append("Enable third-party OAuth app monitoring on at least one connected service in AppOmni")
 
         return create_response(
-            result={criteriaKey: result, "servicesWithThirdPartyMonitoring": len(monitored), "totalServices": total},
+            result={criteriaKey: result, "servicesWithThirdPartyMonitoring": len(monitored), "totalServices": total, "serviceTypes": service_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,

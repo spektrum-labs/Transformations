@@ -2,6 +2,7 @@
 Transformation: isPoliciesConfigured
 Vendor: AppOmni  |  Category: Cloud Security
 Evaluates: At least one enabled security policy exists in AppOmni
+API: GET /api/v1/core/policy/
 """
 import json
 from datetime import datetime
@@ -59,6 +60,8 @@ def transform(input):
         recommendations = []
 
         # === EVALUATION LOGIC ===
+        # GET /api/v1/core/policy/ returns DRF paginated response
+        # Each policy object has: id, name, policy_type, mode, enabled, is_reference
         policies = data.get("results", data.get("data", data.get("items", [])))
 
         if not isinstance(policies, list):
@@ -78,22 +81,25 @@ def transform(input):
                str(p.get("enabled", "")).lower() in ("true", "1", "yes")
         ]
 
+        policy_types = list({p.get("policy_type", "unknown") for p in enabled if p.get("policy_type")})
         result = len(enabled) >= 1
         # === END EVALUATION LOGIC ===
 
         if result:
             pass_reasons.append(f"{len(enabled)} of {total} policy/policies enabled")
+            if policy_types:
+                pass_reasons.append(f"Policy types: {', '.join(policy_types)}")
         else:
             fail_reasons.append(f"No enabled policies found (total policies: {total})")
             recommendations.append("Configure and enable at least one security policy in AppOmni")
 
         return create_response(
-            result={criteriaKey: result, "enabledPolicies": len(enabled), "totalPolicies": total},
+            result={criteriaKey: result, "enabledPolicies": len(enabled), "totalPolicies": total, "policyTypes": policy_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"totalPolicies": total, "enabledPolicies": len(enabled)}
+            input_summary={"totalPolicies": total, "enabledPolicies": len(enabled), "policyTypes": policy_types}
         )
 
     except Exception as e:

@@ -1,7 +1,8 @@
 """
 Transformation: isViolationAlertingEnabled
 Vendor: AppOmni  |  Category: Cloud Security
-Evaluates: At least one notification rule is configured and enabled in AppOmni
+Evaluates: At least one alert rule is configured and enabled in AppOmni
+API: GET /api/v1/alert-rules/
 """
 import json
 from datetime import datetime
@@ -59,38 +60,43 @@ def transform(input):
         recommendations = []
 
         # === EVALUATION LOGIC ===
-        notifications = data.get("results", data.get("data", data.get("items", [])))
+        # GET /api/v1/alert-rules/ returns DRF paginated response
+        # Each alert rule has: id, enabled, ruleset_id, channel, logic (object with name)
+        # Channel values: prod, beta, testing, ao_only_prod, ao_only_beta, ao_only_testing
+        rules = data.get("results", data.get("data", data.get("items", [])))
 
-        if not isinstance(notifications, list):
+        if not isinstance(rules, list):
             return create_response(
-                result={criteriaKey: False, "enabledNotifications": 0, "channels": []},
+                result={criteriaKey: False, "enabledRules": 0, "channels": []},
                 validation=validation,
-                fail_reasons=["Unexpected notifications response format"],
-                recommendations=["Verify the API response contains a list of notifications"],
+                fail_reasons=["Unexpected alert rules response format"],
+                recommendations=["Verify the API response contains a list of alert rules"],
                 input_summary={"dataType": "non-list"}
             )
 
-        enabled = [n for n in notifications if n.get("enabled", False)]
-        channels = list({n.get("channel", "unknown") for n in enabled if n.get("channel")})
+        total = len(rules)
+        enabled = [r for r in rules if r.get("enabled", False)]
+        channels = list({r.get("channel", "unknown") for r in enabled if r.get("channel")})
+        rule_names = [r.get("logic", {}).get("name", r.get("name", "unnamed")) for r in enabled]
 
         result = len(enabled) >= 1
         # === END EVALUATION LOGIC ===
 
         if result:
-            pass_reasons.append(f"{len(enabled)} notification rule(s) enabled")
+            pass_reasons.append(f"{len(enabled)} of {total} alert rule(s) enabled")
             if channels:
                 pass_reasons.append(f"Active channels: {', '.join(channels)}")
         else:
-            fail_reasons.append(f"No enabled notification rules found (total: {len(notifications)})")
-            recommendations.append("Configure and enable at least one notification rule in AppOmni for violation alerting")
+            fail_reasons.append(f"No enabled alert rules found (total: {total})")
+            recommendations.append("Configure and enable at least one alert rule in AppOmni for violation alerting")
 
         return create_response(
-            result={criteriaKey: result, "enabledNotifications": len(enabled), "channels": channels},
+            result={criteriaKey: result, "enabledRules": len(enabled), "totalRules": total, "channels": channels, "ruleNames": rule_names},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"totalNotifications": len(notifications), "enabledNotifications": len(enabled), "channels": channels}
+            input_summary={"totalRules": total, "enabledRules": len(enabled), "channels": channels}
         )
 
     except Exception as e:

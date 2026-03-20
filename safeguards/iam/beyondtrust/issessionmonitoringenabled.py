@@ -13,7 +13,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -84,7 +84,7 @@ def evaluate(data):
         return {
             "isSessionMonitoringEnabled": False,
             "sessionCount": 0,
-            "reason": f"Unexpected response type: {type(data).__name__}"
+            "reason": "Unexpected response type: non-dict/non-list"
         }
     except Exception as e:
         return {"isSessionMonitoringEnabled": False, "error": str(e)}
