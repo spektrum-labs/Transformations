@@ -13,7 +13,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -55,7 +55,7 @@ def evaluate(data):
         elif isinstance(data, list):
             accounts = data
         else:
-            return {"isPAMEnabled": False, "managedAccountCount": 0, "reason": f"Unexpected type: {type(data).__name__}"}
+            return {"isPAMEnabled": False, "managedAccountCount": 0, "reason": "Unexpected type: non-dict/non-list"}
 
         count = len(accounts)
         result = count > 0
