@@ -2,6 +2,7 @@
 Transformation: confirmedLicensePurchased
 Vendor: AppOmni  |  Category: Cloud Security
 Evaluates: Whether an active AppOmni license exists by confirming monitored services are present
+API: GET /api/v1/core/monitoredservice/
 """
 import json
 from datetime import datetime
@@ -71,23 +72,26 @@ def transform(input):
             )
 
         total = len(services)
-        enabled = [s for s in services if s.get("enabled", False) or s.get("detection_ingest_enabled",False)]
+        enabled = [s for s in services if s.get("enabled", False) or s.get("detection_ingest_enabled", False)]
+        service_types = [s.get("service_type", "unknown") for s in services if s.get("service_type")]
         result = total > 0
         # === END EVALUATION LOGIC ===
 
         if result:
             pass_reasons.append(f"AppOmni license confirmed: {total} service(s) provisioned, {len(enabled)} enabled")
+            if service_types:
+                pass_reasons.append(f"Connected service types: {', '.join(service_types)}")
         else:
             fail_reasons.append("No monitored services found — unable to confirm an active AppOmni license")
             recommendations.append("Ensure AppOmni has at least one SaaS service connected to confirm an active license")
 
         return create_response(
-            result={criteriaKey: result, "totalServices": total, "enabledServices": len(enabled)},
+            result={criteriaKey: result, "totalServices": total, "enabledServices": len(enabled), "serviceTypes": service_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"totalServices": total, "enabledServices": len(enabled)}
+            input_summary={"totalServices": total, "enabledServices": len(enabled), "serviceTypes": service_types}
         )
 
     except Exception as e:

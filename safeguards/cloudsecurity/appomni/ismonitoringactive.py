@@ -2,6 +2,7 @@
 Transformation: isMonitoringActive
 Vendor: AppOmni  |  Category: Cloud Security
 Evaluates: At least one SaaS service is connected and actively being monitored
+API: GET /api/v1/core/monitoredservice/
 """
 import json
 from datetime import datetime
@@ -59,6 +60,8 @@ def transform(input):
         recommendations = []
 
         # === EVALUATION LOGIC ===
+        # GET /api/v1/core/monitoredservice/ returns DRF paginated response
+        # Each service object has: id, name, service_type, account_id, slug, enabled, detection_ingest_enabled
         services = data.get("results", data.get("data", data.get("items", [])))
 
         if not isinstance(services, list):
@@ -74,20 +77,26 @@ def transform(input):
 
         active = [
             s for s in services
-            if s.get("enabled", False) and s.get("monitoring_enabled", False)
+            if s.get("enabled", False) and (
+                s.get("detection_ingest_enabled", False) or
+                s.get("monitoring_enabled", False)
+            )
         ]
 
+        service_types = [s.get("service_type", "unknown") for s in active if s.get("service_type")]
         result = len(active) >= 1
         # === END EVALUATION LOGIC ===
 
         if result:
             pass_reasons.append(f"{len(active)} of {total} service(s) actively monitored")
+            if service_types:
+                pass_reasons.append(f"Monitored types: {', '.join(service_types)}")
         else:
-            fail_reasons.append(f"No services are both enabled and monitoring_enabled (total services: {total})")
+            fail_reasons.append(f"No services are enabled with active monitoring (total services: {total})")
             recommendations.append("Enable monitoring on at least one connected SaaS service in AppOmni")
 
         return create_response(
-            result={criteriaKey: result, "activeServices": len(active), "totalServices": total},
+            result={criteriaKey: result, "activeServices": len(active), "totalServices": total, "serviceTypes": service_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
