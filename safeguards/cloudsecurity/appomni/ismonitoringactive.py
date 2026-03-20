@@ -13,7 +13,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -67,7 +67,7 @@ def transform(input):
                 validation=validation,
                 fail_reasons=["Unexpected services response format"],
                 recommendations=["Verify the API response contains a list of services"],
-                input_summary={"dataType": str(type(services).__name__)}
+                input_summary={"dataType": "non-list"}
             )
 
         total = len(services)
