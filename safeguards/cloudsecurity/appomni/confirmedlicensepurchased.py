@@ -1,7 +1,7 @@
 """
 Transformation: confirmedLicensePurchased
 Vendor: AppOmni  |  Category: Cloud Security
-Evaluates: Whether the AppOmni subscription status is active or trial
+Evaluates: Whether an active AppOmni license exists by confirming monitored services are present
 """
 import json
 from datetime import datetime
@@ -59,31 +59,35 @@ def transform(input):
         recommendations = []
 
         # === EVALUATION LOGIC ===
-        status = data.get("status", "")
-        plan = data.get("plan", "unknown")
+        services = data.get("results", data.get("data", data.get("items", [])))
 
-        if isinstance(status, str):
-            status = status.lower()
+        if not isinstance(services, list):
+            return create_response(
+                result={criteriaKey: False, "totalServices": 0},
+                validation=validation,
+                fail_reasons=["Unexpected services response format"],
+                recommendations=["Verify the API response contains a list of monitored services"],
+                input_summary={"dataType": str(type(services).__name__)}
+            )
 
-        valid_statuses = {"active", "trial"}
-        result = status in valid_statuses
+        total = len(services)
+        enabled = [s for s in services if s.get("enabled", False) or s.get("detection_ingest_enabled",False)]
+        result = total > 0
         # === END EVALUATION LOGIC ===
 
         if result:
-            pass_reasons.append(f"Subscription status is '{status}'")
-            if plan != "unknown":
-                pass_reasons.append(f"Plan: {plan}")
+            pass_reasons.append(f"AppOmni license confirmed: {total} service(s) provisioned, {len(enabled)} enabled")
         else:
-            fail_reasons.append(f"Subscription status '{status}' is not in valid statuses: {valid_statuses}")
-            recommendations.append("Ensure AppOmni subscription is active or in trial status")
+            fail_reasons.append("No monitored services found — unable to confirm an active AppOmni license")
+            recommendations.append("Ensure AppOmni has at least one SaaS service connected to confirm an active license")
 
         return create_response(
-            result={criteriaKey: result, "plan": plan, "status": status},
+            result={criteriaKey: result, "totalServices": total, "enabledServices": len(enabled)},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"status": status, "plan": plan}
+            input_summary={"totalServices": total, "enabledServices": len(enabled)}
         )
 
     except Exception as e:
