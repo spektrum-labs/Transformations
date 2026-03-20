@@ -56,6 +56,8 @@ def evaluate(data):
             if "license" in error_msg or "invalid" in error_msg:
                 return {"confirmedLicensePurchased": False, "reason": error_msg}
             # Non-error dict response — still a valid API call
+            if "status" in data and str(data["status"]).lower() == "error" and "message" in data and str(data["message"]).lower() == "authentication failed":
+                return {"confirmedLicensePurchased": False, "reason": "Authentication failed"}
             return {"confirmedLicensePurchased": True}
 
         # A list response (even empty) confirms a valid license
