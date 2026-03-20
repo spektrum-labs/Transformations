@@ -62,6 +62,12 @@ def evaluate(data):
                     "reason": error_msg
                 }
             # Non-error dict (e.g., single session object) — still counts as enabled
+            if "status" in data and str(data["status"]).lower() == "error":
+                return {
+                    "isSessionMonitoringEnabled": False,
+                    "sessionCount": 0,
+                    "reason": "Error response from Sessions endpoint"
+                }
             return {"isSessionMonitoringEnabled": True, "sessionCount": 1}
 
         # A list response confirms session monitoring is active
