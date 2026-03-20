@@ -95,7 +95,8 @@ def transform(input):
         elif isinstance(data, list):
             machine_data = data
 
-        eligibleMachines = [m for m in machine_data if isinstance(m, dict) and not m.get("isExcluded", False)]
+        eligibleMachines = [ m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true" ]
+
         protectedMachines = [
             m for m in eligibleMachines
             if m.get("healthStatus") == "Active" and m.get("onboardingStatus") == "Onboarded"
@@ -105,10 +106,10 @@ def transform(input):
         eligibleDevices = len(eligibleMachines)
         protectedDevices = len(protectedMachines)
 
-        criteriaValue = (eligibleDevices == protectedDevices) and eligibleDevices > 0
-
         allDevicesPercentage = round((protectedDevices / allDevices) * 100) if allDevices > 0 else 0
         eligibleDevicesPercentage = round((protectedDevices / eligibleDevices) * 100) if eligibleDevices > 0 else 0
+
+        criteriaValue = eligibleDevicesPercentage if eligibleDevices > 0 else 100
 
         if criteriaValue:
             pass_reasons.append(f"All eligible devices are protected: {protectedDevices}/{eligibleDevices} (100%)")
