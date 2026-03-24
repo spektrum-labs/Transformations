@@ -12,6 +12,11 @@ from .ispamenabled import IspamenabledInput
 from .isrbacimplemented import IsrbacimplementedInput
 from .isstrongauthrequired import IsstrongauthrequiredInput
 from .mfa_transform import MfaTransformInput
+from .ismfarequiredforremoteaccess import IsmfarequiredforremoteaccessInput
+from .ismfarequiredforcloudapps import IsmfarequiredforcloudappsInput
+from .conditionalaccesspoliciesactive import ConditionalaccesspoliciesactiveInput
+from .legacyauthblocked import LegacyauthblockedInput
+from .isrdpprotected import IsrdpprotectedInput
 
 __all__ = [
     "AuthTypesAllowedInput",
@@ -26,4 +31,9 @@ __all__ = [
     "IsrbacimplementedInput",
     "IsstrongauthrequiredInput",
     "MfaTransformInput",
+    "IsmfarequiredforremoteaccessInput",
+    "IsmfarequiredforcloudappsInput",
+    "ConditionalaccesspoliciesactiveInput",
+    "LegacyauthblockedInput",
+    "IsrdpprotectedInput",
 ]
