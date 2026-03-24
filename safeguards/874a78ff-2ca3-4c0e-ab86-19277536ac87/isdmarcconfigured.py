@@ -1,0 +1,167 @@
+"""
+Transformation: isDMARCConfigured
+Vendor: Microsoft Defender for Office 365  |  Category: Email Security
+Evaluates: Whether DMARC DNS record has an enforce policy (reject or quarantine).
+"""
+import json
+from datetime import datetime
+
+
+# ============================================================================
+# Response Helpers (inline for RestrictedPython compatibility)
+# ============================================================================
+
+def extract_input(input_data):
+    """Extract data and validation from input, handling both new and legacy formats."""
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+
+    validation = {
+        "status": "unknown",
+        "errors": [],
+        "warnings": ["Legacy input format - no schema validation performed"]
+    }
+    return data, validation
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, metadata=None,
+                    transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create a standardized transformation response."""
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+
+    response_metadata = {
+        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+        "schemaVersion": "1.0",
+        "transformationId": "isDMARCConfigured",
+        "vendor": "Microsoft Defender for Office 365",
+        "category": "Email Security"
+    }
+    if metadata:
+        response_metadata.update(metadata)
+
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": response_metadata
+        }
+    }
+
+
+# ============================================================================
+# Transformation Logic
+# ============================================================================
+
+
+def evaluate(data):
+    """Core evaluation logic."""
+    try:
+        record = data.get('dmarc_record', '')
+        has_dmarc = bool(record and 'v=DMARC1' in record)
+        policy = 'none'
+        if has_dmarc:
+            if 'p=reject' in record:
+                policy = 'reject'
+            elif 'p=quarantine' in record:
+                policy = 'quarantine'
+        return {"isDMARCConfigured": has_dmarc and policy != 'none', "policy": policy, "record": record}
+    except Exception as e:
+        return {"isDMARCConfigured": False, "error": str(e)}
+
+
+def transform(input):
+    """
+    Evaluates DMARC DNS record for enforce policy.
+
+    Parameters:
+        input: Either enriched format {"data": {...}, "validation": {...}}
+               or legacy format (raw API response)
+
+    Returns:
+        dict: Standardized response with transformedResponse and additionalInfo
+    """
+    criteriaKey = "isDMARCConfigured"
+
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        eval_result = evaluate(data)
+        result_value = eval_result.get(criteriaKey, False)
+        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        if result_value:
+            pass_reasons.append(f"{criteriaKey} check passed")
+            for k, v in extra_fields.items():
+                pass_reasons.append(f"{k}: {v}")
+        else:
+            fail_reasons.append(f"{criteriaKey} check failed")
+            if "error" in eval_result:
+                fail_reasons.append(eval_result["error"])
+            recommendations.append(f"Review Microsoft Defender for Office 365 configuration for {criteriaKey}")
+
+        return create_response(
+            result={criteriaKey: result_value, **extra_fields},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={criteriaKey: result_value, **extra_fields}
+        )
+
+    except Exception as e:
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
