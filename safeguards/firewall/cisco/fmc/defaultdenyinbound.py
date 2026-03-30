@@ -1,0 +1,137 @@
+"""
+Transformation: defaultDenyInbound
+Vendor: Cisco FMC  |  Category: Firewall
+Evaluates: Whether access policy default action is set to BLOCK (deny inbound by default)
+"""
+import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "defaultDenyInbound", "vendor": "Cisco FMC", "category": "Firewall"}
+        }
+    }
+
+
+def evaluate(data):
+    """Check that all access policy default actions are set to BLOCK."""
+    try:
+        policies = data.get('items', [])
+        default_actions = data.get('defaultActions', [])
+
+        if not policies and not default_actions:
+            if isinstance(data, dict) and data.get('action'):
+                action = data.get('action', '').upper()
+                return {
+                    "defaultDenyInbound": action == 'BLOCK',
+                    "defaultAction": action,
+                    "policiesEvaluated": 1
+                }
+            return {"defaultDenyInbound": False, "error": "No access policies or default actions found"}
+
+        if default_actions:
+            actions_list = default_actions if isinstance(default_actions, list) else [default_actions]
+            non_block = []
+            for entry in actions_list:
+                items = entry.get('items', [entry]) if isinstance(entry, dict) else [entry]
+                for item in items:
+                    action = item.get('action', '').upper()
+                    if action != 'BLOCK':
+                        non_block.append({
+                            "name": item.get('name', 'Unknown'),
+                            "action": action
+                        })
+
+            all_block = len(non_block) == 0 and len(actions_list) > 0
+            result = {
+                "defaultDenyInbound": all_block,
+                "policiesEvaluated": len(actions_list)
+            }
+            if non_block:
+                result["nonBlockPolicies"] = non_block
+            return result
+
+        non_block = []
+        for policy in policies:
+            default_action = policy.get('defaultAction', {})
+            action = default_action.get('action', '').upper()
+            if action != 'BLOCK':
+                non_block.append({
+                    "policyName": policy.get('name', 'Unknown'),
+                    "action": action
+                })
+
+        all_block = len(non_block) == 0 and len(policies) > 0
+        result = {
+            "defaultDenyInbound": all_block,
+            "policiesEvaluated": len(policies)
+        }
+        if non_block:
+            result["nonBlockPolicies"] = non_block
+        return result
+    except Exception as e:
+        return {"defaultDenyInbound": False, "error": str(e)}
+
+
+def transform(input):
+    criteriaKey = "defaultDenyInbound"
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+        data, validation = extract_input(input)
+        if validation.get("status") == "failed":
+            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+        eval_result = evaluate(data)
+        result_value = eval_result.get(criteriaKey, False)
+        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+        if result_value:
+            pass_reasons.append(f"{criteriaKey} check passed")
+            for k, v in extra_fields.items():
+                pass_reasons.append(f"{k}: {v}")
+        else:
+            fail_reasons.append(f"{criteriaKey} check failed")
+            if "error" in eval_result:
+                fail_reasons.append(eval_result["error"])
+            recommendations.append("Set the default action on all FMC access policies to BLOCK to ensure inbound traffic is denied by default")
+        return create_response(
+            result={criteriaKey: result_value, **extra_fields}, validation=validation,
+            pass_reasons=pass_reasons, fail_reasons=fail_reasons, recommendations=recommendations,
+            input_summary={criteriaKey: result_value, **extra_fields})
+    except Exception as e:
+        return create_response(
+            result={criteriaKey: False}, validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {str(e)}"])
