@@ -43,12 +43,44 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Core evaluation logic."""
+    """Core evaluation logic - extracts phish-prone percentage from campaign data."""
     try:
-        rate = data.get('phish_prone_percentage', 100)
-        return {"phishingClickRate": str(int(rate)), "phishPronePercentage": rate}
+        campaigns = data if isinstance(data, list) else data.get('campaigns', [])
+        if not campaigns:
+            return {"phishingClickRate": "100", "phishPronePercentage": 100.0, "campaignsEvaluated": 0, "error": "No phishing campaigns found"}
+
+        completed = [c for c in campaigns if c.get('status') in ('Closed', 'Completed')]
+        if not completed:
+            completed = campaigns
+
+        most_recent = None
+        most_recent_date = None
+        for c in completed:
+            last_run = c.get('last_run') or c.get('completed_date') or c.get('created_date')
+            if last_run:
+                try:
+                    parsed = datetime.strptime(last_run, '%Y-%m-%dT%H:%M:%S.%fZ')
+                except Exception:
+                    try:
+                        parsed = datetime.strptime(last_run, '%Y-%m-%dT%H:%M:%SZ')
+                    except Exception:
+                        continue
+                if most_recent_date is None or parsed > most_recent_date:
+                    most_recent_date = parsed
+                    most_recent = c
+
+        if most_recent is None:
+            most_recent = completed[0]
+
+        rate = most_recent.get('phish_prone_percentage', 100)
+        return {
+            "phishingClickRate": str(int(rate)),
+            "phishPronePercentage": rate,
+            "campaignName": most_recent.get('name', 'Unknown'),
+            "campaignsEvaluated": len(completed)
+        }
     except Exception as e:
-        return {"phishingClickRate": "100", "error": str(e)}
+        return {"phishingClickRate": "100", "phishPronePercentage": 100.0, "error": str(e)}
 
 
 def transform(input):
