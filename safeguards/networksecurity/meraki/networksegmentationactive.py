@@ -43,9 +43,29 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
+    """Check that multiple networks exist in the organization, indicating segmentation.
+
+    Passes when at least 2 networks are configured.
+    """
     try:
-        vlans = data if isinstance(data, list) else data.get('vlans', [])
-        return {"networkSegmentationActive": len(vlans) >= 2, "vlanCount": len(vlans)}
+        networks = data if isinstance(data, list) else data.get('items', data.get('networks', []))
+        if not isinstance(networks, list):
+            return {"networkSegmentationActive": False, "networkCount": 0, "error": "No networks found"}
+
+        network_details = []
+        for net in networks:
+            network_details.append({
+                "id": net.get('id', 'unknown'),
+                "name": net.get('name', ''),
+                "productTypes": net.get('productTypes', [])
+            })
+
+        segmented = len(networks) >= 2
+        return {
+            "networkSegmentationActive": segmented,
+            "networkCount": len(networks),
+            "networks": network_details
+        }
     except Exception as e:
         return {"networkSegmentationActive": False, "error": str(e)}
 
@@ -74,7 +94,7 @@ def transform(input):
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Cisco Meraki configuration for {criteriaKey}")
+            recommendations.append("Configure multiple networks in Meraki to ensure proper network segmentation")
         return create_response(
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
             pass_reasons=pass_reasons, fail_reasons=fail_reasons, recommendations=recommendations,
