@@ -72,7 +72,17 @@ def evaluate(data):
         if most_recent is None:
             most_recent = completed[0]
 
-        rate = most_recent.get('phish_prone_percentage', 100)
+        rate = most_recent.get('last_phish_prone_percentage', 0)
+        
+        #Check individual phishing simulation tests for the highest phish_prone_percentage
+        if not rate and "psts" in most_recent:
+            pst_rates = [
+                pst.get("phish_prone_percentage", 0)
+                for pst in most_recent.get("psts", [])
+                if "phish_prone_percentage" in pst
+            ]
+            if pst_rates:
+                rate = max(pst_rates)
         return {
             "phishingClickRate": str(int(rate)),
             "phishPronePercentage": rate,
