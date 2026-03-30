@@ -45,11 +45,19 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic."""
     most_recent_lastRun = "N/A"
+    active = []
+    campaigns = []
     try:
         campaigns = data if isinstance(data, list) else data.get('campaigns', [])
         active = [c for c in campaigns if c.get('status') in ['In Progress', 'Active']]
         if len(active) < 1:
-            lastRun = [c for c in campaigns if c.get('status') in ['Closed']]
+            # Add recurring campaigns (frequency != 'One Time') to the active list (if not already in)
+            recurring = [c for c in campaigns if c.get('frequency') and c.get('frequency','').lower() != 'one time']
+            for rc in recurring:
+                # Make sure this recurring campaign isn't already in the active list (may overlap)
+                if rc not in active:
+                    active.append(rc)
+
             # Find the most recent last_run date among closed campaigns and check only that
             lastRunDates = [
                 c.get('last_run') for c in campaigns 
@@ -67,20 +75,17 @@ def evaluate(data):
                     most_recent_lastRun = max(parsed_dates)
                     if most_recent_lastRun < datetime.now() - timedelta(days=90):
                         return {"phishingSimulationActive": False, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun,), "error": "Last run was more than 90 days ago"}
-        else:
-            # Loop through all campaigns, active or not, and get the latest run date
-            all_last_run_dates = [c.get('last_run') for c in campaigns if c.get('last_run')]
-            if all_last_run_dates:
-                try:
-                    parsed_dates = [datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%fZ') for date_str in all_last_run_dates]
-                    most_recent_lastRun = max(parsed_dates)
-                except Exception:
-                    most_recent_lastRun = max(all_last_run_dates)
-            else:
-                most_recent_lastRun = "N/A"
-        return {"phishingSimulationActive": len(active) > 0, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun)}
+    
     except Exception as e:
         return {"phishingSimulationActive": False, "activeCampaigns": 0, "totalCampaigns": 0, "latestRunDate": None, "error": str(e)}
+
+    try:
+        if len(active) > 0 and most_recent_lastRun == "N/A":
+            most_recent_lastRun = active[0].get('last_run')
+
+        return {"phishingSimulationActive": len(active) > 0, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun)}
+    except Exception as e:
+        return {"phishingSimulationActive": len(active) > 0, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun)}
 
 
 def transform(input):
