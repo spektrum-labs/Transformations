@@ -43,9 +43,40 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
+    """Check intrusion settings across appliance networks and Air Marshal for wireless networks."""
     try:
-        mode = data.get('mode', 'disabled')
-        return {"isNetworkSecurityEnabled": mode != 'disabled', "currentMode": mode}
+        intrusion_list = data.get('intrusionSettings', [])
+        if isinstance(intrusion_list, dict):
+            intrusion_list = [intrusion_list]
+
+        air_marshal = data.get('airMarshalSettings', {})
+        am_items = air_marshal.get('items', []) if isinstance(air_marshal, dict) else []
+
+        if not intrusion_list and not am_items:
+            mode = data.get('mode', 'disabled')
+            return {"isNetworkSecurityEnabled": mode != 'disabled', "currentMode": mode}
+
+        disabled_appliance = []
+        for entry in intrusion_list:
+            mode = entry.get('mode', 'disabled')
+            if mode == 'disabled':
+                disabled_appliance.append(entry.get('networkId', 'unknown'))
+
+        insecure_wireless = []
+        for item in am_items:
+            if item.get('defaultPolicy') == 'allow':
+                insecure_wireless.append(item.get('networkId', 'unknown'))
+
+        all_enabled = len(disabled_appliance) == 0 and len(insecure_wireless) == 0
+        has_any = len(intrusion_list) > 0 or len(am_items) > 0
+
+        return {
+            "isNetworkSecurityEnabled": all_enabled and has_any,
+            "applianceNetworksEvaluated": len(intrusion_list),
+            "wirelessNetworksEvaluated": len(am_items),
+            "disabledApplianceNetworks": disabled_appliance,
+            "insecureWirelessNetworks": insecure_wireless
+        }
     except Exception as e:
         return {"isNetworkSecurityEnabled": False, "error": str(e)}
 
