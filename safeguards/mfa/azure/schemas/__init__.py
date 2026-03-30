@@ -7,6 +7,7 @@ from .confirmpasswordpolicyenforced import ConfirmpasswordpolicyenforcedInput
 from .is_mfa_logging_enabled import IsMfaLoggingEnabledInput
 from .isauditloggingenabled import IsauditloggingenabledInput
 from .islifecyclemanagementenabled import IslifecyclemanagementenabledInput
+from .ismfaenabled import IsmfaenabledInput
 from .ismfaenforcedforusers import IsmfaenforcedforusersInput
 from .ispamenabled import IspamenabledInput
 from .isrbacimplemented import IsrbacimplementedInput
@@ -26,6 +27,7 @@ __all__ = [
     "IsMfaLoggingEnabledInput",
     "IsauditloggingenabledInput",
     "IslifecyclemanagementenabledInput",
+    "IsmfaenabledInput",
     "IsmfaenforcedforusersInput",
     "IspamenabledInput",
     "IsrbacimplementedInput",
