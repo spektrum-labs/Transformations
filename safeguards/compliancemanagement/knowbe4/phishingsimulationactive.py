@@ -68,7 +68,16 @@ def evaluate(data):
                     if most_recent_lastRun < datetime.now() - timedelta(days=90):
                         return {"phishingSimulationActive": False, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun,), "error": "Last run was more than 90 days ago"}
         else:
-            most_recent_lastRun = max([c.get('last_run') for c in active])
+            # Loop through all campaigns, active or not, and get the latest run date
+            all_last_run_dates = [c.get('last_run') for c in campaigns if c.get('last_run')]
+            if all_last_run_dates:
+                try:
+                    parsed_dates = [datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%fZ') for date_str in all_last_run_dates]
+                    most_recent_lastRun = max(parsed_dates)
+                except Exception:
+                    most_recent_lastRun = max(all_last_run_dates)
+            else:
+                most_recent_lastRun = "N/A"
         return {"phishingSimulationActive": len(active) > 0, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun)}
     except Exception as e:
         return {"phishingSimulationActive": False, "activeCampaigns": 0, "totalCampaigns": 0, "latestRunDate": None, "error": str(e)}
