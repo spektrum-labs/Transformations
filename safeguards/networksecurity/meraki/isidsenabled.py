@@ -43,9 +43,40 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
+    """Check IDS is enabled across appliance networks (detection/prevention) and wireless (Air Marshal block)."""
     try:
-        mode = data.get('mode', 'disabled')
-        return {"isIDSEnabled": mode in ['detection', 'prevention'], "currentMode": mode}
+        intrusion_list = data.get('intrusionSettings', [])
+        if isinstance(intrusion_list, dict):
+            intrusion_list = [intrusion_list]
+
+        air_marshal = data.get('airMarshalSettings', {})
+        am_items = air_marshal.get('items', []) if isinstance(air_marshal, dict) else []
+
+        if not intrusion_list and not am_items:
+            mode = data.get('mode', 'disabled')
+            return {"isIDSEnabled": mode in ['detection', 'prevention'], "currentMode": mode}
+
+        appliance_without_ids = []
+        for entry in intrusion_list:
+            mode = entry.get('mode', 'disabled')
+            if mode not in ['detection', 'prevention']:
+                appliance_without_ids.append(entry.get('networkId', 'unknown'))
+
+        wireless_without_ids = []
+        for item in am_items:
+            if item.get('defaultPolicy') == 'allow':
+                wireless_without_ids.append(item.get('networkId', 'unknown'))
+
+        all_enabled = len(appliance_without_ids) == 0 and len(wireless_without_ids) == 0
+        has_any = len(intrusion_list) > 0 or len(am_items) > 0
+
+        return {
+            "isIDSEnabled": all_enabled and has_any,
+            "applianceNetworksEvaluated": len(intrusion_list),
+            "wirelessNetworksEvaluated": len(am_items),
+            "applianceWithoutIDS": appliance_without_ids,
+            "wirelessWithoutIDS": wireless_without_ids
+        }
     except Exception as e:
         return {"isIDSEnabled": False, "error": str(e)}
 
