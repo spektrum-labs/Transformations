@@ -44,6 +44,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def evaluate(data):
     """Core evaluation logic."""
+    most_recent_lastRun = "N/A"
     try:
         campaigns = data if isinstance(data, list) else data.get('campaigns', [])
         active = [c for c in campaigns if c.get('status') in ['In Progress', 'Active']]
