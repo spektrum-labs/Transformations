@@ -88,41 +88,64 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        policies = data.get('value', [])
+        # 1. Check authentication methods policy — are MFA methods enabled at the tenant level?
+        auth_methods = data.get('authMethodsPolicy', {})
+        method_configs = auth_methods.get('authenticationMethodConfigurations', [])
+        mfa_method_types = ['microsoftauthenticator', 'fido2', 'softwareoath', 'temporaryaccesspass']
+        enabled_methods = []
+        for method in method_configs:
+            method_id = method.get('id', '')
+            state = method.get('state', 'disabled')
+            if state == 'enabled' and method_id.lower() in mfa_method_types:
+                enabled_methods.append(method_id)
+
+        methods_available = len(enabled_methods) > 0
+
+        # 2. Check conditional access policies — is MFA actually enforced?
+        ca_data = data.get('conditionalAccessPolicies', {})
+        policies = ca_data.get('value', [])
         policies_with_mfa = []
         policies_without_mfa = []
 
         for policy in policies:
-            built_in_controls = policy.get("grantControls", {}).get("builtInControls", [])
-            requires_mfa = "mfa" in built_in_controls
-
-            if requires_mfa:
-                policies_with_mfa.append(policy.get("displayName"))
+            if policy.get('state') != 'enabled':
+                continue
+            grant_controls = policy.get('grantControls') or {}
+            built_in_controls = grant_controls.get('builtInControls', [])
+            if 'mfa' in built_in_controls:
+                policies_with_mfa.append(policy.get('displayName'))
             else:
-                policies_without_mfa.append(policy.get("displayName"))
+                policies_without_mfa.append(policy.get('displayName'))
 
-        is_enabled = len(policies_with_mfa) > 0
+        mfa_enforced = len(policies_with_mfa) > 0
+        is_enabled = methods_available and mfa_enforced
 
-        if is_enabled:
-            pass_reasons.append(f"MFA enabled via {len(policies_with_mfa)} conditional access policies: {', '.join(policies_with_mfa[:3])}")
+        if methods_available:
+            pass_reasons.append(f"MFA methods enabled: {', '.join(enabled_methods)}")
         else:
-            fail_reasons.append("No conditional access policies with MFA requirement found")
+            fail_reasons.append("No MFA authentication methods enabled at the tenant level")
+            recommendations.append("Enable MFA methods (Microsoft Authenticator, FIDO2, or Software OATH) in authentication methods policy")
+
+        if mfa_enforced:
+            pass_reasons.append(f"MFA enforced via {len(policies_with_mfa)} conditional access policies: {', '.join(policies_with_mfa[:3])}")
+        else:
+            fail_reasons.append("No enabled conditional access policies requiring MFA")
             recommendations.append("Create conditional access policies requiring MFA for users")
 
         return create_response(
             result={
                 criteriaKey: is_enabled,
+                "mfaMethodsAvailable": methods_available,
+                "enabledMethods": enabled_methods,
                 "policiesTotal": len(policies),
                 "policiesWithMFA": len(policies_with_mfa),
-                "policiesWithoutMFA": len(policies_without_mfa),
-                "conditionalAccessPoliciesWithMFA": policies_with_mfa,
-                "conditionalAccessPoliciesWithoutMFA": policies_without_mfa
+                "conditionalAccessPoliciesWithMFA": policies_with_mfa
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"totalPolicies": len(policies), "mfaPolicies": len(policies_with_mfa)}
+            input_summary={"enabledMethods": len(enabled_methods), "mfaPolicies": len(policies_with_mfa)}
         )
 
     except Exception as e:
