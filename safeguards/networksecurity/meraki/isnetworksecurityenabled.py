@@ -43,39 +43,26 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Check intrusion settings across appliance networks and Air Marshal for wireless networks."""
-    try:
-        intrusion_list = data.get('intrusionSettings', [])
-        if isinstance(intrusion_list, dict):
-            intrusion_list = [intrusion_list]
+    """Check Air Marshal settings across all wireless networks.
 
+    Passes when at least one network exists and all have defaultPolicy set to 'block'.
+    """
+    try:
         air_marshal = data.get('airMarshalSettings', {})
         am_items = air_marshal.get('items', []) if isinstance(air_marshal, dict) else []
 
-        if not intrusion_list and not am_items:
-            mode = data.get('mode', 'disabled')
-            return {"isNetworkSecurityEnabled": mode != 'disabled', "currentMode": mode}
+        if not am_items:
+            return {"isNetworkSecurityEnabled": False, "networksEvaluated": 0, "error": "No wireless networks found"}
 
-        disabled_appliance = []
-        for entry in intrusion_list:
-            mode = entry.get('mode', 'disabled')
-            if mode == 'disabled':
-                disabled_appliance.append(entry.get('networkId', 'unknown'))
-
-        insecure_wireless = []
+        insecure = []
         for item in am_items:
             if item.get('defaultPolicy') == 'allow':
-                insecure_wireless.append(item.get('networkId', 'unknown'))
-
-        all_enabled = len(disabled_appliance) == 0 and len(insecure_wireless) == 0
-        has_any = len(intrusion_list) > 0 or len(am_items) > 0
+                insecure.append(item.get('networkId', 'unknown'))
 
         return {
-            "isNetworkSecurityEnabled": all_enabled and has_any,
-            "applianceNetworksEvaluated": len(intrusion_list),
-            "wirelessNetworksEvaluated": len(am_items),
-            "disabledApplianceNetworks": disabled_appliance,
-            "insecureWirelessNetworks": insecure_wireless
+            "isNetworkSecurityEnabled": len(insecure) == 0,
+            "networksEvaluated": len(am_items),
+            "insecureNetworks": insecure
         }
     except Exception as e:
         return {"isNetworkSecurityEnabled": False, "error": str(e)}
