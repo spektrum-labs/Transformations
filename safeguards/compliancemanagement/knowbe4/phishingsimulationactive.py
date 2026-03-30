@@ -4,7 +4,7 @@ Vendor: KnowBe4  |  Category: Compliance Management
 Evaluates: Whether phishing simulation campaigns are currently running
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def extract_input(input_data):
@@ -47,9 +47,30 @@ def evaluate(data):
     try:
         campaigns = data if isinstance(data, list) else data.get('campaigns', [])
         active = [c for c in campaigns if c.get('status') in ['In Progress', 'Active']]
-        return {"phishingSimulationActive": len(active) > 0, "activeCampaigns": len(active)}
+        if len(active) < 1:
+            lastRun = [c for c in campaigns if c.get('status') in ['Closed']]
+            # Find the most recent last_run date among closed campaigns and check only that
+            lastRunDates = [
+                c.get('last_run') for c in campaigns 
+                if c.get('status') == 'Closed' and c.get('last_run')
+            ]
+            if lastRunDates:
+                # Parse all dates, get the max (most recent)
+                parsed_dates = []
+                for date_str in lastRunDates:
+                    try:
+                        parsed_dates.append(datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%fZ'))
+                    except Exception:
+                        continue
+                if parsed_dates:
+                    most_recent_lastRun = max(parsed_dates)
+                    if most_recent_lastRun < datetime.now() - timedelta(days=90):
+                        return {"phishingSimulationActive": False, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun,), "error": "Last run was more than 90 days ago"}
+        else:
+            most_recent_lastRun = max([c.get('last_run') for c in active])
+        return {"phishingSimulationActive": len(active) > 0, "activeCampaigns": len(active), "totalCampaigns": len(campaigns), "latestRunDate": str(most_recent_lastRun)}
     except Exception as e:
-        return {"phishingSimulationActive": False, "error": str(e)}
+        return {"phishingSimulationActive": False, "activeCampaigns": 0, "totalCampaigns": 0, "latestRunDate": None, "error": str(e)}
 
 
 def transform(input):
