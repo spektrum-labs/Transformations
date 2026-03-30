@@ -1,9 +1,10 @@
 """
 Transformation: isMFAEnforcedForUsers
-Vendor: Generic IDP
-Category: Identity / Authentication
+Vendor: Microsoft Azure AD
+Category: Identity / MFA
 
-Evaluates the MFA status for a given IDP by checking for active MFA enrollment.
+Evaluates if MFA is enforced for all users by checking that MFA methods are enabled
+at the tenant level and conditional access policies require MFA for all users.
 """
 
 import json
@@ -20,11 +21,6 @@ def extract_input(input_data):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-                # Handle list in response wrapper
-                if key in data and isinstance(data.get(key), list):
                     data = data[key]
                     unwrapped = True
                     break
@@ -64,7 +60,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isMFAEnforcedForUsers",
-                "vendor": "Generic",
+                "vendor": "Microsoft",
                 "category": "Identity"
             }
         }
@@ -93,35 +89,70 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Handle list input (from response wrapper or direct list)
-        if isinstance(data, list):
-            items = data
+        # 1. Check authentication methods policy — are MFA methods enabled at the tenant level?
+        auth_methods = data.get('authMethodsPolicy', {})
+        method_configs = auth_methods.get('authenticationMethodConfigurations', [])
+        mfa_method_types = ['microsoftauthenticator', 'fido2', 'softwareoath', 'temporaryaccesspass']
+        enabled_methods = []
+        for method in method_configs:
+            method_id = method.get('id', '')
+            state = method.get('state', 'disabled')
+            if state == 'enabled' and method_id.lower() in mfa_method_types:
+                enabled_methods.append(method_id)
+
+        methods_available = len(enabled_methods) > 0
+
+        # 2. Check conditional access policies — is MFA enforced for all users?
+        ca_data = data.get('conditionalAccessPolicies', {})
+        policies = ca_data.get('value', [])
+        policies_enforcing_mfa_all_users = []
+
+        for policy in policies:
+            if policy.get('state') != 'enabled':
+                continue
+            grant_controls = policy.get('grantControls') or {}
+            built_in_controls = grant_controls.get('builtInControls', [])
+            if 'mfa' not in built_in_controls:
+                continue
+
+            conditions = policy.get('conditions', {})
+            users = conditions.get('users', {})
+            include_users = users.get('includeUsers', [])
+            include_groups = users.get('includeGroups', [])
+
+            targets_all = 'All' in include_users or 'all' in include_users
+            targets_groups = len(include_groups) > 0
+
+            if targets_all or targets_groups:
+                policies_enforcing_mfa_all_users.append(policy.get('displayName'))
+
+        mfa_enforced_for_users = len(policies_enforcing_mfa_all_users) > 0
+        is_enforced = methods_available and mfa_enforced_for_users
+
+        if methods_available:
+            pass_reasons.append(f"MFA methods enabled: {', '.join(enabled_methods)}")
         else:
-            items = []
+            fail_reasons.append("No MFA authentication methods enabled at the tenant level")
+            recommendations.append("Enable MFA methods (Microsoft Authenticator, FIDO2, or Software OATH) in authentication methods policy")
 
-        # Find active MFA enrollment entries
-        mfa_enrolled = [
-            obj for obj in items
-            if isinstance(obj, dict)
-            and 'type' in obj and str(obj['type']).lower() == "mfa_enroll"
-            and 'status' in obj and str(obj['status']).lower() == "active"
-        ]
-
-        is_enforced = len(mfa_enrolled) > 0
-
-        if is_enforced:
-            pass_reasons.append(f"MFA is enforced with {len(mfa_enrolled)} active enrollments")
+        if mfa_enforced_for_users:
+            pass_reasons.append(f"MFA enforced for users via {len(policies_enforcing_mfa_all_users)} policies: {', '.join(policies_enforcing_mfa_all_users[:3])}")
         else:
-            fail_reasons.append("No users enrolled in MFA")
-            recommendations.append("Enable MFA enrollment for all users")
+            fail_reasons.append("No enabled conditional access policies requiring MFA for all users")
+            recommendations.append("Create a conditional access policy requiring MFA that targets All Users or relevant groups")
 
         return create_response(
-            result={criteriaKey: is_enforced},
+            result={
+                criteriaKey: is_enforced,
+                "mfaMethodsAvailable": methods_available,
+                "enabledMethods": enabled_methods,
+                "policiesEnforcingMFAForUsers": policies_enforcing_mfa_all_users
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"activeMfaEnrollments": len(mfa_enrolled), "totalItems": len(items)}
+            input_summary={"enabledMethods": len(enabled_methods), "mfaUserPolicies": len(policies_enforcing_mfa_all_users)}
         )
 
     except Exception as e:
