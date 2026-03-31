@@ -15,7 +15,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -74,11 +74,64 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def safe_dict(val):
+    """Return val if it's a dict, otherwise empty dict."""
+    return val if isinstance(val, dict) else {}
+
+
+def check_vault_geo_redundancy(vault):
+    """Check a single vault dict for geo-redundant storage."""
+    props = safe_dict(vault.get("properties"))
+    # Check top-level storageType
+    storage_type = vault.get("storageType", "")
+    # Check nested redundancySettings
+    redundancy = safe_dict(props.get("redundancySettings"))
+    standard_tier = redundancy.get("standardTierStorageRedundancy", "")
+    # Also check properties.storageType
+    props_storage = props.get("storageType", "")
+    # Use whichever is available
+    effective_type = storage_type or standard_tier or props_storage
+    if not isinstance(effective_type, str):
+        effective_type = ""
+    return effective_type
+
+
 def evaluate(data):
-    """Core evaluation logic."""
+    """Core evaluation logic. Handles single vault dict or list of vaults."""
     try:
-        storage_type = data.get('properties', {}).get('storageType', '')
-        return {"isGeoRedundant": storage_type == 'GeoRedundant', "storageType": storage_type}
+        if isinstance(data, list):
+            vaults = data
+        elif isinstance(data, dict):
+            if "value" in data:
+                vaults = data["value"] if isinstance(data["value"], list) else [data]
+            else:
+                vaults = [data]
+        else:
+            vaults = []
+
+        if not vaults:
+            return {"isGeoRedundant": False, "error": "No vaults found"}
+
+        all_geo = True
+        non_geo_vaults = []
+        storage_types = []
+
+        for vault in vaults:
+            if not isinstance(vault, dict):
+                continue
+            vault_name = vault.get("name", "Unknown")
+            effective_type = check_vault_geo_redundancy(vault)
+            storage_types.append(effective_type)
+            if "georedundant" not in effective_type.lower():
+                all_geo = False
+                non_geo_vaults.append(vault_name)
+
+        return {
+            "isGeoRedundant": all_geo and len(vaults) > 0,
+            "vaultsEvaluated": len(vaults),
+            "storageTypes": storage_types,
+            "nonGeoRedundantVaults": non_geo_vaults
+        }
     except Exception as e:
         return {"isGeoRedundant": False, "error": str(e)}
 
@@ -93,13 +146,6 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
