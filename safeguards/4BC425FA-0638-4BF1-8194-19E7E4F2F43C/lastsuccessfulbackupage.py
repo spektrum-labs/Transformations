@@ -83,7 +83,7 @@ def evaluate(data):
 
         most_recent = max(
             (datetime.fromisoformat(
-                item.get('properties', {}).get('lastBackupTime', '2000-01-01T00:00:00Z').replace('Z', '+00:00')
+                (item.get('properties') or {}).get('lastBackupTime', '2000-01-01T00:00:00Z').replace('Z', '+00:00')
             ) for item in items),
             default=datetime(2000, 1, 1, tzinfo=timezone.utc)
         )

@@ -74,20 +74,43 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def evaluate(data):
-    """Evaluate last backup time across all vaults' protected items."""
-    try:
-        # Handle merged protectedItems from iterating across all vaults
-        items_data = data.get('protectedItems', data)
-        items = []
-        if isinstance(items_data, list):
-            for entry in items_data:
+def extract_protected_items(data):
+    """Extract protected items from various input shapes.
+
+    Handles:
+    - dict with 'protectedItems' key (full API response)
+    - dict with 'value' key (single vault response)
+    - list of vault dicts each containing 'value' (unwrapped 'data' from Token-Service)
+    - list of protected item dicts with 'properties' (flat list)
+    """
+    items = []
+
+    if isinstance(data, dict):
+        if 'protectedItems' in data:
+            for entry in data['protectedItems']:
                 if isinstance(entry, dict) and "value" in entry:
                     items.extend(entry["value"])
                 elif isinstance(entry, list):
                     items.extend(entry)
-        elif isinstance(items_data, dict):
-            items = items_data.get("value", [])
+            return items
+        if 'value' in data:
+            return data['value'] if isinstance(data['value'], list) else []
+
+    if isinstance(data, list):
+        for entry in data:
+            if isinstance(entry, dict):
+                if "value" in entry:
+                    items.extend(entry["value"] if isinstance(entry["value"], list) else [])
+                elif "properties" in entry:
+                    items.append(entry)
+
+    return items
+
+
+def evaluate(data):
+    """Evaluate last backup time across all vaults' protected items."""
+    try:
+        items = extract_protected_items(data)
 
         if not items:
             return {"lastSuccessfulBackupAge": "999", "error": "No protected items"}
@@ -122,7 +145,7 @@ def evaluate(data):
         most_recent = max(
             (
                 parse_last_backup_time(
-                    item.get('properties', {}).get('lastBackupTime', '2000-01-01T00:00:00Z')
+                    (item.get('properties') or {}).get('lastBackupTime', '2000-01-01T00:00:00Z')
                 )
                 for item in items
             ),
@@ -144,13 +167,6 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: "999"},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, "999")

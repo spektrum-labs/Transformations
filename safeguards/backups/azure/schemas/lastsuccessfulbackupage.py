@@ -1,5 +1,13 @@
-"""Schema for lastsuccessfulbackupage transformation input."""
-from typing import List, Optional
+"""Schema for lastsuccessfulbackupage transformation input.
+
+With merge=false, the input is the protectedItems array directly — a list of
+vault entries, each containing a 'value' array of protected backup items.
+
+Note: Since the input is a list and Token-Service only provides BaseModel (not
+RootModel), schema validation is skipped for list inputs. The transformation's
+extract_protected_items() handles all input shapes.
+"""
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -26,10 +34,18 @@ class ProtectedItem(BaseModel):
 
 
 class LastsuccessfulbackupageInput(BaseModel):
-    """Expected input schema for the lastsuccessfulbackupage transformation. Criteria key: lastSuccessfulBackupAge"""
+    """Expected input schema for the lastsuccessfulbackupage transformation. Criteria key: lastSuccessfulBackupAge
+
+    Accepts dict inputs with protectedItems or value keys.
+    List inputs (merge=false) bypass schema validation.
+    """
+    protectedItems: Optional[List[Any]] = Field(
+        default=None,
+        description="List of vault entries, each containing a 'value' array of protected items"
+    )
     value: Optional[List[ProtectedItem]] = Field(
         default=None,
-        description="List of protected backup items with their last backup times"
+        description="Direct list of protected backup items (single vault format)"
     )
 
     class Config:
