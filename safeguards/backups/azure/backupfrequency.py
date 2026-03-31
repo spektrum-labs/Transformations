@@ -98,7 +98,7 @@ def evaluate(data):
             else:
                 policies_failing_frequency.append(f"{policy_name} ({vault_name}: {schedule_type or 'none'})")
 
-        all_meet = len(policies_failing_frequency) == 0 and policies_evaluated > 0
+        all_meet = len(policies_meeting_frequency) > 0 and policies_evaluated > 0
 
         return {
             "backupFrequency": all_meet,
