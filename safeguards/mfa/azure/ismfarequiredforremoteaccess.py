@@ -13,7 +13,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -42,22 +42,78 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def safe_dict(val):
+    """Return val if it's a dict, otherwise empty dict.
+    Handles the Microsoft Graph pattern of returning string 'None' for null fields."""
+    return val if isinstance(val, dict) else {}
+
+
+def requires_mfa(policy):
+    """Check if a policy enforces MFA via any mechanism."""
+    grant = safe_dict(policy.get('grantControls'))
+    built_in = grant.get('builtInControls', [])
+    if not isinstance(built_in, list):
+        built_in = []
+    custom_factors = grant.get('customAuthenticationFactors', [])
+    if not isinstance(custom_factors, list):
+        custom_factors = []
+    auth_strength = grant.get('authenticationStrength')
+
+    if 'mfa' in built_in:
+        return True
+    if any('mfa' in f.lower() for f in custom_factors if isinstance(f, str)):
+        return True
+    if isinstance(auth_strength, dict) and auth_strength.get('id'):
+        return True
+    return False
+
+
+def applies_to_remote(policy):
+    """Check if a policy applies to non-trusted (remote) locations.
+    A policy applies to remote access if:
+    - No location condition (applies everywhere)
+    - includeLocations contains 'All' or specific locations beyond just AllTrusted
+    """
+    conditions = safe_dict(policy.get('conditions'))
+    locations = conditions.get('locations')
+    if not isinstance(locations, dict):
+        return True  # No location restriction = applies everywhere including remote
+    include = locations.get('includeLocations', [])
+    if not isinstance(include, list):
+        return True
+    exclude = locations.get('excludeLocations', [])
+    if not isinstance(exclude, list):
+        exclude = []
+    # If only trusted locations are included, it does NOT apply to remote
+    if include == ['AllTrusted']:
+        return False
+    return True
+
+
 def evaluate(data):
     """Core evaluation logic."""
     try:
-        policies = data.get('value', [])
+        if isinstance(data, dict):
+            policies = data.get('value', [])
+        elif isinstance(data, list):
+            policies = data
+        else:
+            policies = []
+
+        if not isinstance(policies, list):
+            policies = []
+
         remote_mfa_policies = [
             p for p in policies
-            if p.get('state') == 'enabled'
-            and 'mfa' in (p.get('grantControls', {}).get('builtInControls', []))
-            and any(
-                loc.get('includeLocations', []) != ['AllTrusted']
-                for loc in [p.get('conditions', {}).get('locations', {})]
-            )
+            if isinstance(p, dict)
+            and p.get('state') == 'enabled'
+            and requires_mfa(p)
+            and applies_to_remote(p)
         ]
         return {
             "isMFARequiredForRemoteAccess": len(remote_mfa_policies) > 0,
-            "matchingPolicies": len(remote_mfa_policies)
+            "matchingPolicies": len(remote_mfa_policies),
+            "policyNames": [p.get('displayName', 'Unknown') for p in remote_mfa_policies]
         }
     except Exception as e:
         return {"isMFARequiredForRemoteAccess": False, "error": str(e)}
@@ -72,13 +128,6 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
