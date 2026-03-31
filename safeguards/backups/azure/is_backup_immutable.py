@@ -20,7 +20,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -60,16 +60,24 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
-
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        # Parse Resource Graph table response rows
-        inner_data = data.get("data", data)
-        rows = inner_data.get("rows", [])
+        # Handle list input (e.g. merge=false sending vault array directly)
+        # or dict with nested data/rows from Resource Graph
+        if isinstance(data, list):
+            rows = data
+        elif isinstance(data, dict):
+            inner_data = data.get("data", data)
+            if isinstance(inner_data, dict):
+                rows = inner_data.get("rows", [])
+            elif isinstance(inner_data, list):
+                rows = inner_data
+            else:
+                rows = []
+        else:
+            rows = []
 
         if not rows:
             return create_response(
@@ -90,12 +98,18 @@ def transform(input):
                 # softDeleteState, softDeleteRetentionPeriodInDays, isSoftDeleteEnabled,
                 # hasRetentionPeriod, isImmutable, properties
                 vault_name = row[0] if len(row) > 0 else "Unknown"
-                is_immutable = row[9] if len(row) > 9 else False
+                raw_immutable = row[9] if len(row) > 9 else False
             elif isinstance(row, dict):
                 vault_name = row.get("name", "Unknown")
-                is_immutable = row.get("isImmutable", False)
+                raw_immutable = row.get("isImmutable", False)
             else:
                 continue
+
+            # Handle string values like "0"/"1" from Resource Graph
+            if isinstance(raw_immutable, str):
+                is_immutable = raw_immutable.lower() in ("1", "true", "yes")
+            else:
+                is_immutable = bool(raw_immutable)
 
             vaults_evaluated += 1
             if not is_immutable:
