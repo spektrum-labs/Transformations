@@ -92,13 +92,42 @@ def evaluate(data):
         if not items:
             return {"lastSuccessfulBackupAge": "999", "error": "No protected items"}
 
+        def parse_last_backup_time(backup_time_str):
+            # Handles timestamps with/without fractions/with/without Z or +00:00 at end
+            if not backup_time_str:
+                return datetime(2000, 1, 1, tzinfo=timezone.utc)
+            val = backup_time_str.strip()
+            # Ensure UTC aware
+            if val.endswith('Z'):
+                val = val[:-1] + '+00:00'
+            try:
+                # Remove excessive microseconds if present (Python only supports up to 6 digits)
+                if '.' in val:
+                    dt_part, rest = val.split('.', 1)
+                    frac, tz_part = rest.split('+', 1) if '+' in rest else (rest, None)
+                    frac = frac[:6]  # take at most 6 digits
+                    val = f"{dt_part}.{frac}"
+                    if tz_part:
+                        val += '+' + tz_part
+                return datetime.fromisoformat(val)
+            except Exception:
+                # fallback to parsing without fractions if above fails
+                try:
+                    if '.' in val:
+                        val = val.split('.')[0] + val[val.find('+'):]
+                    return datetime.fromisoformat(val)
+                except Exception:
+                    return datetime(2000, 1, 1, tzinfo=timezone.utc)
+
         most_recent = max(
-            (datetime.fromisoformat(
-                item.get('properties', {}).get('lastBackupTime', '2000-01-01T00:00:00Z').replace('Z', '+00:00')
-            ) for item in items),
+            (
+                parse_last_backup_time(
+                    item.get('properties', {}).get('lastBackupTime', '2000-01-01T00:00:00Z')
+                )
+                for item in items
+            ),
             default=datetime(2000, 1, 1, tzinfo=timezone.utc)
         )
-
         hours_ago = int((datetime.now(timezone.utc) - most_recent).total_seconds() / 3600)
         return {"lastSuccessfulBackupAge": str(hours_ago), "hoursSinceLastBackup": hours_ago}
     except Exception as e:
