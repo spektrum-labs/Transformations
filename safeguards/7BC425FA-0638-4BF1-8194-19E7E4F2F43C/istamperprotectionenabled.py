@@ -2,6 +2,15 @@
 Transformation: isTamperProtectionEnabled
 Vendor: Microsoft Defender for Endpoint  |  Category: Endpoint Security
 Evaluates: Whether tamper protection is enabled on all devices
+
+Data source: Advanced Hunting API (POST /api/advancedqueries/run)
+Query: DeviceTvmSecureConfigurationAssessment
+       | where ConfigurationId == 'scid-2010'
+       | project DeviceId, DeviceName, ConfigurationId, IsCompliant, IsApplicable
+Permission: AdvancedQuery.Read.All
+
+Response contains Results[] with IsCompliant (bool) per device.
+scid-2010 = "Turn on tamper protection" configuration check.
 """
 import json
 from datetime import datetime
@@ -13,7 +22,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -42,17 +51,90 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def to_bool(val):
+    """Convert various truthy representations to bool."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return bool(val)
+
+
+def extract_devices(data):
+    """Extract device records from Advanced Hunting or legacy response formats.
+
+    Handles:
+    - Advanced Hunting: dict with 'Results' list
+    - Legacy machines API: dict with 'value' list
+    - List input (merge=false / unwrapped)
+    """
+    if isinstance(data, dict):
+        # Advanced Hunting response
+        if "Results" in data:
+            results = data["Results"]
+            return results if isinstance(results, list) else []
+        # Legacy machines API
+        if "value" in data:
+            value = data["value"]
+            return value if isinstance(value, list) else []
+        return [data]
+    if isinstance(data, list):
+        return data
+    return []
+
+
 def evaluate(data):
-    """Core evaluation logic."""
+    """Evaluate tamper protection across all devices.
+
+    Supports two response formats:
+    1. Advanced Hunting (scid-2010): IsCompliant field per device
+    2. Legacy machines API: isTamperProtected field per device
+    """
     try:
-        machines = data.get('value', [])
-        if not machines:
-            return {"isTamperProtectionEnabled": False, "error": "No machines found"}
-        tamper_enabled = all(m.get('isTamperProtected', False) for m in machines)
+        devices = extract_devices(data)
+
+        if not devices:
+            return {"isTamperProtectionEnabled": False, "error": "No devices found"}
+
+        total = 0
+        protected = 0
+        non_compliant_devices = []
+
+        for device in devices:
+            if not isinstance(device, dict):
+                continue
+
+            device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
+
+            # Advanced Hunting format (scid-2010): IsCompliant
+            if "IsCompliant" in device:
+                is_applicable = to_bool(device.get("IsApplicable", True))
+                if not is_applicable:
+                    continue
+                total += 1
+                if to_bool(device.get("IsCompliant", False)):
+                    protected += 1
+                else:
+                    non_compliant_devices.append(device_name)
+            # Legacy machines API format: isTamperProtected
+            elif "isTamperProtected" in device:
+                total += 1
+                if to_bool(device.get("isTamperProtected", False)):
+                    protected += 1
+                else:
+                    non_compliant_devices.append(device_name)
+            else:
+                # Device record without tamper protection info — skip
+                continue
+
+        if total == 0:
+            return {"isTamperProtectionEnabled": False, "error": "No applicable devices found with tamper protection data"}
+
         return {
-            "isTamperProtectionEnabled": tamper_enabled,
-            "totalDevices": len(machines),
-            "tamperProtectedCount": sum(1 for m in machines if m.get('isTamperProtected', False))
+            "isTamperProtectionEnabled": protected == total,
+            "totalDevices": total,
+            "tamperProtectedCount": protected,
+            "nonCompliantDevices": non_compliant_devices[:20]
         }
     except Exception as e:
         return {"isTamperProtectionEnabled": False, "error": str(e)}
@@ -67,9 +149,6 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
@@ -87,7 +166,7 @@ def transform(input):
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review configuration for {criteriaKey}")
+            recommendations.append("Enable tamper protection on all devices via Microsoft Defender for Endpoint")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
