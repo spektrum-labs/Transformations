@@ -95,12 +95,15 @@ def transform(input):
         elif isinstance(data, list):
             machine_data = data
 
-        eligibleMachines = [ m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true" ]
+        # Exclude devices marked as excluded
+        non_excluded = [m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true"]
 
-        protectedMachines = [
-            m for m in eligibleMachines
-            if m.get("healthStatus") == "Active" and m.get("onboardingStatus") == "Onboarded"
-        ]
+        # Eligible = devices that can run endpoint protection (exclude Unsupported and InsufficientInfo)
+        ineligible_statuses = {"Unsupported", "InsufficientInfo"}
+        eligibleMachines = [m for m in non_excluded if m.get("onboardingStatus") not in ineligible_statuses]
+
+        # Protected = onboarded devices (Active or Inactive — Inactive just means powered off)
+        protectedMachines = [m for m in eligibleMachines if m.get("onboardingStatus") == "Onboarded"]
 
         allDevices = len(machine_data)
         eligibleDevices = len(eligibleMachines)
@@ -111,18 +114,20 @@ def transform(input):
 
         criteriaValue = eligibleDevicesPercentage if eligibleDevices > 0 else 100
 
-        if criteriaValue:
+        if criteriaValue >= 100:
             pass_reasons.append(f"All eligible devices are protected: {protectedDevices}/{eligibleDevices} (100%)")
         else:
-            if eligibleDevices > 0:
-                fail_reasons.append(f"Not all eligible devices are protected: {protectedDevices}/{eligibleDevices} ({eligibleDevicesPercentage}%)")
-                recommendations.append("Onboard remaining eligible devices to endpoint protection")
-            else:
-                fail_reasons.append("No eligible devices found")
-                recommendations.append("Ensure devices are properly enrolled and not excluded")
+            fail_reasons.append(f"Not all eligible devices are protected: {protectedDevices}/{eligibleDevices} ({eligibleDevicesPercentage}%)")
+            recommendations.append("Onboard remaining eligible devices to endpoint protection")
 
-        if allDevicesPercentage < 100:
-            pass_reasons.append(f"Overall coverage: {protectedDevices}/{allDevices} devices ({allDevicesPercentage}%)")
+        if eligibleDevices == 0:
+            fail_reasons.append("No eligible devices found")
+            recommendations.append("Ensure devices are properly enrolled and not excluded")
+
+        pass_reasons.append(f"Overall coverage: {protectedDevices}/{allDevices} total devices ({allDevicesPercentage}%)")
+        if allDevices != eligibleDevices:
+            ineligible = allDevices - eligibleDevices
+            pass_reasons.append(f"{ineligible} device(s) excluded from eligibility (Unsupported/InsufficientInfo)")
 
         return create_response(
             result={
