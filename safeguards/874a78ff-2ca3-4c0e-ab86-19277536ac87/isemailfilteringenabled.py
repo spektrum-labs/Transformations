@@ -82,75 +82,110 @@ def to_bool(val):
 ACTIVE_ACTIONS = {"MoveToJmf", "Quarantine", "Delete", "Redirect", "AddXHeader"}
 
 
-def is_policy_filtering(policy):
+def has_protective_actions(policy):
     """Check if a hosted content filter policy has meaningful filtering actions configured."""
     if not isinstance(policy, dict):
         return False
 
-    # Policy must be enabled
-    enabled = policy.get("IsEnabled")
-    if enabled is None:
-        enabled = policy.get("Enabled")
-    if not to_bool(enabled if enabled is not None else False):
-        return False
-
-    # Check that key spam/phish actions are set to something protective
-    spam_action = policy.get("SpamAction", "")
     high_spam_action = policy.get("HighConfidenceSpamAction", "")
-    phish_action = policy.get("PhishSpamAction", "")
     high_phish_action = policy.get("HighConfidencePhishAction", "")
 
-    # At minimum, high confidence spam and phish should have active actions
     has_spam_filtering = high_spam_action in ACTIVE_ACTIONS
     has_phish_filtering = high_phish_action in ACTIVE_ACTIONS
 
     return has_spam_filtering and has_phish_filtering
 
 
-def extract_policies(data):
-    """Extract policy list from various input shapes."""
+def extract_policies_and_rules(data):
+    """Extract policy and rule lists from various input shapes."""
+    policies = []
+    rules = []
+
     if isinstance(data, list):
-        return data
+        return data, []
+
     if isinstance(data, dict):
-        if "policies" in data:
-            policies = data["policies"]
-            return policies if isinstance(policies, list) else [policies] if policies else []
-        if "value" in data:
+        raw_policies = data.get("policies")
+        if isinstance(raw_policies, list):
+            policies = raw_policies
+        elif isinstance(raw_policies, dict):
+            policies = [raw_policies]
+
+        raw_rules = data.get("rules")
+        if isinstance(raw_rules, list):
+            rules = raw_rules
+        # "None" string means no rules configured
+        elif isinstance(raw_rules, dict):
+            rules = [raw_rules]
+
+        if not policies and "value" in data:
             value = data["value"]
-            return value if isinstance(value, list) else []
-    return []
+            policies = value if isinstance(value, list) else []
+
+    return policies, rules
+
+
+def build_rule_map(rules):
+    """Build a map of policy name to rule state from hosted content filter rules."""
+    rule_map = {}
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        policy_name = rule.get("HostedContentFilterPolicy", "")
+        state = rule.get("State", "")
+        if policy_name:
+            rule_map[policy_name] = state
+    return rule_map
 
 
 def evaluate(data):
-    """Evaluate hosted content filter policies for active email filtering."""
+    """Evaluate hosted content filter policies for active email filtering.
+
+    Hosted content filter policies do NOT have an IsEnabled field.
+    A policy is active if:
+    - It is the Default policy (always applies to unmatched users), OR
+    - It has an associated rule with State = 'Enabled'
+    """
     try:
-        policies = extract_policies(data)
+        policies, rules = extract_policies_and_rules(data)
 
         if not policies:
             return {"isEmailFilteringEnabled": False, "error": "No hosted content filter policies found"}
 
+        rule_map = build_rule_map(rules)
+
         filtering_policies = []
-        non_filtering_policies = []
+        inactive_policies = []
         findings = []
 
         for policy in policies:
             if not isinstance(policy, dict):
                 continue
             name = policy.get("Name", policy.get("name", "Unknown"))
+            is_default = to_bool(policy.get("IsDefault", False))
 
-            if is_policy_filtering(policy):
-                filtering_policies.append(name)
-                findings.append(f"{name}: spam/phish filtering active")
+            # Determine if this policy is active
+            if is_default:
+                is_active = True
             else:
-                enabled = policy.get("IsEnabled", policy.get("Enabled"))
-                if not to_bool(enabled if enabled is not None else False):
-                    non_filtering_policies.append(name)
-                    findings.append(f"{name}: policy disabled")
-                else:
-                    non_filtering_policies.append(name)
-                    high_spam = policy.get("HighConfidenceSpamAction", "N/A")
-                    high_phish = policy.get("HighConfidencePhishAction", "N/A")
-                    findings.append(f"{name}: enabled but weak actions (HighConfSpam={high_spam}, HighConfPhish={high_phish})")
+                rule_state = rule_map.get(name, "")
+                is_active = rule_state == "Enabled"
+
+            if not is_active:
+                inactive_policies.append(name)
+                findings.append(f"{name}: no active rule (not applied to users)")
+                continue
+
+            if has_protective_actions(policy):
+                filtering_policies.append(name)
+                high_spam = policy.get("HighConfidenceSpamAction", "N/A")
+                high_phish = policy.get("HighConfidencePhishAction", "N/A")
+                findings.append(f"{name}: active with HighConfSpam={high_spam}, HighConfPhish={high_phish}")
+            else:
+                inactive_policies.append(name)
+                high_spam = policy.get("HighConfidenceSpamAction", "N/A")
+                high_phish = policy.get("HighConfidencePhishAction", "N/A")
+                findings.append(f"{name}: active but weak actions (HighConfSpam={high_spam}, HighConfPhish={high_phish})")
 
         has_filtering = len(filtering_policies) > 0
 
