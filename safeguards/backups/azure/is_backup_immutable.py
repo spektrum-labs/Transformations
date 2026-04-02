@@ -64,6 +64,28 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
+        # Check for single-vault immutabilitySettings format (properties.immutabilitySettings.state)
+        if isinstance(data, dict) and "properties" in data:
+            immutability = data.get("properties", {}).get("immutabilitySettings", {})
+            if isinstance(immutability, dict):
+                imm_state = immutability.get("state", "NotConfigured")
+                is_immutable = imm_state in ("Locked", "Unlocked")
+
+                if is_immutable:
+                    pass_reasons.append(f"Vault immutability state is {imm_state}")
+                else:
+                    fail_reasons.append(f"Vault immutability state is {imm_state or 'NotConfigured'}")
+                    recommendations.append("Enable immutable vault (WORM) on the Azure Recovery Services vault")
+
+                return create_response(
+                    result={criteriaKey: is_immutable, "immutabilityState": imm_state},
+                    validation=validation,
+                    pass_reasons=pass_reasons,
+                    fail_reasons=fail_reasons,
+                    recommendations=recommendations,
+                    input_summary={"immutabilityState": imm_state}
+                )
+
         # Handle list input (e.g. merge=false sending vault array directly)
         # or dict with nested data/rows from Resource Graph
         if isinstance(data, list):
