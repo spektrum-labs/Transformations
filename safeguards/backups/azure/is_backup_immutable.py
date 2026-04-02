@@ -133,7 +133,7 @@ def transform(input):
             else:
                 is_immutable = bool(raw_immutable)
 
-            vaults_evaluated += 1
+            vaults_evaluated = vaults_evaluated + 1
             if not is_immutable:
                 all_immutable = False
                 non_immutable_vaults.append(vault_name)
@@ -141,7 +141,8 @@ def transform(input):
         if all_immutable and vaults_evaluated > 0:
             pass_reasons.append(f"All {vaults_evaluated} backup vaults have soft delete enabled with retention (immutable)")
         else:
-            fail_reasons.append(f"{len(non_immutable_vaults)} vault(s) lack immutability protection: {', '.join(non_immutable_vaults[:5])}")
+            display_vaults = non_immutable_vaults if len(non_immutable_vaults) <= 5 else list(non_immutable_vaults[i] for i in range(5))
+            fail_reasons.append(f"{len(non_immutable_vaults)} vault(s) lack immutability protection: {', '.join(display_vaults)}")
             recommendations.append("Enable soft delete with a retention period on all Azure backup vaults to ensure immutability")
 
         return create_response(
