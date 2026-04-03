@@ -4,8 +4,9 @@ Vendor: Mimecast
 Category: Email Security / Anti-Phishing
 
 Evaluates whether Mimecast anti-phishing protection is active by checking
-impersonation threat detection statistics from /threats/v1/stats/impersonations.
-A successful response confirms Targeted Threat Protection is enabled.
+anti-spoofing bypass policies from /api/policy/antispoofing-bypass/get-policy.
+Anti-spoofing policies directly indicate active phishing protection since
+sender spoofing is the primary vector for phishing attacks.
 """
 
 import json
@@ -91,38 +92,31 @@ def transform(input):
         recommendations = []
 
         antiphishing_enabled = False
-        total_detections = 0
+        policy_count = 0
 
         if isinstance(data, dict):
-            # /threats/v1/stats/impersonations returns aggregated stats.
-            # A successful response (even with zero detections) confirms
-            # Targeted Threat Protection / impersonation scanning is active.
-            stats = data.get('data', data.get('stats', []))
-            if isinstance(stats, list):
-                antiphishing_enabled = True
-                for entry in stats:
-                    if isinstance(entry, dict):
-                        total_detections += entry.get('count', 0)
-            elif 'totalCount' in data or 'count' in data:
-                antiphishing_enabled = True
-                total_detections = data.get('totalCount', data.get('count', 0))
+            # /api/policy/antispoofing-bypass/get-policy returns policies
+            # in a "data" array (mapped as "policies" in returnSpec).
+            # A successful response confirms anti-spoofing is configured,
+            # which is a direct indicator of active phishing protection.
+            policies = data.get('policies', data.get('data', []))
+            if isinstance(policies, list):
+                policy_count = len(policies)
+                antiphishing_enabled = policy_count > 0
 
         if antiphishing_enabled:
-            reason = "Mimecast Targeted Threat Protection is active"
-            if total_detections > 0:
-                reason += f" ({total_detections} impersonation threats detected)"
-            pass_reasons.append(reason)
-        else:
-            fail_reasons.append("Unable to confirm Mimecast anti-phishing protection is active")
-            recommendations.append(
-                "Ensure the Mimecast API application has the 'Threats, Security Events and Data' "
-                "product assigned and Targeted Threat Protection is enabled"
+            pass_reasons.append(
+                f"Mimecast anti-phishing is configured ({policy_count} anti-spoofing "
+                f"polic{'y' if policy_count == 1 else 'ies'} active)"
             )
+        else:
+            fail_reasons.append("No anti-spoofing policies configured in Mimecast")
+            recommendations.append("Configure anti-spoofing policies in Mimecast to protect against phishing attacks")
 
         return create_response(
             result={
                 criteriaKey: antiphishing_enabled,
-                "totalDetections": total_detections
+                "policyCount": policy_count
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -130,7 +124,7 @@ def transform(input):
             recommendations=recommendations,
             input_summary={
                 "antiphishingActive": antiphishing_enabled,
-                "totalDetections": total_detections
+                "policyCount": policy_count
             }
         )
 
