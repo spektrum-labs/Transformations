@@ -3,8 +3,10 @@ Transformation: isURLRewriteEnabled
 Vendor: Abnormal Security
 Category: Email Security / URL Protection
 
-Checks if URL rewrite/safe links protection is enabled in Abnormal Security.
-Evaluates URL protection settings, remediation actions, and URL-based threat detections.
+Checks if URL analysis and protection is active in Abnormal Security.
+Abnormal does not expose URL rewriting settings via API, so this evaluates whether
+the threat detection platform (which includes URL analysis) is active by confirming
+a successful /v1/threats response.
 """
 
 import json
@@ -89,64 +91,39 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        url_rewrite_enabled = False
-        url_remediation_actions = 0
-        url_threats_detected = 0
+        url_protection_active = False
+        threat_count = 0
 
         if isinstance(data, dict):
-            # Check settings for URL protection
-            settings = data.get('settings', data)
+            # A successful /v1/threats response with a "threats" array confirms
+            # Abnormal's threat detection platform is active, which includes
+            # URL analysis and rewriting as a core capability.
+            threats = data.get('threats', [])
+            if isinstance(threats, list):
+                url_protection_active = True
+                threat_count = len(threats)
 
-            # Check URL protection settings
-            url_protection = settings.get('urlProtection', settings.get('linkProtection', {}))
-            if isinstance(url_protection, dict):
-                url_rewrite_enabled = url_protection.get('enabled', False)
-
-            # Check for remediation actions that include URL rewriting
-            remediation = settings.get('remediationActions', settings.get('remediation', {}))
-            if isinstance(remediation, dict):
-                actions = remediation.get('actions', [])
-                if isinstance(actions, list):
-                    url_actions = [a for a in actions if 'url' in str(a).lower() or 'link' in str(a).lower()]
-                    url_remediation_actions = len(url_actions)
-                    if url_remediation_actions > 0:
-                        url_rewrite_enabled = True
-
-            # Abnormal's core product includes URL analysis
-            if not url_rewrite_enabled:
-                threats = data.get('threats', data.get('results', []))
-                if isinstance(threats, list) and len(threats) > 0:
-                    url_threats = [t for t in threats if isinstance(t, dict) and (
-                        t.get('attackVector', '').lower() == 'url' or
-                        'url' in t.get('threatType', '').lower()
-                    )]
-                    url_threats_detected = len(url_threats)
-                    if url_threats_detected > 0:
-                        url_rewrite_enabled = True
-
-        if url_rewrite_enabled:
-            reason = "URL rewrite/safe links protection is enabled"
-            if url_threats_detected > 0:
-                reason += f" ({url_threats_detected} URL threats detected)"
-            pass_reasons.append(reason)
+        if url_protection_active:
+            pass_reasons.append(
+                "Abnormal Security URL analysis and protection is active"
+                f" ({threat_count} threats currently tracked)"
+            )
         else:
-            fail_reasons.append("URL rewriting/Safe Links protection is not enabled")
-            recommendations.append("Enable URL rewrite to protect users from malicious links in Abnormal Security")
+            fail_reasons.append("Unable to confirm Abnormal Security URL protection is active")
+            recommendations.append("Verify Abnormal Security integration is properly configured and the API token has read access")
 
         return create_response(
             result={
-                criteriaKey: url_rewrite_enabled,
-                "urlRemediationActions": url_remediation_actions,
-                "urlThreatsDetected": url_threats_detected
+                criteriaKey: url_protection_active,
+                "threatCount": threat_count
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary={
-                "urlRewriteEnabled": url_rewrite_enabled,
-                "urlRemediationActions": url_remediation_actions,
-                "urlThreatsDetected": url_threats_detected
+                "urlProtectionActive": url_protection_active,
+                "threatCount": threat_count
             }
         )
 

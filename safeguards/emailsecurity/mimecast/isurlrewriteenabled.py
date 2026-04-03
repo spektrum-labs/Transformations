@@ -3,8 +3,9 @@ Transformation: isURLRewriteEnabled
 Vendor: Mimecast
 Category: Email Security / URL Protection
 
-Ensures that URLs are checked before delivery.
-Checks URL rewrite/protection settings, URL defense, safe links, and URL-related policies.
+Ensures that URL rewriting is enabled in Mimecast.
+Evaluates address alteration set policies from the Mimecast API to determine
+if at least one enabled policy exists for URL rewriting.
 """
 
 import json
@@ -89,38 +90,63 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        url_protection_enabled = False
-        url_policies_count = 0
+        url_rewrite_enabled = False
+        total_policies = 0
+        enabled_policies = 0
+        additional_findings = []
 
+        policies = []
         if isinstance(data, dict):
-            if 'urlRewriteEnabled' in data or 'urlProtection' in data:
-                url_protection_enabled = bool(data.get('urlRewriteEnabled', data.get('urlProtection', False)))
-            elif 'urlDefense' in data or 'safeLinks' in data:
-                url_protection_enabled = bool(data.get('urlDefense', data.get('safeLinks', False)))
-            elif 'enabled' in data:
-                url_protection_enabled = bool(data['enabled'])
-            elif 'policies' in data:
-                policies = data['policies'] if isinstance(data['policies'], list) else []
-                url_policies = [p for p in policies if 'url' in str(p).lower() or 'link' in str(p).lower()]
-                url_policies_count = len(url_policies)
-                url_protection_enabled = url_policies_count > 0
+            policies = data.get("data", [])
+        elif isinstance(data, list):
+            policies = data
 
-        if url_protection_enabled:
-            reason = "URL rewrite/safe links protection is enabled"
-            if url_policies_count > 0:
-                reason += f" ({url_policies_count} URL policies configured)"
-            pass_reasons.append(reason)
+        if isinstance(policies, list):
+            total_policies = len(policies)
+            for policy_entry in policies:
+                if not isinstance(policy_entry, dict):
+                    continue
+                policy = policy_entry.get("policy", {})
+                if not isinstance(policy, dict):
+                    continue
+                is_enabled = policy.get("enabled", False)
+                if is_enabled:
+                    enabled_policies += 1
+                    description = policy.get("description", "Unnamed policy")
+                    additional_findings.append(f"Enabled policy: {description}")
+
+            url_rewrite_enabled = enabled_policies > 0
+
+        if url_rewrite_enabled:
+            pass_reasons.append(
+                f"URL rewrite is enabled ({enabled_policies} of {total_policies} "
+                f"address alteration {'policy' if total_policies == 1 else 'policies'} enabled)"
+            )
         else:
-            fail_reasons.append("URL rewriting/Safe Links protection is not enabled")
-            recommendations.append("Enable URL rewrite protection in Mimecast to scan links before delivery")
+            if total_policies > 0:
+                fail_reasons.append(
+                    f"No enabled address alteration policies found ({total_policies} "
+                    f"{'policy' if total_policies == 1 else 'policies'} configured but none enabled)"
+                )
+            else:
+                fail_reasons.append("No address alteration policies found")
+            recommendations.append("Enable at least one address alteration policy in Mimecast for URL rewriting")
 
         return create_response(
-            result={criteriaKey: url_protection_enabled, "urlPolicies": url_policies_count},
+            result={
+                criteriaKey: url_rewrite_enabled,
+                "totalPolicies": total_policies,
+                "enabledPolicies": enabled_policies
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"urlProtectionEnabled": url_protection_enabled, "urlPolicies": url_policies_count}
+            input_summary={
+                "totalPolicies": total_policies,
+                "enabledPolicies": enabled_policies
+            },
+            additional_findings=additional_findings
         )
 
     except Exception as e:
