@@ -93,22 +93,17 @@ def transform(input):
         license_details = {}
 
         if isinstance(data, dict):
-            # Abnormal Security health check response
-            if 'organization_id' in data or 'organizationId' in data:
+            # Abnormal Security /v1/threats response confirms valid token and active license
+            if 'threats' in data and isinstance(data['threats'], list):
+                license_purchased = True
+                license_details['status'] = 'active'
+                license_details['threatCount'] = len(data['threats'])
+            elif 'organization_id' in data or 'organizationId' in data:
                 license_purchased = True
                 license_details['organizationId'] = data.get('organization_id', data.get('organizationId', ''))
-            elif 'subscription' in data and data['subscription']:
-                license_purchased = True
-                license_details['subscription'] = data['subscription']
-            elif 'license' in data and data['license']:
-                license_purchased = True
-                license_details['license'] = data['license']
             elif 'status' in data and isinstance(data['status'], str) and data['status'].lower() in ['active', 'ok', 'healthy']:
                 license_purchased = True
                 license_details['status'] = data['status']
-            elif 'active' in data or 'enabled' in data:
-                license_purchased = bool(data.get('active', data.get('enabled', False)))
-                license_details['status'] = 'active' if license_purchased else 'inactive'
 
         if license_purchased:
             pass_reasons.append("Abnormal Security license active and confirmed")
