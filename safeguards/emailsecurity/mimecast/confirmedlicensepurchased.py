@@ -3,8 +3,8 @@ Transformation: confirmedLicensePurchased
 Vendor: Mimecast
 Category: Email Security / Licensing
 
-Evaluates if a valid Mimecast subscription is active.
-Checks for subscription, SKU, license info, or active/enabled flags.
+Evaluates if a valid Mimecast subscription is active by checking the
+account information endpoint for packages and account details.
 """
 
 import json
@@ -78,7 +78,7 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
+        if validation.get("status") == "failed" and not isinstance(data, list):
             return create_response(
                 result={criteriaKey: False},
                 validation=validation,
@@ -90,38 +90,58 @@ def transform(input):
         recommendations = []
 
         license_purchased = False
-        license_details = {}
+        additional_findings = []
+        account_name = ""
+        account_code = ""
+        package_count = 0
 
-        if isinstance(data, dict):
-            if 'subscription' in data and data['subscription']:
-                license_purchased = True
-                license_details['subscription'] = data['subscription']
-            elif 'sku' in data and data['sku']:
-                license_purchased = True
-                license_details['sku'] = data['sku']
-            elif 'license' in data and data['license']:
-                license_purchased = True
-                license_details['license'] = data['license']
-            elif 'licenses' in data and isinstance(data.get('licenses'), list) and len(data['licenses']) > 0:
-                license_purchased = True
-                license_details['licenseCount'] = len(data['licenses'])
-            elif 'active' in data or 'enabled' in data:
-                license_purchased = bool(data.get('active', data.get('enabled', False)))
-                license_details['status'] = 'active' if license_purchased else 'inactive'
+        account = None
+        if isinstance(data, list) and len(data) > 0:
+            account = data[0] if isinstance(data[0], dict) else None
+        elif isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+                account = data["data"][0] if isinstance(data["data"][0], dict) else None
+            else:
+                account = data
+
+        if isinstance(account, dict):
+            account_name = account.get("accountName", "")
+            account_code = account.get("accountCode", "")
+            packages = account.get("packages", [])
+            if isinstance(packages, list):
+                package_count = len(packages)
+
+            license_purchased = package_count > 0
+
+            if license_purchased:
+                for pkg in packages:
+                    if isinstance(pkg, str):
+                        additional_findings.append(f"Package: {pkg}")
 
         if license_purchased:
-            pass_reasons.append("Mimecast license active and confirmed")
+            pass_reasons.append(
+                f"Mimecast license confirmed for {account_name} ({account_code}) "
+                f"with {package_count} {'package' if package_count == 1 else 'packages'}"
+            )
         else:
-            fail_reasons.append("Mimecast license has not been purchased or confirmed")
-            recommendations.append("Ensure valid Mimecast subscription is active")
+            fail_reasons.append("No Mimecast packages found - license not confirmed")
+            recommendations.append("Ensure a valid Mimecast subscription is active with licensed packages")
 
         return create_response(
-            result={criteriaKey: license_purchased, **license_details},
+            result={
+                criteriaKey: license_purchased,
+                "packageCount": package_count
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased, **license_details}
+            input_summary={
+                "accountName": account_name,
+                "accountCode": account_code,
+                "packageCount": package_count
+            },
+            additional_findings=additional_findings
         )
 
     except Exception as e:

@@ -4,7 +4,8 @@ Vendor: Mimecast
 Category: Email Security / Logging
 
 Ensures email security logs are integrated with SIEM.
-Checks logging status, audit log presence, and state/status indicators.
+Evaluates anti-spoofing bypass policies from the Mimecast API to determine
+if email logging and monitoring policies are active.
 """
 
 import json
@@ -78,9 +79,9 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
+        if validation.get("status") == "failed" and not isinstance(data, list):
             return create_response(
-                result={criteriaKey: False, "logCount": 0},
+                result={criteriaKey: False},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -90,47 +91,67 @@ def transform(input):
         recommendations = []
 
         logging_enabled = False
-        log_count = 0
-        logging_state = ''
+        total_policies = 0
+        enabled_policies = 0
+        additional_findings = []
 
-        if isinstance(data, dict):
-            if 'loggingEnabled' in data or 'auditEnabled' in data:
-                logging_enabled = bool(data.get('loggingEnabled', data.get('auditEnabled', False)))
-            elif 'enabled' in data:
-                logging_enabled = bool(data['enabled'])
-            elif 'state' in data or 'status' in data:
-                logging_state = str(data.get('state', data.get('status', ''))).lower()
-                logging_enabled = logging_state in ['enabled', 'active', 'on']
-            elif 'logs' in data:
-                logs = data['logs'] if isinstance(data['logs'], list) else []
-                log_count = len(logs)
-                logging_enabled = log_count > 0
-            elif 'auditLog' in data:
-                logging_enabled = bool(data['auditLog'])
+        policies = []
+        if isinstance(data, list):
+            policies = data
+        elif isinstance(data, dict):
+            policies = data.get("data", [])
+
+        if isinstance(policies, list):
+            total_policies = len(policies)
+            for policy_entry in policies:
+                if not isinstance(policy_entry, dict):
+                    continue
+                policy = policy_entry.get("policy", {})
+                if not isinstance(policy, dict):
+                    continue
+                is_enabled = policy.get("enabled", False)
+                if is_enabled:
+                    enabled_policies += 1
+                    description = policy.get("description", "Unnamed policy")
+                    additional_findings.append(f"Enabled policy: {description}")
+
+            logging_enabled = enabled_policies > 0
 
         if logging_enabled:
-            reason = "Email security logging is enabled"
-            if log_count > 0:
-                reason += f" ({log_count} log entries found)"
-            elif logging_state:
-                reason += f" (state: {logging_state})"
-            pass_reasons.append(reason)
+            pass_reasons.append(
+                f"Email logging is enabled ({enabled_policies} of {total_policies} "
+                f"anti-spoofing bypass {'policy' if total_policies == 1 else 'policies'} enabled)"
+            )
         else:
-            fail_reasons.append("Email security logging is not enabled")
-            recommendations.append("Enable email security logging and SIEM integration in Mimecast")
+            if total_policies > 0:
+                fail_reasons.append(
+                    f"No enabled anti-spoofing bypass policies found ({total_policies} "
+                    f"{'policy' if total_policies == 1 else 'policies'} configured but none enabled)"
+                )
+            else:
+                fail_reasons.append("No anti-spoofing bypass policies found")
+            recommendations.append("Enable anti-spoofing bypass policies in Mimecast to ensure email logging and SIEM integration")
 
         return create_response(
-            result={criteriaKey: logging_enabled, "logCount": log_count},
+            result={
+                criteriaKey: logging_enabled,
+                "totalPolicies": total_policies,
+                "enabledPolicies": enabled_policies
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"logCount": log_count, "loggingEnabled": logging_enabled, "state": logging_state}
+            input_summary={
+                "totalPolicies": total_policies,
+                "enabledPolicies": enabled_policies
+            },
+            additional_findings=additional_findings
         )
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False, "logCount": 0},
+            result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

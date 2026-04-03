@@ -79,7 +79,7 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
+        if validation.get("status") == "failed" and not isinstance(data, list):
             return create_response(
                 result={criteriaKey: False},
                 validation=validation,
