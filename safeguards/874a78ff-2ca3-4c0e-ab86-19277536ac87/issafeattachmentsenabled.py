@@ -201,26 +201,26 @@ def transform(input):
             if len(matched_object_list) > 1:
                 fail_reasons.append(f"Ambiguous data: {len(matched_object_list)} objects match controlName '{controlName}'")
                 return create_response(
-                    result={criteriaKey: False},
+                    result={criteriaKey: enablement_score == 100.00},
                     validation=validation,
                     fail_reasons=fail_reasons,
-                    recommendations=["Check Microsoft Secure Score data for duplicate control entries"]
+                    recommendations=["Check Microsoft Secure Score data for duplicate control entries"],
+                    additional_findings=additional_findings
                 )
             elif len(matched_object_list) == 1:
                 matched_object = matched_object_list[0]
 
                 score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
-                is_enabled = score_in_percentage == 100.00
 
                 raw_count = matched_object.get("count", 0)
                 raw_total = matched_object.get("total", 0)
                 count = int(raw_count) if isinstance(raw_count, str) else raw_count
                 total = int(raw_total) if isinstance(raw_total, str) else raw_total
 
-                if is_enabled:
-                    pass_reasons.append(f"Safe Attachments policy is fully configured (score: 100%)")
+                if score_in_percentage == 100.00:
+                    additional_findings.append(f"Safe Attachments policy is fully configured (score: 100%)")
                 else:
-                    fail_reasons.append(f"Safe Attachments policy score is {score_in_percentage}% ({count}/{total} users securely configured)")
+                    additional_findings.append(f"Safe Attachments policy score is {score_in_percentage}% ({count}/{total} users securely configured)")
                     recommendations.append("Configure Safe Attachments policy to use Block mode in Microsoft Defender for Office 365")
             else:
                 fail_reasons.append(f"No control found matching '{controlName}' in Secure Score data")
@@ -228,6 +228,14 @@ def transform(input):
         else:
             fail_reasons.append("Microsoft Secure Score data not available - verify API permissions")
             recommendations.append("Verify the Microsoft Graph API integration is returning Secure Score data")
+
+        # Pass if either enablement or policy score is 100%
+        is_enabled = enablement_score == 100.00 or score_in_percentage == 100.00
+
+        if is_enabled:
+            pass_reasons.append("Safe Attachments is enabled (enablement score: {}%, policy score: {}%)".format(enablement_score, score_in_percentage))
+        else:
+            fail_reasons.append("Safe Attachments is not fully enabled (enablement score: {}%, policy score: {}%)".format(enablement_score, score_in_percentage))
 
         result = {
             criteriaKey: is_enabled,
