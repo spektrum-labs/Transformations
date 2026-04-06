@@ -133,6 +133,7 @@ def transform(input):
     """
     criteriaKey = "isSafeAttachmentsEnabled"
     controlName = "mdo_safeattachmentpolicy"
+    enablementControlName = "mdo_safeattachments"
 
     try:
         if isinstance(input, str):
@@ -165,15 +166,36 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
         score_in_percentage = 0.0
         count = 0
         total = 0
         is_enabled = False
+        enablement_score = 0.0
+        enablement_count = 0
+        enablement_total = 0
 
         # Process Secure Score data
         values = data.get("value", [])
         if len(values) > 0:
             control_scores = values[0].get("controlScores", [])
+
+            # Look up the enablement control (mdo_safeattachments)
+            enablement_list = [i for i in control_scores if i.get('controlName') == enablementControlName]
+            if len(enablement_list) == 1:
+                enablement_obj = enablement_list[0]
+                enablement_score = enablement_obj.get("scoreInPercentage", 0.0)
+                raw_en_count = enablement_obj.get("count", 0)
+                raw_en_total = enablement_obj.get("total", 0)
+                enablement_count = int(raw_en_count) if isinstance(raw_en_count, str) else raw_en_count
+                enablement_total = int(raw_en_total) if isinstance(raw_en_total, str) else raw_en_total
+
+                if enablement_score == 100.00:
+                    additional_findings.append(f"Safe Attachments is enabled for all users ({enablement_count}/{enablement_total})")
+                else:
+                    additional_findings.append(f"Safe Attachments enablement is at {enablement_score}% ({enablement_count}/{enablement_total} users)")
+
+            # Look up the policy control (mdo_safeattachmentpolicy)
             matched_object_list = [i for i in control_scores if i.get('controlName') == controlName]
 
             if len(matched_object_list) > 1:
@@ -196,10 +218,10 @@ def transform(input):
                 total = int(raw_total) if isinstance(raw_total, str) else raw_total
 
                 if is_enabled:
-                    pass_reasons.append(f"Safe Attachments is fully enabled (score: 100%)")
+                    pass_reasons.append(f"Safe Attachments policy is fully configured (score: 100%)")
                 else:
-                    fail_reasons.append(f"Safe Attachments score is {score_in_percentage}%")
-                    recommendations.append("Enable Safe Attachments policy in Microsoft Defender for Office 365")
+                    fail_reasons.append(f"Safe Attachments policy score is {score_in_percentage}% ({count}/{total} users securely configured)")
+                    recommendations.append("Configure Safe Attachments policy to use Block mode in Microsoft Defender for Office 365")
             else:
                 fail_reasons.append(f"No control found matching '{controlName}' in Secure Score data")
                 recommendations.append("Verify Microsoft Secure Score is collecting Safe Attachments data")
@@ -211,14 +233,20 @@ def transform(input):
             criteriaKey: is_enabled,
             "scoreInPercentage": score_in_percentage,
             "count": count,
-            "total": total
+            "total": total,
+            "enablementScoreInPercentage": enablement_score,
+            "enablementCount": enablement_count,
+            "enablementTotal": enablement_total
         }
 
         input_summary = {
             "hasSecureScoreData": len(values) > 0,
-            "scoreInPercentage": score_in_percentage,
-            "protectedCount": count,
-            "totalCount": total
+            "policyScoreInPercentage": score_in_percentage,
+            "policyProtectedCount": count,
+            "policyTotalCount": total,
+            "enablementScoreInPercentage": enablement_score,
+            "enablementProtectedCount": enablement_count,
+            "enablementTotalCount": enablement_total
         }
 
         return create_response(
@@ -227,7 +255,8 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary=input_summary
+            input_summary=input_summary,
+            additional_findings=additional_findings
         )
 
     except json.JSONDecodeError as e:
