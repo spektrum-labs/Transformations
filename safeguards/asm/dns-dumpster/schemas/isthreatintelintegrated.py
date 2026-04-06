@@ -1,0 +1,18 @@
+"""Schema for isthreatintelintegrated transformation input."""
+
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+
+
+class IsthreatintelintegratedInput(BaseModel):
+    """
+    Expected input schema for the isthreatintelintegrated transformation.
+    Vendor: Dns Dumpster
+    Category: asm
+
+    Note: No API response sample available. Schema structure should be
+    updated based on actual API response format.
+    """
+
+    class Config:
+        extra = "allow"

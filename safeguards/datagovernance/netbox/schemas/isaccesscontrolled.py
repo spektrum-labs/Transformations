@@ -1,0 +1,18 @@
+"""Schema for isaccesscontrolled transformation input."""
+
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+
+
+class IsaccesscontrolledInput(BaseModel):
+    """
+    Expected input schema for the isaccesscontrolled transformation.
+    Vendor: Netbox
+    Category: datagovernance
+
+    Note: No API response sample available. Schema structure should be
+    updated based on actual API response format.
+    """
+
+    class Config:
+        extra = "allow"

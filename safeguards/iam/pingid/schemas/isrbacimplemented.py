@@ -1,0 +1,18 @@
+"""Schema for isrbacimplemented transformation input."""
+
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+
+
+class IsrbacimplementedInput(BaseModel):
+    """
+    Expected input schema for the isrbacimplemented transformation.
+    Vendor: Pingid
+    Category: iam
+
+    Note: No API response sample available. Schema structure should be
+    updated based on actual API response format.
+    """
+
+    class Config:
+        extra = "allow"
