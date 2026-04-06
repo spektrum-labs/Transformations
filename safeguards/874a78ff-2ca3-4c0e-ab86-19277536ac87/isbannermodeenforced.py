@@ -16,7 +16,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -66,8 +66,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-
-def parse_api_error(raw_error: str, source: str = None) -> tuple:
+def parse_api_error(raw_error, source=None):
     """Parse raw API error into clean message with source."""
     raw_lower = raw_error.lower() if raw_error else ''
     src = source or "external service"
@@ -94,7 +93,7 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: Connection failed",
                 "Check network connectivity and firewall settings")
     else:
-        clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
+        clean = (raw_error[0:80] + "...") if len(raw_error) > 80 else raw_error
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
@@ -108,13 +107,6 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
 
 
         # Check for API error (e.g., OAuth failure)
@@ -153,7 +145,7 @@ def transform(input):
         is_enforced = len(enforced_rules) > 0
 
         if is_enforced:
-            rule_names = [r['Name'] for r in enforced_rules[:3]]
+            rule_names = [r['Name'] for r in list(enforced_rules[i] for i in range(min(3, len(enforced_rules))))]
             pass_reasons.append(f"Banner mode is enforced via {len(enforced_rules)} rules: {', '.join(rule_names)}")
         else:
             if len(banner_rules) > 0:

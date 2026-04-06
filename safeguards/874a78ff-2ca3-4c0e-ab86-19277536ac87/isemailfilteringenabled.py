@@ -64,7 +64,7 @@ def parse_api_error(raw_error, source=None):
         return (f"Could not connect to {src}: Request timed out",
                 "Check network connectivity and retry")
     else:
-        clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
+        clean = (raw_error[0:80] + "...") if len(raw_error) > 80 else raw_error
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
@@ -194,7 +194,7 @@ def evaluate(data):
             "totalPolicies": len(policies),
             "filteringPolicies": len(filtering_policies),
             "filteringPolicyNames": filtering_policies,
-            "findings": findings[:10]
+            "findings": list(findings[i] for i in range(min(10, len(findings))))
         }
     except Exception as e:
         return {"isEmailFilteringEnabled": False, "error": str(e)}
@@ -234,7 +234,7 @@ def transform(input):
             pass_reasons.append(f"{criteriaKey} check passed")
             names = eval_result.get("filteringPolicyNames", [])
             if names:
-                pass_reasons.append(f"Active filtering policies: {', '.join(names[:5])}")
+                pass_reasons.append(f"Active filtering policies: {', '.join(list(names[i] for i in range(min(5, len(names)))))}")
         else:
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:

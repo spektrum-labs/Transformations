@@ -67,7 +67,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(endpoints_response, debug=False):
+def transform(endpoints_response):
     try:
         if isinstance(endpoints_response, str):
             endpoints_response = json.loads(endpoints_response)

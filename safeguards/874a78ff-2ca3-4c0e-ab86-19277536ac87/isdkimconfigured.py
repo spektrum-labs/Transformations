@@ -7,10 +7,6 @@ import json
 from datetime import datetime
 
 
-# ============================================================================
-# Response Helpers (inline for RestrictedPython compatibility)
-# ============================================================================
-
 def extract_input(input_data):
     """Extract data and validation from input, handling both new and legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -19,7 +15,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -38,53 +34,19 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, metadata=None,
-                    transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create a standardized transformation response."""
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-
-    response_metadata = {
-        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-        "schemaVersion": "1.0",
-        "transformationId": "isDKIMConfigured",
-        "vendor": "Microsoft Defender for Office 365",
-        "category": "Email Security"
-    }
-    if metadata:
-        response_metadata.update(metadata)
-
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
-            },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
-            "evaluation": {
-                "passReasons": pass_reasons or [],
-                "failReasons": fail_reasons or [],
-                "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
-            },
-            "metadata": response_metadata
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isDKIMConfigured", "vendor": "Microsoft Defender for Office 365", "category": "Email Security"}
         }
     }
-
-
-# ============================================================================
-# Transformation Logic
-# ============================================================================
 
 
 def evaluate(data):
@@ -117,12 +79,6 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)

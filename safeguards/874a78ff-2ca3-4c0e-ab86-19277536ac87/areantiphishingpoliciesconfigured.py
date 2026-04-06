@@ -16,7 +16,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -35,74 +35,18 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
-            },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
-            "evaluation": {
-                "passReasons": pass_reasons or [],
-                "failReasons": fail_reasons or [],
-                "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
-            },
-            "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-                "schemaVersion": "1.0",
-                "transformationId": "areAntiPhishingPoliciesConfigured",
-                "vendor": "Microsoft",
-                "category": "Email Security"
-            }
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "areAntiPhishingPoliciesConfigured", "vendor": "Microsoft", "category": "Email Security"}
         }
     }
 
 
-def transform(input):
-    criteriaKey = "areAntiPhishingPoliciesConfigured"
-
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        # Check for PowerShell/API error
-        if 'PSError' in data:
-            raw_error = data.get('PSError', '')
-            api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
-
-            return create_response(
-                result={criteriaKey: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=["Could not retrieve anti-phishing policies from Microsoft 365"],
-                recommendations=[recommendation]
-            )
-
-
-def parse_api_error(raw_error: str, source: str = None) -> tuple:
-    """Parse raw API error into clean message with source."""
+def parse_api_error(raw_error, source=None):
     raw_lower = raw_error.lower() if raw_error else ''
     src = source or "external service"
-
     if '401' in raw_error:
         return (f"Could not connect to {src}: Authentication failed (HTTP 401)",
                 f"Verify {src} credentials and permissions are valid")
@@ -125,9 +69,33 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: Connection failed",
                 "Check network connectivity and firewall settings")
     else:
-        clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
+        clean = (raw_error[0:80] + "...") if len(raw_error) > 80 else raw_error
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
+
+
+def transform(input):
+    criteriaKey = "areAntiPhishingPoliciesConfigured"
+
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        # Check for PowerShell/API error
+        if isinstance(data, dict) and 'PSError' in data:
+            raw_error = data.get('PSError', '')
+            api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_errors=[api_error],
+                fail_reasons=["Could not retrieve anti-phishing policies from Microsoft 365"],
+                recommendations=[recommendation]
+            )
 
         pass_reasons = []
         fail_reasons = []
@@ -158,7 +126,7 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         is_configured = len(matching_policies) > 0
 
         if is_configured:
-            policy_names = [p.get('Name', 'unnamed') for p in matching_policies[:3]]
+            policy_names = [p.get('Name', 'unnamed') for p in list(matching_policies[i] for i in range(min(3, len(matching_policies))))]
             pass_reasons.append(f"Anti-phishing policies properly configured: {', '.join(policy_names)}")
         else:
             if len(policies) > 0:
