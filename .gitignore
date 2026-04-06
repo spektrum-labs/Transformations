@@ -179,3 +179,4 @@ CLAUDE.md
 
 # Local scripts with hardcoded paths
 move_api_responses.py
+tests/
