@@ -1,52 +1,60 @@
-# certificatesHaveValidityPeriod.py
-# Azure Key Vault - DP-7.1: Certificate Management - Maximum Validity Period
-# Azure Policy: 0a075868-4c26-42ef-914c-5bc007359560
+"""
+Transformation: certificatesHaveValidityPeriod
+Vendor: Microsoft
+Category: Encryption
+
+Evaluates certificatesHaveValidityPeriod for Microsoft
+"""
 
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "certificatesHaveValidityPeriod", "vendor": "Microsoft", "category": "Encryption"}
+        }
+    }
+
 
 def transform(input):
-    """
-    Checks whether all certificates have validity periods within the maximum allowed (397 days).
-    Aligns with Azure Policy: 0a075868-4c26-42ef-914c-5bc007359560
-    Default max validity: 397 days (CA/Browser Forum baseline requirement)
-    
-    API Endpoint (Data Plane):
-        GET https://{vaultName}.vault.azure.net/certificates?api-version=7.4
-        Token scope: https://vault.azure.net/.default
-    
-    Transformation Logic:
-        True if all certificates have validity <= 397 days (or no certificates exist)
-        False if any certificate exceeds maximum validity period
-    
-    Returns: {"certificatesHaveValidityPeriod": bool}
-    """
-    MAX_VALIDITY_DAYS = 397  # CA/Browser Forum baseline requirement
-    SECONDS_PER_DAY = 86400
+    criteriaKey = "certificatesHaveValidityPeriod"
 
     try:
-        def parse_input(input):
-            if isinstance(input, str):
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        data = parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
+        data, validation = extract_input(input)
+
         data = data.get("apiResponse", data)
         data = data.get("data", data)
 
@@ -55,8 +63,10 @@ def transform(input):
 
         # If no certificates exist, consider compliant
         if len(certificates) == 0:
-            return {"certificatesHaveValidityPeriod": True}
-
+            return create_response(
+                result={"certificatesHaveValidityPeriod": True},
+                validation=validation
+            )
         # Check each certificate validity period
         for cert in certificates:
             attributes = cert.get("attributes", {})
@@ -64,17 +74,31 @@ def transform(input):
             exp = attributes.get("exp")  # Expiration (Unix timestamp)
 
             if nbf is None or exp is None:
-                return {"certificatesHaveValidityPeriod": False}
-
+                return create_response(
+                    result={"certificatesHaveValidityPeriod": False},
+                    validation=validation,
+                    fail_reasons=["certificatesHaveValidityPeriod check failed"]
+                )
             # Calculate validity period in days
             validity_days = (exp - nbf) / SECONDS_PER_DAY
 
             if validity_days > MAX_VALIDITY_DAYS:
-                return {"certificatesHaveValidityPeriod": False}
+                return create_response(
+                    result={"certificatesHaveValidityPeriod": False},
+                    validation=validation,
+                    fail_reasons=["certificatesHaveValidityPeriod check failed"]
+                )
+        return create_response(
 
-        return {"certificatesHaveValidityPeriod": True}
+            result={"certificatesHaveValidityPeriod": True},
 
-    except json.JSONDecodeError:
-        return {"certificatesHaveValidityPeriod": False, "error": "Invalid JSON"}
+            validation=validation
+
+        )
     except Exception as e:
-        return {"certificatesHaveValidityPeriod": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

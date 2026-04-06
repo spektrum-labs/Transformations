@@ -1,65 +1,94 @@
+"""
+Transformation: isTicketingEnabled
+Vendor: Notion
+Category: Task Management
+
+Evaluates isTicketingEnabled for Notion (All-in-One Workspace)
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isTicketingEnabled", "vendor": "Notion", "category": "Task Management"}
+        }
+    }
 
 
 def transform(input):
-    """
-    Evaluates isTicketingEnabled for Notion (All-in-One Workspace)
+    criteriaKey = "isTicketingEnabled"
 
-    Checks: Whether databases are searchable via the Notion API
-    API Source: https://api.notion.com/v1/search
-    Pass Condition: API returns search results with database objects
-
-    Parameters:
-        input (dict): JSON data containing API response
-
-    Returns:
-        dict: {"isTicketingEnabled": boolean, "databaseCount": int}
-    """
     try:
-        def _parse_input(raw):
-            if isinstance(raw, str):
-                try:
-                    parsed = ast.literal_eval(raw)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    raw = raw.replace("'", '"')
-                    return json.loads(raw)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(raw, bytes):
-                return json.loads(raw.decode("utf-8"))
-            if isinstance(raw, dict):
-                return raw
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        data = _parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
+        data, validation = extract_input(input)
+
         data = data.get("apiResponse", data)
 
         # -- EVALUATION LOGIC --
         results = data.get("results", [])
 
         if not isinstance(results, list):
-            return {
+            return create_response(
+                result={
                 "isTicketingEnabled": False,
                 "databaseCount": 0,
                 "error": "Unexpected response format"
-            }
-
+            },
+                validation=validation,
+                fail_reasons=["isTicketingEnabled check failed"]
+            )
         databases = [r for r in results if r.get("object") == "database"]
         database_count = len(databases)
         result = database_count >= 0 and not data.get("code", None)
         # -- END EVALUATION LOGIC --
 
-        return {
+        return create_response(
+
+            result={
             "isTicketingEnabled": result,
             "databaseCount": database_count
-        }
+        },
 
+            validation=validation
+
+        )
     except Exception as e:
-        return {"isTicketingEnabled": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

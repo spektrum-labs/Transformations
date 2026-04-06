@@ -1,49 +1,60 @@
+"""
+Transformation: isAlertingConfigured
+Vendor: Wazuh Server
+Category: MDR
+
+Evaluates isAlertingConfigured for Wazuh Server MDR
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isAlertingConfigured", "vendor": "Wazuh Server", "category": "MDR"}
+        }
+    }
 
 
 def transform(input):
-    """
-    Evaluates isAlertingConfigured for Wazuh Server MDR
+    criteriaKey = "isAlertingConfigured"
 
-    Checks: Whether alerting is configured in Wazuh Manager by checking the
-            alerts configuration section for active alert settings and log levels.
-
-    API Source: GET {baseURL}/manager/configuration?section=alerts
-    Pass Condition: The alerts configuration section exists and contains alert
-                    settings (e.g., log_alert_level), confirming alerting is configured.
-
-    Parameters:
-        input (dict): JSON data containing API response from the manager configuration endpoint
-
-    Returns:
-        dict: {"isAlertingConfigured": boolean, "alertLevel": int}
-    """
     try:
-        def _parse_input(raw):
-            if isinstance(raw, str):
-                try:
-                    parsed = ast.literal_eval(raw)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    raw = raw.replace("'", '"')
-                    return json.loads(raw)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(raw, bytes):
-                return json.loads(raw.decode("utf-8"))
-            if isinstance(raw, dict):
-                return raw
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        data = _parse_input(input)
+        data, validation = extract_input(input)
 
-        # Standard response unwrapping chain
-        data = data.get("response", data)
-        data = data.get("result", data)
         data = data.get("apiResponse", data)
 
         # Wazuh manager configuration returns data under data.affected_items
@@ -76,10 +87,20 @@ def transform(input):
         # Alerting is configured if the alerts section exists with valid settings
         result = alert_config_found
 
-        return {
+        return create_response(
+
+            result={
             "isAlertingConfigured": result,
             "alertLevel": alert_level
-        }
+        },
 
+            validation=validation
+
+        )
     except Exception as e:
-        return {"isAlertingConfigured": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

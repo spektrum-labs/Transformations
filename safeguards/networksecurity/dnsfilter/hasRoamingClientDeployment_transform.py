@@ -1,60 +1,96 @@
+"""
+Transformation: hasRoamingClientDeployment
+Vendor: DNSFilter
+Category: Network Security
+
+Verifies roaming clients are deployed for endpoint protection.
+"""
+
 import json
-import ast
+from datetime import datetime
 
 
-def parse_input(input):
-    if isinstance(input, str):
-        try:
-            parsed = ast.literal_eval(input)
-            if isinstance(parsed, dict):
-                return parsed
-        except:
-            pass
-        try:
-            input = input.replace("'", '"')
-            return json.loads(input)
-        except:
-            raise ValueError("Input string is neither valid Python literal nor JSON")
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "hasRoamingClientDeployment", "vendor": "DNSFilter", "category": "Network Security"}
+        }
+    }
 
 def transform(input):
-    """
-    Verifies roaming clients are deployed for endpoint protection
+    criteriaKey = "hasRoamingClientDeployment"
 
-    Parameters:
-        input (dict): Agents data from GET /agents
-
-    Returns:
-        dict: {"hasRoamingClientDeployment": boolean, "totalAgents": int, "activeAgents": int}
-    """
     try:
-        data = parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
-        data = data.get("apiResponse", data)
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        agents = data if isinstance(data, list) else data.get("agents", data.get("roamingClients", []))
+        data, validation = extract_input(input)
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        agents = data if isinstance(data, list) else []
+        if isinstance(data, dict):
+            agents = data.get("agents", data.get("roamingClients", []))
 
         total_agents = len(agents)
         active_agents = 0
-
         for agent in agents:
-            status = agent.get("status", "").lower()
-            if status in ("protected", "active", "online"):
-                active_agents += 1
+            if isinstance(agent, dict):
+                status = str(agent.get("status", "")).lower()
+                if status in ("protected", "active", "online"):
+                    active_agents = active_agents + 1
 
         has_deployment = total_agents > 0
 
-        return {
-            "hasRoamingClientDeployment": has_deployment,
-            "totalAgents": total_agents,
-            "activeAgents": active_agents
-        }
+        if has_deployment:
+            pass_reasons.append(f"{total_agents} roaming client(s) deployed ({active_agents} active)")
+        else:
+            fail_reasons.append("No roaming clients deployed")
+            recommendations.append("Deploy DNSFilter roaming clients to protect remote endpoints")
+
+        return create_response(
+            result={criteriaKey: has_deployment, "totalAgents": total_agents, "activeAgents": active_agents},
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={"totalAgents": total_agents, "activeAgents": active_agents}
+        )
 
     except Exception as e:
-        return {"hasRoamingClientDeployment": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

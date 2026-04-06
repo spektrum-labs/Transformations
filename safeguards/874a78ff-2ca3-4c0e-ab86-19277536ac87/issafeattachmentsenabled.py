@@ -189,9 +189,9 @@ def transform(input):
         is_enabled = enablement_score == 100.00 or score_in_percentage == 100.00
 
         if is_enabled:
-            pass_reasons.append("Safe Attachments is enabled (enablement score: {}%, policy score: {}%)".format(enablement_score, score_in_percentage))
+            pass_reasons.append("Safe Attachments is enabled (enablement score: " + str(enablement_score) + "%, policy score: " + str(score_in_percentage) + "%)")
         else:
-            fail_reasons.append("Safe Attachments is not fully enabled (enablement score: {}%, policy score: {}%)".format(enablement_score, score_in_percentage))
+            fail_reasons.append("Safe Attachments is not fully enabled (enablement score: " + str(enablement_score) + "%, policy score: " + str(score_in_percentage) + "%)")
 
         result = {
             criteriaKey: is_enabled,

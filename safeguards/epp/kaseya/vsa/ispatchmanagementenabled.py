@@ -1,44 +1,60 @@
+"""
+Transformation: isPatchManagementEnabled
+Vendor: Kaseya
+Category: Endpoint Protection
+
+Evaluates isPatchManagementEnabled for Kaseya
+"""
+
 import json
-import ast
-from datetime import datetime, timedelta
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isPatchManagementEnabled", "vendor": "Kaseya", "category": "Endpoint Protection"}
+        }
+    }
 
 
 def transform(input):
-    """
-    Evaluates whether patch management is enabled and valid in Kaseya VSA.
-    Checks patch management policies for enabled status and SLA compliance.
+    criteriaKey = "isPatchManagementEnabled"
 
-    Parameters:
-        input (dict): The JSON data from Kaseya getPatchManagementPolicies or getDevices endpoints.
-
-    Returns:
-        dict: A dictionary indicating patch management status and validity.
-    """
     try:
-        def parse_input(input):
-            if isinstance(input, str):
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        data = parse_input(input)
+        data, validation = extract_input(input)
 
-        # Navigate through response wrappers
-        data = data.get("response", data)
-        data = data.get("result", data)
         data = data.get("apiResponse", data)
 
         # Initialize result
@@ -125,15 +141,14 @@ def transform(input):
                             # Try common date formats
                             for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%SZ"]:
                                 try:
-                                    patch_date = datetime.strptime(last_patch_date[:19], fmt)
+                                    patch_date = datetime.strptime(last_patch_date[0:19], fmt)
                                     if patch_date >= sla_threshold:
-                                        patched_devices += 1
+                                        patched_devices = patched_devices + 1
                                     break
                                 except ValueError:
                                     continue
-                    except:
+                    except Exception:
                         pass
-
             # Calculate coverage
             result["totalDevices"] = total_devices
             result["patchedDevices"] = min(patched_devices, total_devices)  # Cap at total
@@ -148,15 +163,10 @@ def transform(input):
 
         return result
 
-    except json.JSONDecodeError:
-        return {
-            "isPatchManagementEnabled": False,
-            "isPatchManagementValid": False,
-            "error": "Invalid JSON"
-        }
     except Exception as e:
-        return {
-            "isPatchManagementEnabled": False,
-            "isPatchManagementValid": False,
-            "error": str(e)
-        }
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

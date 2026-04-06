@@ -1,49 +1,60 @@
+"""
+Transformation: isAlertingConfigured
+Vendor: Splunk Observability
+Category: SIEM
+
+Evaluates isAlertingConfigured for Splunk Observability Cloud
+"""
+
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isAlertingConfigured", "vendor": "Splunk Observability", "category": "SIEM"}
+        }
+    }
 
 
 def transform(input):
-    """
-    Evaluates isAlertingConfigured for Splunk Observability Cloud
+    criteriaKey = "isAlertingConfigured"
 
-    Checks: Whether detectors (alert rules) are configured in Splunk
-            Observability by checking the detector endpoint for active detectors.
-
-    API Source: GET {baseURL}/v2/detector?limit=50
-    Pass Condition: At least one detector exists, confirming that alerting
-                    is configured for infrastructure and application monitoring.
-
-    Parameters:
-        input (dict): JSON data containing API response from the detector endpoint
-
-    Returns:
-        dict: {"isAlertingConfigured": boolean, "detectorCount": int}
-    """
     try:
-        def _parse_input(raw):
-            if isinstance(raw, str):
-                try:
-                    parsed = ast.literal_eval(raw)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    raw = raw.replace("'", '"')
-                    return json.loads(raw)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(raw, bytes):
-                return json.loads(raw.decode("utf-8"))
-            if isinstance(raw, dict):
-                return raw
-            raise ValueError("Input must be JSON string, bytes, or dict")
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-        data = _parse_input(input)
+        data, validation = extract_input(input)
 
-        # Standard response unwrapping chain
-        data = data.get("response", data)
-        data = data.get("result", data)
         data = data.get("apiResponse", data)
 
         # Splunk Observability returns detectors as results array
@@ -52,19 +63,32 @@ def transform(input):
             # Check for count field
             count = data.get("count", data.get("total", 0))
             if isinstance(count, (int, float)) and count > 0:
-                return {
+                return create_response(
+                    result={
                     "isAlertingConfigured": True,
                     "detectorCount": int(count)
-                }
+                },
+                    validation=validation
+                )
             detectors = []
 
         detector_count = len(detectors)
         result = detector_count > 0
 
-        return {
+        return create_response(
+
+            result={
             "isAlertingConfigured": result,
             "detectorCount": detector_count
-        }
+        },
 
+            validation=validation
+
+        )
     except Exception as e:
-        return {"isAlertingConfigured": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )

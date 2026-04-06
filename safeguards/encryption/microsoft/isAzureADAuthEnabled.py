@@ -1,46 +1,60 @@
-# isAzureADAuthEnabled.py
-# Azure Key Vault - IM-1.1: Centralized Identity - Azure AD Authentication
+"""
+Transformation: isAzureADAuthEnabled
+Vendor: Microsoft
+Category: Encryption
+
+Evaluates isAzureADAuthEnabled for Microsoft
+"""
 
 import json
-import ast
+from datetime import datetime
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isAzureADAuthEnabled", "vendor": "Microsoft", "category": "Encryption"}
+        }
+    }
+
 
 def transform(input):
-    """
-    Checks whether Azure AD authentication is enabled for Key Vault.
-    Note: This is platform-enforced - Key Vault always requires Azure AD.
-    
-    API Endpoint:
-        GET https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}?api-version=2023-07-01
-    
-    Transformation Logic:
-        True if properties.tenantId exists and is not empty
-        False otherwise (should never occur for valid vaults)
-    
-    Returns: {"isAzureADAuthEnabled": bool}
-    """
-    try:
-        def parse_input(input):
-            if isinstance(input, str):
-                try:
-                    parsed = ast.literal_eval(input)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except:
-                    pass
-                try:
-                    input = input.replace("'", '"')
-                    return json.loads(input)
-                except:
-                    raise ValueError("Input string is neither valid Python literal nor JSON")
-            if isinstance(input, bytes):
-                return json.loads(input.decode("utf-8"))
-            if isinstance(input, dict):
-                return input
-            raise ValueError("Input must be JSON string, bytes, or dict")
+    criteriaKey = "isAzureADAuthEnabled"
 
-        data = parse_input(input)
-        data = data.get("response", data)
-        data = data.get("result", data)
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
         data = data.get("apiResponse", data)
         data = data.get("data", data)
 
@@ -50,9 +64,17 @@ def transform(input):
         # Azure AD is always required - vault won't exist without tenantId
         is_enabled = bool(tenant_id)
 
-        return {"isAzureADAuthEnabled": is_enabled}
+        return create_response(
 
-    except json.JSONDecodeError:
-        return {"isAzureADAuthEnabled": False, "error": "Invalid JSON"}
+            result={"isAzureADAuthEnabled": is_enabled},
+
+            validation=validation
+
+        )
     except Exception as e:
-        return {"isAzureADAuthEnabled": False, "error": str(e)}
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=[f"Transformation error: {str(e)}"]
+        )
