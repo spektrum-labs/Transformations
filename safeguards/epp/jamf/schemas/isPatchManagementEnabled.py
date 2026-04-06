@@ -1,4 +1,4 @@
-"""Schema for isPatchManagementEnabled transformation input."""
+"""Schema for ispatchmanagementenabled transformation input."""
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class IspatchmanagementenabledInput(BaseModel):
     """
-    Expected input schema for the isPatchManagementEnabled transformation.
+    Expected input schema for the ispatchmanagementenabled transformation.
     Vendor: Jamf
     Category: epp
 

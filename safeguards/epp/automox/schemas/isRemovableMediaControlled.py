@@ -1,4 +1,4 @@
-"""Schema for isRemovableMediaControlled transformation input."""
+"""Schema for isremovablemediacontrolled transformation input."""
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class IsremovablemediacontrolledInput(BaseModel):
     """
-    Expected input schema for the isRemovableMediaControlled transformation.
+    Expected input schema for the isremovablemediacontrolled transformation.
     Vendor: Automox
     Category: epp
 

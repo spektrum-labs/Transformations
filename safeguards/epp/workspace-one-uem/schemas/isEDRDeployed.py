@@ -1,4 +1,4 @@
-"""Schema for isEDRDeployed transformation input."""
+"""Schema for isedrdeployed transformation input."""
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class IsedrdeployedInput(BaseModel):
     """
-    Expected input schema for the isEDRDeployed transformation.
+    Expected input schema for the isedrdeployed transformation.
     Vendor: Workspace One Uem
     Category: epp
 

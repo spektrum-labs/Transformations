@@ -1,4 +1,4 @@
-"""Schema for isEPPDeployed transformation input."""
+"""Schema for iseppdeployed transformation input."""
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class IseppdeployedInput(BaseModel):
     """
-    Expected input schema for the isEPPDeployed transformation.
+    Expected input schema for the iseppdeployed transformation.
     Vendor: Bitdefender
     Category: epp
 

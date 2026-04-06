@@ -1,4 +1,4 @@
-"""Schema for isBehavioralMonitoringValid transformation input."""
+"""Schema for isbehavioralmonitoringvalid transformation input."""
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class IsbehavioralmonitoringvalidInput(BaseModel):
     """
-    Expected input schema for the isBehavioralMonitoringValid transformation.
+    Expected input schema for the isbehavioralmonitoringvalid transformation.
     Vendor: Workspace One Uem
     Category: epp
 
