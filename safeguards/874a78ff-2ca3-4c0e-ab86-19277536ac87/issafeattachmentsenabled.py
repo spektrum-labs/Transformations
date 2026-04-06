@@ -190,8 +190,10 @@ def transform(input):
                 score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
                 is_enabled = score_in_percentage == 100.00
 
-                count = matched_object.get("count", 0)
-                total = matched_object.get("total", 0)
+                raw_count = matched_object.get("count", 0)
+                raw_total = matched_object.get("total", 0)
+                count = int(raw_count) if isinstance(raw_count, str) else raw_count
+                total = int(raw_total) if isinstance(raw_total, str) else raw_total
 
                 if is_enabled:
                     pass_reasons.append(f"Safe Attachments is fully enabled (score: 100%)")
