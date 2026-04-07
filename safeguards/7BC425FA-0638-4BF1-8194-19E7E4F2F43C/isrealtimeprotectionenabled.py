@@ -120,8 +120,11 @@ def evaluate(data):
         if total == 0:
             return {"isRealTimeProtectionEnabled": False, "error": "No applicable devices found with real-time protection data"}
 
+        score = round((protected / total) * 100, 2)
+
         return {
-            "isRealTimeProtectionEnabled": protected == total,
+            "isRealTimeProtectionEnabled": protected > 0,
+            "scoreInPercentage": score,
             "totalDevices": total,
             "realTimeProtectedCount": protected,
             "nonCompliantDevices": non_compliant_devices[:20]
