@@ -130,8 +130,11 @@ def evaluate(data):
         if total == 0:
             return {"isTamperProtectionEnabled": False, "error": "No applicable devices found with tamper protection data"}
 
+        percentage = round((protected / total) * 100, 2)
+
         return {
-            "isTamperProtectionEnabled": protected == total,
+            "isTamperProtectionEnabled": protected > 0,
+            "scoreInPercentage": percentage,
             "totalDevices": total,
             "tamperProtectedCount": protected,
             "nonCompliantDevices": non_compliant_devices[:20]
