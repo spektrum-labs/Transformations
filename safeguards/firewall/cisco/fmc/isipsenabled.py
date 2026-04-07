@@ -4,17 +4,18 @@ Vendor: Cisco FMC  |  Category: Firewall
 Evaluates: Whether Intrusion Prevention System (IPS) is active on the firewall.
 
 Data source: FMC REST API
-  - GET /api/fmc_config/v1/domain/{domainUUID}/policy/intrusionpolicies
-  - GET /api/fmc_config/v1/domain/{domainUUID}/policy/accesspolicies (items[])
-  - GET .../accesspolicies/{id}/accessrules?expanded=true (accessRules[])
+  - GET /api/fmc_config/v1/domain/{domainUUID}/policy/intrusionpolicies (list)
+  - GET .../intrusionpolicies/{id} (detail, iterated per policy)
+
+The list endpoint returns summary objects (id, name, type) without
+inspectionMode. The detail endpoint returns the full policy including
+inspectionMode (DETECTION or PREVENTION).
 
 IPS is enabled when:
-  1. At least one intrusion policy exists with inspectionMode set to PREVENTION
-  2. At least one enabled access rule has a prevention-mode intrusion policy assigned
+  1. At least one intrusion policy exists in FMC
+  2. At least one policy detail has inspectionMode == PREVENTION
 
-The key distinction from IDS: IDS only detects and alerts, while IPS actively
-blocks malicious traffic. FMC intrusion policies use inspectionMode to control
-this — DETECTION (IDS-only) vs PREVENTION (IPS, actively drops threats).
+Workflow merges detail responses into the "policyDetails" key.
 """
 import json
 from datetime import datetime
@@ -55,166 +56,91 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def to_bool(val):
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.lower() in ("true", "1", "yes")
-    return bool(val)
+def extract_policy_details(data):
+    """Extract intrusion policy details from the merged policyDetails key.
 
-
-def extract_intrusion_policies(data):
-    """Extract intrusion policies from the getIntrusionPolicies response."""
+    The workflow iterates over intrusion policies and merges each detail
+    response into data["policyDetails"]. Each entry is the full policy
+    object from GET /intrusionpolicies/{id}.
+    """
     if not isinstance(data, dict):
         return []
-    items = data.get("items", [])
-    if isinstance(items, list) and items:
-        return [p for p in items if isinstance(p, dict)]
-    if "id" in data and data.get("type", "") == "IntrusionPolicy":
-        return [data]
+    raw = data.get("policyDetails", [])
+    if isinstance(raw, list):
+        details = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                # Could be a direct policy object or wrapped in items
+                if "items" in entry and isinstance(entry["items"], list):
+                    details.extend(entry["items"])
+                elif "id" in entry:
+                    details.append(entry)
+            elif isinstance(entry, list):
+                details.extend([e for e in entry if isinstance(e, dict)])
+        return details
+    if isinstance(raw, dict) and "id" in raw:
+        return [raw]
     return []
 
 
-def extract_access_rules(data):
-    """Extract merged access rules from workflow output."""
+def extract_intrusion_policies_summary(data):
+    """Extract summary intrusion policies from the list endpoint response."""
     if not isinstance(data, dict):
         return []
-    raw = data.get("accessRules", [])
-    if isinstance(raw, list):
-        rules = []
-        for entry in raw:
-            if isinstance(entry, dict) and "items" in entry:
-                rules.extend(entry["items"] if isinstance(entry["items"], list) else [])
-            elif isinstance(entry, dict):
-                rules.append(entry)
-            elif isinstance(entry, list):
-                rules.extend(entry)
-        return rules
+    items = data.get("items", [])
+    if isinstance(items, list):
+        return [p for p in items if isinstance(p, dict)]
     return []
 
 
 def evaluate(data):
-    """Evaluate whether IPS (prevention mode) is active via intrusion policies on access rules."""
+    """Evaluate whether IPS (prevention mode) is active."""
     try:
-        intrusion_policies = extract_intrusion_policies(data)
-        access_rules = extract_access_rules(data)
+        summary_policies = extract_intrusion_policies_summary(data)
+        detail_policies = extract_policy_details(data)
 
-        if not intrusion_policies:
+        if not summary_policies and not detail_policies:
             return {"isIPSEnabled": False, "error": "No intrusion policies found in FMC"}
 
-        # Build lookup of intrusion policies by ID, categorize by mode
-        policy_by_id = {}
+        # Use details if available (they have inspectionMode), fall back to summary
+        policies_to_check = detail_policies if detail_policies else summary_policies
+
         prevention_policies = []
         detection_only_policies = []
+        unknown_mode_policies = []
 
-        for policy in intrusion_policies:
-            pid = policy.get("id", "")
-            pname = policy.get("name", "Unknown")
-            mode = policy.get("inspectionMode", "").upper()
-            policy_by_id[pid] = policy
-
-            if mode == "PREVENTION":
-                prevention_policies.append(pname)
-            else:
-                detection_only_policies.append(pname)
-
-        if not prevention_policies:
-            findings = []
-            findings.append(f"{len(intrusion_policies)} intrusion policy/policies found but none in PREVENTION mode")
-            if detection_only_policies:
-                findings.append(f"Detection-only policies: {', '.join(detection_only_policies[:5])}")
-            return {
-                "isIPSEnabled": False,
-                "error": "No intrusion policies configured in PREVENTION mode",
-                "intrusionPoliciesFound": len(intrusion_policies),
-                "preventionPolicies": 0,
-                "detectionOnlyPolicies": len(detection_only_policies),
-                "detectionOnlyPolicyNames": detection_only_policies[:10],
-                "findings": findings
-            }
-
-        if not access_rules:
-            return {
-                "isIPSEnabled": False,
-                "error": "No access rules found to evaluate intrusion policy assignments",
-                "intrusionPoliciesFound": len(intrusion_policies),
-                "preventionPolicies": len(prevention_policies),
-                "preventionPolicyNames": prevention_policies[:10]
-            }
-
-        # Check enabled access rules for ipsPolicy in prevention mode
-        enabled_rules = []
-        for rule in access_rules:
-            if not isinstance(rule, dict):
-                continue
-            enabled = rule.get("enabled")
-            if enabled is None:
-                enabled = True
-            if to_bool(enabled):
-                enabled_rules.append(rule)
-
-        if not enabled_rules:
-            return {
-                "isIPSEnabled": False,
-                "error": "No enabled access rules found",
-                "intrusionPoliciesFound": len(intrusion_policies),
-                "preventionPolicies": len(prevention_policies)
-            }
-
-        rules_with_ips = []
-        rules_with_ids_only = []
-        rules_without_intrusion = []
-
-        for rule in enabled_rules:
-            rule_name = rule.get("name", "Unknown")
-            ips_policy = rule.get("ipsPolicy")
-
-            if not isinstance(ips_policy, dict) or not ips_policy.get("id"):
-                rules_without_intrusion.append(rule_name)
-                continue
-
-            assigned_id = ips_policy.get("id", "")
-            assigned_name = ips_policy.get("name", "Unknown")
-            matched_policy = policy_by_id.get(assigned_id, {})
-            mode = matched_policy.get("inspectionMode", "").upper()
+        for policy in policies_to_check:
+            name = policy.get("name", "Unknown")
+            mode = (policy.get("inspectionMode", "") or "").upper()
 
             if mode == "PREVENTION":
-                rules_with_ips.append({
-                    "ruleName": rule_name,
-                    "intrusionPolicy": assigned_name,
-                    "mode": "PREVENTION"
-                })
+                prevention_policies.append(name)
+            elif mode == "DETECTION":
+                detection_only_policies.append(name)
             else:
-                rules_with_ids_only.append({
-                    "ruleName": rule_name,
-                    "intrusionPolicy": assigned_name,
-                    "mode": mode or "DETECTION"
-                })
+                unknown_mode_policies.append(name)
 
-        ips_enabled = len(rules_with_ips) > 0
+        ips_enabled = len(prevention_policies) > 0
 
         findings = []
-        findings.append(f"{len(prevention_policies)} intrusion policy/policies in PREVENTION mode: {', '.join(prevention_policies[:5])}")
+        total = len(summary_policies) or len(policies_to_check)
+        findings.append(f"{total} intrusion policy/policies configured in FMC")
+        findings.append(f"{len(detail_policies)} policy details retrieved with inspectionMode")
+        if prevention_policies:
+            findings.append(f"Prevention mode (IPS active): {', '.join(prevention_policies[:5])}")
         if detection_only_policies:
-            findings.append(f"{len(detection_only_policies)} policy/policies in DETECTION-only mode: {', '.join(detection_only_policies[:5])}")
-        findings.append(f"{len(rules_with_ips)} of {len(enabled_rules)} enabled rules have IPS (prevention) assigned")
-        if rules_with_ids_only:
-            ids_names = [r["ruleName"] for r in rules_with_ids_only]
-            findings.append(f"Rules with detection-only intrusion policies: {', '.join(ids_names[:10])}")
-        if rules_without_intrusion:
-            findings.append(f"Rules without any intrusion inspection: {', '.join(rules_without_intrusion[:10])}")
+            findings.append(f"Detection-only mode (IDS only): {', '.join(detection_only_policies[:5])}")
+        if unknown_mode_policies:
+            findings.append(f"Unknown mode (detail not retrieved): {', '.join(unknown_mode_policies[:5])}")
 
         return {
             "isIPSEnabled": ips_enabled,
-            "intrusionPoliciesFound": len(intrusion_policies),
+            "intrusionPoliciesFound": total,
+            "policyDetailsRetrieved": len(detail_policies),
             "preventionPolicies": len(prevention_policies),
             "preventionPolicyNames": prevention_policies[:10],
             "detectionOnlyPolicies": len(detection_only_policies),
-            "totalEnabledRules": len(enabled_rules),
-            "rulesWithIPS": len(rules_with_ips),
-            "rulesWithIDSOnly": len(rules_with_ids_only),
-            "rulesWithoutIntrusion": len(rules_without_intrusion),
-            "rulesWithoutIntrusionNames": rules_without_intrusion[:20],
+            "detectionOnlyPolicyNames": detection_only_policies[:10],
             "findings": findings
         }
     except Exception as e:
@@ -241,21 +167,22 @@ def transform(input):
 
         if result_value:
             pass_reasons.append(f"{criteriaKey} check passed")
-            policies = eval_result.get("preventionPolicyNames", [])
-            if policies:
-                pass_reasons.append(f"Prevention-mode policies: {', '.join(policies[:5])}")
-            rules_with = eval_result.get("rulesWithIPS", 0)
-            total = eval_result.get("totalEnabledRules", 0)
-            pass_reasons.append(f"{rules_with}/{total} enabled rules have IPS (prevention) assigned")
+            names = eval_result.get("preventionPolicyNames", [])
+            if names:
+                pass_reasons.append(f"Prevention-mode policies: {', '.join(names[:5])}")
+            prev = eval_result.get("preventionPolicies", 0)
+            det = eval_result.get("detectionOnlyPolicies", 0)
+            pass_reasons.append(f"{prev} prevention-mode, {det} detection-only policy/policies")
         else:
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            ids_only = eval_result.get("rulesWithIDSOnly", 0)
-            if ids_only:
-                fail_reasons.append(f"{ids_only} rule(s) have intrusion policies in detection-only mode")
-            recommendations.append("Set intrusion policy inspectionMode to PREVENTION to actively block threats, not just detect them")
-            recommendations.append("Assign prevention-mode intrusion policies to access control rules via the ipsPolicy setting")
+            det = eval_result.get("detectionOnlyPolicies", 0)
+            if det > 0:
+                det_names = eval_result.get("detectionOnlyPolicyNames", [])
+                fail_reasons.append(f"{det} intrusion policy/policies found but all in detection-only mode: {', '.join(det_names[:5])}")
+            recommendations.append("Set intrusion policy inspectionMode to PREVENTION in FMC under Policies > Intrusion > Edit Policy")
+            recommendations.append("PREVENTION mode actively blocks threats in addition to detecting them")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
@@ -263,7 +190,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={criteriaKey: result_value, "preventionPolicies": extra_fields.get("preventionPolicies", 0), "rulesWithIPS": extra_fields.get("rulesWithIPS", 0)},
+            input_summary={criteriaKey: result_value, "preventionPolicies": extra_fields.get("preventionPolicies", 0), "intrusionPoliciesFound": extra_fields.get("intrusionPoliciesFound", 0)},
             additional_findings=eval_result.get("findings", [])
         )
     except Exception as e:
