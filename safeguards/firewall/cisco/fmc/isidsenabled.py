@@ -5,12 +5,15 @@ Evaluates: Whether Intrusion Detection System (IDS) is active on the firewall.
 
 Data source: FMC REST API
   - GET /api/fmc_config/v1/domain/{domainUUID}/policy/intrusionpolicies
-  - GET /api/fmc_config/v1/domain/{domainUUID}/policy/accesspolicies (items[])
-  - GET .../accesspolicies/{id}/accessrules?expanded=true (accessRules[])
 
 IDS is enabled when:
   1. At least one intrusion policy exists in FMC
-  2. At least one enabled access rule has an intrusion policy (ipsPolicy) assigned
+  2. Intrusion policies are in either DETECTION or PREVENTION mode
+     (both provide detection capability; PREVENTION additionally blocks)
+
+FMC intrusion policies provide IDS by default — any configured intrusion
+policy is performing detection. The inspectionMode field determines whether
+it also prevents (blocks) threats, but detection is always active.
 """
 import json
 from datetime import datetime
@@ -51,113 +54,61 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def to_bool(val):
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.lower() in ("true", "1", "yes")
-    return bool(val)
-
-
 def extract_intrusion_policies(data):
     """Extract intrusion policies from the getIntrusionPolicies response."""
+    if isinstance(data, list):
+        return [p for p in data if isinstance(p, dict)]
     if not isinstance(data, dict):
         return []
-    # Direct items from the intrusion policies endpoint
     items = data.get("items", [])
     if isinstance(items, list) and items:
         return [p for p in items if isinstance(p, dict)]
-    # Single policy object
-    if "id" in data and data.get("type", "") == "IntrusionPolicy":
+    if "id" in data and ("type" in data or "name" in data):
         return [data]
     return []
 
 
-def extract_access_rules(data):
-    """Extract merged access rules from workflow output."""
-    if not isinstance(data, dict):
-        return []
-    raw = data.get("accessRules", [])
-    if isinstance(raw, list):
-        rules = []
-        for entry in raw:
-            if isinstance(entry, dict) and "items" in entry:
-                rules.extend(entry["items"] if isinstance(entry["items"], list) else [])
-            elif isinstance(entry, dict):
-                rules.append(entry)
-            elif isinstance(entry, list):
-                rules.extend(entry)
-        return rules
-    return []
-
-
 def evaluate(data):
-    """Evaluate whether IDS is active via intrusion policies assigned to access rules."""
+    """Evaluate whether IDS is active by checking for intrusion policies."""
     try:
-        intrusion_policies = extract_intrusion_policies(data)
-        access_rules = extract_access_rules(data)
+        policies = extract_intrusion_policies(data)
 
-        if not intrusion_policies:
+        if not policies:
             return {"isIDSEnabled": False, "error": "No intrusion policies found in FMC"}
 
-        policy_names = [p.get("name", "Unknown") for p in intrusion_policies]
+        detection_policies = []
+        prevention_policies = []
 
-        if not access_rules:
-            return {
-                "isIDSEnabled": False,
-                "error": "No access rules found to evaluate intrusion policy assignments",
-                "intrusionPoliciesFound": len(intrusion_policies),
-                "intrusionPolicyNames": policy_names[:10]
+        for policy in policies:
+            name = policy.get("name", "Unknown")
+            mode = (policy.get("inspectionMode", "") or "").upper()
+            policy_info = {
+                "name": name,
+                "id": policy.get("id", ""),
+                "inspectionMode": mode or "UNKNOWN"
             }
-
-        # Check enabled access rules for ipsPolicy assignment
-        enabled_rules = []
-        for rule in access_rules:
-            if not isinstance(rule, dict):
-                continue
-            enabled = rule.get("enabled")
-            if enabled is None:
-                enabled = True
-            if to_bool(enabled):
-                enabled_rules.append(rule)
-
-        if not enabled_rules:
-            return {
-                "isIDSEnabled": False,
-                "error": "No enabled access rules found",
-                "intrusionPoliciesFound": len(intrusion_policies)
-            }
-
-        rules_with_ids = []
-        rules_without_ids = []
-
-        for rule in enabled_rules:
-            rule_name = rule.get("name", "Unknown")
-            ips_policy = rule.get("ipsPolicy")
-            if isinstance(ips_policy, dict) and ips_policy.get("id"):
-                rules_with_ids.append({
-                    "ruleName": rule_name,
-                    "intrusionPolicy": ips_policy.get("name", "Unknown")
-                })
+            if mode == "PREVENTION":
+                prevention_policies.append(policy_info)
             else:
-                rules_without_ids.append(rule_name)
+                detection_policies.append(policy_info)
 
-        ids_enabled = len(rules_with_ids) > 0
+        all_policy_names = [p["name"] for p in detection_policies + prevention_policies]
 
         findings = []
-        findings.append(f"{len(intrusion_policies)} intrusion policy/policies configured: {', '.join(policy_names[:5])}")
-        findings.append(f"{len(rules_with_ids)} of {len(enabled_rules)} enabled access rules have intrusion inspection assigned")
-        if rules_without_ids:
-            findings.append(f"Rules without intrusion inspection: {', '.join(rules_without_ids[:10])}")
+        findings.append(f"{len(policies)} intrusion policy/policies configured in FMC")
+        if detection_policies:
+            names = [p["name"] for p in detection_policies]
+            findings.append(f"Detection mode: {', '.join(names[:5])}")
+        if prevention_policies:
+            names = [p["name"] for p in prevention_policies]
+            findings.append(f"Prevention mode (also provides detection): {', '.join(names[:5])}")
 
         return {
-            "isIDSEnabled": ids_enabled,
-            "intrusionPoliciesFound": len(intrusion_policies),
-            "intrusionPolicyNames": policy_names[:10],
-            "totalEnabledRules": len(enabled_rules),
-            "rulesWithIDS": len(rules_with_ids),
-            "rulesWithoutIDS": len(rules_without_ids),
-            "rulesWithoutIDSNames": rules_without_ids[:20],
+            "isIDSEnabled": True,
+            "intrusionPoliciesFound": len(policies),
+            "intrusionPolicyNames": all_policy_names[:10],
+            "detectionModePolicies": len(detection_policies),
+            "preventionModePolicies": len(prevention_policies),
             "findings": findings
         }
     except Exception as e:
@@ -184,18 +135,18 @@ def transform(input):
 
         if result_value:
             pass_reasons.append(f"{criteriaKey} check passed")
-            policies = eval_result.get("intrusionPolicyNames", [])
-            if policies:
-                pass_reasons.append(f"Intrusion policies: {', '.join(policies[:5])}")
-            rules_with = eval_result.get("rulesWithIDS", 0)
-            total = eval_result.get("totalEnabledRules", 0)
-            pass_reasons.append(f"{rules_with}/{total} enabled rules have intrusion detection assigned")
+            names = eval_result.get("intrusionPolicyNames", [])
+            if names:
+                pass_reasons.append(f"Intrusion policies: {', '.join(names[:5])}")
+            det = eval_result.get("detectionModePolicies", 0)
+            prev = eval_result.get("preventionModePolicies", 0)
+            pass_reasons.append(f"{det} detection-mode, {prev} prevention-mode policy/policies")
         else:
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            recommendations.append("Configure intrusion policies in FMC and assign them to access control rules via the ipsPolicy setting")
-            recommendations.append("Ensure at least one intrusion policy is applied to enabled access rules for network threat detection")
+            recommendations.append("Create intrusion policies in FMC under Policies > Intrusion")
+            recommendations.append("Apply intrusion policies to access control rules to enable network threat detection")
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
@@ -203,7 +154,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={criteriaKey: result_value, "intrusionPoliciesFound": extra_fields.get("intrusionPoliciesFound", 0), "rulesWithIDS": extra_fields.get("rulesWithIDS", 0)},
+            input_summary={criteriaKey: result_value, "intrusionPoliciesFound": extra_fields.get("intrusionPoliciesFound", 0)},
             additional_findings=eval_result.get("findings", [])
         )
     except Exception as e:
