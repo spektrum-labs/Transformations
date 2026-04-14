@@ -26,6 +26,15 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+def str_to_bool(val):
+    """Handle AppOmni string booleans ('True', 'False', 'None')."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return False
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
@@ -52,47 +61,50 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        # Handle list inputs — use first dict element
+        # AppOmni /monitoredservice/ returns a paginated dict or bare list
+        services = []
         if isinstance(data, list):
-            dict_items = [item for item in data if isinstance(item, dict)]
-            if dict_items:
-                data = dict_items[0]
+            services = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            candidate = data.get("results", data.get("data", data.get("items", None)))
+            if isinstance(candidate, list):
+                services = [item for item in candidate if isinstance(item, dict)]
             else:
-                return create_response(
-                    result={criteriaKey: False, "activeServices": 0, "totalServices": 0},
-                    validation=validation,
-                    fail_reasons=["Input is a list with no dict elements"]
-                )
+                services = [data]
+
+        total = len(services)
+
+        # A service is actively monitored when:
+        # 1. integration_connected is true
+        # 2. detection_ingest_enabled is true (data collection active)
+        # 3. monitoring_reqs_satisfied is true (all prereqs met)
+        # 4. not archived
+        active = []
+        for s in services:
+            if not isinstance(s, dict):
+                continue
+            connected = str_to_bool(s.get("integration_connected", False))
+            ingest = str_to_bool(s.get("detection_ingest_enabled", False))
+            reqs_met = str_to_bool(s.get("monitoring_reqs_satisfied", False))
+            archived = str_to_bool(s.get("is_archived", False))
+
+            if connected and ingest and reqs_met and not archived:
+                active.append(s)
+
+        # Collect unique service types from active services
+        seen_types = {}
+        service_types = []
+        for s in active:
+            st = s.get("service_type", "")
+            if st and st not in seen_types:
+                seen_types[st] = True
+                service_types.append(st)
+
+        result = len(active) >= 1
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-
-        # === EVALUATION LOGIC ===
-        services = data.get("results", data.get("data", data.get("items", [])))
-
-        if not isinstance(services, list):
-            return create_response(
-                result={criteriaKey: False, "activeServices": 0, "totalServices": 0},
-                validation=validation,
-                fail_reasons=["Unexpected services response format"],
-                recommendations=["Verify the API response contains a list of services"],
-                input_summary={"dataType": "non-list"}
-            )
-
-        total = len(services)
-
-        active = [
-            s for s in services
-            if s.get("enabled", False) and (
-                s.get("detection_ingest_enabled", False) or
-                s.get("monitoring_enabled", False)
-            )
-        ]
-
-        service_types = [s.get("service_type", "unknown") for s in active if s.get("service_type")]
-        result = len(active) >= 1
-        # === END EVALUATION LOGIC ===
 
         if result:
             type_str = ""
@@ -104,7 +116,7 @@ def transform(input):
             if service_types:
                 pass_reasons.append("Monitored types: " + type_str)
         else:
-            fail_reasons.append("No services are enabled with active monitoring (total services: " + str(total) + ")")
+            fail_reasons.append("No services are actively monitored (total services: " + str(total) + ")")
             recommendations.append("Enable monitoring on at least one connected SaaS service in AppOmni")
 
         return create_response(

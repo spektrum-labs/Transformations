@@ -26,6 +26,15 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+def str_to_bool(val):
+    """Handle AppOmni string booleans ('True', 'False', 'None')."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return False
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
@@ -52,43 +61,29 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        # Handle list inputs — use first dict element
+        # AppOmni /policy/ returns a paginated dict or bare list
+        policies = []
         if isinstance(data, list):
-            dict_items = [item for item in data if isinstance(item, dict)]
-            if dict_items:
-                data = dict_items[0]
+            policies = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            candidate = data.get("results", data.get("data", data.get("items", None)))
+            if isinstance(candidate, list):
+                policies = [item for item in candidate if isinstance(item, dict)]
             else:
-                return create_response(
-                    result={criteriaKey: False, "enabledPolicies": 0, "totalPolicies": 0},
-                    validation=validation,
-                    fail_reasons=["Input is a list with no dict elements"]
-                )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # === EVALUATION LOGIC ===
-        policies = data.get("results", data.get("data", data.get("items", [])))
-
-        if not isinstance(policies, list):
-            return create_response(
-                result={criteriaKey: False, "enabledPolicies": 0, "totalPolicies": 0},
-                validation=validation,
-                fail_reasons=["Unexpected policies response format"],
-                recommendations=["Verify the API response contains a list of policies"],
-                input_summary={"dataType": "non-list"}
-            )
+                policies = [data]
 
         total = len(policies)
 
-        enabled = [
-            p for p in policies
-            if p.get("enabled", False) is True or
-               str(p.get("enabled", "")).lower() in ("true", "1", "yes")
-        ]
+        # A policy is considered enabled if its enabled field is true
+        # AppOmni returns booleans as strings
+        enabled = []
+        for p in policies:
+            if not isinstance(p, dict):
+                continue
+            if str_to_bool(p.get("enabled", False)):
+                enabled.append(p)
 
-        # Deduplicate policy types without set comprehension (RestrictedPython safe)
+        # Deduplicate policy types
         seen_types = {}
         policy_types = []
         for p in enabled:
@@ -98,7 +93,10 @@ def transform(input):
                 policy_types.append(pt)
 
         result = len(enabled) >= 1
-        # === END EVALUATION LOGIC ===
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         if result:
             type_str = ""

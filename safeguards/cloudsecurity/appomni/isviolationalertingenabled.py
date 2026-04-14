@@ -26,6 +26,15 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+def str_to_bool(val):
+    """Handle AppOmni string booleans ('True', 'False', 'None')."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return False
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
@@ -52,43 +61,33 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        # Handle list inputs — use first dict element
+        # AppOmni /alert-rules/ returns a paginated dict or bare list
+        rules = []
         if isinstance(data, list):
-            dict_items = [item for item in data if isinstance(item, dict)]
-            if dict_items:
-                data = dict_items[0]
+            rules = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            candidate = data.get("results", data.get("data", data.get("items", None)))
+            if isinstance(candidate, list):
+                rules = [item for item in candidate if isinstance(item, dict)]
             else:
-                return create_response(
-                    result={criteriaKey: False, "enabledRules": 0, "channels": []},
-                    validation=validation,
-                    fail_reasons=["Input is a list with no dict elements"]
-                )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # === EVALUATION LOGIC ===
-        rules = data.get("results", data.get("data", data.get("items", [])))
-
-        if not isinstance(rules, list):
-            return create_response(
-                result={criteriaKey: False, "enabledRules": 0, "channels": []},
-                validation=validation,
-                fail_reasons=["Unexpected alert rules response format"],
-                recommendations=["Verify the API response contains a list of alert rules"],
-                input_summary={"dataType": "non-list"}
-            )
+                rules = [data]
 
         total = len(rules)
-        enabled = [r for r in rules if r.get("enabled", False)]
 
-        # Deduplicate channels without set comprehension (RestrictedPython safe)
+        # A rule is enabled if its enabled field is true (string or bool)
+        enabled = []
+        for r in rules:
+            if not isinstance(r, dict):
+                continue
+            if str_to_bool(r.get("enabled", False)):
+                enabled.append(r)
+
+        # Deduplicate channels
         seen_channels = {}
         channels = []
         for r in enabled:
             ch = r.get("channel", "")
-            if ch and ch not in seen_channels:
+            if ch and ch != "None" and ch not in seen_channels:
                 seen_channels[ch] = True
                 channels.append(ch)
 
@@ -99,10 +98,16 @@ def transform(input):
                 name = logic.get("name", r.get("name", "unnamed"))
             else:
                 name = r.get("name", "unnamed")
+            # Handle string "None"
+            if not isinstance(name, str) or name == "None":
+                name = "unnamed"
             rule_names.append(name)
 
         result = len(enabled) >= 1
-        # === END EVALUATION LOGIC ===
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         if result:
             ch_str = ""
