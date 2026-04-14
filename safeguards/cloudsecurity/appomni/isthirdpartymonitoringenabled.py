@@ -1,7 +1,7 @@
 """
 Transformation: isThirdPartyMonitoringEnabled
 Vendor: AppOmni  |  Category: Cloud Security
-Evaluates: At least one connected service has third-party OAuth app monitoring enabled
+Evaluates: At least one connected service has third-party app monitoring enabled
 API: GET /api/v1/core/monitoredservice/
 """
 import json
@@ -24,6 +24,15 @@ def extract_input(input_data):
             if not unwrapped:
                 break
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+
+
+def str_to_bool(val):
+    """Handle AppOmni string booleans ('True', 'False', 'None')."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return False
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -52,48 +61,62 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        # Handle list inputs — use first dict element
+        # AppOmni /monitoredservice/ returns a bare list or paginated dict
+        # Determine the services array from whichever format we receive
+        services = []
         if isinstance(data, list):
-            dict_items = [item for item in data if isinstance(item, dict)]
-            if dict_items:
-                data = dict_items[0]
+            services = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            candidate = data.get("results", data.get("data", data.get("items", None)))
+            if isinstance(candidate, list):
+                services = [item for item in candidate if isinstance(item, dict)]
             else:
-                return create_response(
-                    result={criteriaKey: False, "servicesWithThirdPartyMonitoring": 0, "totalServices": 0},
-                    validation=validation,
-                    fail_reasons=["Input is a list with no dict elements"]
-                )
+                # Single service object — wrap as list
+                services = [data]
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # === EVALUATION LOGIC ===
-        services = data.get("results", data.get("data", data.get("items", [])))
-
-        if not isinstance(services, list):
+        if len(services) == 0:
             return create_response(
-                result={criteriaKey: False, "servicesWithThirdPartyMonitoring": 0, "totalServices": 0},
+                result={criteriaKey: False, "servicesWithMonitoring": 0, "totalServices": 0},
                 validation=validation,
-                fail_reasons=["Unexpected services response format"],
-                recommendations=["Verify the API response contains a list of services"],
-                input_summary={"dataType": "non-list"}
+                fail_reasons=["No service objects found in response"]
             )
 
         total = len(services)
 
-        monitored = [
-            s for s in services
-            if s.get("enabled", False) and (
-                s.get("third_party_apps_monitored", False) or
-                s.get("third_party_monitoring_enabled", False) or
-                s.get("oauth_app_monitoring_enabled", False)
-            )
-        ]
+        # A service has third-party monitoring enabled when:
+        # 1. detection_ingest_enabled is true (data collection active)
+        # 2. integration_connected is true (integration is live)
+        # 3. monitoring_reqs_satisfied is true (all monitoring prereqs met)
+        # AppOmni returns these as string "True"/"False"
+        monitored = []
+        not_monitored = []
+        for s in services:
+            if not isinstance(s, dict):
+                continue
+            ingest = str_to_bool(s.get("detection_ingest_enabled", False))
+            connected = str_to_bool(s.get("integration_connected", False))
+            reqs_met = str_to_bool(s.get("monitoring_reqs_satisfied", False))
+            archived = str_to_bool(s.get("is_archived", False))
 
-        service_types = [s.get("service_type", "unknown") for s in monitored if s.get("service_type")]
+            if ingest and connected and reqs_met and not archived:
+                monitored.append(s)
+            else:
+                not_monitored.append(s)
+
+        # Collect unique service types from monitored services
+        seen_types = {}
+        service_types = []
+        for s in monitored:
+            st = s.get("service_type", "")
+            if st and st not in seen_types:
+                seen_types[st] = True
+                service_types.append(st)
+
         result = len(monitored) >= 1
-        # === END EVALUATION LOGIC ===
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         if result:
             type_str = ""
@@ -101,20 +124,33 @@ def transform(input):
                 if idx > 0:
                     type_str = type_str + ", "
                 type_str = type_str + str(service_types[idx])
-            pass_reasons.append(str(len(monitored)) + " of " + str(total) + " service(s) have third-party app monitoring enabled")
+            pass_reasons.append(str(len(monitored)) + " of " + str(total) + " service(s) have active monitoring with detection ingest enabled")
             if service_types:
-                pass_reasons.append("Service types with monitoring: " + type_str)
+                pass_reasons.append("Monitored service types: " + type_str)
         else:
-            fail_reasons.append("No enabled services have third-party app monitoring (total services: " + str(total) + ")")
-            recommendations.append("Enable third-party OAuth app monitoring on at least one connected service in AppOmni")
+            fail_reasons.append("No services have active third-party monitoring (total services: " + str(total) + ")")
+            if not_monitored:
+                reasons = []
+                for s in not_monitored:
+                    name = s.get("name", "unknown")
+                    if not str_to_bool(s.get("integration_connected", False)):
+                        reasons.append(name + ": integration not connected")
+                    elif not str_to_bool(s.get("detection_ingest_enabled", False)):
+                        reasons.append(name + ": detection ingest not enabled")
+                    elif not str_to_bool(s.get("monitoring_reqs_satisfied", False)):
+                        reasons.append(name + ": monitoring requirements not satisfied")
+                if reasons:
+                    for r in reasons:
+                        fail_reasons.append(r)
+            recommendations.append("Enable detection ingest and ensure integration is connected on at least one service in AppOmni")
 
         return create_response(
-            result={criteriaKey: result, "servicesWithThirdPartyMonitoring": len(monitored), "totalServices": total, "serviceTypes": service_types},
+            result={criteriaKey: result, "servicesWithMonitoring": len(monitored), "totalServices": total, "serviceTypes": service_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"totalServices": total, "servicesWithThirdPartyMonitoring": len(monitored)}
+            input_summary={"totalServices": total, "servicesWithMonitoring": len(monitored), "serviceTypes": service_types}
         )
 
     except Exception as e:
