@@ -26,6 +26,15 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+def str_to_bool(val):
+    """Handle AppOmni string booleans ('True', 'False', 'None')."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes")
+    return False
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
@@ -52,39 +61,46 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        # Handle list inputs — use first dict element
+        # AppOmni /monitoredservice/ returns a paginated dict or bare list
+        services = []
         if isinstance(data, list):
-            dict_items = [item for item in data if isinstance(item, dict)]
-            if dict_items:
-                data = dict_items[0]
+            services = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            candidate = data.get("results", data.get("data", data.get("items", None)))
+            if isinstance(candidate, list):
+                services = [item for item in candidate if isinstance(item, dict)]
             else:
-                return create_response(
-                    result={criteriaKey: False, "totalServices": 0},
-                    validation=validation,
-                    fail_reasons=["Input is a list with no dict elements"]
-                )
+                # Single service object — wrap as list
+                services = [data]
+
+        total = len(services)
+
+        # Count services that are actively connected and ingesting
+        active = []
+        for s in services:
+            if not isinstance(s, dict):
+                continue
+            connected = str_to_bool(s.get("integration_connected", False))
+            ingest = str_to_bool(s.get("detection_ingest_enabled", False))
+            archived = str_to_bool(s.get("is_archived", False))
+            if connected and ingest and not archived:
+                active.append(s)
+
+        # Collect unique service types
+        seen_types = {}
+        service_types = []
+        for s in services:
+            st = s.get("service_type", "")
+            if st and st not in seen_types:
+                seen_types[st] = True
+                service_types.append(st)
+
+        # License is confirmed if at least one service is provisioned
+        result = total > 0
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-
-        # === EVALUATION LOGIC ===
-        services = data.get("results", data.get("data", data.get("items", [])))
-
-        if not isinstance(services, list):
-            return create_response(
-                result={criteriaKey: False, "totalServices": 0},
-                validation=validation,
-                fail_reasons=["Unexpected services response format"],
-                recommendations=["Verify the API response contains a list of monitored services"],
-                input_summary={"dataType": "non-list"}
-            )
-
-        total = len(services)
-        enabled = [s for s in services if s.get("enabled", False) or s.get("detection_ingest_enabled", False)]
-        service_types = [s.get("service_type", "unknown") for s in services if s.get("service_type")]
-        result = total > 0
-        # === END EVALUATION LOGIC ===
 
         if result:
             type_str = ""
@@ -92,7 +108,7 @@ def transform(input):
                 if idx > 0:
                     type_str = type_str + ", "
                 type_str = type_str + str(service_types[idx])
-            pass_reasons.append("AppOmni license confirmed: " + str(total) + " service(s) provisioned, " + str(len(enabled)) + " enabled")
+            pass_reasons.append("AppOmni license confirmed: " + str(total) + " service(s) provisioned, " + str(len(active)) + " actively connected")
             if service_types:
                 pass_reasons.append("Connected service types: " + type_str)
         else:
@@ -100,12 +116,12 @@ def transform(input):
             recommendations.append("Ensure AppOmni has at least one SaaS service connected to confirm an active license")
 
         return create_response(
-            result={criteriaKey: result, "totalServices": total, "enabledServices": len(enabled), "serviceTypes": service_types},
+            result={criteriaKey: result, "totalServices": total, "activeServices": len(active), "serviceTypes": service_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"totalServices": total, "enabledServices": len(enabled), "serviceTypes": service_types}
+            input_summary={"totalServices": total, "activeServices": len(active), "serviceTypes": service_types}
         )
 
     except Exception as e:

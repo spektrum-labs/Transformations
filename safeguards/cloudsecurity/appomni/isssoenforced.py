@@ -26,13 +26,13 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def safe_bool(val):
-    """Convert value to bool safely — handles string booleans from APIs."""
+def str_to_bool(val):
+    """Handle AppOmni string booleans ('True', 'False', 'None')."""
     if isinstance(val, bool):
         return val
     if isinstance(val, str):
-        return val.lower() in ("true", "1", "yes", "enabled")
-    return bool(val)
+        return val.lower() in ("true", "1", "yes")
+    return False
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -61,48 +61,45 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        # Handle list inputs — use first dict element
+        # AppOmni /settings/sso/ may return a dict, paginated dict, or bare list
+        sso_data = {}
         if isinstance(data, list):
             dict_items = [item for item in data if isinstance(item, dict)]
             if dict_items:
-                data = dict_items[0]
+                sso_data = dict_items[0]
+        elif isinstance(data, dict):
+            # If paginated response, extract first result
+            results_val = data.get("results", None)
+            if isinstance(results_val, list) and len(results_val) > 0:
+                first_item = results_val[0]
+                if isinstance(first_item, dict):
+                    sso_data = first_item
             else:
-                return create_response(
-                    result={criteriaKey: False},
-                    validation=validation,
-                    fail_reasons=["Input is a list with no dict elements"]
-                )
+                sso_data = data
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # === EVALUATION LOGIC ===
-        # If response is a paginated list, extract the first result
-        sso_data = data
-        results_val = data.get("results", None)
-        if isinstance(results_val, list) and len(results_val) > 0:
-            first_item = results_val[0]
-            if isinstance(first_item, dict):
-                sso_data = first_item
-
-        sso_enabled = safe_bool(
+        sso_enabled = str_to_bool(
             sso_data.get("sso_enabled", sso_data.get("enabled", sso_data.get("is_enabled", False)))
         )
-        sso_enforced = safe_bool(
+        sso_enforced = str_to_bool(
             sso_data.get("sso_enforced", sso_data.get("enforce_sso", sso_data.get("is_enforced", False)))
         )
-        local_login_allowed = safe_bool(
+        local_login_allowed = str_to_bool(
             sso_data.get("local_login_allowed", sso_data.get("allow_local_login", sso_data.get("password_login_enabled", True)))
         )
         sso_provider = sso_data.get("sso_provider", sso_data.get("provider", sso_data.get("idp_name", "unknown")))
+        # Handle string "None" from AppOmni
+        if not isinstance(sso_provider, str) or sso_provider == "None":
+            sso_provider = "unknown"
 
         # All three conditions required:
         # 1. SSO is configured and enabled
         # 2. SSO is enforced (required, not optional)
         # 3. Local login backdoor is disabled
         result = sso_enabled and sso_enforced and not local_login_allowed
-        # === END EVALUATION LOGIC ===
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
 
         if result:
             pass_reasons.append("SSO is enabled, enforced, and local login is disabled")
