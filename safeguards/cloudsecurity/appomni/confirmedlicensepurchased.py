@@ -52,8 +52,17 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+        # Handle list inputs — use first dict element
+        if isinstance(data, list):
+            dict_items = [item for item in data if isinstance(item, dict)]
+            if dict_items:
+                data = dict_items[0]
+            else:
+                return create_response(
+                    result={criteriaKey: False, "totalServices": 0},
+                    validation=validation,
+                    fail_reasons=["Input is a list with no dict elements"]
+                )
 
         pass_reasons = []
         fail_reasons = []
@@ -78,9 +87,14 @@ def transform(input):
         # === END EVALUATION LOGIC ===
 
         if result:
-            pass_reasons.append(f"AppOmni license confirmed: {total} service(s) provisioned, {len(enabled)} enabled")
+            type_str = ""
+            for idx in range(len(service_types)):
+                if idx > 0:
+                    type_str = type_str + ", "
+                type_str = type_str + str(service_types[idx])
+            pass_reasons.append("AppOmni license confirmed: " + str(total) + " service(s) provisioned, " + str(len(enabled)) + " enabled")
             if service_types:
-                pass_reasons.append(f"Connected service types: {', '.join(service_types)}")
+                pass_reasons.append("Connected service types: " + type_str)
         else:
             fail_reasons.append("No monitored services found — unable to confirm an active AppOmni license")
             recommendations.append("Ensure AppOmni has at least one SaaS service connected to confirm an active license")
@@ -99,5 +113,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )

@@ -52,16 +52,23 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+        # Handle list inputs — use first dict element
+        if isinstance(data, list):
+            dict_items = [item for item in data if isinstance(item, dict)]
+            if dict_items:
+                data = dict_items[0]
+            else:
+                return create_response(
+                    result={criteriaKey: False, "servicesWithThirdPartyMonitoring": 0, "totalServices": 0},
+                    validation=validation,
+                    fail_reasons=["Input is a list with no dict elements"]
+                )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
         # === EVALUATION LOGIC ===
-        # GET /api/v1/core/monitoredservice/ returns DRF paginated response
-        # Each service object has: id, name, service_type, account_id, slug, enabled
         services = data.get("results", data.get("data", data.get("items", [])))
 
         if not isinstance(services, list):
@@ -89,11 +96,16 @@ def transform(input):
         # === END EVALUATION LOGIC ===
 
         if result:
-            pass_reasons.append(f"{len(monitored)} of {total} service(s) have third-party app monitoring enabled")
+            type_str = ""
+            for idx in range(len(service_types)):
+                if idx > 0:
+                    type_str = type_str + ", "
+                type_str = type_str + str(service_types[idx])
+            pass_reasons.append(str(len(monitored)) + " of " + str(total) + " service(s) have third-party app monitoring enabled")
             if service_types:
-                pass_reasons.append(f"Service types with monitoring: {', '.join(service_types)}")
+                pass_reasons.append("Service types with monitoring: " + type_str)
         else:
-            fail_reasons.append(f"No enabled services have third-party app monitoring (total services: {total})")
+            fail_reasons.append("No enabled services have third-party app monitoring (total services: " + str(total) + ")")
             recommendations.append("Enable third-party OAuth app monitoring on at least one connected service in AppOmni")
 
         return create_response(
@@ -110,5 +122,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )

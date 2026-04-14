@@ -52,16 +52,23 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+        # Handle list inputs — use first dict element
+        if isinstance(data, list):
+            dict_items = [item for item in data if isinstance(item, dict)]
+            if dict_items:
+                data = dict_items[0]
+            else:
+                return create_response(
+                    result={criteriaKey: False, "enabledPolicies": 0, "totalPolicies": 0},
+                    validation=validation,
+                    fail_reasons=["Input is a list with no dict elements"]
+                )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
         # === EVALUATION LOGIC ===
-        # GET /api/v1/core/policy/ returns DRF paginated response
-        # Each policy object has: id, name, policy_type, mode, enabled, is_reference
         policies = data.get("results", data.get("data", data.get("items", [])))
 
         if not isinstance(policies, list):
@@ -81,16 +88,29 @@ def transform(input):
                str(p.get("enabled", "")).lower() in ("true", "1", "yes")
         ]
 
-        policy_types = list({p.get("policy_type", "unknown") for p in enabled if p.get("policy_type")})
+        # Deduplicate policy types without set comprehension (RestrictedPython safe)
+        seen_types = {}
+        policy_types = []
+        for p in enabled:
+            pt = p.get("policy_type", "")
+            if pt and pt not in seen_types:
+                seen_types[pt] = True
+                policy_types.append(pt)
+
         result = len(enabled) >= 1
         # === END EVALUATION LOGIC ===
 
         if result:
-            pass_reasons.append(f"{len(enabled)} of {total} policy/policies enabled")
+            type_str = ""
+            for idx in range(len(policy_types)):
+                if idx > 0:
+                    type_str = type_str + ", "
+                type_str = type_str + str(policy_types[idx])
+            pass_reasons.append(str(len(enabled)) + " of " + str(total) + " policy/policies enabled")
             if policy_types:
-                pass_reasons.append(f"Policy types: {', '.join(policy_types)}")
+                pass_reasons.append("Policy types: " + type_str)
         else:
-            fail_reasons.append(f"No enabled policies found (total policies: {total})")
+            fail_reasons.append("No enabled policies found (total policies: " + str(total) + ")")
             recommendations.append("Configure and enable at least one security policy in AppOmni")
 
         return create_response(
@@ -107,5 +127,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )
