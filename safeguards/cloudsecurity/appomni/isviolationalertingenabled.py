@@ -52,17 +52,23 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+        # Handle list inputs — use first dict element
+        if isinstance(data, list):
+            dict_items = [item for item in data if isinstance(item, dict)]
+            if dict_items:
+                data = dict_items[0]
+            else:
+                return create_response(
+                    result={criteriaKey: False, "enabledRules": 0, "channels": []},
+                    validation=validation,
+                    fail_reasons=["Input is a list with no dict elements"]
+                )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
         # === EVALUATION LOGIC ===
-        # GET /api/v1/alert-rules/ returns DRF paginated response
-        # Each alert rule has: id, enabled, ruleset_id, channel, logic (object with name)
-        # Channel values: prod, beta, testing, ao_only_prod, ao_only_beta, ao_only_testing
         rules = data.get("results", data.get("data", data.get("items", [])))
 
         if not isinstance(rules, list):
@@ -76,18 +82,39 @@ def transform(input):
 
         total = len(rules)
         enabled = [r for r in rules if r.get("enabled", False)]
-        channels = list({r.get("channel", "unknown") for r in enabled if r.get("channel")})
-        rule_names = [r.get("logic", {}).get("name", r.get("name", "unnamed")) for r in enabled]
+
+        # Deduplicate channels without set comprehension (RestrictedPython safe)
+        seen_channels = {}
+        channels = []
+        for r in enabled:
+            ch = r.get("channel", "")
+            if ch and ch not in seen_channels:
+                seen_channels[ch] = True
+                channels.append(ch)
+
+        rule_names = []
+        for r in enabled:
+            logic = r.get("logic", None)
+            if isinstance(logic, dict):
+                name = logic.get("name", r.get("name", "unnamed"))
+            else:
+                name = r.get("name", "unnamed")
+            rule_names.append(name)
 
         result = len(enabled) >= 1
         # === END EVALUATION LOGIC ===
 
         if result:
-            pass_reasons.append(f"{len(enabled)} of {total} alert rule(s) enabled")
+            ch_str = ""
+            for idx in range(len(channels)):
+                if idx > 0:
+                    ch_str = ch_str + ", "
+                ch_str = ch_str + str(channels[idx])
+            pass_reasons.append(str(len(enabled)) + " of " + str(total) + " alert rule(s) enabled")
             if channels:
-                pass_reasons.append(f"Active channels: {', '.join(channels)}")
+                pass_reasons.append("Active channels: " + ch_str)
         else:
-            fail_reasons.append(f"No enabled alert rules found (total: {total})")
+            fail_reasons.append("No enabled alert rules found (total: " + str(total) + ")")
             recommendations.append("Configure and enable at least one alert rule in AppOmni for violation alerting")
 
         return create_response(
@@ -104,5 +131,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )

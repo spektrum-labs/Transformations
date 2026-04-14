@@ -26,6 +26,15 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+def safe_bool(val):
+    """Convert value to bool safely — handles string booleans from APIs."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes", "enabled")
+    return bool(val)
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
@@ -52,34 +61,38 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+        # Handle list inputs — use first dict element
+        if isinstance(data, list):
+            dict_items = [item for item in data if isinstance(item, dict)]
+            if dict_items:
+                data = dict_items[0]
+            else:
+                return create_response(
+                    result={criteriaKey: False},
+                    validation=validation,
+                    fail_reasons=["Input is a list with no dict elements"]
+                )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
         # === EVALUATION LOGIC ===
-        # GET /api/v1/settings/sso/ returns SSO configuration object
         # If response is a paginated list, extract the first result
         sso_data = data
-        if isinstance(data.get("results"), list) and len(data.get("results", [])) > 0:
-            sso_data = data["results"][0]
+        results_val = data.get("results", None)
+        if isinstance(results_val, list) and len(results_val) > 0:
+            first_item = results_val[0]
+            if isinstance(first_item, dict):
+                sso_data = first_item
 
-        def to_bool(val):
-            if isinstance(val, bool):
-                return val
-            if isinstance(val, str):
-                return val.lower() in ("true", "1", "yes", "enabled")
-            return bool(val)
-
-        sso_enabled = to_bool(
+        sso_enabled = safe_bool(
             sso_data.get("sso_enabled", sso_data.get("enabled", sso_data.get("is_enabled", False)))
         )
-        sso_enforced = to_bool(
+        sso_enforced = safe_bool(
             sso_data.get("sso_enforced", sso_data.get("enforce_sso", sso_data.get("is_enforced", False)))
         )
-        local_login_allowed = to_bool(
+        local_login_allowed = safe_bool(
             sso_data.get("local_login_allowed", sso_data.get("allow_local_login", sso_data.get("password_login_enabled", True)))
         )
         sso_provider = sso_data.get("sso_provider", sso_data.get("provider", sso_data.get("idp_name", "unknown")))
@@ -94,7 +107,7 @@ def transform(input):
         if result:
             pass_reasons.append("SSO is enabled, enforced, and local login is disabled")
             if sso_provider != "unknown":
-                pass_reasons.append(f"SSO provider: {sso_provider}")
+                pass_reasons.append("SSO provider: " + str(sso_provider))
         else:
             if not sso_enabled:
                 fail_reasons.append("SSO is not enabled")
@@ -120,5 +133,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )
