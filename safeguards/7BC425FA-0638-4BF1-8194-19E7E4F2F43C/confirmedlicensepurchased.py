@@ -3,8 +3,16 @@ Transformation: confirmedLicensePurchased
 Vendor: Microsoft Defender / Endpoint Protection
 Category: Licensing
 
-Evaluates if the license has been purchased for endpoint protection.
-Searches for SKUs containing: MDE, ATP, DEFENDER, SPE_E3 (Microsoft 365 E3)
+Evaluates if a Defender license has been purchased by inspecting each SKU's
+servicePlans for Defender entitlements (the authoritative source). Defender
+is delivered via bundles (e.g. M365 E5 / SPE_E5) and standalone add-ons,
+so matching on skuPartNumber alone misses many valid entitlements.
+
+A SKU is considered to carry Defender when:
+  - capabilityStatus == "Enabled"
+  - prepaidUnits.enabled > 0
+  - it contains at least one servicePlan whose name is a known Defender
+    plan (or matches a Defender keyword) with provisioningStatus == "Success"
 
 Reference:
 https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference
@@ -12,6 +20,53 @@ https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-re
 
 import json
 from datetime import datetime
+
+
+DEFENDER_SERVICE_PLANS = {
+    # Defender for Endpoint
+    "WINDEFATP",
+    "MDE_LITE",
+    "MDE_SMB",
+    "MICROSOFT_DEFENDER_FOR_ENDPOINT_PLAN_1",
+    "MICROSOFT_DEFENDER_FOR_ENDPOINT_PLAN_2",
+    "MDATP_XPLAT",
+    # Defender for Office 365
+    "ATP_ENTERPRISE",
+    "THREAT_INTELLIGENCE",
+    # Defender for Identity
+    "ATA",
+    # Defender for Cloud Apps
+    "ADALLOM_S_STANDALONE",
+    "ADALLOM_FOR_AATP",
+    # Defender for IoT
+    "DEFENDER_FOR_IOT_ENTERPRISE",
+    # Vulnerability Management (Defender TVM)
+    "TVM_PREMIUM_1",
+    "TVM_PREMIUM_2",
+    # Common Defender platform
+    "COMMON_DEFENDER_PLATFORM_FOR_OFFICE",
+}
+
+DEFENDER_KEYWORDS = ("DEFENDER", "WINDEFATP", "MDATP", "MDE_", "ATP_")
+
+
+def _is_defender_plan(plan_name):
+    name = (plan_name or "").upper()
+    if not name:
+        return False
+    if name in DEFENDER_SERVICE_PLANS:
+        return True
+    return any(keyword in name for keyword in DEFENDER_KEYWORDS)
+
+
+def _sku_is_active(sku):
+    if sku.get("capabilityStatus") != "Enabled":
+        return False
+    prepaid = sku.get("prepaidUnits") or {}
+    try:
+        return int(prepaid.get("enabled", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def extract_input(input_data):
@@ -103,25 +158,50 @@ def transform(input):
             sku_data = data
 
         for sku in sku_data:
-            if isinstance(sku, dict):
-                sku_part = sku.get("skuPartNumber", "").upper()
-                if any(keyword in sku_part for keyword in ["MDE", "ATP", "DEFENDER", "SPE_E3"]):
-                    defender_skus.append({
-                        "SkuPartNumber": sku.get("skuPartNumber"),
-                        "SkuId": sku.get("skuId"),
-                        "CapabilityStatus": sku.get("capabilityStatus"),
-                        "ConsumedUnits": sku.get("consumedUnits"),
-                        "PrepaidUnits": sku.get("prepaidUnits")
-                    })
-                    criteriaValue = True
+            if not isinstance(sku, dict):
+                continue
+            if not _sku_is_active(sku):
+                continue
+
+            matched_plans = []
+            for sp in sku.get("servicePlans", []) or []:
+                if not isinstance(sp, dict):
+                    continue
+                if sp.get("provisioningStatus") != "Success":
+                    continue
+                if _is_defender_plan(sp.get("servicePlanName")):
+                    matched_plans.append(sp.get("servicePlanName"))
+
+            if matched_plans:
+                defender_skus.append({
+                    "SkuPartNumber": sku.get("skuPartNumber"),
+                    "SkuId": sku.get("skuId"),
+                    "CapabilityStatus": sku.get("capabilityStatus"),
+                    "ConsumedUnits": sku.get("consumedUnits"),
+                    "PrepaidUnits": sku.get("prepaidUnits"),
+                    "DefenderServicePlans": matched_plans,
+                })
+                criteriaValue = True
 
         if criteriaValue:
-            pass_reasons.append(f"Endpoint protection license purchased: {len(defender_skus)} matching SKUs")
+            total_plans = sum(len(s["DefenderServicePlans"]) for s in defender_skus)
+            pass_reasons.append(
+                f"Defender license purchased: {len(defender_skus)} SKU(s) carrying "
+                f"{total_plans} Defender service plan(s)"
+            )
             for sku in defender_skus:
-                pass_reasons.append(f"SKU: {sku['SkuPartNumber']} (Status: {sku['CapabilityStatus']})")
+                plans = ", ".join(sku["DefenderServicePlans"])
+                prepaid_enabled = (sku["PrepaidUnits"] or {}).get("enabled")
+                pass_reasons.append(
+                    f"SKU {sku['SkuPartNumber']} (enabled={prepaid_enabled}, "
+                    f"consumed={sku['ConsumedUnits']}) -> {plans}"
+                )
         else:
-            fail_reasons.append("No endpoint protection license SKUs found")
-            recommendations.append("Purchase Microsoft Defender for Endpoint or equivalent license")
+            fail_reasons.append(
+                "No active SKU with a Defender service plan found "
+                "(checked servicePlans for WINDEFATP, ATP_ENTERPRISE, MDE, TVM_PREMIUM, etc.)"
+            )
+            recommendations.append("Purchase Microsoft Defender for Endpoint, M365 E5, or an equivalent Defender-bearing license")
 
         return create_response(
             result={criteriaKey: criteriaValue},
@@ -131,7 +211,8 @@ def transform(input):
             recommendations=recommendations,
             input_summary={
                 "totalSkus": len(sku_data),
-                "defenderSkus": len(defender_skus)
+                "defenderSkus": len(defender_skus),
+                "matchedSkuPartNumbers": [s["SkuPartNumber"] for s in defender_skus],
             }
         )
 
