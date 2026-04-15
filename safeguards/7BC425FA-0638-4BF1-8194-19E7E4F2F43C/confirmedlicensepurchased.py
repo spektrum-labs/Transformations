@@ -50,7 +50,7 @@ DEFENDER_SERVICE_PLANS = {
 DEFENDER_KEYWORDS = ("DEFENDER", "WINDEFATP", "MDATP", "MDE_", "ATP_")
 
 
-def _is_defender_plan(plan_name):
+def is_defender_plan(plan_name):
     name = (plan_name or "").upper()
     if not name:
         return False
@@ -59,7 +59,7 @@ def _is_defender_plan(plan_name):
     return any(keyword in name for keyword in DEFENDER_KEYWORDS)
 
 
-def _sku_is_active(sku):
+def sku_is_active(sku):
     if sku.get("capabilityStatus") != "Enabled":
         return False
     prepaid = sku.get("prepaidUnits") or {}
@@ -75,7 +75,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -160,7 +160,7 @@ def transform(input):
         for sku in sku_data:
             if not isinstance(sku, dict):
                 continue
-            if not _sku_is_active(sku):
+            if not sku_is_active(sku):
                 continue
 
             matched_plans = []
@@ -169,7 +169,7 @@ def transform(input):
                     continue
                 if sp.get("provisioningStatus") != "Success":
                     continue
-                if _is_defender_plan(sp.get("servicePlanName")):
+                if is_defender_plan(sp.get("servicePlanName")):
                     matched_plans.append(sp.get("servicePlanName"))
 
             if matched_plans:
