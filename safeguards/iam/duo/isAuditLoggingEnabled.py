@@ -1,9 +1,8 @@
 """
 Transformation: isAuditLoggingEnabled
-Vendor: Duo  |  Category: IAM
-Evaluates: Validates that audit logging is enabled and capturing both authentication events
-(via /admin/v2/logs/authentication) and administrator action events (via /admin/v1/logs/administrator).
-Checks that log entries are present and that the stat field returns OK.
+Vendor: Duo  |  Category: iam
+Evaluates: Verify that audit logging is enabled and active in the Duo tenant by retrieving
+activity log records and confirming events are being captured.
 """
 import json
 from datetime import datetime
@@ -15,7 +14,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for i in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -39,39 +38,33 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isAuditLoggingEnabled", "vendor": "Duo", "category": "IAM"}
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isAuditLoggingEnabled", "vendor": "Duo", "category": "iam"}
         }
     }
 
 
 def evaluate(data):
     try:
-        if not isinstance(data, dict):
-            return {"isAuditLoggingEnabled": False, "error": "Unexpected data format"}
+        items = []
+        if isinstance(data, dict):
+            if "items" in data:
+                candidate = data.get("items", [])
+                if isinstance(candidate, list):
+                    items = candidate
+            if len(items) == 0 and "data" in data:
+                inner = data.get("data", {})
+                if isinstance(inner, dict) and "items" in inner:
+                    candidate = inner.get("items", [])
+                    if isinstance(candidate, list):
+                        items = candidate
 
-        authlogs = data.get("authlogs", [])
-        adminlogs = data.get("adminlogs", [])
-        stat = data.get("stat", "")
-
-        if not isinstance(authlogs, list):
-            authlogs = []
-        if not isinstance(adminlogs, list):
-            adminlogs = []
-
-        auth_logs_present = len(authlogs) > 0
-        admin_logs_present = len(adminlogs) > 0
-        stat_ok = str(stat).upper() == "OK"
-
-        is_enabled = auth_logs_present and admin_logs_present and stat_ok
+        total_log_count = len(items)
+        logging_active = total_log_count > 0
 
         return {
-            "isAuditLoggingEnabled": is_enabled,
-            "authLogsPresent": auth_logs_present,
-            "adminLogsPresent": admin_logs_present,
-            "authLogCount": len(authlogs),
-            "adminLogCount": len(adminlogs),
-            "statOk": stat_ok,
-            "stat": stat
+            "isAuditLoggingEnabled": logging_active,
+            "totalLogCount": total_log_count,
+            "loggingEndpointAccessible": isinstance(data, dict)
         }
     except Exception as e:
         return {"isAuditLoggingEnabled": False, "error": str(e)}
@@ -93,35 +86,30 @@ def transform(input):
             )
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
+        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
+        total = eval_result.get("totalLogCount", 0)
         if result_value:
-            pass_reasons.append("Audit logging is enabled for both authentication and administrator events")
-            pass_reasons.append("Authentication log entries found: " + str(eval_result.get("authLogCount", 0)))
-            pass_reasons.append("Administrator log entries found: " + str(eval_result.get("adminLogCount", 0)))
+            pass_reasons.append("Audit logging is active: " + str(total) + " activity log entries retrieved from Duo")
+            pass_reasons.append("Activity logging endpoint is accessible and events are being captured")
         else:
+            fail_reasons.append("No activity log entries found in the Duo audit log — logging may not be active")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            if not eval_result.get("statOk", False):
-                fail_reasons.append("Duo API did not return a successful stat: " + str(eval_result.get("stat", "")))
-            if not eval_result.get("authLogsPresent", False):
-                fail_reasons.append("No authentication log entries found")
-                recommendations.append("Ensure authentication logging is active and generating events in Duo")
-            if not eval_result.get("adminLogsPresent", False):
-                fail_reasons.append("No administrator log entries found")
-                recommendations.append("Ensure administrator action logging is active and generating events in Duo")
+            recommendations.append("Verify the Duo Admin API integration has the 'Grant read log' permission enabled")
+            recommendations.append("Confirm that Duo activity logging is configured and events are being generated in the tenant")
+        additional_findings.append("Total activity log entries retrieved: " + str(total))
         return create_response(
-            result=eval_result,
+            result={criteriaKey: result_value, **extra_fields},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "authLogCount": eval_result.get("authLogCount", 0),
-                "adminLogCount": eval_result.get("adminLogCount", 0),
-                "statOk": eval_result.get("statOk", False)
-            }
+            additional_findings=additional_findings,
+            input_summary={criteriaKey: result_value, **extra_fields}
         )
     except Exception as e:
         return create_response(
