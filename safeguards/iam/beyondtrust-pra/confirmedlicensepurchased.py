@@ -1,9 +1,9 @@
 """
-Transformation: isAuditLoggingEnabled
-Vendor: Duo  |  Category: IAM
-Evaluates: Validates that audit logging is enabled and capturing both authentication events
-(via /admin/v2/logs/authentication) and administrator action events (via /admin/v1/logs/administrator).
-Checks that log entries are present and that the stat field returns OK.
+Transformation: confirmedLicensePurchased
+Vendor: BeyondTrust Privileged Remote Access (PRA)  |  Category: Identity & Access Management
+Evaluates: Active PRA license by confirming a successful authenticated response
+from the vault account API. PRA has no dedicated license endpoint; any valid
+response from /api/config/v1/vault/account confirms a licensed, reachable appliance.
 """
 import json
 from datetime import datetime
@@ -39,94 +39,81 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isAuditLoggingEnabled", "vendor": "Duo", "category": "IAM"}
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "confirmedLicensePurchased", "vendor": "BeyondTrust PRA", "category": "Identity & Access Management"}
         }
     }
 
 
 def evaluate(data):
     try:
-        if not isinstance(data, dict):
-            return {"isAuditLoggingEnabled": False, "error": "Unexpected data format"}
+        if data is None:
+            return {"confirmedLicensePurchased": False, "reason": "Null response — possible license or connectivity error"}
 
-        authlogs = data.get("authlogs", [])
-        adminlogs = data.get("adminlogs", [])
-        stat = data.get("stat", "")
+        # Error payload detection
+        if isinstance(data, dict):
+            error_msg = str(data.get("error", data.get("message", data.get("detail", "")))).lower()
+            if error_msg and any(k in error_msg for k in ("license", "unauthorized", "forbidden", "invalid_client", "invalid_token")):
+                return {"confirmedLicensePurchased": False, "reason": error_msg}
+            # Dict returned — valid but unexpected shape for vault/account (PRA returns a list)
+            return {"confirmedLicensePurchased": True}
 
-        if not isinstance(authlogs, list):
-            authlogs = []
-        if not isinstance(adminlogs, list):
-            adminlogs = []
+        # List response (even empty) confirms license and API access
+        if isinstance(data, list):
+            return {"confirmedLicensePurchased": True, "vaultAccountCount": len(data)}
 
-        auth_logs_present = len(authlogs) > 0
-        admin_logs_present = len(adminlogs) > 0
-        stat_ok = str(stat).upper() == "OK"
-
-        is_enabled = auth_logs_present and admin_logs_present and stat_ok
-
-        return {
-            "isAuditLoggingEnabled": is_enabled,
-            "authLogsPresent": auth_logs_present,
-            "adminLogsPresent": admin_logs_present,
-            "authLogCount": len(authlogs),
-            "adminLogCount": len(adminlogs),
-            "statOk": stat_ok,
-            "stat": stat
-        }
+        return {"confirmedLicensePurchased": False, "reason": "Unexpected response type"}
     except Exception as e:
-        return {"isAuditLoggingEnabled": False, "error": str(e)}
+        return {"confirmedLicensePurchased": False, "error": str(e)}
 
 
 def transform(input):
-    criteriaKey = "isAuditLoggingEnabled"
+    criteriaKey = "confirmedLicensePurchased"
     try:
         if isinstance(input, str):
             input = json.loads(input)
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
+
         data, validation = extract_input(input)
+
         if validation.get("status") == "failed":
             return create_response(
                 result={criteriaKey: False},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
+
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
+        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+
         if result_value:
-            pass_reasons.append("Audit logging is enabled for both authentication and administrator events")
-            pass_reasons.append("Authentication log entries found: " + str(eval_result.get("authLogCount", 0)))
-            pass_reasons.append("Administrator log entries found: " + str(eval_result.get("adminLogCount", 0)))
+            pass_reasons.append(f"{criteriaKey} check passed")
+            for k, v in extra_fields.items():
+                pass_reasons.append(f"{k}: {v}")
         else:
+            fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
-            if not eval_result.get("statOk", False):
-                fail_reasons.append("Duo API did not return a successful stat: " + str(eval_result.get("stat", "")))
-            if not eval_result.get("authLogsPresent", False):
-                fail_reasons.append("No authentication log entries found")
-                recommendations.append("Ensure authentication logging is active and generating events in Duo")
-            if not eval_result.get("adminLogsPresent", False):
-                fail_reasons.append("No administrator log entries found")
-                recommendations.append("Ensure administrator action logging is active and generating events in Duo")
+            recommendations.append("Verify PRA appliance is licensed, reachable, and API credentials are valid")
+
         return create_response(
-            result=eval_result,
+            result={criteriaKey: result_value, **extra_fields},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "authLogCount": eval_result.get("authLogCount", 0),
-                "adminLogCount": eval_result.get("adminLogCount", 0),
-                "statOk": eval_result.get("statOk", False)
-            }
+            input_summary={criteriaKey: result_value, **extra_fields}
         )
+
     except Exception as e:
         return create_response(
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
+            fail_reasons=[f"Transformation error: {str(e)}"]
         )

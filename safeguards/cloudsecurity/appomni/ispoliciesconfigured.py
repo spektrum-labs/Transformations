@@ -10,7 +10,7 @@ from datetime import datetime
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
+        return {"data": input_data["data"], "validation": input_data["validation"]}
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
@@ -23,7 +23,7 @@ def extract_input(input_data):
                     break
             if not unwrapped:
                 break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+    return {"data": data, "validation": {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}}
 
 
 def str_to_bool(val):
@@ -59,7 +59,9 @@ def transform(input):
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
 
-        data, validation = extract_input(input)
+        extracted = extract_input(input)
+        data = extracted["data"]
+        validation = extracted["validation"]
 
         # AppOmni /policy/ returns a paginated dict or bare list
         policies = []
@@ -80,7 +82,7 @@ def transform(input):
         for p in policies:
             if not isinstance(p, dict):
                 continue
-            if str_to_bool(p.get("enabled", False)):
+            if str_to_bool(p.get("active", p.get("enabled", False))):
                 enabled.append(p)
 
         # Deduplicate policy types
