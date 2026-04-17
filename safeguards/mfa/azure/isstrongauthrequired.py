@@ -1,36 +1,50 @@
 """
 Transformation: isStrongAuthRequired
-Vendor: Generic IDP
+Vendor: Azure / Microsoft Entra ID
 Category: Identity / Authentication
 
-Evaluates if strong authentication is required by checking for active authentication policies.
+Evaluates if strong (phishing-resistant) authentication methods are enabled
+by inspecting the Microsoft Graph authenticationMethodsPolicy response.
+
+Strong auth methods: MicrosoftAuthenticator, Fido2
+Weak auth methods: Sms, Voice, Email, SoftwareOath
+
+API: GET /v1.0/policies/authenticationMethodsPolicy
+Reference: https://learn.microsoft.com/en-us/graph/api/authenticationmethodspolicy-get
 """
 
 import json
 from datetime import datetime
 
+STRONG_AUTH_METHODS = {
+    "Fido2": "FIDO2 Security Key",
+    "MicrosoftAuthenticator": "Microsoft Authenticator",
+}
+
+WEAK_AUTH_METHODS = {
+    "Sms": "SMS",
+    "Voice": "Voice call",
+    "Email": "Email OTP",
+    "SoftwareOath": "Software OATH token",
+}
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
+        return {"data": input_data["data"], "validation": input_data["validation"]}
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-                # Handle list in response wrapper
-                if key in data and isinstance(data.get(key), list):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
             if not unwrapped:
                 break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+    return {"data": data, "validation": {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -64,7 +78,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isStrongAuthRequired",
-                "vendor": "Generic",
+                "vendor": "Azure",
                 "category": "Identity"
             }
         }
@@ -80,7 +94,9 @@ def transform(input):
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
 
-        data, validation = extract_input(input)
+        extracted = extract_input(input)
+        data = extracted["data"]
+        validation = extracted["validation"]
 
         if validation.get("status") == "failed":
             return create_response(
@@ -92,34 +108,70 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        # Handle list input (authentication policies)
-        if isinstance(data, list):
-            policies = data
-        else:
-            policies = []
+        # Extract authenticationMethodConfigurations from the policy response
+        configs = []
+        if isinstance(data, dict):
+            configs = data.get("authenticationMethodConfigurations", [])
+            if not isinstance(configs, list):
+                configs = []
+        elif isinstance(data, list):
+            configs = data
 
-        # Check for active authentication policies
-        is_required = False
-        active_count = 0
-        for item in policies:
-            if isinstance(item, dict) and item.get('status', '').lower() == 'active':
-                is_required = True
-                active_count += 1
+        enabled_strong = []
+        disabled_strong = []
+        enabled_weak = []
+
+        for config in configs:
+            if not isinstance(config, dict):
+                continue
+            method_id = config.get("id", "")
+            state = (config.get("state", "") or "").lower()
+
+            if method_id in STRONG_AUTH_METHODS:
+                label = STRONG_AUTH_METHODS[method_id]
+                if state == "enabled":
+                    enabled_strong.append(label)
+                else:
+                    disabled_strong.append(label)
+            elif method_id in WEAK_AUTH_METHODS:
+                label = WEAK_AUTH_METHODS[method_id]
+                if state == "enabled":
+                    enabled_weak.append(label)
+
+        is_required = len(enabled_strong) > 0
 
         if is_required:
-            pass_reasons.append(f"Strong authentication is required with {active_count} active policies")
+            strong_str = ", ".join(enabled_strong)
+            pass_reasons.append("Strong authentication method(s) enabled: " + strong_str)
+            if disabled_strong:
+                additional_findings.append("Strong method(s) not yet enabled: " + ", ".join(disabled_strong))
         else:
-            fail_reasons.append("No strong authentication policies configured")
-            recommendations.append("Enable strong authentication requirements")
+            fail_reasons.append("No strong authentication methods (Authenticator or FIDO2) are enabled")
+            recommendations.append("Enable Microsoft Authenticator and/or FIDO2 security keys in the authentication methods policy")
+
+        if enabled_weak:
+            additional_findings.append("Weak authentication method(s) still enabled: " + ", ".join(enabled_weak))
+            recommendations.append("Consider disabling weak methods (" + ", ".join(enabled_weak) + ") to enforce phishing-resistant authentication")
 
         return create_response(
-            result={criteriaKey: is_required},
+            result={
+                criteriaKey: is_required,
+                "enabledStrongMethods": enabled_strong,
+                "enabledWeakMethods": enabled_weak,
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"activePolicies": active_count}
+            additional_findings=additional_findings,
+            input_summary={
+                "totalMethods": len(configs),
+                "enabledStrongCount": len(enabled_strong),
+                "disabledStrongCount": len(disabled_strong),
+                "enabledWeakCount": len(enabled_weak),
+            }
         )
 
     except Exception as e:
@@ -127,5 +179,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )
