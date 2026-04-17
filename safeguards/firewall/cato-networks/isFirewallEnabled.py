@@ -1,10 +1,8 @@
 """
 Transformation: isFirewallEnabled
 Vendor: Cato Networks  |  Category: Firewall
-Evaluates: Whether the WAN Firewall or Internet Firewall (or both) is enabled
-           for the account. Checks wanFirewall.policy.enabled and
-           internetFirewall.policy.enabled from the Cato policy query.
-           Returns true if at least one of the two firewall policies is enabled.
+Evaluates: Inspects the internetFirewall.policy.enabled and wanFirewall.policy.enabled
+fields in the policy response to determine if the firewall is enabled for the Cato account.
 """
 import json
 from datetime import datetime
@@ -69,35 +67,39 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def evaluate(data):
     """
-    Core evaluation logic for isFirewallEnabled.
-
-    The returnSpec for getFirewallPolicy maps data.policy to the response root,
-    so the data dict contains:
-      data["wanFirewall"]["policy"]["enabled"]      -> bool
-      data["internetFirewall"]["policy"]["enabled"] -> bool
-
-    Pass condition: at least one of the two firewall policies is enabled.
+    Checks both internetFirewall.policy.enabled and wanFirewall.policy.enabled.
+    Returns isFirewallEnabled=True only when both policies report enabled=True.
+    Individual states are also surfaced for traceability.
     """
     try:
-        wan_firewall = data.get("wanFirewall", {})
-        internet_firewall = data.get("internetFirewall", {})
+        internet_fw = data.get("internetFirewall", {})
+        wan_fw = data.get("wanFirewall", {})
 
-        wan_policy = wan_firewall.get("policy", {})
-        internet_policy = internet_firewall.get("policy", {})
+        internet_policy = internet_fw.get("policy", {})
+        wan_policy = wan_fw.get("policy", {})
 
-        wan_enabled = wan_policy.get("enabled", False)
         internet_enabled = internet_policy.get("enabled", False)
+        wan_enabled = wan_policy.get("enabled", False)
 
-        # Coerce to bool in case the API returns string or None
-        wan_enabled = wan_enabled is True
-        internet_enabled = internet_enabled is True
+        internet_rules = internet_policy.get("rules", [])
+        wan_rules = wan_policy.get("rules", [])
 
-        is_enabled = wan_enabled or internet_enabled
+        if not isinstance(internet_rules, list):
+            internet_rules = []
+        if not isinstance(wan_rules, list):
+            wan_rules = []
+
+        internet_rule_count = len(internet_rules)
+        wan_rule_count = len(wan_rules)
+
+        is_enabled = internet_enabled and wan_enabled
 
         return {
             "isFirewallEnabled": is_enabled,
+            "internetFirewallEnabled": internet_enabled,
             "wanFirewallEnabled": wan_enabled,
-            "internetFirewallEnabled": internet_enabled
+            "internetFirewallRuleCount": internet_rule_count,
+            "wanFirewallRuleCount": wan_rule_count
         }
     except Exception as e:
         return {"isFirewallEnabled": False, "error": str(e)}
@@ -123,46 +125,66 @@ def transform(input):
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
 
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+        internet_enabled = eval_result.get("internetFirewallEnabled", False)
+        wan_enabled = eval_result.get("wanFirewallEnabled", False)
+        internet_rule_count = eval_result.get("internetFirewallRuleCount", 0)
+        wan_rule_count = eval_result.get("wanFirewallRuleCount", 0)
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         additional_findings = []
 
-        wan_enabled = eval_result.get("wanFirewallEnabled", False)
-        internet_enabled = eval_result.get("internetFirewallEnabled", False)
-
         if result_value:
-            pass_reasons.append("At least one Cato Networks firewall policy is enabled.")
-            if wan_enabled:
-                pass_reasons.append("WAN Firewall policy is enabled.")
-            if internet_enabled:
-                pass_reasons.append("Internet Firewall policy is enabled.")
-            if not wan_enabled:
-                additional_findings.append("WAN Firewall policy is not enabled — consider enabling it for full coverage.")
-            if not internet_enabled:
-                additional_findings.append("Internet Firewall policy is not enabled — consider enabling it for full coverage.")
+            pass_reasons.append("Both Internet Firewall and WAN Firewall policies are enabled.")
+            pass_reasons.append("internetFirewall.policy.enabled: " + str(internet_enabled))
+            pass_reasons.append("wanFirewall.policy.enabled: " + str(wan_enabled))
         else:
-            fail_reasons.append("Neither the WAN Firewall nor the Internet Firewall policy is enabled.")
+            if not internet_enabled:
+                fail_reasons.append("Internet Firewall policy is not enabled (internetFirewall.policy.enabled = False).")
+                recommendations.append(
+                    "Enable the Internet Firewall policy in the Cato Management Application "
+                    "under Security > Internet Firewall."
+                )
+            if not wan_enabled:
+                fail_reasons.append("WAN Firewall policy is not enabled (wanFirewall.policy.enabled = False).")
+                recommendations.append(
+                    "Enable the WAN Firewall policy in the Cato Management Application "
+                    "under Security > WAN Firewall."
+                )
             if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append(
-                "Enable the WAN Firewall and/or Internet Firewall policies in the Cato Management Application "
-                "under Security > WAN Firewall / Internet Firewall."
-            )
+                fail_reasons.append("Evaluation error: " + eval_result["error"])
+
+        additional_findings.append(
+            "Internet Firewall active rule count: " + str(internet_rule_count)
+        )
+        additional_findings.append(
+            "WAN Firewall active rule count: " + str(wan_rule_count)
+        )
+
+        result = {
+            criteriaKey: result_value,
+            "internetFirewallEnabled": internet_enabled,
+            "wanFirewallEnabled": wan_enabled,
+            "internetFirewallRuleCount": internet_rule_count,
+            "wanFirewallRuleCount": wan_rule_count
+        }
+
+        input_summary = {
+            "internetFirewallEnabled": internet_enabled,
+            "wanFirewallEnabled": wan_enabled,
+            "internetFirewallRuleCount": internet_rule_count,
+            "wanFirewallRuleCount": wan_rule_count
+        }
 
         return create_response(
-            result={criteriaKey: result_value, **extra_fields},
+            result=result,
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            additional_findings=additional_findings,
-            input_summary={
-                "wanFirewallEnabled": wan_enabled,
-                "internetFirewallEnabled": internet_enabled
-            }
+            input_summary=input_summary,
+            additional_findings=additional_findings
         )
 
     except Exception as e:
