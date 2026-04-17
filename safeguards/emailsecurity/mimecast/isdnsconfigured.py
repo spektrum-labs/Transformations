@@ -67,6 +67,22 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def is_dns_record_present(value):
+    """Check if a DNS record value indicates the record is configured.
+    Handles actual record strings, booleans, and the string 'False'/'None'.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lower() in ("false", "none", "null", "", "no", "0", "no banner found", "not found", "n/a"):
+            return False
+        return len(stripped) > 0
+    return bool(value)
+
+
 def transform(input):
     criteriaKey = "isDNSConfigured"
 
@@ -95,11 +111,17 @@ def transform(input):
         dkim_configured = False
         spf_configured = False
 
+        # Normalize keys to lowercase for case-insensitive matching
         if isinstance(data, dict):
-            if 'dmarc' in data or 'dkim' in data or 'spf' in data:
-                dmarc_configured = bool(data.get('dmarc'))
-                dkim_configured = bool(data.get('dkim'))
-                spf_configured = bool(data.get('spf'))
+            lower_data = {k.lower(): v for k, v in data.items()}
+        else:
+            lower_data = {}
+
+        if isinstance(data, dict):
+            if 'dmarc' in lower_data or 'dkim' in lower_data or 'spf' in lower_data:
+                dmarc_configured = is_dns_record_present(lower_data.get('dmarc'))
+                dkim_configured = is_dns_record_present(lower_data.get('dkim'))
+                spf_configured = is_dns_record_present(lower_data.get('spf'))
                 dns_configured = dmarc_configured and dkim_configured and spf_configured
             elif 'records' in data:
                 records = data['records'] if isinstance(data['records'], list) else []
