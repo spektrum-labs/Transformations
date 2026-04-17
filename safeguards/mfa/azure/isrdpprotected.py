@@ -46,19 +46,35 @@ def evaluate(data):
     """Core evaluation logic."""
     try:
         policies = data.get('value', [])
-        rdp_app_id = 'c0d2a505-13b8-4ae0-aa9e-cddd5eab0b12'
-        rdp_protected = [
-            p for p in policies
-            if p.get('state') == 'enabled'
-            and (
-                rdp_app_id in p.get('conditions', {}).get('applications', {}).get('includeApplications', [])
-                or 'All' in p.get('conditions', {}).get('applications', {}).get('includeApplications', [])
-            )
-            and (
-                'mfa' in (p.get('grantControls', {}).get('builtInControls', []))
-                or 'block' in (p.get('grantControls', {}).get('builtInControls', []))
-            )
-        ]
+        if not isinstance(policies, list):
+            policies = []
+        
+        #Need to update accordingly as RDP application GUID could change in the future
+        rdp_app_id = 'c0d2a505-13b8-4ae0-aa9e-cddd5eab0b12' #Azure Global App Id for RDP
+        
+        rdp_protected = []
+        for p in policies:
+            if not isinstance(p, dict):
+                continue
+
+            conditions = p.get("conditions") or {}
+            applications = conditions.get("applications") or {}
+            include_apps = applications.get("includeApplications") or []
+            grant_controls = p.get("grantControls") or {}
+            built_in_controls = grant_controls.get("builtInControls") or []
+
+            if not isinstance(include_apps, list):
+                include_apps = []
+            if not isinstance(built_in_controls, list):
+                built_in_controls = []
+
+            if (
+                p.get("state") == "enabled"
+                and (rdp_app_id in include_apps or "All" in include_apps)
+                and ("mfa" in built_in_controls or "block" in built_in_controls)
+            ):
+                rdp_protected.append(p)
+
         return {
             "isRDPProtected": len(rdp_protected) > 0,
             "protectingPolicies": len(rdp_protected)
