@@ -67,6 +67,22 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def is_dns_record_present(value):
+    """Check if a DNS record value indicates the record is configured.
+    Handles actual record strings, booleans, and the string 'False'/'None'.
+    """
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lower() in ("false", "none", "null", "", "no", "0", "no banner found", "not found", "n/a"):
+            return False
+        return len(stripped) > 0
+    return bool(value)
+
+
 def transform(input):
     criteriaKey = "isDNSConfigured"
 
@@ -96,34 +112,50 @@ def transform(input):
         dmarc_configured = False
 
         if isinstance(data, dict):
-            # Check Abnormal Security settings for email authentication
-            settings = data.get('settings', data)
+            # Normalize keys to lowercase for case-insensitive matching
+            lower_data = {k.lower(): v for k, v in data.items()}
 
-            # Check for email authentication settings
-            email_auth = settings.get('emailAuthentication', settings.get('authentication', {}))
-            if isinstance(email_auth, dict):
-                spf = email_auth.get('spf', {})
-                dkim = email_auth.get('dkim', {})
-                dmarc = email_auth.get('dmarc', {})
+            # Check for flat DNS record format: {SPF: "v=spf1...", DKIM: "...", DMARC: "v=DMARC1..."}
+            if 'spf' in lower_data or 'dkim' in lower_data or 'dmarc' in lower_data:
+                spf_configured = is_dns_record_present(lower_data.get('spf'))
+                dkim_configured = is_dns_record_present(lower_data.get('dkim'))
+                dmarc_configured = is_dns_record_present(lower_data.get('dmarc'))
+                dns_configured = spf_configured and dkim_configured and dmarc_configured
+            else:
+                # Check Abnormal Security settings for email authentication
+                settings = data.get('settings', data)
 
-                if isinstance(spf, dict):
-                    spf_configured = bool(spf.get('enabled', spf.get('configured', False)))
-                if isinstance(dkim, dict):
-                    dkim_configured = bool(dkim.get('enabled', dkim.get('configured', False)))
-                if isinstance(dmarc, dict):
-                    dmarc_configured = bool(dmarc.get('enabled', dmarc.get('configured', False)))
+                # Check for email authentication settings
+                email_auth = settings.get('emailAuthentication', settings.get('authentication', {}))
+                if isinstance(email_auth, dict):
+                    spf = email_auth.get('spf', {})
+                    dkim = email_auth.get('dkim', {})
+                    dmarc = email_auth.get('dmarc', {})
 
-                dns_configured = spf_configured or dkim_configured or dmarc_configured
-            elif 'integrations' in settings:
-                # If Abnormal has integrations configured, DNS is set up
-                integrations = settings['integrations']
-                if isinstance(integrations, list) and len(integrations) > 0:
-                    dns_configured = True
+                    if isinstance(spf, dict):
+                        spf_configured = is_dns_record_present(spf.get('enabled', spf.get('configured', False)))
+                    else:
+                        spf_configured = is_dns_record_present(spf)
+                    if isinstance(dkim, dict):
+                        dkim_configured = is_dns_record_present(dkim.get('enabled', dkim.get('configured', False)))
+                    else:
+                        dkim_configured = is_dns_record_present(dkim)
+                    if isinstance(dmarc, dict):
+                        dmarc_configured = is_dns_record_present(dmarc.get('enabled', dmarc.get('configured', False)))
+                    else:
+                        dmarc_configured = is_dns_record_present(dmarc)
 
-            # If we get a valid response from settings, that implies basic DNS config
-            if not dns_configured and isinstance(data, dict) and len(data) > 0:
-                if 'organization' in data or 'account' in data:
-                    dns_configured = True
+                    dns_configured = spf_configured or dkim_configured or dmarc_configured
+                elif 'integrations' in settings:
+                    # If Abnormal has integrations configured, DNS is set up
+                    integrations = settings['integrations']
+                    if isinstance(integrations, list) and len(integrations) > 0:
+                        dns_configured = True
+
+                # If we get a valid response from settings, that implies basic DNS config
+                if not dns_configured and isinstance(data, dict) and len(data) > 0:
+                    if 'organization' in data or 'account' in data:
+                        dns_configured = True
 
         # Build additional findings for sub-criteria
         if spf_configured:
