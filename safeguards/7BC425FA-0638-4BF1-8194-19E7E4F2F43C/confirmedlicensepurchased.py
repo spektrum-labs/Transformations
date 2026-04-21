@@ -64,7 +64,9 @@ def sku_is_active(sku):
         return False
     prepaid = sku.get("prepaidUnits") or {}
     try:
-        return int(prepaid.get("enabled", 0) or 0) > 0
+        enabled = int(prepaid.get("enabled", 0) or 0)
+        warning = int(prepaid.get("warning", 0) or 0)
+        return (enabled + warning) > 0
     except (TypeError, ValueError):
         return False
 
