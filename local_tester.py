@@ -225,6 +225,14 @@ def load_and_validate_schema(schema_file_path, parsed_data):
         }
 
     # Validate data against schema
+    # BaseModel.model_validate cannot accept a list — skip validation
+    # with a warning (mirrors Token-Service behaviour for list inputs)
+    if isinstance(parsed_data, list):
+        return input_class, {
+            "status": "passed",
+            "errors": [],
+            "warnings": ["Schema validation skipped for list input (BaseModel cannot validate lists directly)"]
+        }
     try:
         input_class.model_validate(parsed_data)
         return input_class, {

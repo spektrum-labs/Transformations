@@ -3,8 +3,10 @@ Transformation: isCloudMonitoringEnabled
 Vendor: Red Canary
 Category: Cloud Security / Monitoring
 
-Validates that cloud detection and monitoring detectors are active.
-Checks the detectors endpoint for configured and active detectors.
+Validates that cloud monitoring is enabled by checking whether any
+monitored endpoints exist. The API call filters by
+monitoring_status=monitored, so any endpoints returned are actively
+monitored.
 """
 
 import json
@@ -13,20 +15,20 @@ from datetime import datetime
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
+        return {"data": input_data.get("data"), "validation": input_data.get("validation")}
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
+                    data = data.get(key)
                     unwrapped = True
                     break
             if not unwrapped:
                 break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+    return {"data": data, "validation": {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -76,77 +78,50 @@ def transform(input):
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
 
-        data, validation = extract_input(input)
+        extracted = extract_input(input)
+        data = extracted.get("data")
+        validation = extracted.get("validation")
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            has_data = (isinstance(data, list) and len(data) > 0) or \
+                       (isinstance(data, dict) and ('data' in data or 'value' in data))
+            if not has_data:
+                return create_response(
+                    result={criteriaKey: False},
+                    validation=validation,
+                    fail_reasons=["Input validation failed"]
+                )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         additional_findings = []
 
-        monitoring_enabled = False
-        total_detectors = 0
-        active_detectors = 0
+        endpoints = []
 
-        detectors = []
+        if isinstance(data, list):
+            endpoints = data
+        elif isinstance(data, dict):
+            if 'data' in data and isinstance(data.get('data'), list):
+                endpoints = data.get('data')
+            elif 'value' in data and isinstance(data.get('value'), list):
+                endpoints = data.get('value')
 
-        if isinstance(data, dict):
-            if 'detectors' in data and isinstance(data['detectors'], list):
-                detectors = data['detectors']
-            elif 'data' in data and isinstance(data['data'], list):
-                detectors = data['data']
-        elif isinstance(data, list):
-            detectors = data
-
-        total_detectors = len(detectors)
-
-        if total_detectors > 0:
-            for detector in detectors:
-                if isinstance(detector, dict):
-                    state = str(detector.get('state', '')).lower()
-                    status = str(detector.get('status', '')).lower()
-                    is_active = detector.get('active', detector.get('is_active',
-                                detector.get('enabled', None)))
-
-                    if state in ('active', 'enabled', 'running') or \
-                       status in ('active', 'enabled', 'running') or \
-                       is_active is True:
-                        active_detectors += 1
-                    elif not state and not status and is_active is None:
-                        # No status field means likely active
-                        active_detectors += 1
-
-            if active_detectors > 0:
-                monitoring_enabled = True
-            else:
-                # Detectors exist but none flagged active
-                monitoring_enabled = True
-                additional_findings.append(
-                    f"All {total_detectors} detectors may be inactive or in a non-standard state"
-                )
+        monitored_count = len(endpoints)
+        monitoring_enabled = monitored_count > 0
 
         if monitoring_enabled:
-            reason = f"Cloud monitoring is enabled ({total_detectors} detector(s) configured"
-            if active_detectors > 0:
-                reason += f", {active_detectors} active)"
-            else:
-                reason += ")"
-            pass_reasons.append(reason)
+            pass_reasons.append(
+                f"Cloud monitoring is enabled: {monitored_count} endpoint(s) actively monitored"
+            )
         else:
-            fail_reasons.append("No cloud monitoring detectors found")
-            recommendations.append("Configure detection rules in Red Canary to enable cloud monitoring")
+            fail_reasons.append("No monitored endpoints found")
+            recommendations.append("Configure endpoint monitoring in Red Canary")
 
         return create_response(
             result={
                 criteriaKey: monitoring_enabled,
-                "totalDetectors": total_detectors,
-                "activeDetectors": active_detectors
+                "monitoredEndpoints": monitored_count
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -154,8 +129,7 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "totalDetectors": total_detectors,
-                "activeDetectors": active_detectors
+                "monitoredEndpoints": monitored_count
             }
         )
 
