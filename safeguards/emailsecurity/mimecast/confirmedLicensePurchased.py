@@ -1,8 +1,3 @@
-"""Transformation: isDNSConfigured — Mimecast getInternalDomain
-Checks whether DNS (DMARC, DKIM, SPF / MX routing) is configured by
-verifying that at least one internal domain has an active inbound type
-registered with Mimecast, indicating DNS records point mail to Mimecast.
-"""
 import json
 from datetime import datetime
 
@@ -76,94 +71,78 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    raw_items = data.get("data") or []
+    account_list = data.get("data") or []
+    meta = data.get("meta") or {}
     fail_list = data.get("fail") or []
 
-    # Filter out truncation markers (e.g. {"_truncated": "+112 more items"})
-    domains = [
-        item for item in raw_items
-        if isinstance(item, dict) and "domain" in item
-    ]
+    meta_status = meta.get("status") if isinstance(meta, dict) else None
+    has_account = len(account_list) > 0
+    has_failures = len(fail_list) > 0
 
-    total_domains = len(domains)
+    # Pull first account record details for evidence
+    account = account_list[0] if has_account else {}
+    account_name = account.get("accountName") or "unknown"
+    account_code = account.get("accountCode") or "unknown"
+    packages = account.get("packages") or []
+    package_count = len(packages)
 
-    # Active inbound domains: sendOnly=False and inboundType is set and non-empty
-    inbound_domains = [
-        d for d in domains
-        if not d.get("sendOnly", True) and d.get("inboundType")
-    ]
-    inbound_count = len(inbound_domains)
-
-    # Collect sample domain names for reporting (up to 5)
-    sample_names = [d.get("domain", "") for d in inbound_domains[:5]]
-
-    api_errors = []
-    if fail_list:
-        for f in fail_list:
-            errs = f.get("errors") or []
-            for e in errs:
-                api_errors.append(e.get("message", "Unknown API error"))
-
-    is_configured = inbound_count > 0
-
-    inbound_types_seen = list({d.get("inboundType") for d in inbound_domains if d.get("inboundType")})
+    # A valid license is confirmed when:
+    # - API returned status 200
+    # - data array is non-empty (account record exists)
+    # - fail array is empty
+    license_purchased = (meta_status == 200 and has_account and not has_failures)
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if is_configured:
+    if license_purchased:
         pass_reasons.append(
-            f"{inbound_count} of {total_domains} registered internal domains "
-            f"have an active inbound DNS routing type configured in Mimecast "
-            f"(inboundType values observed: {', '.join(inbound_types_seen)}). "
-            f"Sample domains: {', '.join(sample_names)}. "
-            "Active inbound routing confirms that MX records point to Mimecast and "
-            "that DNS configuration (SPF, DKIM, DMARC) is in place for mail flow."
+            f"Mimecast API returned HTTP 200 with a populated account record "
+            f"(accountCode={account_code}, accountName={account_name}). "
+            f"Account has {package_count} provisioned packages and no failure entries, "
+            f"confirming a valid, active Mimecast license."
         )
     else:
-        if total_domains == 0:
+        if meta_status != 200:
             fail_reasons.append(
-                "No internal domains are registered with this Mimecast account. "
-                "Without registered domains, DNS records (SPF, DKIM, DMARC) "
-                "cannot be validated or enforced via Mimecast."
+                f"API response meta.status was {meta_status} instead of 200, "
+                f"indicating the account could not be retrieved."
             )
-            recommendations.append(
-                "Register your organisation's email domains in the Mimecast administration "
-                "console under Gateway > Domains, and ensure MX records, SPF, DKIM, and "
-                "DMARC records are published in DNS."
-            )
-        else:
+        if not has_account:
             fail_reasons.append(
-                f"{total_domains} domain(s) are registered but none have an active "
-                "inbound DNS routing type (all are send-only or have no inboundType). "
-                "This indicates DNS/MX records may not be directing inbound mail through Mimecast."
+                "The data array in the API response was empty — no account record returned."
             )
-            recommendations.append(
-                "Review domain configuration in Mimecast and ensure that MX records for "
-                "each domain point to Mimecast, and that SPF, DKIM, and DMARC DNS records "
-                "are published and verified."
+        if has_failures:
+            fail_reasons.append(
+                f"The fail array contained {len(fail_list)} error(s), indicating the account "
+                f"request did not complete successfully."
             )
+        recommendations.append(
+            "Verify that the Mimecast OAuth credentials (clientId / clientSecret) are valid "
+            "and that the account has an active Mimecast subscription."
+        )
 
     return create_response(
         result={
-            "isDNSConfigured": is_configured,
-            "totalDomainsRegistered": total_domains,
-            "inboundConfiguredDomains": inbound_count,
+            "confirmedLicensePurchased": license_purchased,
+            "accountCode": account_code,
+            "accountName": account_name,
+            "packageCount": package_count,
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary={
-            "totalDomainsRegistered": total_domains,
-            "inboundConfiguredDomains": inbound_count,
-            "inboundTypesObserved": inbound_types_seen,
+            "metaStatus": meta_status,
+            "accountRecordCount": len(account_list),
+            "failCount": len(fail_list),
+            "packageCount": package_count,
         },
-        api_errors=api_errors,
         metadata={
-            "transformationId": "isDNSConfigured",
+            "transformationId": "confirmedLicensePurchased",
             "vendor": "Mimecast",
-            "category": "Email Security",
+            "category": "emailsecurity",
         },
     )
