@@ -1,15 +1,19 @@
 """Schema registry for this vendor's transformations."""
 
 from .confirmedLicensePurchased import ConfirmedLicensePurchasedInput
-from .isEPPConfigured import IsEPPConfiguredInput
+from
 from .isEPPEnabled import IsEPPEnabledInput
-from .isEPPLoggingEnabled import IsEPPLoggingEnabledInput
+from
+from .isSSOEnabled import IsSSOEnabledInput
 from .requiredCoveragePercentage import RequiredCoveragePercentageInput
+
+__all__
 
 __all__ = [
     "ConfirmedLicensePurchasedInput",
     "IsEPPConfiguredInput",
     "IsEPPEnabledInput",
     "IsEPPLoggingEnabledInput",
+    "IsSSOEnabledInput",
     "RequiredCoveragePercentageInput",
 ]
