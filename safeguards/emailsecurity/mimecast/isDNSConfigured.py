@@ -1,14 +1,14 @@
-"""Transformation: isDNSConfigured — Mimecast getInternalDomain
-Checks whether DNS (DMARC, DKIM, SPF / MX routing) is configured by
-verifying that at least one internal domain has an active inbound type
-registered with Mimecast, indicating DNS records point mail to Mimecast.
+"""
+Transformation: isDNSConfigured
+Vendor: Mimecast  |  Category: emailsecurity
+Evaluates: Ensure that DMARC, DKIM and SPF records are set up properly
+           by verifying at least one active DNS Authentication Outbound policy exists.
 """
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -23,147 +23,209 @@ def extract_input(input_data):
                     break
             if not unwrapped:
                 break
-    validation = {
-        "status": "unknown",
-        "errors": [],
-        "warnings": ["Legacy input format - no schema validation performed"],
-    }
-    return data, validation
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, metadata=None,
-                    transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    api_err_list = api_errors or []
-    transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
-    transformation_status = "error" if transform_err_list else "success"
-    response_metadata = {
-        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-        "schemaVersion": "2.0",
-    }
-    if metadata:
-        response_metadata.update(metadata)
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": data_collection_status, "errors": api_err_list},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or []
+            },
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", []),
+                "warnings": validation.get("warnings", [])
             },
             "transformation": {
-                "status": transformation_status,
-                "errors": transform_err_list,
-                "inputSummary": input_summary or {},
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
             },
             "evaluation": {
                 "passReasons": pass_reasons or [],
                 "failReasons": fail_reasons or [],
                 "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or [],
+                "additionalFindings": additional_findings or []
             },
-            "metadata": response_metadata,
-        },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "isDNSConfigured",
+                "vendor": "Mimecast",
+                "category": "emailsecurity"
+            }
+        }
     }
 
 
+def get_policy_list(data):
+    """
+    Extract the list of DNS auth outbound policies from the API response.
+    Mimecast /api/gateway/policies/dns-auth-outbound returns:
+      { "data": [ { "id": "...", "policy": { ... }, "option": { ... } }, ... ] }
+    The returnSpec maps data -> data, so by the time we receive it the top-level
+    key is already 'data'.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ["data", "policies", "items", "results"]:
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
+    return []
+
+
+def is_policy_enabled(policy_entry):
+    """Return True if a policy entry is considered active/enabled."""
+    if isinstance(policy_entry, dict):
+        # Direct enabled flag
+        if "enabled" in policy_entry:
+            return bool(policy_entry.get("enabled"))
+        # Nested under 'policy' key
+        nested = policy_entry.get("policy")
+        if isinstance(nested, dict) and "enabled" in nested:
+            return bool(nested.get("enabled"))
+        # If there is no explicit enabled flag, treat existence as enabled
+        return True
+    return False
+
+
+def evaluate(data):
+    """
+    Core evaluation logic for isDNSConfigured.
+
+    Criteria: At least one DNS Authentication Outbound policy must exist
+    and be enabled, indicating that DKIM/SPF/DMARC outbound signing or
+    verification is configured in Mimecast.
+    """
+    try:
+        policies = get_policy_list(data)
+        total_policies = len(policies)
+
+        if total_policies == 0:
+            return {
+                "isDNSConfigured": False,
+                "totalPolicies": 0,
+                "enabledPolicies": 0,
+                "error": "No DNS Authentication Outbound policies found"
+            }
+
+        enabled_count = 0
+        for policy in policies:
+            if is_policy_enabled(policy):
+                enabled_count = enabled_count + 1
+
+        is_configured = enabled_count > 0
+
+        return {
+            "isDNSConfigured": is_configured,
+            "totalPolicies": total_policies,
+            "enabledPolicies": enabled_count
+        }
+
+    except Exception as e:
+        return {"isDNSConfigured": False, "error": str(e)}
+
+
 def transform(input):
-    data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    criteriaKey = "isDNSConfigured"
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
 
-    raw_items = data.get("data") or []
-    fail_list = data.get("fail") or []
+        data, validation = extract_input(input)
 
-    # Filter out truncation markers (e.g. {"_truncated": "+112 more items"})
-    domains = [
-        item for item in raw_items
-        if isinstance(item, dict) and "domain" in item
-    ]
-
-    total_domains = len(domains)
-
-    # Active inbound domains: sendOnly=False and inboundType is set and non-empty
-    inbound_domains = [
-        d for d in domains
-        if not d.get("sendOnly", True) and d.get("inboundType")
-    ]
-    inbound_count = len(inbound_domains)
-
-    # Collect sample domain names for reporting (up to 5)
-    sample_names = [d.get("domain", "") for d in inbound_domains[:5]]
-
-    api_errors = []
-    if fail_list:
-        for f in fail_list:
-            errs = f.get("errors") or []
-            for e in errs:
-                api_errors.append(e.get("message", "Unknown API error"))
-
-    is_configured = inbound_count > 0
-
-    inbound_types_seen = list({d.get("inboundType") for d in inbound_domains if d.get("inboundType")})
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if is_configured:
-        pass_reasons.append(
-            f"{inbound_count} of {total_domains} registered internal domains "
-            f"have an active inbound DNS routing type configured in Mimecast "
-            f"(inboundType values observed: {', '.join(inbound_types_seen)}). "
-            f"Sample domains: {', '.join(sample_names)}. "
-            "Active inbound routing confirms that MX records point to Mimecast and "
-            "that DNS configuration (SPF, DKIM, DMARC) is in place for mail flow."
-        )
-    else:
-        if total_domains == 0:
-            fail_reasons.append(
-                "No internal domains are registered with this Mimecast account. "
-                "Without registered domains, DNS records (SPF, DKIM, DMARC) "
-                "cannot be validated or enforced via Mimecast."
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
             )
-            recommendations.append(
-                "Register your organisation's email domains in the Mimecast administration "
-                "console under Gateway > Domains, and ensure MX records, SPF, DKIM, and "
-                "DMARC records are published in DNS."
+
+        eval_result = evaluate(data)
+        result_value = eval_result.get(criteriaKey, False)
+        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+        additional_findings = []
+
+        total = eval_result.get("totalPolicies", 0)
+        enabled = eval_result.get("enabledPolicies", 0)
+
+        if result_value:
+            pass_reasons.append(
+                "DNS Authentication Outbound policies are configured: "
+                + str(enabled) + " of " + str(total) + " policy(s) are enabled"
+            )
+            pass_reasons.append(
+                "DKIM/SPF/DMARC outbound configuration is active in Mimecast"
             )
         else:
-            fail_reasons.append(
-                f"{total_domains} domain(s) are registered but none have an active "
-                "inbound DNS routing type (all are send-only or have no inboundType). "
-                "This indicates DNS/MX records may not be directing inbound mail through Mimecast."
-            )
+            if total == 0:
+                fail_reasons.append(
+                    "No DNS Authentication Outbound policies found in Mimecast"
+                )
+                recommendations.append(
+                    "Create at least one DNS Authentication Outbound policy in the Mimecast "
+                    "Administration Console under Gateway | Policies | DNS Authentication Outbound"
+                )
+            else:
+                fail_reasons.append(
+                    str(total) + " DNS Authentication Outbound policy(s) exist but none are enabled"
+                )
+                recommendations.append(
+                    "Enable at least one DNS Authentication Outbound policy in Mimecast to ensure "
+                    "DKIM signing and DMARC/SPF verification are active"
+                )
             recommendations.append(
-                "Review domain configuration in Mimecast and ensure that MX records for "
-                "each domain point to Mimecast, and that SPF, DKIM, and DMARC DNS records "
-                "are published and verified."
+                "Ensure DMARC, DKIM, and SPF DNS records are published and that Mimecast "
+                "DNS Authentication policies reference the correct signing profile"
             )
 
-    return create_response(
-        result={
-            "isDNSConfigured": is_configured,
-            "totalDomainsRegistered": total_domains,
-            "inboundConfiguredDomains": inbound_count,
-        },
-        validation=validation,
-        pass_reasons=pass_reasons,
-        fail_reasons=fail_reasons,
-        recommendations=recommendations,
-        input_summary={
-            "totalDomainsRegistered": total_domains,
-            "inboundConfiguredDomains": inbound_count,
-            "inboundTypesObserved": inbound_types_seen,
-        },
-        api_errors=api_errors,
-        metadata={
-            "transformationId": "isDNSConfigured",
-            "vendor": "Mimecast",
-            "category": "Email Security",
-        },
-    )
+            if "error" in eval_result:
+                fail_reasons.append(eval_result["error"])
+
+        additional_findings.append(
+            "Total DNS Auth Outbound policies: " + str(total)
+        )
+        additional_findings.append(
+            "Enabled DNS Auth Outbound policies: " + str(enabled)
+        )
+
+        full_result = {criteriaKey: result_value}
+        for k, v in extra_fields.items():
+            full_result[k] = v
+
+        return create_response(
+            result=full_result,
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                criteriaKey: result_value,
+                "totalPolicies": total,
+                "enabledPolicies": enabled
+            },
+            additional_findings=additional_findings
+        )
+
+    except Exception as e:
+        return create_response(
+            result={criteriaKey: False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            fail_reasons=["Transformation error: " + str(e)]
+        )

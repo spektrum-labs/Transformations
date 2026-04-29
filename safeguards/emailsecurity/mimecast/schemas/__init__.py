@@ -1,21 +1,13 @@
-"""Schema registry for this vendor's transformations."""
+"""Pydantic schemas for transformation inputs."""
 
-from .confirmedLicensePurchased import ConfirmedLicensePurchasedInput
 from .confirmedlicensepurchased import ConfirmedlicensepurchasedInput
-from
-from .isDNSConfigured import IsDNSConfiguredInput
-from .isEmailLoggingEnabled import IsEmailLoggingEnabledInput
+from .isantiphishingenabled import IsantiphishingenabledInput
 from .isdnsconfigured import IsdnsconfiguredInput
-from
+from .isemailloggingenabled import IsemailloggingenabledInput
 from .isurlrewriteenabled import IsurlrewriteenabledInput
 
-__all__
-
 __all__ = [
-    "ConfirmedLicensePurchasedInput",
     "ConfirmedlicensepurchasedInput",
-    "IsDNSConfiguredInput",
-    "IsEmailLoggingEnabledInput",
     "IsantiphishingenabledInput",
     "IsdnsconfiguredInput",
     "IsemailloggingenabledInput",
