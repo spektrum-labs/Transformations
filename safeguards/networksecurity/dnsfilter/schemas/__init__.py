@@ -1,13 +1,15 @@
-"""Pydantic schemas for transformation inputs."""
+"""Schema registry for this vendor's transformations."""
 
 from .confirmedlicensepurchased import ConfirmedlicensepurchasedInput
-from .isdnsfilteringenabled import IsdnsfilteringenabledInput
+from
+from .isDNSLoggingEnabled import IsDNSLoggingEnabledInput
 from .isdnspolicyconfigured import IsdnspolicyconfiguredInput
-from .isdnsloggingenabled import IsdnsloggingenabledInput
+from
 
 __all__ = [
     "ConfirmedlicensepurchasedInput",
+    "IsDNSLoggingEnabledInput",
     "IsdnsfilteringenabledInput",
-    "IsdnspolicyconfiguredInput",
     "IsdnsloggingenabledInput",
+    "IsdnspolicyconfiguredInput",
 ]
