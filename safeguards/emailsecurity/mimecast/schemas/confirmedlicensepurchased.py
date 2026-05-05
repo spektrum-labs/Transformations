@@ -1,39 +1,21 @@
-"""Schema for confirmedlicensepurchased transformation input."""
-
+from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
 
 
-class MimecastAccount(BaseModel):
-    """Mimecast account information from the account API."""
-    accountName: Optional[str] = None
-    accountCode: Optional[str] = None
-    mimecastId: Optional[str] = None
-    packages: Optional[List[str]] = None
-    userCount: Optional[str] = None
-    region: Optional[str] = None
-    type: Optional[str] = None
-    gateway: Optional[str] = None
-    archive: Optional[str] = None
-    contactEmail: Optional[str] = None
-    contactName: Optional[str] = None
+class ConfirmedLicensePurchasedInput(BaseModel):
+    """Input schema for the confirmedLicensePurchased transformation.
 
-    class Config:
-        extra = "allow"
-
-
-class ConfirmedlicensepurchasedInput(BaseModel):
-    """
-    Expected input schema for the confirmedlicensepurchased transformation.
-    Criteria key: confirmedLicensePurchased
-
-    Note: After API response parsing, the Mimecast account response is
-    unwrapped from the 'data' key, yielding a list of MimecastAccount
-    entries. Schema validation may report an error for list inputs.
-    The transformation handles both list and dict formats.
+    Expects the raw Mimecast getAccount API response envelope:
+      {
+        "fail": [],
+        "meta": {"status": 200},
+        "data": [{"accountCode": "...", "accountName": "...", "packages": [...], ...}]
+      }
     """
 
-    data: Optional[List[MimecastAccount]] = None
+    fail: Optional[List[Any]] = None
+    meta: Optional[Dict[str, Any]] = None
+    data: Optional[List[Dict[str, Any]]] = None
 
     class Config:
         extra = "allow"

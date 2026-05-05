@@ -1,17 +1,10 @@
-"""
-Transformation: confirmedLicensePurchased
-Vendor: Mimecast
-Category: Email Security / Licensing
-
-Evaluates if a valid Mimecast subscription is active by checking the
-account information endpoint for packages and account details.
-"""
-
+"""Transformation: confirmedLicensePurchased — Mimecast getAccount"""
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -26,128 +19,135 @@ def extract_input(input_data):
                     break
             if not unwrapped:
                 break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+    validation = {
+        "status": "unknown",
+        "errors": [],
+        "warnings": ["Legacy input format - no schema validation performed"],
+    }
+    return data, validation
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, metadata=None,
+                    transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    api_err_list = api_errors or []
+    transform_err_list = transformation_errors or []
+    data_collection_status = "error" if api_err_list else "success"
+    transformation_status = "error" if transform_err_list else "success"
+    response_metadata = {
+        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+        "schemaVersion": "2.0",
+    }
+    if metadata:
+        response_metadata.update(metadata)
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
-            },
+            "dataCollection": {"status": data_collection_status, "errors": api_err_list},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
+                "warnings": validation.get("warnings", []),
             },
             "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
+                "status": transformation_status,
+                "errors": transform_err_list,
+                "inputSummary": input_summary or {},
             },
             "evaluation": {
                 "passReasons": pass_reasons or [],
                 "failReasons": fail_reasons or [],
                 "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
+                "additionalFindings": additional_findings or [],
             },
-            "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-                "schemaVersion": "1.0",
-                "transformationId": "confirmedLicensePurchased",
-                "vendor": "Mimecast",
-                "category": "Email Security"
-            }
-        }
+            "metadata": response_metadata,
+        },
     }
 
 
 def transform(input):
-    criteriaKey = "confirmedLicensePurchased"
+    data, validation = extract_input(input)
+    data = data if isinstance(data, dict) else {}
 
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
+    # The Mimecast getAccount response wraps account records in a top-level "data" list
+    account_list = data.get("data") or []
+    fail_list = data.get("fail") or []
+    meta = data.get("meta") or {}
+    meta_status = meta.get("status") if isinstance(meta, dict) else None
 
-        data, validation = extract_input(input)
+    # API-level errors surfaced in the "fail" array
+    api_errors = []
+    if fail_list:
+        api_errors = [str(f) for f in fail_list]
 
-        if validation.get("status") == "failed" and not isinstance(data, list):
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        license_purchased = False
-        additional_findings = []
-        account_name = ""
-        account_code = ""
-        package_count = 0
-
-        account = None
-        if isinstance(data, list) and len(data) > 0:
-            account = data[0] if isinstance(data[0], dict) else None
-        elif isinstance(data, dict):
-            if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
-                account = data["data"][0] if isinstance(data["data"][0], dict) else None
-            else:
-                account = data
-
-        if isinstance(account, dict):
-            account_name = account.get("accountName", "")
-            account_code = account.get("accountCode", "")
-            packages = account.get("packages", [])
-            if isinstance(packages, list):
-                package_count = len(packages)
-
-            license_purchased = package_count > 0
-
-            if license_purchased:
-                for pkg in packages:
-                    if isinstance(pkg, str):
-                        additional_findings.append(f"Package: {pkg}")
-
-        if license_purchased:
-            pass_reasons.append(
-                f"Mimecast license confirmed for {account_name} ({account_code}) "
-                f"with {package_count} {'package' if package_count == 1 else 'packages'}"
-            )
-        else:
-            fail_reasons.append("No Mimecast packages found - license not confirmed")
-            recommendations.append("Ensure a valid Mimecast subscription is active with licensed packages")
-
+    if not account_list:
+        # No account data returned — cannot confirm license
         return create_response(
             result={
-                criteriaKey: license_purchased,
-                "packageCount": package_count
+                "confirmedLicensePurchased": False,
+                "packageCount": 0,
+                "accountCode": None,
             },
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={
-                "accountName": account_name,
-                "accountCode": account_code,
-                "packageCount": package_count
+            pass_reasons=[],
+            fail_reasons=["No account data was returned in the getAccount response. Cannot confirm a valid Mimecast license."],
+            recommendations=["Verify that the API credentials have the Accounts | Dashboard | Read scope and that the account is active."],
+            input_summary={"accountCount": 0, "metaStatus": meta_status, "failCount": len(fail_list)},
+            api_errors=api_errors,
+            metadata={
+                "transformationId": "confirmedLicensePurchased",
+                "vendor": "Mimecast",
+                "category": "Email Security",
             },
-            additional_findings=additional_findings
         )
 
-    except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+    account = account_list[0] if isinstance(account_list[0], dict) else {}
+    account_code = account.get("accountCode") or ""
+    account_name = account.get("accountName") or ""
+    packages = account.get("packages") or []
+    package_count = len(packages)
+
+    license_purchased = package_count > 0
+
+    if license_purchased:
+        pass_reasons = [
+            f"Mimecast account '{account_name}' (code: {account_code}) returned a valid getAccount response with {package_count} licensed packages, confirming an active Mimecast license is purchased."
+        ]
+        fail_reasons = []
+        recommendations = []
+    else:
+        pass_reasons = []
+        fail_reasons = [
+            f"Mimecast account '{account_name}' (code: {account_code}) returned a valid response but the packages array is empty, indicating no licensed products were found."
+        ]
+        recommendations = [
+            "Contact Mimecast support to verify the account's license status and ensure at least one product package is assigned."
+        ]
+
+    return create_response(
+        result={
+            "confirmedLicensePurchased": license_purchased,
+            "packageCount": package_count,
+            "accountCode": account_code,
+            "accountName": account_name,
+        },
+        validation=validation,
+        pass_reasons=pass_reasons,
+        fail_reasons=fail_reasons,
+        recommendations=recommendations,
+        input_summary={
+            "accountCount": len(account_list),
+            "accountCode": account_code,
+            "packageCount": package_count,
+            "metaStatus": meta_status,
+        },
+        api_errors=api_errors,
+        metadata={
+            "transformationId": "confirmedLicensePurchased",
+            "vendor": "Mimecast",
+            "category": "Email Security",
+        },
+    )
