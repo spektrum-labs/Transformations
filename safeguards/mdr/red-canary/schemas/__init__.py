@@ -1,5 +1,8 @@
-"""Pydantic schemas for transformation inputs."""
+"""Schema registry for this vendor's transformations."""
 
+from .isMDREnabled import IsMDREnabledInput
+from .isMDRLoggingEnabled import IsMDRLoggingEnabledInput
+from .requiredCoveragePercentage import RequiredCoveragePercentageInput
 from .confirmedlicensepurchased import ConfirmedlicensepurchasedInput
 from .iscloudmonitoringenabled import IscloudmonitoringenabledInput
 from .isalertingconfigured import IsalertingconfiguredInput
@@ -10,4 +13,7 @@ __all__ = [
     "IscloudmonitoringenabledInput",
     "IsalertingconfiguredInput",
     "IsendpointcoveragevalidInput",
+    "IsMDREnabledInput",
+    "IsMDRLoggingEnabledInput",
+    "RequiredCoveragePercentageInput",
 ]
