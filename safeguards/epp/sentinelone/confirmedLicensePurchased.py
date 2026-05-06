@@ -2,13 +2,14 @@
 Transformation: confirmedLicensePurchased
 Vendor: SentinelOne
 Category: epp
-Method: getAccounts
+Method: checkLicenseStatus
 
-Checks that at least one account has a Paid, active account type with valid
-license entitlements (unlimited SKU, positive license count, or named bundles).
+Reads the /web/api/v2.1/sites/{siteId} response — a single site object — and confirms
+the customer has a paid, active, unexpired license with capacity. Trial and free
+siteTypes are NOT considered a confirmed purchase.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def extract_input(input_data):
@@ -46,7 +47,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     data_collection_status = "error" if api_err_list else "success"
     transformation_status = "error" if transform_err_list else "success"
     response_metadata = {
-        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+        "evaluatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "schemaVersion": "2.0",
     }
     if metadata:
@@ -76,28 +77,53 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def _looks_like_site(d):
+    if not isinstance(d, dict):
+        return False
+    return any(k in d for k in ("totalLicenses", "siteType", "unlimitedLicenses", "registrationToken"))
+
+
+def _resolve_site(data):
+    """Resolve the site object from whatever shape Token-Service preprocessing produced."""
+    if not isinstance(data, dict):
+        return None, "Input data is not a dict — cannot locate site object."
+
+    # Most common: Token-Service unwrapped down to the site dict directly.
+    if _looks_like_site(data):
+        return data, None
+
+    # /sites list-endpoint shape: data has a `sites` array.
+    sites = data.get("sites")
+    if isinstance(sites, list):
+        if len(sites) == 1:
+            return sites[0], None
+        if len(sites) == 0:
+            return None, "GET /sites returned an empty list — the apiToken cannot see any sites."
+        return None, (f"GET /sites returned {len(sites)} sites; the integration must filter to a "
+                      "single site via /sites/{siteId} or by configuring siteId.")
+
+    # Defensive: one more layer of nesting.
+    inner = data.get("data")
+    if _looks_like_site(inner):
+        return inner, None
+
+    return None, "Could not locate a site object in the API response."
+
+
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    site, resolve_err = _resolve_site(data)
 
-    accounts = data.get("data") or []
-    total_accounts = len(accounts)
-
-    if total_accounts == 0:
+    if site is None:
         return create_response(
-            result={
-                "confirmedLicensePurchased": False,
-                "accountCount": 0,
-                "activeAccountCount": 0,
-                "paidAccountCount": 0,
-                "licensedBundles": [],
-                "unlimitedSkuAccounts": 0,
-            },
+            result={"confirmedLicensePurchased": False},
             validation=validation,
-            pass_reasons=[],
-            fail_reasons=["No account records returned from the SentinelOne API. Cannot confirm a purchased license."],
-            recommendations=["Verify that the API token has sufficient permissions to read account data, and that at least one account exists in the management console."],
-            input_summary={"accountCount": 0},
+            fail_reasons=[resolve_err or "No site object available; license cannot be confirmed."],
+            recommendations=[
+                "Verify the integration's checkLicenseStatus method targets "
+                "/web/api/v2.1/sites/{siteId} and that the configured siteId is correct."
+            ],
+            input_summary={"siteFound": False},
             metadata={
                 "transformationId": "confirmedLicensePurchased",
                 "vendor": "SentinelOne",
@@ -105,116 +131,97 @@ def transform(input):
             },
         )
 
-    paid_accounts = []
-    active_accounts = []
-    licensed_bundles = []
-    unlimited_sku_accounts = []
-    positive_license_accounts = []
+    state = (site.get("state") or "").lower() if isinstance(site.get("state"), str) else ""
+    site_type_raw = site.get("siteType") or ""
+    site_type = site_type_raw.lower() if isinstance(site_type_raw, str) else ""
+    unlimited_licenses = bool(site.get("unlimitedLicenses"))
+    unlimited_expiration = bool(site.get("unlimitedExpiration"))
+    total_licenses = site.get("totalLicenses")
+    if not isinstance(total_licenses, (int, float)):
+        total_licenses = 0
+    active_licenses = site.get("activeLicenses")
+    if not isinstance(active_licenses, (int, float)):
+        active_licenses = 0
+    expiration_str = site.get("expiration") or ""
+    sku = site.get("sku") or ""
+    site_name = site.get("name") or site.get("id") or "unknown"
 
-    for account in accounts:
-        account_type = account.get("accountType") or ""
-        state = account.get("state") or ""
-        name = account.get("name") or account.get("id") or "unknown"
+    is_active = state == "active"
+    is_paid = site_type == "paid"  # exclude "trial", "free", and missing
+    has_capacity = unlimited_licenses or total_licenses > 0
 
-        if account_type.lower() == "paid":
-            paid_accounts.append(name)
+    is_unexpired = unlimited_expiration
+    if not is_unexpired and isinstance(expiration_str, str) and expiration_str:
+        try:
+            exp_dt = datetime.fromisoformat(expiration_str.replace("Z", "+00:00"))
+            is_unexpired = exp_dt > datetime.now(timezone.utc)
+        except Exception:
+            is_unexpired = False
 
-        if state.lower() == "active":
-            active_accounts.append(name)
+    confirmed = is_active and is_paid and has_capacity and is_unexpired
 
-        skus = account.get("skus") or []
-        found_sku_entitlement = False
-        for sku in skus:
-            if sku.get("unlimited") is True:
-                if name not in unlimited_sku_accounts:
-                    unlimited_sku_accounts.append(name)
-                found_sku_entitlement = True
-                break
-            sku_total = sku.get("totalLicenses") or 0
-            if isinstance(sku_total, int) and sku_total > 0:
-                if name not in positive_license_accounts:
-                    positive_license_accounts.append(name)
-                found_sku_entitlement = True
-                break
-
-        # Also accept totalLicenses == -1 at account level (means unlimited)
-        if not found_sku_entitlement:
-            acct_total_licenses = account.get("totalLicenses")
-            if isinstance(acct_total_licenses, int) and acct_total_licenses == -1:
-                if name not in unlimited_sku_accounts:
-                    unlimited_sku_accounts.append(name)
-
-        bundles = (account.get("licenses") or {}).get("bundles") or []
-        for bundle in bundles:
-            display = bundle.get("displayName") or bundle.get("name") or ""
-            if display and display not in licensed_bundles:
-                licensed_bundles.append(display)
-
-    has_paid = len(paid_accounts) > 0
-    has_active = len(active_accounts) > 0
-    has_entitlement = (
-        len(unlimited_sku_accounts) > 0
-        or len(positive_license_accounts) > 0
-        or len(licensed_bundles) > 0
-    )
-
-    confirmed = has_paid and has_active and has_entitlement
+    extras = {
+        "siteName": site_name,
+        "siteState": state,
+        "siteType": site_type_raw,
+        "sku": sku,
+        "totalLicenses": total_licenses,
+        "activeLicenses": active_licenses,
+        "unlimitedLicenses": unlimited_licenses,
+        "expiration": expiration_str,
+        "unlimitedExpiration": unlimited_expiration,
+    }
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
     if confirmed:
-        bundle_str = ", ".join(licensed_bundles) if licensed_bundles else "none listed"
-        unlimited_str = ", ".join(unlimited_sku_accounts) if unlimited_sku_accounts else "none"
+        capacity_str = "unlimited" if unlimited_licenses else f"{int(total_licenses)} licenses"
+        expiry_str = "no expiration" if unlimited_expiration else f"expiring {expiration_str}"
         pass_reasons.append(
-            f"Account(s) {paid_accounts} have accountType='Paid' and state='active', "
-            f"confirming an active subscription. "
-            f"Unlimited SKU entitlement on account(s): {unlimited_str}. "
-            f"Licensed bundles: {bundle_str}."
+            f"Site '{site_name}' has siteType='{site_type_raw}' and state='active' with a valid "
+            f"license entitlement ({capacity_str}, {expiry_str}, SKU '{sku}')."
         )
     else:
-        if not has_paid:
-            observed_types = [a.get("accountType") for a in accounts]
+        if not is_active:
+            fail_reasons.append(f"Site state is '{state or 'missing'}', not 'active'.")
+            recommendations.append("Activate the site in the SentinelOne management console.")
+        if not is_paid:
+            actual = site_type_raw or "missing"
             fail_reasons.append(
-                f"No account with accountType='Paid' found among {total_accounts} account(s). "
-                f"Account types observed: {observed_types}."
+                f"Site siteType is '{actual}', not 'Paid'. Trial and free sites are not considered "
+                "a confirmed license purchase."
             )
-            recommendations.append("Purchase a SentinelOne license and ensure the account type is set to 'Paid' in the management console.")
-        if not has_active:
-            observed_states = [a.get("state") for a in accounts]
+            recommendations.append(
+                "Convert this site to a paid subscription, or verify the customer has a purchased license."
+            )
+        if not has_capacity:
             fail_reasons.append(
-                f"No account with state='active' found among {total_accounts} account(s). "
-                f"States observed: {observed_states}."
+                f"Site has no license capacity (totalLicenses={int(total_licenses)}, "
+                f"unlimitedLicenses={unlimited_licenses})."
             )
-            recommendations.append("Activate the SentinelOne account in the management console or contact SentinelOne support to resolve the inactive account state.")
-        if not has_entitlement:
-            fail_reasons.append(
-                "No valid license entitlement found: no unlimited SKUs, no positive totalLicenses, "
-                "and no named license bundles present on any account."
-            )
-            recommendations.append("Assign a valid SentinelOne SKU or bundle to the account to establish license entitlement.")
+            recommendations.append("Assign at least one Endpoint Security license to this site.")
+        if not is_unexpired:
+            if expiration_str:
+                fail_reasons.append(
+                    f"Site license expired or expiration unparseable (expiration='{expiration_str}', "
+                    f"unlimitedExpiration={unlimited_expiration})."
+                )
+            else:
+                fail_reasons.append(
+                    f"Site license expiration is unknown (no `expiration` field and "
+                    f"unlimitedExpiration={unlimited_expiration})."
+                )
+            recommendations.append("Renew the SentinelOne license before the expiration date.")
 
     return create_response(
-        result={
-            "confirmedLicensePurchased": confirmed,
-            "accountCount": total_accounts,
-            "activeAccountCount": len(active_accounts),
-            "paidAccountCount": len(paid_accounts),
-            "licensedBundles": licensed_bundles,
-            "unlimitedSkuAccounts": len(unlimited_sku_accounts),
-        },
+        result={"confirmedLicensePurchased": confirmed, **extras},
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "accountCount": total_accounts,
-            "paidAccounts": paid_accounts,
-            "activeAccounts": active_accounts,
-            "licensedBundles": licensed_bundles,
-            "unlimitedSkuAccounts": unlimited_sku_accounts,
-        },
+        input_summary={"confirmedLicensePurchased": confirmed, **extras},
         metadata={
             "transformationId": "confirmedLicensePurchased",
             "vendor": "SentinelOne",
