@@ -1,4 +1,9 @@
-"""Transformation: isDNSLoggingEnabled — DNS query logging active check for DNSFilter."""
+"""
+Transformation: isDNSLoggingEnabled
+Criterion: DNS-2.4 [Recommended]: DNS Query Logging Enabled
+Vendor: DNSFilter
+Category: Network Security
+"""
 import json
 from datetime import datetime
 
@@ -72,68 +77,74 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    inner = data.get("data") or {}
-    inner = inner if isinstance(inner, dict) else {}
+    org_data = data.get("data") or {}
+    org_data = org_data if isinstance(org_data, dict) else {}
+    attributes = org_data.get("attributes") or {}
+    attributes = attributes if isinstance(attributes, dict) else {}
 
-    values = inner.get("values") or []
-    values = values if isinstance(values, list) else []
+    org_name = attributes.get("name") or "Unknown"
+    privacy_mode = attributes.get("privacy_mode") or ""
+    msp_privacy_mode = attributes.get("msp_privacy_mode") or ""
 
-    page = inner.get("page") or {}
-    page = page if isinstance(page, dict) else {}
+    # Determine effective privacy mode.
+    # "inherit" means the org defers to the MSP-level setting.
+    # "standard" means full DNS query logging is active.
+    # Other modes ("private", "anonymized", etc.) restrict log visibility.
+    if privacy_mode == "inherit":
+        effective_mode = msp_privacy_mode if msp_privacy_mode else "unknown"
+        mode_source = "msp_privacy_mode (inherited from MSP)"
+    else:
+        effective_mode = privacy_mode if privacy_mode else "unknown"
+        mode_source = "privacy_mode"
 
-    total_logs = page.get("total")
-    if total_logs is None:
-        total_logs = 0
-    try:
-        total_logs = int(total_logs)
-    except (TypeError, ValueError):
-        total_logs = 0
+    logging_enabled = effective_mode == "standard"
 
-    org_name = inner.get("organization_name") or "unknown"
-    sample_count = len(values)
-
-    logging_enabled = total_logs > 0 or sample_count > 0
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    input_summary = {
+        "organizationName": org_name,
+        "privacyMode": privacy_mode,
+        "mspPrivacyMode": msp_privacy_mode,
+        "effectiveMode": effective_mode,
+        "modeSource": mode_source,
+    }
 
     if logging_enabled:
-        pass_reasons.append(
-            f"DNS query logging is active for organization '{org_name}': "
-            f"{total_logs} total log entries recorded (page.total={total_logs}, "
-            f"current page contains {sample_count} entries). "
-            "A non-zero log count confirms that DNS queries are being captured and stored."
-        )
+        pass_reasons = [
+            f"DNS query logging is enabled for organization '{org_name}'. "
+            f"The effective privacy mode is 'standard' (sourced from {mode_source}), "
+            f"indicating full DNS query logging is active and available for audit and threat analysis."
+        ]
+        if privacy_mode == "inherit":
+            pass_reasons.append(
+                f"Organization privacy_mode is 'inherit'; the MSP-level msp_privacy_mode is "
+                f"'standard', so full logging applies to this organization."
+            )
+        fail_reasons = []
+        recommendations = []
     else:
-        fail_reasons.append(
-            f"No DNS query log entries found for organization '{org_name}' "
-            f"(page.total={total_logs}, values returned={sample_count}). "
-            "The getQueryLogs endpoint returned an empty result set, indicating "
-            "that DNS query logging may not be active or no queries have been processed."
-        )
-        recommendations.append(
-            "Verify that the DNSFilter deployment is actively routing DNS traffic "
-            "for this organization. Ensure at least one network, site, or roaming client "
-            "is connected and generating DNS queries through DNSFilter."
-        )
+        fail_reasons = [
+            f"DNS query logging is not fully enabled for organization '{org_name}'. "
+            f"The effective privacy mode is '{effective_mode}' (sourced from {mode_source}), "
+            f"which restricts DNS query log data visibility."
+        ]
+        pass_reasons = []
+        recommendations = [
+            f"Set the organization's privacy_mode (or the MSP-level msp_privacy_mode if using "
+            f"'inherit') to 'standard' to enable full DNS query logging for audit and threat analysis."
+        ]
 
     return create_response(
         result={
             "isDNSLoggingEnabled": logging_enabled,
-            "totalLogEntries": total_logs,
-            "currentPageEntries": sample_count,
             "organizationName": org_name,
+            "privacyMode": privacy_mode,
+            "mspPrivacyMode": msp_privacy_mode,
+            "effectivePrivacyMode": effective_mode,
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalLogEntries": total_logs,
-            "currentPageEntries": sample_count,
-            "organizationName": org_name,
-        },
+        input_summary=input_summary,
         metadata={
             "transformationId": "isDNSLoggingEnabled",
             "vendor": "DNSFilter",
