@@ -85,13 +85,13 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _is_critical(agent):
+def is_critical(agent):
     """Heuristic for 'critical system' — currently machineType == 'server'."""
     machine_type = (agent.get("machineType") or "").lower() if isinstance(agent.get("machineType"), str) else ""
     return machine_type == "server"
 
 
-def _is_protected(agent):
+def is_protected(agent):
     """An agent is considered EPP-protected when mitigation is active and protection modules are reporting."""
     mitigation = agent.get("mitigationMode") or ""
     active_protection = agent.get("activeProtection") or []
@@ -113,9 +113,9 @@ def transform(input):
         items = []
 
     total = len(items)
-    critical_systems = [a for a in items if isinstance(a, dict) and _is_critical(a)]
+    critical_systems = [a for a in items if isinstance(a, dict) and is_critical(a)]
     critical_count = len(critical_systems)
-    unprotected_critical = [a for a in critical_systems if not _is_protected(a)]
+    unprotected_critical = [a for a in critical_systems if not is_protected(a)]
     unprotected_names = [
         a.get("computerName") or a.get("uuid") or "unknown" for a in unprotected_critical[:5]
     ]

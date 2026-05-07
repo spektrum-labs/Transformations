@@ -77,19 +77,19 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _looks_like_site(d):
+def looks_like_site(d):
     if not isinstance(d, dict):
         return False
     return any(k in d for k in ("totalLicenses", "siteType", "unlimitedLicenses", "registrationToken"))
 
 
-def _resolve_site(data):
+def resolve_site(data):
     """Resolve the site object from whatever shape Token-Service preprocessing produced."""
     if not isinstance(data, dict):
         return None, "Input data is not a dict — cannot locate site object."
 
     # Most common: Token-Service unwrapped down to the site dict directly.
-    if _looks_like_site(data):
+    if looks_like_site(data):
         return data, None
 
     # /sites list-endpoint shape: data has a `sites` array.
@@ -104,7 +104,7 @@ def _resolve_site(data):
 
     # Defensive: one more layer of nesting.
     inner = data.get("data")
-    if _looks_like_site(inner):
+    if looks_like_site(inner):
         return inner, None
 
     return None, "Could not locate a site object in the API response."
@@ -112,7 +112,7 @@ def _resolve_site(data):
 
 def transform(input):
     data, validation = extract_input(input)
-    site, resolve_err = _resolve_site(data)
+    site, resolve_err = resolve_site(data)
 
     if site is None:
         return create_response(
