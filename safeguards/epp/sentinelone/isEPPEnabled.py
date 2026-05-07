@@ -70,11 +70,21 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
 
-    items = data.get("data") or []
-    pagination = data.get("pagination") or {}
-    total_items = pagination.get("totalItems") or 0
+    # Token-Service preprocessing may unwrap to a bare list of agents (when API
+    # response's `data` field is a list) or leave a dict containing `data`/`pagination`.
+    if isinstance(data, list):
+        items = data
+        total_items = len(items)
+    elif isinstance(data, dict):
+        items = data.get("data") or []
+        if not isinstance(items, list):
+            items = []
+        pagination = data.get("pagination") or {}
+        total_items = pagination.get("totalItems") or len(items)
+    else:
+        items = []
+        total_items = 0
 
     # Count agents in the sample with active protection entries
     agents_with_protection = 0

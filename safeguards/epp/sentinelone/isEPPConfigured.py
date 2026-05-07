@@ -70,13 +70,23 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
 
-    agents = data.get("data") or []
-    agents = agents if isinstance(agents, list) else []
-    pagination = data.get("pagination") or {}
-    pagination = pagination if isinstance(pagination, dict) else {}
-    total_items = pagination.get("totalItems") or 0
+    # Token-Service preprocessing may unwrap to a bare list of agents (when API
+    # response's `data` field is a list) or leave a dict containing `data`/`pagination`.
+    if isinstance(data, list):
+        agents = data
+        total_items = len(agents)
+    elif isinstance(data, dict):
+        agents = data.get("data") or []
+        if not isinstance(agents, list):
+            agents = []
+        pagination = data.get("pagination") or {}
+        if not isinstance(pagination, dict):
+            pagination = {}
+        total_items = pagination.get("totalItems") or len(agents)
+    else:
+        agents = []
+        total_items = 0
     total_items = int(total_items) if total_items else 0
 
     sampled = len(agents)
