@@ -100,33 +100,94 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Navigate to resource members in CloudTrail events
-        # Use `or {}` to handle both missing keys AND null values from API
+        # Navigate to event list. AWS CloudTrail returns events wrapped in
+        # {Events: {member: [...]}}, where `member` may be a list (multiple
+        # events) or a single dict (one event). Either shape is valid.
         api_response = data.get("apiResponse", data) if isinstance(data, dict) else {}
         lookup_response = api_response.get("LookupEventsResponse") or {}
         lookup_result = lookup_response.get("LookupEventsResult") or {}
-        events = lookup_result.get("Events") or {}
-        member = events.get("member") or {}
-        resources = member.get("Resources") or {}
-        resource_members = resources.get("member") or []
+        events_container = lookup_result.get("Events") or {}
+        event_members = events_container.get("member") if isinstance(events_container, dict) else events_container
+        if event_members is None:
+            event_members = []
+        if isinstance(event_members, dict):
+            event_members = [event_members]
+        if not isinstance(event_members, list):
+            event_members = []
 
-        if isinstance(resource_members, dict):
-            resource_members = [resource_members]
+        # For each event, check if any of its Resources is a DBInstance.
+        # Track successful vs errored events separately so the result output
+        # can surface the breakdown to reviewers, even though both count
+        # toward isBackupTested=true (see boolean comment below).
+        successful_restores = []
+        failed_restores = []
+        for event in event_members:
+            if not isinstance(event, dict):
+                continue
+            # Resources is either a dict-with-member (Query API XML→JSON shape)
+            # or a direct list (modern JSON API shape). Handle both.
+            resources = event.get("Resources")
+            if isinstance(resources, dict):
+                resource_members = resources.get("member") or []
+            elif isinstance(resources, list):
+                resource_members = resources
+            else:
+                resource_members = []
+            if isinstance(resource_members, dict):
+                resource_members = [resource_members]
+            if not isinstance(resource_members, list):
+                resource_members = []
 
-        # Check if any event is a DBInstance restore operation
-        is_backup_tested = False
-        restore_events = []
-        for resource_member in resource_members:
-            resource_type = resource_member.get("ResourceType", "")
-            if "dbinstance" in resource_type.lower():
-                is_backup_tested = True
-                restore_events.append(resource_type)
+            has_db_instance = False
+            for resource_member in resource_members:
+                if not isinstance(resource_member, dict):
+                    continue
+                resource_type = resource_member.get("ResourceType") or ""
+                if isinstance(resource_type, str) and "dbinstance" in resource_type.lower():
+                    has_db_instance = True
+                    break
+
+            if not has_db_instance:
+                continue
+
+            # Inspect CloudTrailEvent JSON for an errorCode so we can label
+            # the event as successful or errored in the output.
+            cloudtrail_raw = event.get("CloudTrailEvent") or ""
+            had_error = False
+            if isinstance(cloudtrail_raw, str) and cloudtrail_raw:
+                try:
+                    cte = json.loads(cloudtrail_raw)
+                    had_error = bool(cte.get("errorCode"))
+                except Exception:
+                    had_error = False
+
+            event_name = event.get("EventName") or "unknown"
+            event_time = event.get("EventTime") or "unknown"
+            user = event.get("Username") or "unknown"
+            entry = {"eventName": event_name, "eventTime": event_time, "user": user}
+            if had_error:
+                failed_restores.append(entry)
+            else:
+                successful_restores.append(entry)
+
+        # Boolean: any DBInstance restore event (successful or errored) counts
+        # as evidence of backup-test activity. The output still surfaces the
+        # success/failure breakdown so reviewers can interpret it.
+        total_restore_events = len(successful_restores) + len(failed_restores)
+        is_backup_tested = total_restore_events > 0
 
         if is_backup_tested:
-            pass_reasons.append(f"Backup restore test detected ({len(restore_events)} DB restore events found)")
+            most_recent = successful_restores[0] if successful_restores else failed_restores[0]
+            pass_reasons.append(
+                f"Found {total_restore_events} DB restore event(s) in CloudTrail "
+                f"({len(successful_restores)} successful, {len(failed_restores)} errored). "
+                f"Most recent: {most_recent['eventName']} at {most_recent['eventTime']} by {most_recent['user']}."
+            )
         else:
-            fail_reasons.append("No backup restore tests found in audit logs")
-            recommendations.append("Perform periodic backup restore tests to verify backup integrity")
+            fail_reasons.append("No backup restore events (DBInstance restores) found in CloudTrail logs.")
+            recommendations.append(
+                "Perform a periodic backup restore test (e.g. RestoreDBInstanceFromDBSnapshot) to verify backup integrity."
+            )
 
         return create_response(
             result={criteriaKey: is_backup_tested},
@@ -135,8 +196,10 @@ def transform(input):
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary={
-                "restoreEventsFound": len(restore_events),
-                "hasCloudTrailData": bool(lookup_response)
+                "successfulRestores": len(successful_restores),
+                "failedRestores": len(failed_restores),
+                "totalEventsInspected": len(event_members),
+                "hasCloudTrailData": bool(lookup_response),
             }
         )
 

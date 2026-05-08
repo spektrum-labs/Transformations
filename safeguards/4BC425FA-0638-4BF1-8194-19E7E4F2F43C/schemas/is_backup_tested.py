@@ -19,8 +19,13 @@ class CloudTrailEvent(BaseModel):
 
 
 class LookupEventsResult(BaseModel):
-    """Result from CloudTrail LookupEvents API."""
-    Events: Optional[Union[List[CloudTrailEvent], None]] = None
+    """Result from CloudTrail LookupEvents API.
+
+    AWS XML→JSON wraps lists in {member: [...]} containers, so `Events`
+    arrives as a dict with a `member` key (list or single dict). It can
+    also arrive as a bare list in some clients. Allow either shape.
+    """
+    Events: Optional[Union[List[CloudTrailEvent], Dict[str, Any], None]] = None
     NextToken: Optional[str] = None
 
     class Config:
