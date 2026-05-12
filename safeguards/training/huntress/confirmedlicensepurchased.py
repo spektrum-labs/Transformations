@@ -3,8 +3,14 @@ Transformation: confirmedLicensePurchased
 Vendor: Huntress SAT (Curricula)
 Category: Training / Licensing
 
-Evaluates if a valid Huntress SAT subscription is active.
-Checks the organizations endpoint for a valid response indicating an active account.
+Confirms the customer's Huntress SAT (Curricula) account is active and on a
+valid paid plan. Consumes /api/v1/accounts/{accountId} which returns a single
+JSON:API account record:
+
+  {"data": {"type": "accounts", "id": "...", "attributes": {name, status, type, plan, licenses, ...}}}
+
+Token-Service preprocesses the wrapper so the transformation receives either the
+full envelope or the inner record directly. Both shapes are handled.
 """
 
 import json
@@ -30,7 +36,8 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -67,6 +74,21 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def pull_account_attributes(data):
+    """JSON:API account record can arrive as the envelope, the inner record, or
+    the bare attributes block depending on how Token-Service preprocesses it."""
+    if isinstance(data, dict):
+        if isinstance(data.get('data'), dict):
+            inner = data['data']
+            if isinstance(inner.get('attributes'), dict):
+                return inner['attributes']
+            return inner
+        if isinstance(data.get('attributes'), dict):
+            return data['attributes']
+        return data
+    return {}
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
 
@@ -89,53 +111,59 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        license_purchased = False
-        license_details = {}
+        attrs = pull_account_attributes(data)
 
-        if isinstance(data, dict):
-            # Check for organizations list response
-            if 'organizations' in data and isinstance(data['organizations'], list):
-                if len(data['organizations']) > 0:
-                    license_purchased = True
-                    license_details['organizationCount'] = len(data['organizations'])
-            # Check for a direct list response (array of organizations)
-            elif isinstance(data.get('data'), list) and len(data['data']) > 0:
-                license_purchased = True
-                license_details['organizationCount'] = len(data['data'])
-            # Check for single organization object
-            elif 'id' in data and ('name' in data or 'organization' in data):
-                license_purchased = True
-                license_details['organizationId'] = data.get('id')
-            # Check for subscription/license indicators
-            elif 'subscription' in data and data['subscription']:
-                license_purchased = True
-                license_details['subscription'] = data['subscription']
-            elif 'active' in data or 'enabled' in data:
-                license_purchased = bool(data.get('active', data.get('enabled', False)))
-                license_details['status'] = 'active' if license_purchased else 'inactive'
-            # Non-empty valid response indicates active account
-            elif len(data) > 0:
-                license_purchased = True
-                license_details['responseKeys'] = list(data.keys())
+        status = str(attrs.get('status', '')).lower()
+        plan = str(attrs.get('plan', '')).strip()
+        account_type = str(attrs.get('type', '')).strip()
+        name = str(attrs.get('name', '')).strip()
 
-        elif isinstance(data, list):
-            if len(data) > 0:
-                license_purchased = True
-                license_details['organizationCount'] = len(data)
+        # A confirmed license = active status AND a non-empty plan that isn't trial-only.
+        # type=="Sandbox" identifies sandbox accounts (not real paid licenses).
+        is_active = status == 'active'
+        is_paid = account_type.lower() in ('paid', '') and account_type.lower() != 'sandbox'
+        has_plan = bool(plan)
+
+        license_purchased = is_active and is_paid and has_plan
 
         if license_purchased:
-            pass_reasons.append("Huntress SAT subscription is active and confirmed")
+            pass_reasons.append(
+                f"Huntress SAT subscription confirmed: account '{name or 'unknown'}' "
+                f"is {status} on the {plan} plan"
+            )
         else:
-            fail_reasons.append("Huntress SAT subscription could not be confirmed")
-            recommendations.append("Ensure a valid Huntress SAT (Curricula) subscription is active")
+            reason_parts = []
+            if not is_active:
+                reason_parts.append(f"account status is '{status or 'unknown'}'")
+            if not has_plan:
+                reason_parts.append("no plan field present")
+            if account_type.lower() == 'sandbox':
+                reason_parts.append("account type is 'Sandbox' (not a paid license)")
+            fail_reasons.append(
+                "Huntress SAT subscription is not active: " + ", ".join(reason_parts)
+                if reason_parts else "Huntress SAT subscription could not be confirmed"
+            )
+            recommendations.append(
+                "Verify the customer's Huntress Managed SAT subscription is active and on a paid plan"
+            )
 
         return create_response(
-            result={criteriaKey: license_purchased, **license_details},
+            result={
+                criteriaKey: license_purchased,
+                "accountName": name or None,
+                "accountStatus": status or None,
+                "accountType": account_type or None,
+                "plan": plan or None
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased, **license_details}
+            input_summary={
+                "accountStatus": status or None,
+                "accountType": account_type or None,
+                "plan": plan or None
+            }
         )
 
     except Exception as e:

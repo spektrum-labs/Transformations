@@ -9,17 +9,16 @@ class ConfirmedlicensepurchasedInput(BaseModel):
     Expected input schema for the confirmedlicensepurchased transformation.
     Criteria key: confirmedLicensePurchased
 
-    Validates Huntress SAT subscription status by checking the
-    organizations endpoint for a valid active account.
+    Consumes /api/v1/accounts/{accountId} from the Huntress SAT (Curricula)
+    API, a single JSON:API record:
+      {"data": {"type": "accounts", "id": "...", "attributes": {name, status, type, plan, ...}}}
+    Token-Service preprocessing may pass the inner record directly.
     """
 
-    organizations: Optional[List[Dict[str, Any]]] = None
-    data: Optional[List[Dict[str, Any]]] = None
+    type: Optional[str] = None
     id: Optional[str] = None
-    name: Optional[str] = None
-    subscription: Optional[Dict[str, Any]] = None
-    active: Optional[bool] = None
-    enabled: Optional[bool] = None
+    attributes: Optional[Dict[str, Any]] = None
+    data: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
