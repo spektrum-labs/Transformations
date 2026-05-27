@@ -3,8 +3,15 @@ Transformation: isTrainingEnabled
 Vendor: Huntress SAT (Curricula)
 Category: Training / Awareness
 
-Validates that security awareness training assignments are active and running.
-Checks the assignments endpoint for configured training campaigns.
+Validates that the customer has training assignments configured in Huntress SAT.
+Consumes /api/v1/accounts/{accountId}/assignments which returns a JSON:API list:
+
+  {"data": [{"type": "assignments", "id": "...", "attributes": {name, status, startsAt, endsAt, ...}}, ...],
+   "meta": {"page": {"total": N, ...}}}
+
+Each assignment has a status: 'in-progress', 'completed', 'scheduled', 'draft', etc.
+The safeguard passes when at least one assignment exists; the in-progress count
+is reported as the active-training signal.
 """
 
 import json
@@ -30,7 +37,8 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -67,6 +75,19 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def pull_jsonapi_items(data):
+    """Pull a list of JSON:API items from raw envelope, preprocessed list, or single record."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get('data'), list):
+            return data['data']
+        if isinstance(data.get('data'), dict):
+            return [data['data']]
+        return [data]
+    return []
+
+
 def transform(input):
     criteriaKey = "isTrainingEnabled"
 
@@ -90,58 +111,59 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        training_enabled = False
-        total_assignments = 0
-        active_assignments = 0
+        assignments = pull_jsonapi_items(data)
 
-        assignments = []
+        total = len(assignments)
+        in_progress = 0
+        completed = 0
+        scheduled = 0
+        draft = 0
+        other = 0
 
-        if isinstance(data, dict):
-            if 'assignments' in data and isinstance(data['assignments'], list):
-                assignments = data['assignments']
-            elif 'data' in data and isinstance(data['data'], list):
-                assignments = data['data']
-        elif isinstance(data, list):
-            assignments = data
-
-        total_assignments = len(assignments)
-
-        if total_assignments > 0:
-            # Check for active/in-progress assignments
-            for assignment in assignments:
-                if isinstance(assignment, dict):
-                    status = str(assignment.get('status', '')).lower()
-                    state = str(assignment.get('state', '')).lower()
-                    if status in ('active', 'in_progress', 'open', 'started') or \
-                       state in ('active', 'in_progress', 'open', 'started'):
-                        active_assignments += 1
-                    elif not status and not state:
-                        # No status field means likely active
-                        active_assignments += 1
-
-            if active_assignments > 0:
-                training_enabled = True
+        for a in assignments:
+            if not isinstance(a, dict):
+                continue
+            attrs = a.get('attributes') if isinstance(a.get('attributes'), dict) else a
+            status = str(attrs.get('status', '')).lower()
+            if status == 'in-progress':
+                in_progress += 1
+            elif status == 'completed':
+                completed += 1
+            elif status == 'scheduled':
+                scheduled += 1
+            elif status == 'draft':
+                draft += 1
             else:
-                # Assignments exist but none are active - still consider enabled
-                training_enabled = True
-                additional_findings.append(f"All {total_assignments} assignments may be completed or inactive")
+                other += 1
+
+        training_enabled = total > 0
 
         if training_enabled:
-            reason = f"Security awareness training is enabled ({total_assignments} assignment(s) found"
-            if active_assignments > 0:
-                reason += f", {active_assignments} active)"
-            else:
-                reason += ")"
-            pass_reasons.append(reason)
+            pass_reasons.append(
+                f"Training is enabled ({total} assignment(s): "
+                f"{in_progress} in-progress, {completed} completed, "
+                f"{scheduled} scheduled, {draft} draft)"
+            )
+            if in_progress == 0 and scheduled == 0:
+                additional_findings.append(
+                    "No assignments are currently in-progress or scheduled — "
+                    "all training appears to be historical or in draft"
+                )
         else:
-            fail_reasons.append("No training assignments found")
-            recommendations.append("Configure security awareness training assignments in Huntress SAT")
+            fail_reasons.append("No training assignments configured for this customer")
+            recommendations.append(
+                "Create at least one training assignment in Huntress SAT for the customer's learners"
+            )
 
         return create_response(
             result={
                 criteriaKey: training_enabled,
-                "totalAssignments": total_assignments,
-                "activeAssignments": active_assignments
+                "totalAssignments": total,
+                "inProgressAssignments": in_progress,
+                "completedAssignments": completed,
+                "scheduledAssignments": scheduled,
+                "draftAssignments": draft,
+                "otherStatusAssignments": other
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -149,8 +171,10 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "totalAssignments": total_assignments,
-                "activeAssignments": active_assignments
+                "totalAssignments": total,
+                "inProgressAssignments": in_progress,
+                "completedAssignments": completed,
+                "scheduledAssignments": scheduled
             }
         )
 

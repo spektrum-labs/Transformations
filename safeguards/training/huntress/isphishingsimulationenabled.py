@@ -3,8 +3,16 @@ Transformation: isPhishingSimulationEnabled
 Vendor: Huntress SAT (Curricula)
 Category: Training / Phishing Simulation
 
-Validates that phishing simulation campaigns are configured and being sent.
-Checks the phishing_campaigns endpoint for active campaigns.
+Validates that at least one phishing simulation campaign is configured for the
+customer. Consumes /api/v1/accounts/{accountId}/phishing-campaigns which returns
+a JSON:API list:
+
+  {"data": [{"type": "phishing-campaigns", "id": "...", "attributes": {title, status, campaignStartsAt, campaignEndsAt, campaignLaunchedAt, attemptStats, ...}}, ...],
+   "meta": {"page": {"total": N, ...}}}
+
+Each campaign has a status: 'in-progress', 'completed', 'scheduled', 'draft', etc.
+The safeguard passes when at least one campaign exists. In-progress and recently-
+launched counts are surfaced as additional signal.
 """
 
 import json
@@ -30,7 +38,8 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -67,6 +76,18 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def pull_jsonapi_items(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get('data'), list):
+            return data['data']
+        if isinstance(data.get('data'), dict):
+            return [data['data']]
+        return [data]
+    return []
+
+
 def transform(input):
     criteriaKey = "isPhishingSimulationEnabled"
 
@@ -90,62 +111,67 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        phishing_enabled = False
-        total_campaigns = 0
-        active_campaigns = 0
+        campaigns = pull_jsonapi_items(data)
 
-        campaigns = []
+        total = len(campaigns)
+        in_progress = 0
+        completed = 0
+        scheduled = 0
+        draft = 0
+        other = 0
+        ever_launched = 0
 
-        if isinstance(data, dict):
-            if 'phishing_campaigns' in data and isinstance(data['phishing_campaigns'], list):
-                campaigns = data['phishing_campaigns']
-            elif 'campaigns' in data and isinstance(data['campaigns'], list):
-                campaigns = data['campaigns']
-            elif 'data' in data and isinstance(data['data'], list):
-                campaigns = data['data']
-        elif isinstance(data, list):
-            campaigns = data
-
-        total_campaigns = len(campaigns)
-
-        if total_campaigns > 0:
-            for campaign in campaigns:
-                if isinstance(campaign, dict):
-                    status = str(campaign.get('status', '')).lower()
-                    state = str(campaign.get('state', '')).lower()
-                    is_active = campaign.get('active', campaign.get('is_active', None))
-
-                    if status in ('active', 'in_progress', 'sending', 'scheduled', 'running') or \
-                       state in ('active', 'in_progress', 'sending', 'scheduled', 'running') or \
-                       is_active is True:
-                        active_campaigns += 1
-                    elif not status and not state and is_active is None:
-                        # No status field means likely active
-                        active_campaigns += 1
-
-            if active_campaigns > 0:
-                phishing_enabled = True
+        for c in campaigns:
+            if not isinstance(c, dict):
+                continue
+            attrs = c.get('attributes') if isinstance(c.get('attributes'), dict) else c
+            status = str(attrs.get('status', '')).lower()
+            if status == 'in-progress':
+                in_progress += 1
+            elif status == 'completed':
+                completed += 1
+            elif status == 'scheduled':
+                scheduled += 1
+            elif status == 'draft':
+                draft += 1
             else:
-                # Campaigns exist but none active - still counts as enabled
-                phishing_enabled = True
-                additional_findings.append(f"All {total_campaigns} phishing campaigns may be completed or inactive")
+                other += 1
+            if attrs.get('campaignLaunchedAt'):
+                ever_launched += 1
+
+        phishing_enabled = total > 0
 
         if phishing_enabled:
-            reason = f"Phishing simulation is enabled ({total_campaigns} campaign(s) found"
-            if active_campaigns > 0:
-                reason += f", {active_campaigns} active)"
-            else:
-                reason += ")"
-            pass_reasons.append(reason)
+            pass_reasons.append(
+                f"Phishing simulation is enabled ({total} campaign(s): "
+                f"{in_progress} in-progress, {completed} completed, "
+                f"{scheduled} scheduled, {draft} draft)"
+            )
+            if ever_launched == 0:
+                additional_findings.append(
+                    "Campaigns exist but none have been launched yet"
+                )
+            elif in_progress == 0 and scheduled == 0:
+                additional_findings.append(
+                    "No campaigns are currently in-progress or scheduled — "
+                    "phishing simulation may be inactive"
+                )
         else:
-            fail_reasons.append("No phishing simulation campaigns found")
-            recommendations.append("Configure phishing simulation campaigns in Huntress SAT")
+            fail_reasons.append("No phishing simulation campaigns configured for this customer")
+            recommendations.append(
+                "Configure at least one phishing simulation campaign in Huntress SAT"
+            )
 
         return create_response(
             result={
                 criteriaKey: phishing_enabled,
-                "totalCampaigns": total_campaigns,
-                "activeCampaigns": active_campaigns
+                "totalCampaigns": total,
+                "inProgressCampaigns": in_progress,
+                "completedCampaigns": completed,
+                "scheduledCampaigns": scheduled,
+                "draftCampaigns": draft,
+                "otherStatusCampaigns": other,
+                "everLaunchedCampaigns": ever_launched
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -153,8 +179,11 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "totalCampaigns": total_campaigns,
-                "activeCampaigns": active_campaigns
+                "totalCampaigns": total,
+                "inProgressCampaigns": in_progress,
+                "completedCampaigns": completed,
+                "scheduledCampaigns": scheduled,
+                "everLaunchedCampaigns": ever_launched
             }
         )
 
