@@ -10,7 +10,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -70,11 +70,21 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
 
-    endpoints = data.get("data") or []
-    meta = data.get("meta") or {}
-    total_items = meta.get("total_items") or 0
+    if isinstance(data, list):
+        endpoints = data
+        meta = {}
+        total_items = len(endpoints)
+    elif isinstance(data, dict):
+        endpoints = data.get("data") or []
+        meta = data.get("meta") or {}
+        total_items = meta.get("total_items")
+        if total_items is None:
+            total_items = len(endpoints)
+    else:
+        endpoints = []
+        meta = {}
+        total_items = 0
 
     page_count = len(endpoints)
     active_count = 0
