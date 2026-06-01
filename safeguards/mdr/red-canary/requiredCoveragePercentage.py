@@ -17,7 +17,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -77,24 +77,28 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
 
-    # --- Enrolled endpoint count (numerator) ---
-    # With follow=true the runtime aggregates all pages; meta.total_items reflects
-    # the full fleet enrolled in Red Canary MDR.
-    meta = data.get("meta") or {}
-    total_items_raw = meta.get("total_items")
+    if isinstance(data, list):
+        endpoints_list = data
+        meta = {}
+        total_items_raw = len(endpoints_list)
+        config_lookup = {}
+    elif isinstance(data, dict):
+        endpoints_list = data.get("data") or []
+        meta = data.get("meta") or {}
+        total_items_raw = meta.get("total_items")
+        config_lookup = data
+    else:
+        endpoints_list = []
+        meta = {}
+        total_items_raw = None
+        config_lookup = {}
 
-    # Fallback: count the data array directly (valid after full pagination)
-    endpoints_list = data.get("data") or []
     if total_items_raw is None:
         enrolled_count = len(endpoints_list)
     else:
         enrolled_count = int(total_items_raw)
 
-    # --- Expected fleet size (denominator) — from per-tenant safeguard config ---
-    # The runtime may inject config values alongside the API response.
-    # Check common config key names; fall back to enrolled_count (100% if unconfigured).
     expected_count = None
     config_key_candidates = [
         "expectedEndpoints",
@@ -105,7 +109,7 @@ def transform(input):
         "fleetSize",
     ]
     for ck in config_key_candidates:
-        val = data.get(ck)
+        val = config_lookup.get(ck)
         if val is not None:
             try:
                 expected_count = int(val)
