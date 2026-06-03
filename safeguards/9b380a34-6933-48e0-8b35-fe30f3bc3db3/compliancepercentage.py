@@ -66,6 +66,66 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# AWS Security Hub associated-standard identifiers used to scope each score.
+CIS_STANDARD = "cis-aws-foundations-benchmark"
+FSBP_STANDARD = "aws-foundational-security-best-practices"
+
+
+def _is_suppressed(finding):
+    """True when a Security Hub finding is suppressed (excluded from AWS scoring)."""
+    if not isinstance(finding, dict):
+        return False
+    workflow = finding.get("Workflow")
+    if isinstance(workflow, dict):
+        return str(workflow.get("Status", "")).upper() == "SUPPRESSED"
+    return False
+
+
+def _matches_standard(finding, standard):
+    """Whether a finding is associated with the given standard.
+
+    Returns True/False when the finding carries AssociatedStandards, or None
+    when the finding has no standard association (so callers can fall back to
+    legacy, standard-agnostic behaviour for non-Security-Hub inputs).
+    """
+    compliance = finding.get("Compliance") if isinstance(finding, dict) else None
+    if not isinstance(compliance, dict):
+        return None
+    standards = compliance.get("AssociatedStandards") or []
+    ids = [str(s.get("StandardsId")) for s in standards
+           if isinstance(s, dict) and s.get("StandardsId")]
+    if not ids:
+        return None
+    return any(standard in sid for sid in ids)
+
+
+def _score_by_control(findings):
+    """Score findings per security control (CIS/FSBP scoring is per-control).
+
+    Resource-level duplicates of the same control collapse to one result; a
+    control passes only if all of its findings pass. Only PASSED/FAILED
+    findings count toward the score (WARNING/NOT_AVAILABLE are ignored, matching
+    AWS Security Hub).
+    """
+    control_passed = {}
+    for obj in findings:
+        compliance = obj.get("Compliance") if isinstance(obj, dict) else None
+        if not isinstance(compliance, dict) or "Status" not in compliance:
+            continue
+        status = str(compliance["Status"]).lower()
+        if status not in ("passed", "failed"):
+            continue
+        control_id = compliance.get("SecurityControlId") or obj.get("Id") or id(obj)
+        passed = status == "passed"
+        control_passed[control_id] = control_passed.get(control_id, True) and passed
+
+    passed_count = sum(1 for ok in control_passed.values() if ok)
+    failed_count = len(control_passed) - passed_count
+    total = len(control_passed)
+    percentage = int((passed_count / total) * 100) if total > 0 else 0
+    return percentage, passed_count, failed_count, total
+
+
 def transform(input):
     try:
         if isinstance(input, str):
@@ -93,38 +153,49 @@ def transform(input):
         elif isinstance(data, list):
             findings = data
 
-        passed = [obj for obj in findings if 'Compliance' in obj and 'Status' in obj['Compliance'] and str(obj['Compliance']['Status']).lower() == "passed"]
-        failed = [obj for obj in findings if 'Compliance' in obj and 'Status' in obj['Compliance'] and str(obj['Compliance']['Status']).lower() == "failed"]
+        # Exclude suppressed findings — AWS Security Hub omits them from its
+        # security score, so the IAM.6 (SUPPRESSED) failure should not count.
+        active = [obj for obj in findings if not _is_suppressed(obj)]
 
-        total = len(passed) + len(failed)
-        compliance_percentage = int((len(passed) / total) * 100) if total > 0 else 0
+        # Scope each score to its own standard so the CIS and FSBP keys are not
+        # conflated. Findings without an AssociatedStandards block (non Security
+        # Hub inputs) fall back to legacy, standard-agnostic scoring.
+        cis_findings = [obj for obj in active if _matches_standard(obj, CIS_STANDARD)]
+        fsbp_findings = [obj for obj in active if _matches_standard(obj, FSBP_STANDARD)]
+        if not cis_findings and not fsbp_findings:
+            cis_findings = active
+            fsbp_findings = active
 
-        if compliance_percentage >= 80:
-            pass_reasons.append(f"Good compliance level: {compliance_percentage}% ({len(passed)} passed, {len(failed)} failed)")
-        elif compliance_percentage >= 50:
-            fail_reasons.append(f"Moderate compliance level: {compliance_percentage}%")
+        cis_percentage, cis_passed, cis_failed, cis_total = _score_by_control(cis_findings)
+        fsbp_percentage, _, _, _ = _score_by_control(fsbp_findings)
+
+        if cis_percentage >= 80:
+            pass_reasons.append(f"Good compliance level: {cis_percentage}% ({cis_passed} passed, {cis_failed} failed)")
+        elif cis_percentage >= 50:
+            fail_reasons.append(f"Moderate compliance level: {cis_percentage}%")
             recommendations.append("Address failed compliance findings to improve security posture")
         else:
-            fail_reasons.append(f"Low compliance level: {compliance_percentage}%")
+            fail_reasons.append(f"Low compliance level: {cis_percentage}%")
             recommendations.append("Urgently address compliance failures to meet security requirements")
 
         return create_response(
             result={
-                "compliancePercentage": compliance_percentage,
-                "CIScompliancePercentage": compliance_percentage,
-                "totalPassed": len(passed),
-                "totalFailed": len(failed),
-                "totalFindings": total
+                "compliancePercentage": fsbp_percentage,
+                "CIScompliancePercentage": cis_percentage,
+                "totalPassed": cis_passed,
+                "totalFailed": cis_failed,
+                "totalFindings": cis_total
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary={
-                "compliancePercentage": compliance_percentage,
-                "totalPassed": len(passed),
-                "totalFailed": len(failed),
-                "totalFindings": total
+                "compliancePercentage": fsbp_percentage,
+                "CIScompliancePercentage": cis_percentage,
+                "totalPassed": cis_passed,
+                "totalFailed": cis_failed,
+                "totalFindings": cis_total
             }
         )
 

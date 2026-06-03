@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "atlassian": {
+      "type": "http",
+      "url": "https://mcp.atlassian.com/v1/sse",
+      "headers": {
+        "Authorization": "Bearer ${ATLASSIAN_OAUTH_TOKEN}"
+      }
+    },
+    "spektrum": {
+      "command": "spektrum-debug",
+      "args": [
+        "serve",
+        "--profile",
+        "${SPEKTRUM_PROFILE:-dev}"
+      ],
+      "env": {
+        "SPEKTRUM_CLIENT_ID": "${SPEKTRUM_CLIENT_ID}",
+        "SPEKTRUM_CLIENT_SECRET": "${SPEKTRUM_CLIENT_SECRET}"
+      }
+    }
+  }
+}

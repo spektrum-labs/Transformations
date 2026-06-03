@@ -1,0 +1,24 @@
+{
+  "enabledPlugins": [
+    "shared@spektrum",
+    "engineering@spektrum",
+    "spektrum-platform@spektrum"
+  ],
+  "marketplaces": {
+    "spektrum": {
+      "path": "/opt/spektrum-skills"
+    }
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "deny": [
+      "Read(./.env*)",
+      "Read(./**/secrets/**)",
+      "Edit(./.github/**)",
+      "Edit(./infra/**)",
+      "Bash(git push:*)",
+      "Bash(git push --force:*)",
+      "Bash(rm -rf:*)"
+    ]
+  }
+}
