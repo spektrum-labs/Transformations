@@ -6,6 +6,7 @@ from .aredlppoliciesconfigured import AredlppoliciesconfiguredInput
 from .aretransportrulesconfigured import AretransportrulesconfiguredInput
 from .authtypesallowed import AuthtypesallowedInput
 from .confirmedlicensepurchased import ConfirmedlicensepurchasedInput
+from .isadminauditloggingenabled import IsadminauditloggingenabledInput
 from .isadminmfaphishingresistant import IsadminmfaphishingresistantInput
 from .isantiphishingenabled import IsantiphishingenabledInput
 from .isappconsentrestricted import IsappconsentrestrictedInput
@@ -40,6 +41,7 @@ __all__ = [
     "AretransportrulesconfiguredInput",
     "AuthtypesallowedInput",
     "ConfirmedlicensepurchasedInput",
+    "IsadminauditloggingenabledInput",
     "IsadminmfaphishingresistantInput",
     "IsantiphishingenabledInput",
     "IsappconsentrestrictedInput",
