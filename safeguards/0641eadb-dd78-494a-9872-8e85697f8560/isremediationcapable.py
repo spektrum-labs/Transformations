@@ -3,7 +3,16 @@ Transformation: isRemediationCapable
 Vendor: Anthropic (Claude) Compliance API
 Category: Remediation
 
-Evaluates whether the key holds delete:compliance_user_data for automated remediation. Scope-presence only; never invokes a DELETE endpoint.
+Evaluates whether the key holds delete:compliance_user_data for automated remediation.
+
+Per the Anthropic Compliance API docs ("Check your key's scopes"), there is NO
+programmatic scope-introspection endpoint, and Compliance Access Key scopes are
+immutable after creation. Scopes are knowable only via (1) key prefix [type only],
+(2) the claude.ai Settings UI Scopes column, or (3) a 403 "Got: [...]" error from an
+endpoint the key lacks scope for. None of these confirm delete:compliance_user_data
+without attempting a DELETE. This criterion is therefore an OPERATOR ATTESTATION of
+the scope list recorded at key creation (supplied via the grantedScopes setting);
+it is scope-presence only and NEVER invokes a DELETE endpoint.
 """
 
 import json
