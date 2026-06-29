@@ -96,7 +96,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
+                result={criteriaKey: False, "isSPFConfigured": False, "isDKIMConfigured": False, "isDMARCConfigured": False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -182,6 +182,9 @@ def transform(input):
         return create_response(
             result={
                 criteriaKey: dns_configured,
+                "isSPFConfigured": spf_configured,
+                "isDKIMConfigured": dkim_configured,
+                "isDMARCConfigured": dmarc_configured,
                 "spfConfigured": spf_configured,
                 "dkimConfigured": dkim_configured,
                 "dmarcConfigured": dmarc_configured
@@ -200,7 +203,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
+            result={criteriaKey: False, "isSPFConfigured": False, "isDKIMConfigured": False, "isDMARCConfigured": False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
