@@ -1,13 +1,25 @@
 """
 Transformation: isDNSConfigured
-Vendor: Abnormal Security
-Category: Email Security / DNS
+Vendor: Abnormal Security  |  Category: emailsecurity
+Evaluates: Ensure that DMARC, DKIM and SPF records are set up properly.
 
-Checks if DNS authentication (SPF/DKIM/DMARC) is configured via Abnormal Security.
-Evaluates email authentication settings and integration status.
+isDKIMConfigured / isSPFConfigured / isDMARCConfigured all route to the
+isDNSConfigured method, which calls the Spektrum mail-server security checker
+(mail_server_security_checks/tool). That tool performs a live DNS/CNAME probe of
+the email domain and returns a flat dict keyed by protocol, e.g.:
+
+    {"result": {"SPF": <bool|record-string|false>,
+                "DKIM": <bool|record-string|false>,
+                "DMARC": <bool|record-string|false>,
+                "SMTPBanner": ...}}
+
+DKIM/SPF/DMARC are published DNS records, so they are verified by DNS lookup
+(vendor-agnostic) rather than via the Abnormal API. This transformation reads the
+SPF/DKIM/DMARC values and emits the per-protocol criteria keys plus the aggregate
+isDNSConfigured.
 """
-
 import json
+import ast
 from datetime import datetime
 
 
@@ -17,7 +29,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for _ in range(4):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -30,7 +42,8 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -61,15 +74,35 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "schemaVersion": "1.0",
                 "transformationId": "isDNSConfigured",
                 "vendor": "Abnormal Security",
-                "category": "Email Security"
+                "category": "emailsecurity"
             }
         }
     }
 
 
-def is_dns_record_present(value):
-    """Check if a DNS record value indicates the record is configured.
-    Handles actual record strings, booleans, and the string 'False'/'None'.
+def coerce_data(value):
+    """Best-effort conversion of a raw response into a dict."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(value)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+    return value if isinstance(value, dict) else {}
+
+
+def record_present(value):
+    """True if a protocol value from the DNS tool indicates a record exists.
+
+    The tool returns either a boolean, the actual DNS record string, or a falsey
+    sentinel (False / "" / "False" / "None" / "not found"). Any real record string
+    or boolean True counts as configured.
     """
     if value is None:
         return False
@@ -77,14 +110,24 @@ def is_dns_record_present(value):
         return value
     if isinstance(value, str):
         stripped = value.strip()
-        if stripped.lower() in ("false", "none", "null", "", "no", "0", "no banner found", "not found", "n/a"):
+        if stripped.lower() in ("false", "none", "null", "", "no", "0", "not found", "n/a", "no banner found"):
             return False
         return len(stripped) > 0
     return bool(value)
 
 
+def get_protocol(data, name):
+    """Fetch a protocol value (SPF/DKIM/DMARC) regardless of key casing."""
+    if name in data:
+        return data.get(name)
+    lowered = {k.lower(): v for k, v in data.items() if isinstance(k, str)}
+    return lowered.get(name.lower())
+
+
 def transform(input):
-    criteriaKey = "isDNSConfigured"
+    is_dmarc_configured = False
+    is_dkim_configured = False
+    is_spf_configured = False
 
     try:
         if isinstance(input, str):
@@ -93,10 +136,16 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
+        data = coerce_data(data)
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False, "isSPFConfigured": False, "isDKIMConfigured": False, "isDMARCConfigured": False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
+                result={
+                    "isDNSConfigured": False,
+                    "isDMARCConfigured": False,
+                    "isDKIMConfigured": False,
+                    "isSPFConfigured": False
+                },
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -106,88 +155,52 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        dns_configured = False
-        spf_configured = False
-        dkim_configured = False
-        dmarc_configured = False
+        is_spf_configured = record_present(get_protocol(data, "SPF"))
+        is_dkim_configured = record_present(get_protocol(data, "DKIM"))
+        is_dmarc_configured = record_present(get_protocol(data, "DMARC"))
 
-        if isinstance(data, dict):
-            # Normalize keys to lowercase for case-insensitive matching
-            lower_data = {k.lower(): v for k, v in data.items()}
+        is_dns_configured = is_dmarc_configured and is_dkim_configured and is_spf_configured
 
-            # Check for flat DNS record format: {SPF: "v=spf1...", DKIM: "...", DMARC: "v=DMARC1..."}
-            if 'spf' in lower_data or 'dkim' in lower_data or 'dmarc' in lower_data:
-                spf_configured = is_dns_record_present(lower_data.get('spf'))
-                dkim_configured = is_dns_record_present(lower_data.get('dkim'))
-                dmarc_configured = is_dns_record_present(lower_data.get('dmarc'))
-                dns_configured = spf_configured and dkim_configured and dmarc_configured
+        if is_dns_configured:
+            pass_reasons.append("All email DNS records (DMARC, DKIM, SPF) are properly configured")
+        else:
+            not_configured = []
+            if not is_dmarc_configured:
+                not_configured.append("DMARC")
+            if not is_dkim_configured:
+                not_configured.append("DKIM")
+            if not is_spf_configured:
+                not_configured.append("SPF")
+            fail_reasons.append("Missing DNS records: " + ", ".join(not_configured))
+            recommendations.append(
+                "Publish the missing DNS records (" + ", ".join(not_configured) + ") for the email domain."
+            )
+
+        for metric, configured, label in (
+            ("isDMARCConfigured", is_dmarc_configured, "DMARC"),
+            ("isDKIMConfigured", is_dkim_configured, "DKIM"),
+            ("isSPFConfigured", is_spf_configured, "SPF"),
+        ):
+            if configured:
+                additional_findings.append({
+                    "metric": metric,
+                    "status": "pass",
+                    "reason": label + " record is configured"
+                })
             else:
-                # Check Abnormal Security settings for email authentication
-                settings = data.get('settings', data)
-
-                # Check for email authentication settings
-                email_auth = settings.get('emailAuthentication', settings.get('authentication', {}))
-                if isinstance(email_auth, dict):
-                    spf = email_auth.get('spf', {})
-                    dkim = email_auth.get('dkim', {})
-                    dmarc = email_auth.get('dmarc', {})
-
-                    if isinstance(spf, dict):
-                        spf_configured = is_dns_record_present(spf.get('enabled', spf.get('configured', False)))
-                    else:
-                        spf_configured = is_dns_record_present(spf)
-                    if isinstance(dkim, dict):
-                        dkim_configured = is_dns_record_present(dkim.get('enabled', dkim.get('configured', False)))
-                    else:
-                        dkim_configured = is_dns_record_present(dkim)
-                    if isinstance(dmarc, dict):
-                        dmarc_configured = is_dns_record_present(dmarc.get('enabled', dmarc.get('configured', False)))
-                    else:
-                        dmarc_configured = is_dns_record_present(dmarc)
-
-                    dns_configured = spf_configured or dkim_configured or dmarc_configured
-                elif 'integrations' in settings:
-                    # If Abnormal has integrations configured, DNS is set up
-                    integrations = settings['integrations']
-                    if isinstance(integrations, list) and len(integrations) > 0:
-                        dns_configured = True
-
-                # If we get a valid response from settings, that implies basic DNS config
-                if not dns_configured and isinstance(data, dict) and len(data) > 0:
-                    if 'organization' in data or 'account' in data:
-                        dns_configured = True
-
-        # Build additional findings for sub-criteria
-        if spf_configured:
-            additional_findings.append({"metric": "spfConfigured", "status": "pass", "reason": "SPF record is configured"})
-        else:
-            additional_findings.append({"metric": "spfConfigured", "status": "fail", "reason": "SPF record not configured", "recommendation": "Configure SPF record for email domain"})
-
-        if dkim_configured:
-            additional_findings.append({"metric": "dkimConfigured", "status": "pass", "reason": "DKIM record is configured"})
-        else:
-            additional_findings.append({"metric": "dkimConfigured", "status": "fail", "reason": "DKIM record not configured", "recommendation": "Configure DKIM record for email signing"})
-
-        if dmarc_configured:
-            additional_findings.append({"metric": "dmarcConfigured", "status": "pass", "reason": "DMARC record is configured"})
-        else:
-            additional_findings.append({"metric": "dmarcConfigured", "status": "fail", "reason": "DMARC record not configured", "recommendation": "Configure DMARC record for domain authentication"})
-
-        if dns_configured:
-            pass_reasons.append("DNS email authentication is configured")
-        else:
-            fail_reasons.append("DNS email authentication (SPF/DKIM/DMARC) is not configured")
-            recommendations.append("Configure SPF, DKIM, and DMARC records for email authentication")
+                additional_findings.append({
+                    "metric": metric,
+                    "status": "fail",
+                    "reason": label + " DNS record not found",
+                    "recommendation": "Configure " + label + " record for the email domain"
+                })
 
         return create_response(
             result={
-                criteriaKey: dns_configured,
-                "isSPFConfigured": spf_configured,
-                "isDKIMConfigured": dkim_configured,
-                "isDMARCConfigured": dmarc_configured,
-                "spfConfigured": spf_configured,
-                "dkimConfigured": dkim_configured,
-                "dmarcConfigured": dmarc_configured
+                "isDMARCConfigured": is_dmarc_configured,
+                "isDKIMConfigured": is_dkim_configured,
+                "isSPFConfigured": is_spf_configured,
+                "isDNSConfigured": is_dns_configured
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -195,16 +208,21 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "spfConfigured": spf_configured,
-                "dkimConfigured": dkim_configured,
-                "dmarcConfigured": dmarc_configured
+                "dmarcConfigured": is_dmarc_configured,
+                "dkimConfigured": is_dkim_configured,
+                "spfConfigured": is_spf_configured
             }
         )
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False, "isSPFConfigured": False, "isDKIMConfigured": False, "isDMARCConfigured": False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
+            result={
+                "isDNSConfigured": False,
+                "isDMARCConfigured": is_dmarc_configured,
+                "isDKIMConfigured": is_dkim_configured,
+                "isSPFConfigured": is_spf_configured
+            },
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )

@@ -3,21 +3,20 @@ Transformation: isDNSConfigured
 Vendor: Mimecast  |  Category: emailsecurity
 Evaluates: Ensure that DMARC, DKIM and SPF records are set up properly.
 
-The Mimecast workflow routes isDKIMConfigured / isSPFConfigured / isDMARCConfigured
-to the isDNSConfigured method. That method calls the Spektrum mail-server security
-checker (mail_server_security_checks/tool), which performs a live DNS/CNAME probe and
-returns a flat dict keyed by protocol name, e.g.:
+isDKIMConfigured / isSPFConfigured / isDMARCConfigured all route to the
+isDNSConfigured method, which calls the Spektrum mail-server security checker
+(mail_server_security_checks/tool). That tool performs a live DNS/CNAME probe of
+the email domain and returns a flat dict keyed by protocol, e.g.:
 
-    {"SPF": <bool|record-string|false>,
-     "DKIM": <bool|record-string|false>,
-     "DMARC": <bool|record-string|false>,
-     "Open Relay": ..., "SMTP Banner": ..., "SSL/TLS": ...}
+    {"result": {"SPF": <bool|record-string|false>,
+                "DKIM": <bool|record-string|false>,
+                "DMARC": <bool|record-string|false>,
+                "SMTPBanner": ...}}
 
-This transformation reads the SPF/DKIM/DMARC values from that flat response and emits
-the per-protocol criteria keys (isDKIMConfigured, isSPFConfigured, isDMARCConfigured)
-plus the aggregate isDNSConfigured. It also tolerates Mimecast's getInternalDomain
-shape ({"data": [{"dns": {"dkim": ..., "dmarc": ..., "spf": ...}}, ...]}) so the same
-logic keeps working if the data source is switched to that endpoint.
+DKIM/SPF/DMARC are published DNS records, so they are verified by DNS lookup
+(vendor-agnostic) rather than via a Mimecast API. This transformation reads the
+SPF/DKIM/DMARC values and emits the per-protocol criteria keys plus the aggregate
+isDNSConfigured.
 """
 import json
 import ast
@@ -30,7 +29,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for _ in range(4):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -82,27 +81,28 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def coerce_data(value):
-    """Best-effort conversion of a raw response into a dict or list."""
-    if isinstance(value, (dict, list)):
+    """Best-effort conversion of a raw response into a dict."""
+    if isinstance(value, dict):
         return value
     if isinstance(value, bytes):
         value = value.decode("utf-8")
     if isinstance(value, str):
         for parser in (json.loads, ast.literal_eval):
             try:
-                return parser(value)
+                parsed = parser(value)
+                if isinstance(parsed, dict):
+                    return parsed
             except Exception:
                 pass
-    return value
+    return value if isinstance(value, dict) else {}
 
 
 def record_present(value):
-    """Return True if a protocol value indicates a DNS record exists.
+    """True if a protocol value from the DNS tool indicates a record exists.
 
-    The DNS tool returns either a boolean, the actual DNS record string, or a falsey
-    sentinel (False / "" / "False" / "None" / "not found"). A nested dict (e.g. the
-    getInternalDomain dns verification object) is considered present when it reports
-    valid/verified/configured or carries a record value.
+    The tool returns either a boolean, the actual DNS record string, or a falsey
+    sentinel (False / "" / "False" / "None" / "not found"). Any real record string
+    or boolean True counts as configured.
     """
     if value is None:
         return False
@@ -113,50 +113,15 @@ def record_present(value):
         if stripped.lower() in ("false", "none", "null", "", "no", "0", "not found", "n/a", "no banner found"):
             return False
         return len(stripped) > 0
-    if isinstance(value, dict):
-        for flag in ("valid", "verified", "configured", "enabled"):
-            if flag in value:
-                return bool(value.get(flag))
-        for rec in ("record", "value", "txt"):
-            if rec in value:
-                return record_present(value.get(rec))
-        return len(value) > 0
     return bool(value)
 
 
-def protocol_from_mapping(mapping, name):
-    """Fetch a protocol value (SPF/DKIM/DMARC) from a dict regardless of key casing."""
-    if name in mapping:
-        return mapping.get(name)
-    lowered = {k.lower(): v for k, v in mapping.items() if isinstance(k, str)}
+def get_protocol(data, name):
+    """Fetch a protocol value (SPF/DKIM/DMARC) regardless of key casing."""
+    if name in data:
+        return data.get(name)
+    lowered = {k.lower(): v for k, v in data.items() if isinstance(k, str)}
     return lowered.get(name.lower())
-
-
-def evaluate_protocols(data):
-    """Return (spf, dkim, dmarc) booleans from either the flat DNS-tool dict or the
-    Mimecast getInternalDomain list shape."""
-    if isinstance(data, dict):
-        # getInternalDomain shape: {"data": [ {"dns": {...}}, ... ]}
-        domains = data.get("data")
-        if isinstance(domains, list) and domains:
-            spf = dkim = dmarc = False
-            for entry in domains:
-                dns = entry.get("dns", entry) if isinstance(entry, dict) else {}
-                if not isinstance(dns, dict):
-                    continue
-                spf = spf or record_present(protocol_from_mapping(dns, "SPF"))
-                dkim = dkim or record_present(protocol_from_mapping(dns, "DKIM"))
-                dmarc = dmarc or record_present(protocol_from_mapping(dns, "DMARC"))
-            return spf, dkim, dmarc
-
-        # Flat DNS-tool shape: {"SPF": ..., "DKIM": ..., "DMARC": ...}
-        return (
-            record_present(protocol_from_mapping(data, "SPF")),
-            record_present(protocol_from_mapping(data, "DKIM")),
-            record_present(protocol_from_mapping(data, "DMARC")),
-        )
-
-    return False, False, False
 
 
 def transform(input):
@@ -190,7 +155,9 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        is_spf_configured, is_dkim_configured, is_dmarc_configured = evaluate_protocols(data)
+        is_spf_configured = record_present(get_protocol(data, "SPF"))
+        is_dkim_configured = record_present(get_protocol(data, "DKIM"))
+        is_dmarc_configured = record_present(get_protocol(data, "DMARC"))
 
         is_dns_configured = is_dmarc_configured and is_dkim_configured and is_spf_configured
 
