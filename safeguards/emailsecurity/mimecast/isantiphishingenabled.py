@@ -83,7 +83,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+
+    # Token-Service navigates into the response's "data" key, so this transform
+    # usually receives the bare account list. Re-wrap it (and a lone account dict)
+    # so the {meta, data} access below works in the live pipeline and local testing.
+    if isinstance(data, list):
+        data = {"data": data}
+    elif isinstance(data, dict) and "data" not in data and ("packages" in data or "accountCode" in data or "accountName" in data):
+        data = {"data": [data]}
+    if not isinstance(data, dict):
+        data = {}
 
     account_list = data.get("data") or []
     fail_list = data.get("fail") or []
