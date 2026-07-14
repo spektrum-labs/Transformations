@@ -49,8 +49,11 @@ def evaluate(data):
         # { "id": str, "name": str, "type": str, "mfaEnabled": bool,
         #   "scimEnabled": bool, "ssoProvider": str, "scimProvider": str }
         result = False
+        mfa_enabled_count = 0
 
         idps = data if isinstance(data, list) else data.get("data", data.get("identityProviders", []))
+
+        total_idps = len(idps) if isinstance(idps, list) else 0
 
         if isinstance(idps, list):
             for idp in idps:
@@ -59,7 +62,13 @@ def evaluate(data):
                     mfa_enabled = mfa_enabled.lower() in ("true", "yes", "1")
                 if mfa_enabled:
                     result = True
-                    break
+                    mfa_enabled_count += 1
+
+        return {
+            "isMFAEnabledForIdentityProvider": result,
+            "identityProvidersChecked": total_idps,
+            "mfaEnabledCount": mfa_enabled_count,
+        }
     except Exception as e:
         return {"isMFAEnabledForIdentityProvider": False, "error": str(e)}
 
