@@ -56,6 +56,8 @@ class MicrosoftOneClickAntiPhishingTests(unittest.TestCase):
             ["Complete Exchange access in Microsoft One-Click, then re-evaluate this check."],
         )
         self.assertFalse(response["transformedResponse"]["isAntiPhishingEnabled"])
+        self.assertEqual(response["additionalInfo"]["validation"]["status"], "unknown")
+        self.assertEqual(response["additionalInfo"]["metadata"]["schemaVersion"], "2.0")
 
     def test_unrelated_error_keeps_generic_existing_copy(self):
         input_data = {"Output": {"PSError": "Request timed out"}}
@@ -70,10 +72,8 @@ class MicrosoftOneClickAntiPhishingTests(unittest.TestCase):
             evaluation["recommendations"],
             ["Check Microsoft 365 credentials and configuration"],
         )
-        self.assertEqual(
-            without_timestamp(response),
-            without_timestamp(self.legacy_transformation.transform(input_data)),
-        )
+        legacy = self.legacy_transformation.transform(input_data)
+        self.assertEqual(response["transformedResponse"], legacy["transformedResponse"])
 
     def test_enabled_policy_behavior_is_unchanged(self):
         input_data = {
@@ -86,10 +86,35 @@ class MicrosoftOneClickAntiPhishingTests(unittest.TestCase):
             response["additionalInfo"]["evaluation"]["passReasons"],
             ["1 anti-phishing policy/policies enabled: Default"],
         )
+        legacy = self.legacy_transformation.transform(input_data)
+        self.assertEqual(response["transformedResponse"], legacy["transformedResponse"])
+
+    def test_disabled_policy_returns_a_valid_failure(self):
+        response = self.transformation.transform({
+            "Output": {"policies": [{"Name": "Disabled", "Enabled": False}]},
+        })
+
+        self.assertFalse(response["transformedResponse"]["isAntiPhishingEnabled"])
         self.assertEqual(
-            without_timestamp(response),
-            without_timestamp(self.legacy_transformation.transform(input_data)),
+            response["additionalInfo"]["evaluation"]["failReasons"],
+            ["No anti-phishing policies are enabled"],
         )
+
+    def test_empty_data_returns_a_valid_failure(self):
+        response = self.transformation.transform({"Output": {}})
+
+        self.assertFalse(response["transformedResponse"]["isAntiPhishingEnabled"])
+        self.assertEqual(
+            response["additionalInfo"]["transformation"]["inputSummary"]["totalPolicies"],
+            0,
+        )
+
+    def test_malformed_json_returns_unknown_validation(self):
+        response = self.transformation.transform("{not-json")
+
+        self.assertFalse(response["transformedResponse"]["isAntiPhishingEnabled"])
+        self.assertEqual(response["additionalInfo"]["validation"]["status"], "unknown")
+        self.assertTrue(response["additionalInfo"]["validation"]["errors"])
 
 
 if __name__ == "__main__":

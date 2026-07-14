@@ -46,7 +46,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-        "schemaVersion": "1.0",
+        "schemaVersion": "2.0",
         "transformationId": "isAntiPhishingEnabled",
         "vendor": "Microsoft",
         "category": "Email Security",
@@ -149,7 +149,7 @@ def transform(input):
 
             return create_response(
                 result={criteria_key: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                validation={"status": "unknown", "errors": [], "warnings": ["API returned error"]},
                 api_errors=[api_error],
                 fail_reasons=[fail_reason],
                 recommendations=[recommendation],
@@ -210,13 +210,13 @@ def transform(input):
     except json.JSONDecodeError as error:
         return create_response(
             result={criteria_key: False},
-            validation={"status": "error", "errors": [f"Invalid JSON: {str(error)}"], "warnings": []},
+            validation={"status": "unknown", "errors": [f"Invalid JSON: {str(error)}"], "warnings": []},
             fail_reasons=["Could not parse input as valid JSON"],
         )
     except Exception as error:
         return create_response(
             result={criteria_key: False},
-            validation={"status": "error", "errors": [], "warnings": []},
+            validation={"status": "unknown", "errors": [], "warnings": []},
             transformation_errors=[str(error)],
             fail_reasons=[f"Transformation error: {str(error)}"],
         )
