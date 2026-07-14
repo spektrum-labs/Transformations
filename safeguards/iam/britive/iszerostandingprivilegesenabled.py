@@ -47,16 +47,18 @@ def evaluate(data):
     try:
         # /api/apps/{appId}/paps returns profile objects:
         # { "papId": str, "name": str, "status": "active",
-        #   "expirationInMinutes": int (0 = no expiry),
-        #   "sessionDuration": int|null, ... }
+        #   "expirationDuration": int (milliseconds, 0 = no expiry), ... }
         # Integration layer passes merged { "profiles": [...] }
 
-        profiles = (
-            data.get("profiles") or
-            data.get("data") or
-            data.get("paps") or
-            (data if isinstance(data, list) else [])
-        )
+        if isinstance(data, list):
+            profiles = data
+        else:
+            profiles = (
+                data.get("profiles") or
+                data.get("data") or
+                data.get("paps") or
+                []
+            )
 
         if not isinstance(profiles, list):
             return {"isZeroStandingPrivilegesEnabled": False, "reason": "No profile data found"}
@@ -75,29 +77,31 @@ def evaluate(data):
         profiles_without_expiry = []
 
         for profile in active_profiles:
-            expiry = profile.get("expirationInMinutes", None)
-            session = profile.get("sessionDuration", None)
-
             has_expiry = False
 
-            if expiry is not None:
+            # Britive returns expirationDuration in milliseconds; older shapes
+            # used expirationInMinutes / sessionDuration.
+            for field in ("expirationDuration", "expirationInMinutes", "sessionDuration"):
+                value = profile.get(field)
+                if value is None:
+                    continue
                 try:
-                    if int(expiry) > 0:
+                    if int(value) > 0:
                         has_expiry = True
+                        break
                 except (TypeError, ValueError):
-                    pass
-
-            if not has_expiry and session is not None:
-                try:
-                    if int(session) > 0:
-                        has_expiry = True
-                except (TypeError, ValueError):
-                    pass
+                    continue
 
             if not has_expiry:
                 profiles_without_expiry.append(profile.get("name", profile.get("papId", "unknown")))
 
         result = len(profiles_without_expiry) == 0
+
+        return {
+            "isZeroStandingPrivilegesEnabled": result,
+            "activeProfiles": total,
+            "profilesWithoutExpiry": profiles_without_expiry,
+        }
     except Exception as e:
         return {"isZeroStandingPrivilegesEnabled": False, "error": str(e)}
 

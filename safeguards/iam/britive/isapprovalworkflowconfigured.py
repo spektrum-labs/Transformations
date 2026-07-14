@@ -45,23 +45,28 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        # Policy objects have structure:
-        # { "policyId": str, "name": str, "isActive": bool,
-        #   "approvalRequired": bool,
-        #   "approvers": { "userIds": [...], "tags": [...] },
-        #   "notificationMedium": str, "timeToApprove": int, ... }
+        # Britive policy objects have structure:
+        # { "id": str, "name": str, "isActive": bool, "accessType": "Allow",
+        #   "condition": {...}, "members": {...},
+        #   "settings": [ { "settingsType": "APPROVAL"|"JUSTIFICATION"|"IM", ... } ] }
+        # Approval is configured as a policy setting, not a top-level flag.
+        # Integration layer passes merged { "policies": [...] }
 
-        policies = (
-            data.get("policies") or
-            data.get("data") or
-            (data if isinstance(data, list) else [])
-        )
+        if isinstance(data, list):
+            policies = data
+        else:
+            policies = (
+                data.get("policies") or
+                data.get("data") or
+                []
+            )
 
         if not isinstance(policies, list):
             return {"isApprovalWorkflowConfigured": False, "reason": "No policy data found"}
 
         result = False
         approval_policies_count = 0
+        active_policies_count = 0
 
         for policy in policies:
             is_active = policy.get("isActive", True)
@@ -71,24 +76,41 @@ def evaluate(data):
             if not is_active:
                 continue
 
-            approval_required = policy.get("approvalRequired", False)
-            if isinstance(approval_required, str):
-                approval_required = approval_required.lower() in ("true", "yes", "1")
+            active_policies_count += 1
 
-            # Check approvers list as secondary signal
-            approvers = policy.get("approvers", {})
-            has_approvers = False
-            if isinstance(approvers, dict):
-                user_approvers = approvers.get("userIds", approvers.get("users", []))
-                tag_approvers = approvers.get("tags", [])
-                has_approvers = (
-                    (isinstance(user_approvers, list) and len(user_approvers) > 0) or
-                    (isinstance(tag_approvers, list) and len(tag_approvers) > 0)
-                )
+            has_approval = False
+            for setting in (policy.get("settings") or []):
+                if str(setting.get("settingsType", "")).upper() == "APPROVAL":
+                    has_approval = True
+                    break
 
-            if approval_required or has_approvers:
+            if not has_approval:
+                # Fall back to the flat shape used by other/older payloads
+                approval_required = policy.get("approvalRequired", False)
+                if isinstance(approval_required, str):
+                    approval_required = approval_required.lower() in ("true", "yes", "1")
+
+                approvers = policy.get("approvers", {})
+                has_approvers = False
+                if isinstance(approvers, dict):
+                    user_approvers = approvers.get("userIds", approvers.get("users", []))
+                    tag_approvers = approvers.get("tags", [])
+                    has_approvers = (
+                        (isinstance(user_approvers, list) and len(user_approvers) > 0) or
+                        (isinstance(tag_approvers, list) and len(tag_approvers) > 0)
+                    )
+
+                has_approval = bool(approval_required or has_approvers)
+
+            if has_approval:
                 approval_policies_count += 1
                 result = True
+
+        return {
+            "isApprovalWorkflowConfigured": result,
+            "activePoliciesChecked": active_policies_count,
+            "policiesWithApproval": approval_policies_count,
+        }
     except Exception as e:
         return {"isApprovalWorkflowConfigured": False, "error": str(e)}
 
