@@ -59,6 +59,8 @@ def evaluate(data):
                 if issuer and sign_in_url:
                     result = True
                     break
+
+        return {"isSAMLEnforced": result}
     except Exception as e:
         return {"isSAMLEnforced": False, "error": str(e)}
 
