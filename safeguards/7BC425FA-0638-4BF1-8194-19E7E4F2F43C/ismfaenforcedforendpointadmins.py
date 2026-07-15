@@ -9,7 +9,9 @@ import json
 from datetime import datetime
 
 
-CRITERIA_KEY = "isMFAEnforcedForEndpointAdmins"
+# Preserve the legacy requirement key while replacing its invalid identity-provider
+# evidence with a real Conditional Access MFA evaluation.
+CRITERIA_KEY = "isSSOEnabled"
 
 
 def extract_input(input_data):

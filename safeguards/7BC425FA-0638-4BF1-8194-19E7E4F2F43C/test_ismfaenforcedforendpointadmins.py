@@ -51,7 +51,7 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
         response = self.evaluate([policy()])
 
         self.assertTrue(
-            response["transformedResponse"]["isMFAEnforcedForEndpointAdmins"]
+            response["transformedResponse"]["isSSOEnabled"]
         )
         self.assertEqual(
             response["transformedResponse"]["matchingPolicies"],
@@ -64,7 +64,7 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
         ])
 
         self.assertFalse(
-            response["transformedResponse"]["isMFAEnforcedForEndpointAdmins"]
+            response["transformedResponse"]["isSSOEnabled"]
         )
 
     def test_user_exclusion_does_not_prove_all_admins_are_protected(self):
@@ -78,7 +78,7 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
         ])
 
         self.assertFalse(
-            response["transformedResponse"]["isMFAEnforcedForEndpointAdmins"]
+            response["transformedResponse"]["isSSOEnabled"]
         )
 
     def test_application_exclusion_does_not_prove_defender_is_protected(self):
@@ -90,7 +90,7 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
         ])
 
         self.assertFalse(
-            response["transformedResponse"]["isMFAEnforcedForEndpointAdmins"]
+            response["transformedResponse"]["isSSOEnabled"]
         )
 
     def test_or_policy_with_an_alternative_control_does_not_require_mfa(self):
@@ -102,7 +102,7 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
         ])
 
         self.assertFalse(
-            response["transformedResponse"]["isMFAEnforcedForEndpointAdmins"]
+            response["transformedResponse"]["isSSOEnabled"]
         )
 
     def test_identity_provider_records_do_not_count_as_mfa_evidence(self):
@@ -112,7 +112,7 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
         }])
 
         self.assertFalse(
-            response["transformedResponse"]["isMFAEnforcedForEndpointAdmins"]
+            response["transformedResponse"]["isSSOEnabled"]
         )
 
 
