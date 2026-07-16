@@ -87,7 +87,11 @@ class MicrosoftOneClickAntiPhishingTests(unittest.TestCase):
             ["1 anti-phishing policy/policies enabled: Default"],
         )
         legacy = self.legacy_transformation.transform(input_data)
-        self.assertEqual(response["transformedResponse"], legacy["transformedResponse"])
+        self.assertEqual(
+            response["transformedResponse"]["isAntiPhishingEnabled"],
+            legacy["transformedResponse"]["isAntiPhishingEnabled"],
+        )
+        self.assertNotIn("policyDetails", response["transformedResponse"])
 
     def test_disabled_policy_returns_a_valid_failure(self):
         response = self.transformation.transform({

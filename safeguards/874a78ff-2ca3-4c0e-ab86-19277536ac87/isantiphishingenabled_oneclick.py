@@ -195,7 +195,7 @@ def transform(input):
             recommendations.append("Enable anti-phishing policies in Microsoft Defender for Office 365")
 
         return create_response(
-            result={criteria_key: is_enabled, "policyDetails": enabled_policies},
+            result={criteria_key: is_enabled},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,

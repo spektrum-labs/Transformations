@@ -115,6 +115,49 @@ class EndpointAdministratorMfaTests(unittest.TestCase):
             response["transformedResponse"]["isSSOEnabled"]
         )
 
+    def test_empty_policy_list_is_a_valid_failed_evaluation(self):
+        response = self.evaluate([])
+
+        self.assertFalse(response["transformedResponse"]["isSSOEnabled"])
+        self.assertEqual(
+            response["additionalInfo"]["dataCollection"]["status"],
+            "success",
+        )
+        self.assertEqual(
+            response["additionalInfo"]["transformation"]["status"],
+            "success",
+        )
+
+    def test_api_error_is_not_reported_as_a_valid_empty_policy_list(self):
+        response = self.transformation.transform({
+            "PSError": "403 Forbidden",
+        })
+
+        self.assertFalse(response["transformedResponse"]["isSSOEnabled"])
+        self.assertEqual(
+            response["additionalInfo"]["dataCollection"]["status"],
+            "error",
+        )
+        self.assertTrue(response["additionalInfo"]["dataCollection"]["errors"])
+
+    def test_missing_policy_collection_is_a_transformation_error(self):
+        response = self.transformation.transform({})
+
+        self.assertFalse(response["transformedResponse"]["isSSOEnabled"])
+        self.assertEqual(
+            response["additionalInfo"]["transformation"]["status"],
+            "error",
+        )
+
+    def test_malformed_json_is_a_transformation_error(self):
+        response = self.transformation.transform("{not-json")
+
+        self.assertFalse(response["transformedResponse"]["isSSOEnabled"])
+        self.assertEqual(
+            response["additionalInfo"]["transformation"]["status"],
+            "error",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

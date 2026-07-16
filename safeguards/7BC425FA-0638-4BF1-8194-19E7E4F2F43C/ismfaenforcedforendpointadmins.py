@@ -1,8 +1,12 @@
-"""Evaluate whether Endpoint Security administrator access requires MFA.
+"""
+Transformation: isSSOEnabled (Endpoint Administrator MFA)
+Vendor: Microsoft
+Category: Endpoint Security
 
-The check deliberately accepts only broad, enforceable Conditional Access
-policies. Narrower policies need additional identity and application evidence
-before they can safely prove that every Endpoint administrator is covered.
+Evaluates whether Endpoint Security administrator access requires MFA. The
+check deliberately accepts only broad, enforceable Conditional Access policies.
+Narrower policies need additional identity and application evidence before they
+can safely prove that every Endpoint administrator is covered.
 """
 
 import json
@@ -38,14 +42,18 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None):
+                    recommendations=None, input_summary=None,
+                    transformation_errors=None, api_errors=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
 
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {
+                "status": "error" if (api_errors or []) else "success",
+                "errors": api_errors or [],
+            },
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -157,9 +165,46 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-        policies = data.get("value", []) if isinstance(data, dict) else []
-        if not isinstance(policies, list):
-            policies = []
+
+        if isinstance(data, dict) and ("PSError" in data or "error" in data):
+            return create_response(
+                {CRITERIA_KEY: False, "matchingPolicies": 0},
+                validation=validation,
+                api_errors=[
+                    "Microsoft Graph could not return Conditional Access policies"
+                ],
+                fail_reasons=["Could not retrieve Conditional Access policies"],
+                recommendations=[
+                    "Verify Microsoft Graph permissions and re-check the connection"
+                ],
+            )
+
+        if validation.get("status") == "failed":
+            errors = validation.get("errors") or ["Input validation failed"]
+            return create_response(
+                {CRITERIA_KEY: False, "matchingPolicies": 0},
+                validation=validation,
+                fail_reasons=["Conditional Access evidence could not be validated"],
+                transformation_errors=errors,
+            )
+
+        malformed_error = None
+        if not isinstance(data, dict):
+            malformed_error = "Conditional Access response must be an object"
+        elif "value" not in data:
+            malformed_error = "Conditional Access response is missing 'value'"
+        elif not isinstance(data.get("value"), list):
+            malformed_error = "Conditional Access response 'value' must be a list"
+
+        if malformed_error:
+            return create_response(
+                {CRITERIA_KEY: False, "matchingPolicies": 0},
+                validation=validation,
+                fail_reasons=["Conditional Access evidence is malformed"],
+                transformation_errors=[malformed_error],
+            )
+
+        policies = data["value"]
 
         matches = [
             policy for policy in policies
