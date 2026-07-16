@@ -18,12 +18,15 @@ import json
 from datetime import datetime
 
 
-def _as_bool(value):
+def coerce_bool(value):
     """Coerce a SentinelOne boolean-ish field to a real bool.
 
     The agent payload may carry native booleans or the strings 'true'/'false'
     depending on the collection path; naive truthiness treats the string
     'False' as True, so normalize explicitly.
+
+    NOTE: must not be named with a leading underscore — RestrictedPython (the
+    transformation sandbox) rejects all underscore-prefixed identifiers.
     """
     if isinstance(value, bool):
         return value
@@ -123,10 +126,10 @@ def transform(input):
     for agent in items:
         if not isinstance(agent, dict):
             continue
-        if _as_bool(agent.get("isUninstalled")):
+        if coerce_bool(agent.get("isUninstalled")):
             uninstalled_count = uninstalled_count + 1
             continue
-        if _as_bool(agent.get("isDecommissioned")):
+        if coerce_bool(agent.get("isDecommissioned")):
             decommissioned_count = decommissioned_count + 1
             continue
         # Enrolled and neither uninstalled nor decommissioned => Endpoint
@@ -136,7 +139,7 @@ def transform(input):
         # still-protected endpoints.
         installed_count = installed_count + 1
         is_active = agent.get("isActive")
-        if is_active is not None and not _as_bool(is_active):
+        if is_active is not None and not coerce_bool(is_active):
             inactive_installed_count = inactive_installed_count + 1
 
     covered_count = installed_count
