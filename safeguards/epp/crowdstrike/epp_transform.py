@@ -235,6 +235,15 @@ def transform(endpoints_response, debug=False):
         coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
+        # Alerting is active whenever at least one endpoint is actively protected
+        # (sensor + prevention policy) or covered by MDR, since those devices
+        # generate and forward detections/alerts. Server- or MDR-only fleets must
+        # still count, so this is not gated on Endpoint Protection alone.
+        coverage_scores["isAlertingEnabled"] = (
+            coverage_scores["Endpoint Protection"] > 0
+            or coverage_scores["Server Protection"] > 0
+            or coverage_scores["MDR"] > 0
+        )
         coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
         coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
         coverage_scores["isEPPConfigured"] = isEPPConfigured
@@ -250,6 +259,11 @@ def transform(endpoints_response, debug=False):
 
         if coverage_scores["isMDREnabled"]:
             pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
+
+        if coverage_scores["isAlertingEnabled"]:
+            pass_reasons.append("Alerting enabled: protected endpoints/servers/MDR generate detections")
+        else:
+            fail_reasons.append("Alerting not enabled: no protected endpoint, server, or MDR coverage detected")
 
         return create_response(
             result=coverage_scores,
