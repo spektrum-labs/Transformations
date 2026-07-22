@@ -1,0 +1,369 @@
+{
+    "requirementsBundleUid": "d720ba9f-c1d1-4c9c-a837-ed48b0e2da34",
+    "dateCreated": "2026-07-15T09:21:01.350395",
+    "dateLastUpdated": "2026-07-15T09:21:01.350403",
+    "requirementsCategory": "Endpoint Security",
+    "requirements": [
+      {
+        "requirementsUid": "f1bc0eb6-e6cf-485a-a9b7-97ddfe2a882f",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "confirmedLicensePurchased",
+            "criteriaTitle": "Confirmed Falcon License Purchased",
+            "criteriaValue": {
+              "uid": "b4c9af43-6011-4960-93b4-c6d52c7f5438",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "The tenant has an active, paid Falcon subscription with sensors provisioned against it, confirmed via a non-empty, authenticated Hosts API response scoped to the customer's CID."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "fad859b1-a06d-4e65-bc46-96b1625c6e51",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isBehavioralMonitoringValid",
+            "criteriaTitle": "Behavioral Monitoring Valid",
+            "criteriaValue": {
+              "uid": "a09fa5a8-35c1-4a86-8adb-dc054967bb4b",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "The Prevention Policy applied to the host group has behavior-based (IOA) detection settings enabled and correctly configured, not just present."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "4daac1d2-e7b3-410c-b517-35df10cc4dfe",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isEDRDeployed",
+            "criteriaTitle": "EDR Deployed",
+            "criteriaValue": {
+              "uid": "eb25753d-6091-4d4f-8b35-312fc98029ad",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "The Falcon sensor is installed and actively streaming telemetry (not in Reduced Functionality Mode) on managed endpoints, providing EDR visibility."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "44c1b2ea-3519-4a94-b000-ffecb0898fab",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isEPPConfigured",
+            "criteriaTitle": "EPP Configured",
+            "criteriaValue": {
+              "uid": "61aa336e-afc8-494c-b23a-218e1fd287f5",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "A Prevention Policy exists and is assigned to the host group covering this endpoint population."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "39af482a-86df-4b7b-a77b-0d4c4b32a4a8",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isEPPDeployed",
+            "criteriaTitle": "EPP Deployed",
+            "criteriaValue": {
+              "uid": "2bd1801c-033f-4654-9fa3-de512ac17950",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "The Falcon sensor (endpoint protection agent) is installed and reporting on managed devices."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "fd98a4e8-4e07-4b11-b660-177d74945c9f",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isEPPEnabled",
+            "criteriaTitle": "EPP Enabled",
+            "criteriaValue": {
+              "uid": "206dab48-6d6d-4e7a-8872-8064855a0443",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "The Prevention Policy assigned to the endpoint's host group has its top-level enabled flag set to true, meaning prevention actions are actively enforced rather than defined-but-disabled."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "5a9270a2-7b1f-495b-b53d-b0e935001526",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isEPPLoggingEnabled",
+            "criteriaTitle": "EPP Logging Enabled",
+            "criteriaValue": {
+              "uid": "21c9f104-3a9d-4df4-883f-b9b99a2903c8",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "Prevention/detection events are being exported off-platform via the Falcon Event Streams API (or equivalent SIEM connector), confirming an audit trail exists."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "33e3263a-0bb5-4077-bd31-12b39c23f576",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isPatchManagementEnabled",
+            "criteriaTitle": "Sensor Patch Management Enabled",
+            "criteriaValue": {
+              "uid": "d5249ee6-4651-4439-b723-ffa3366f60c7",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "A Sensor Update Policy is assigned to the host group and its enabled flag is true, meaning sensor build updates are governed rather than left to manual installer choice."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "731fcd1d-6ef8-4d72-81f2-f12221b493e2",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isPatchManagementValid",
+            "criteriaTitle": "Sensor Patch Management Valid",
+            "criteriaValue": {
+              "uid": "7595df52-0305-4bd8-b349-e62dadbb6476",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "The Sensor Update Policy's configured build tag (e.g. N-1, N-2) matches actual deployed agent_version across the host group, confirming the policy is effective, not just enabled."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "8d718d87-96ee-414b-9ab2-2d8a3b413b08",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isRemovableMediaControlled",
+            "criteriaTitle": "Removable Media Controlled",
+            "criteriaValue": {
+              "uid": "9f18bfa2-95b6-46b1-9dd7-161921af5a49",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "A Device Control Policy is assigned and enabled, restricting or monitoring USB mass-storage devices on managed endpoints."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "799eeccf-f8a6-4a9d-bd1f-7cf9589679ce",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "isEPPEnabledForCriticalSystems",
+            "criteriaTitle": "EPP Enabled For Critical Systems",
+            "criteriaValue": {
+              "uid": "2d765f36-1c59-4538-98c8-5ca5bd0adf00",
+              "type": "bool",
+              "value": true
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "Host Groups tagged as critical (e.g. servers, domain controllers) have a Prevention Policy assigned with enabled=true, confirmed by cross-referencing Host Group membership against Prevention Policy assignment."
+          }
+        ]
+      },
+      {
+        "requirementsUid": "fa861b05-a19c-4a3e-8470-eb762b3fe84f",
+        "requirementsCategory": "Endpoint Security",
+        "requirementsType": "Technical",
+        "proofLevel": "4",
+        "vendorName": "CrowdStrike",
+        "productUid": "424c5b0f-93e3-4dd0-ab2d-f9ac8376bf18",
+        "vendorProduct": "CrowdStrike Falcon",
+        "requirementsSpecificParameters": [
+          {
+            "type": "safeguardEvaluation",
+            "criteriaKey": "requiredCoveragePercentage",
+            "criteriaTitle": "Required Sensor Coverage Percentage",
+            "criteriaValue": {
+              "uid": "1a36e949-b079-4b7d-8787-5bed1ede3eeb",
+              "type": "percentage",
+              "value": "95.0"
+            },
+            "applicableTo": [
+              {
+                "safeguardCategory": "Endpoint Security"
+              },
+              {
+                "vendorName": "CrowdStrike"
+              }
+            ],
+            "criteriaDescription": "Percentage of the organization's known assets (from asset inventory) that have an active Falcon sensor installed and reporting."
+          }
+        ]
+      }
+    ],
+    "requirementGroupStrategies": []
+  }

@@ -1,0 +1,27 @@
+python3 ~/Desktop/Spektrum.nosync/Transformations/e2e_pr_tester.py --is-pr 690 --tx-pr 483 \
+    --requirement-token requirement_d720ba9f.json
+[1/5] Resolving PRs…
+  spektrum-labs/Integration-Service#690 (OPEN) -> feat/integration-crowdstrike-falcon-20260722-145348
+  spektrum-labs/Transformations#483 (OPEN) -> feat/transformations-crowdstrike-falcon-20260722-145348
+[2/5] Fetching definition integration_configs/epp/crowdstrike-falcon.json @ feat/integration-crowdstrike-falcon-20260722-145348
+  rewrote 11 transformation URL(s) develop -> feat/transformations-crowdstrike-falcon-20260722-145348
+[3/5] Authenticating against https://api.us-2.crowdstrike.com…
+  auth OK (https://api.us-2.crowdstrike.com/oauth2/token)
+[4/5] Running 11 criteria live…
+
+[5/5] Results
+
+CRITERION                       HTTP  RUN              VALUE      EXPECTED  MATCH  DETAIL
+isBehavioralMonitoringValid     200   OK               True       -         -      {"isBehavioralMonitoringValid": true, "totalPolicies": 33, "validBehavioralPolic
+isEDRDeployed                   200   OK               True       -         -      {"isEDRDeployed": true, "totalDevices": 100, "deployedCount": 100, "reducedFunct
+isEPPConfigured                 200   OK               True       -         -      {"isEPPConfigured": true}
+isEPPDeployed                   200   OK               True       -         -      {"isEPPDeployed": true, "totalDevices": 5566}
+isEPPEnabled                    200   OK               True       -         -      {"isEPPEnabled": true, "totalAssignedPolicies": 13, "enabledAssignedPolicies": 1
+isEPPEnabledForCriticalSystems  200   OK               True       -         -      {"isEPPEnabledForCriticalSystems": true, "criticalHostGroupsFound": 2, "critical
+isEPPLoggingEnabled             404   OK               False      -         -      queryDetects returned meta.pagination.total=0 detection records - no evidence th
+isPatchManagementEnabled        200   OK               True       -         -      {"isPatchManagementEnabled": true, "totalPolicies": 10, "enabledAssignedPolicies
+isPatchManagementValid          403   OK               False      -         -      No Spotlight vulnerability/remediation records were returned for this tenant, so
+isRemovableMediaControlled      403   OK               False      -         -      No device-control policies were returned by getCombinedDeviceControlPolicies (0 
+requiredCoveragePercentage      200   OK               100.0      -         -      {"requiredCoveragePercentage": 100.0, "activeDevices": 100, "totalDevices": 100}
+
+Work dir (inputs + scripts kept for inspection): /var/folders/06/_r3dlhj90z77bydv9sjpxt840000gn/T/e2e_pr_4hrjfjcb
