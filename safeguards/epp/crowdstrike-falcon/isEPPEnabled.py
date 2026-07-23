@@ -1,8 +1,3 @@
-"""Transformation: isURLRewriteEnabled — Mimecast TTP URL Protect
-Evaluates whether URL rewriting is enabled by inspecting the managed URL
-rules returned by getTTPUrlManagedUrls. A non-zero meta.pagination.totalCount
-confirms TTP URL Protect is active and rewriting URLs in delivered emails.
-"""
 import json
 from datetime import datetime
 
@@ -74,88 +69,82 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
+    data = data if isinstance(data, dict) else {}
 
-    if not isinstance(data, dict):
-        data = {}
-
-    # Extract top-level sections
-    fail_list = data.get("fail") or []
-    meta = data.get("meta") or {}
-    pagination = meta.get("pagination") or {}
-    url_items = data.get("data") or []
-
-    total_count = pagination.get("totalCount") or 0
-    page_size = len(url_items)
-
-    # Collect API-level error messages from the fail array
     api_errors = []
-    for f in fail_list:
-        if isinstance(f, dict):
-            api_errors.append(f.get("message") or str(f))
-        else:
-            api_errors.append(str(f))
+    if data.get("error"):
+        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
 
-    # Count rewrite states across the sampled page
-    rewrite_enabled_count = 0
-    rewrite_disabled_count = 0
-    for item in url_items:
-        if isinstance(item, dict):
-            if item.get("disableRewrite") is False:
-                rewrite_enabled_count = rewrite_enabled_count + 1
-            elif item.get("disableRewrite") is True:
-                rewrite_disabled_count = rewrite_disabled_count + 1
+    policies = data.get("resources") or []
+    if not isinstance(policies, list):
+        policies = []
 
-    # Primary verdict: a non-zero totalCount confirms TTP URL Protect is active
-    # and managing URLs through rewriting. An empty list means the feature has
-    # no rules and is effectively not operational.
-    is_url_rewrite_enabled = total_count > 0
+    total_policies = len(policies)
+    assigned_policies = []
+    for p in policies:
+        if not isinstance(p, dict):
+            continue
+        groups = p.get("groups") or []
+        if isinstance(groups, list) and len(groups) > 0:
+            assigned_policies.append(p)
+
+    enabled_assigned = [p for p in assigned_policies if p.get("enabled") is True]
+    disabled_assigned = [p for p in assigned_policies if p.get("enabled") is not True]
+
+    total_assigned = len(assigned_policies)
+    total_enabled_assigned = len(enabled_assigned)
+
+    is_epp_enabled = total_assigned > 0 and total_enabled_assigned == total_assigned
+
+    input_summary = {
+        "totalPolicies": total_policies,
+        "assignedPolicies": total_assigned,
+        "enabledAssignedPolicies": total_enabled_assigned,
+        "disabledAssignedPolicies": len(disabled_assigned),
+    }
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if is_url_rewrite_enabled:
-        pass_reasons.append(
-            f"TTP URL Protect is active with {total_count} managed URLs configured "
-            f"(meta.pagination.totalCount={total_count}). In the sampled page of "
-            f"{page_size} entries, {rewrite_enabled_count} have URL rewriting enabled "
-            f"(disableRewrite=false) and {rewrite_disabled_count} have rewriting "
-            f"explicitly suppressed (disableRewrite=true) for trusted/permitted domains."
-        )
-    else:
+    if total_assigned == 0:
         fail_reasons.append(
-            "No managed URLs found in TTP URL Protect (meta.pagination.totalCount=0). "
-            "URL rewriting does not appear to be configured or active for this account."
+            "No prevention policies with host-group assignments were found among %d total policies; cannot confirm enforcement." % total_policies
         )
         recommendations.append(
-            "Configure TTP URL Protect managed URL rules in the Mimecast administration "
-            "console under Administration > Gateway > Policies > URL Protection. "
-            "Enabling URL rewriting ensures all links in delivered emails are scanned "
-            "and rewritten through Mimecast's proxy before users can click them."
+            "Assign at least one prevention policy to a host group and ensure its top-level 'enabled' flag is set to true."
+        )
+    elif is_epp_enabled:
+        names = ", ".join([str(p.get("name")) for p in enabled_assigned][:5])
+        pass_reasons.append(
+            "All %d host-group-assigned prevention policies have enabled=true (e.g. %s)." % (total_enabled_assigned, names)
+        )
+    else:
+        names = ", ".join([str(p.get("name")) for p in disabled_assigned][:5])
+        fail_reasons.append(
+            "%d of %d host-group-assigned prevention policies have enabled=false (e.g. %s), meaning prevention is defined but not actively enforced on those host groups." % (len(disabled_assigned), total_assigned, names)
+        )
+        recommendations.append(
+            "Enable the top-level 'enabled' flag on all prevention policies assigned to host groups so prevention actions are actively enforced."
         )
 
+    result = {
+        "isEPPEnabled": is_epp_enabled,
+        "totalAssignedPolicies": total_assigned,
+        "enabledAssignedPolicies": total_enabled_assigned,
+    }
+
     return create_response(
-        result={
-            "isURLRewriteEnabled": is_url_rewrite_enabled,
-            "totalManagedUrls": total_count,
-            "sampledUrlsWithRewriteEnabled": rewrite_enabled_count,
-            "sampledUrlsWithRewriteDisabled": rewrite_disabled_count,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalManagedUrls": total_count,
-            "pageSize": page_size,
-            "sampledRewriteEnabled": rewrite_enabled_count,
-            "sampledRewriteDisabled": rewrite_disabled_count,
-            "apiFailures": len(fail_list),
-        },
+        input_summary=input_summary,
         api_errors=api_errors,
         metadata={
-            "transformationId": "isURLRewriteEnabled",
-            "vendor": "Mimecast",
-            "category": "emailsecurity",
+            "transformationId": "isEPPEnabled",
+            "vendor": "CrowdStrike Falcon",
+            "category": "epp",
         },
     )

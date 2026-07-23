@@ -1,15 +1,8 @@
-"""
-Transformation: isDNSLoggingEnabled
-Criterion: DNS-2.4 [Recommended]: DNS Query Logging Enabled
-Vendor: DNSFilter
-Category: Network Security
-"""
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -35,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -77,77 +69,60 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    org_data = data.get("data") or {}
-    org_data = org_data if isinstance(org_data, dict) else {}
-    attributes = org_data.get("attributes") or {}
-    attributes = attributes if isinstance(attributes, dict) else {}
+    api_errors = []
+    if data.get("error") is True or data.get("statusCode") == 500:
+        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
 
-    org_name = attributes.get("name") or "Unknown"
-    privacy_mode = attributes.get("privacy_mode") or ""
-    msp_privacy_mode = attributes.get("msp_privacy_mode") or ""
+    resources = data.get("resources") or []
+    meta = data.get("meta") or {}
+    pagination = meta.get("pagination") or {}
+    total = pagination.get("total")
+    if total is None:
+        total = len(resources)
 
-    # Determine effective privacy mode.
-    # "inherit" means the org defers to the MSP-level setting.
-    # "standard" means full DNS query logging is active.
-    # Other modes ("private", "anonymized", etc.) restrict log visibility.
-    if privacy_mode == "inherit":
-        effective_mode = msp_privacy_mode if msp_privacy_mode else "unknown"
-        mode_source = "msp_privacy_mode (inherited from MSP)"
-    else:
-        effective_mode = privacy_mode if privacy_mode else "unknown"
-        mode_source = "privacy_mode"
+    is_deployed = bool(total and total > 0)
 
-    logging_enabled = effective_mode == "standard"
+    input_summary = {"totalDevices": total, "resourcesInPage": len(resources)}
 
-    input_summary = {
-        "organizationName": org_name,
-        "privacyMode": privacy_mode,
-        "mspPrivacyMode": msp_privacy_mode,
-        "effectiveMode": effective_mode,
-        "modeSource": mode_source,
-    }
+    if api_errors:
+        result = {"isEPPDeployed": False, "totalDevices": 0}
+        return create_response(
+            result=result,
+            validation=validation,
+            fail_reasons=[
+                "The queryDevicesScroll API call returned an error: %s. Unable to confirm sensor enrollment." % api_errors[0]
+            ],
+            recommendations=[
+                "Verify CrowdStrike API credentials/scopes and retry the devices-scroll query to confirm sensor deployment."
+            ],
+            input_summary=input_summary,
+            metadata={"transformationId": "isEPPDeployed", "vendor": "CrowdStrike Falcon", "category": "epp"},
+            api_errors=api_errors,
+        )
 
-    if logging_enabled:
+    result = {"isEPPDeployed": is_deployed, "totalDevices": total}
+
+    if is_deployed:
         pass_reasons = [
-            f"DNS query logging is enabled for organization '{org_name}'. "
-            f"The effective privacy mode is 'standard' (sourced from {mode_source}), "
-            f"indicating full DNS query logging is active and available for audit and threat analysis."
+            "meta.pagination.total reports %d enrolled devices in the tenant, confirming Falcon sensors are installed and reporting." % total
         ]
-        if privacy_mode == "inherit":
-            pass_reasons.append(
-                f"Organization privacy_mode is 'inherit'; the MSP-level msp_privacy_mode is "
-                f"'standard', so full logging applies to this organization."
-            )
         fail_reasons = []
         recommendations = []
     else:
-        fail_reasons = [
-            f"DNS query logging is not fully enabled for organization '{org_name}'. "
-            f"The effective privacy mode is '{effective_mode}' (sourced from {mode_source}), "
-            f"which restricts DNS query log data visibility."
-        ]
         pass_reasons = []
+        fail_reasons = [
+            "meta.pagination.total is %s, indicating no devices are currently enrolled/reporting via the Falcon sensor." % str(total)
+        ]
         recommendations = [
-            f"Set the organization's privacy_mode (or the MSP-level msp_privacy_mode if using "
-            f"'inherit') to 'standard' to enable full DNS query logging for audit and threat analysis."
+            "Deploy the Falcon sensor to endpoints and confirm they check in via the devices-scroll query."
         ]
 
     return create_response(
-        result={
-            "isDNSLoggingEnabled": logging_enabled,
-            "organizationName": org_name,
-            "privacyMode": privacy_mode,
-            "mspPrivacyMode": msp_privacy_mode,
-            "effectivePrivacyMode": effective_mode,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isDNSLoggingEnabled",
-            "vendor": "DNSFilter",
-            "category": "networksecurity",
-        },
+        metadata={"transformationId": "isEPPDeployed", "vendor": "CrowdStrike Falcon", "category": "epp"},
     )

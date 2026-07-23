@@ -1,10 +1,8 @@
-
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -30,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -68,79 +65,67 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input_data):
-    """
-    Transformation: isEmailLoggingEnabled (Mimecast)
-
-    Checks whether the Mimecast account has the Enhanced Logging package
-    (product ID 1061) active. Enhanced Logging is Mimecast's MTA-level
-    log stream used for SIEM integration. Its presence in the account
-    packages list confirms the feature is licensed and enabled.
-    """
-    data, validation = extract_input(input_data)
+def transform(input):
+    # CrowdStrike exposes no billing/entitlement endpoint, so an active, provisioned
+    # Falcon subscription is proven the standard way: a non-empty, authorized Hosts
+    # (devices-scroll) response means sensors are provisioned against the paid CID.
+    data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    # getAccount returns {"data": [...], "fail": [], "meta": {...}}
-    account_list = data.get("data") or []
-    account = account_list[0] if account_list else {}
+    api_errors = []
+    if data.get("error") is True or data.get("statusCode") == 500:
+        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
 
-    packages = account.get("packages") or []
-    account_code = account.get("accountCode") or "unknown"
-    account_name = account.get("accountName") or "unknown"
+    resources = data.get("resources") or []
+    meta = data.get("meta") or {}
+    pagination = meta.get("pagination") or {}
+    total = pagination.get("total")
+    if total is None:
+        total = len(resources)
 
-    # Enhanced Logging package string as returned by the API
-    ENHANCED_LOGGING_PACKAGE = "Enhanced Logging [1061]"
+    license_confirmed = bool(total and total > 0)
 
-    enhanced_logging_enabled = any(
-        ENHANCED_LOGGING_PACKAGE in pkg for pkg in packages
-    )
+    input_summary = {"totalDevices": total, "resourcesInPage": len(resources)}
 
-    total_packages = len(packages)
+    if api_errors:
+        result = {"confirmedLicensePurchased": False, "totalDevices": 0}
+        return create_response(
+            result=result,
+            validation=validation,
+            fail_reasons=[
+                "The queryDevicesScroll API call returned an error: %s. Unable to confirm an active Falcon subscription." % api_errors[0]
+            ],
+            recommendations=[
+                "Verify CrowdStrike API credentials/scopes and retry the devices-scroll query to confirm the subscription is active."
+            ],
+            input_summary=input_summary,
+            metadata={"transformationId": "confirmedLicensePurchased", "vendor": "CrowdStrike Falcon", "category": "epp"},
+            api_errors=api_errors,
+        )
 
-    if enhanced_logging_enabled:
+    result = {"confirmedLicensePurchased": license_confirmed, "totalDevices": total}
+
+    if license_confirmed:
         pass_reasons = [
-            f"Account '{account_name}' ({account_code}) has the '{ENHANCED_LOGGING_PACKAGE}' "
-            f"package active in its licensed packages list ({total_packages} total packages). "
-            "Enhanced Logging enables MTA-level SIEM log streaming, confirming email security "
-            "logs are integrated with SIEM."
+            "meta.pagination.total reports %d device(s) provisioned against the tenant CID, confirming an active, paid Falcon subscription." % total
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"Account '{account_name}' ({account_code}) does not have the "
-            f"'{ENHANCED_LOGGING_PACKAGE}' package in its licensed packages list "
-            f"({total_packages} packages found). Enhanced Logging must be active for "
-            "email security logs to be streamed to a SIEM."
+            "meta.pagination.total is %s - no devices are provisioned against the CID, so an active Falcon subscription cannot be confirmed." % str(total)
         ]
         recommendations = [
-            "Enable Enhanced Logging under Account Settings in the Mimecast Administration Console "
-            "and configure a SIEM connector to receive MTA log data. Contact your Mimecast "
-            "account representative if the Enhanced Logging package is not included in your subscription."
+            "Confirm the Falcon subscription is active and sensors are provisioned; the devices-scroll query should return enrolled hosts."
         ]
 
     return create_response(
-        result={
-            "isEmailLoggingEnabled": enhanced_logging_enabled,
-            "enhancedLoggingPackageFound": enhanced_logging_enabled,
-            "totalPackages": total_packages,
-            "accountCode": account_code,
-            "accountName": account_name,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "accountCode": account_code,
-            "accountName": account_name,
-            "totalPackages": total_packages,
-            "enhancedLoggingPackageFound": enhanced_logging_enabled,
-        },
-        metadata={
-            "transformationId": "isEmailLoggingEnabled",
-            "vendor": "Mimecast",
-            "category": "emailsecurity",
-        },
+        input_summary=input_summary,
+        metadata={"transformationId": "confirmedLicensePurchased", "vendor": "CrowdStrike Falcon", "category": "epp"},
     )
