@@ -12,11 +12,11 @@ from datetime import datetime
 HEALTHY_SENSOR_STATES = {"active"}
 
 
-def _is_true(value):
+def is_true(value):
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
-def _extract(value):
+def extract_input(value):
     if isinstance(value, (str, bytes)):
         value = json.loads(value.decode("utf-8") if isinstance(value, bytes) else value)
     if isinstance(value, dict) and "data" in value and "validation" in value:
@@ -25,18 +25,18 @@ def _extract(value):
     for _ in range(3):
         if not isinstance(data, dict):
             break
-        nested = next(
-            (data[key] for key in ("api_response", "response", "result", "apiResponse", "Output")
-             if isinstance(data.get(key), (dict, list))),
-            None,
-        )
+        nested = None
+        for key in ("api_response", "response", "result", "apiResponse", "Output"):
+            if isinstance(data.get(key), (dict, list)):
+                nested = data[key]
+                break
         if nested is None:
             break
         data = nested
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def _response(result, validation, *, errors=(), summary=None):
+def create_response(result, validation, *, errors=(), summary=None):
     passed = [key for key, value in result.items() if isinstance(value, bool) and value]
     failed = [key for key, value in result.items() if isinstance(value, bool) and not value]
     return {
@@ -66,13 +66,13 @@ def _response(result, validation, *, errors=(), summary=None):
     }
 
 
-def _machines(data):
+def evaluate_machines(data):
     machines = data.get("value") if isinstance(data, dict) else None
     if not isinstance(machines, list):
         raise ValueError("MDE machines response must contain a value array")
     if any(not isinstance(machine, dict) for machine in machines):
         raise ValueError("MDE machines response contains an invalid machine record")
-    non_excluded = [machine for machine in machines if not _is_true(machine.get("isExcluded"))]
+    non_excluded = [machine for machine in machines if not is_true(machine.get("isExcluded"))]
     eligible = [
         machine for machine in non_excluded
         if str(machine.get("onboardingStatus") or "").lower() not in {"unsupported", "insufficientinfo"}
@@ -103,19 +103,19 @@ def _machines(data):
 
 def transform(input):
     try:
-        data, validation = _extract(input)
+        data, validation = extract_input(input)
         if validation.get("status") == "failed":
             raise ValueError("Input validation failed")
         if not isinstance(data, dict) or "error" in data or "PSError" in data:
             raise ValueError("Microsoft did not return usable Endpoint evidence")
 
         if isinstance(data.get("value"), list):
-            result = _machines(data)
+            result = evaluate_machines(data)
         else:
             raise ValueError("Unrecognized Microsoft Endpoint response shape")
-        return _response(result, validation, summary={"returnedKeys": sorted(result)})
+        return create_response(result, validation, summary={"returnedKeys": sorted(result)})
     except Exception as error:
-        return _response(
+        return create_response(
             {},
             {"status": "failed", "errors": [str(error)], "warnings": []},
             errors=[str(error)],

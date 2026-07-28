@@ -57,6 +57,17 @@ def test_string_false_does_not_exclude_machine():
     assert result["requiredCoveragePercentage"] == 100
 
 
+def test_nested_response_wrapper_is_unwrapped():
+    result = _result({"response": {"value": [{
+        "onboardingStatus": "Onboarded",
+        "healthStatus": "Active",
+        "lastSeen": "2026-07-27",
+        "osPlatform": "Windows11",
+    }]}})
+    assert result["totalEndpointCount"] == 1
+    assert result["isEPPEnabled"] is True
+
+
 def test_empty_collection_fails_closed_for_machine_checks():
     result = _result({"value": []})
     assert result["totalEndpointCount"] == 0
