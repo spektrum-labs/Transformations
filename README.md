@@ -44,6 +44,7 @@ Quick reference for safeguard directories by category and vendor:
 | Vendor | Safeguard SRN |
 |--------|---------------|
 | KnowBe4, Inc. | [52BEAA98-6CED-4A84-B6D5-FAEA40E0FFEF](safeguards/52beaa98-6ced-4a84-b6d5-faea40e0ffef/) |
+| OFAC (self-hosted sanctions screening) | [0FD511ED-A57D-4E0E-8F04-9DFD2F544A09](safeguards/0FD511ED-A57D-4E0E-8F04-9DFD2F544A09/) |
 
 ### Cyber Risk Quantification (CRQ)
 | Vendor | Safeguard SRN |
