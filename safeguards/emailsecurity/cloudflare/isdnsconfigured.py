@@ -68,6 +68,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def get_protocol(data, name):
+    """Return a protocol value without depending on key casing."""
+    if name in data:
+        return data.get(name)
+    for key, value in data.items():
+        if isinstance(key, str) and key.lower() == name.lower():
+            return value
+    return False
+
+
 def transform(input):
     criteriaKey = "isDNSConfigured"
 
@@ -81,7 +91,15 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
+                result={
+                    criteriaKey: False,
+                    "spfConfigured": False,
+                    "dkimConfigured": False,
+                    "dmarcConfigured": False,
+                    "isSPFConfigured": False,
+                    "isDKIMConfigured": False,
+                    "isDMARCConfigured": False
+                },
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -124,14 +142,11 @@ def transform(input):
 
                 dns_configured = spf_configured or dkim_configured or dmarc_configured
 
-            # Direct boolean fields
+            # Direct boolean or record-string fields from the DNS helper.
             if not dns_configured:
-                if 'spf' in data:
-                    spf_configured = bool(data['spf'])
-                if 'dkim' in data:
-                    dkim_configured = bool(data['dkim'])
-                if 'dmarc' in data:
-                    dmarc_configured = bool(data['dmarc'])
+                spf_configured = bool(get_protocol(data, "SPF"))
+                dkim_configured = bool(get_protocol(data, "DKIM"))
+                dmarc_configured = bool(get_protocol(data, "DMARC"))
                 dns_configured = spf_configured or dkim_configured or dmarc_configured
 
             # Check DNS records list (from Cloudflare zones DNS endpoint)
@@ -152,7 +167,10 @@ def transform(input):
                                 dmarc_configured = True
                         elif rtype == 'CNAME' and 'dkim' in record.get('name', '').lower():
                             dkim_configured = True
-                    dns_configured = spf_configured or dkim_configured or dmarc_configured
+
+        # The requirement passes only when all three records exist. The earlier
+        # OR checks are retained solely to preserve the legacy source fallback.
+        dns_configured = spf_configured and dkim_configured and dmarc_configured
 
         # Build additional findings for sub-criteria
         if spf_configured:
@@ -181,7 +199,10 @@ def transform(input):
                 criteriaKey: dns_configured,
                 "spfConfigured": spf_configured,
                 "dkimConfigured": dkim_configured,
-                "dmarcConfigured": dmarc_configured
+                "dmarcConfigured": dmarc_configured,
+                "isSPFConfigured": spf_configured,
+                "isDKIMConfigured": dkim_configured,
+                "isDMARCConfigured": dmarc_configured
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -197,7 +218,15 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False, "spfConfigured": False, "dkimConfigured": False, "dmarcConfigured": False},
+            result={
+                criteriaKey: False,
+                "spfConfigured": False,
+                "dkimConfigured": False,
+                "dmarcConfigured": False,
+                "isSPFConfigured": False,
+                "isDKIMConfigured": False,
+                "isDMARCConfigured": False
+            },
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

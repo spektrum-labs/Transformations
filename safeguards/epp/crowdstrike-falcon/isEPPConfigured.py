@@ -1,4 +1,3 @@
-
 import json
 from datetime import datetime
 
@@ -72,89 +71,95 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    accounts = data.get("data") or []
+    api_errors = []
+    if data.get("error") is True or data.get("statusCode") == 500 or data.get("status") == "Error":
+        msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
+        api_errors.append(f"Vendor API returned an error: {msg}")
 
-    if not accounts:
+    resources = data.get("resources") or []
+    if not isinstance(resources, list):
+        resources = []
+
+    total_policies = len(resources)
+    configured_policies = []
+    for p in resources:
+        if not isinstance(p, dict):
+            continue
+        enabled = bool(p.get("enabled"))
+        groups = p.get("groups") or []
+        prevention_settings = p.get("prevention_settings") or []
+        has_groups = isinstance(groups, list) and len(groups) > 0
+        has_settings = isinstance(prevention_settings, list) and len(prevention_settings) > 0
+        if enabled and has_groups and has_settings:
+            configured_policies.append(p)
+
+    is_configured = len(configured_policies) > 0
+
+    input_summary = {
+        "totalPreventionPolicies": total_policies,
+        "configuredPreventionPolicies": len(configured_policies),
+    }
+
+    if api_errors:
         return create_response(
-            result={
-                "isAntiPhishingEnabled": False,
-                "impersonationProtectionLicensed": False,
-                "urlProtectionLicensed": False,
-                "businessEmailCompromiseLicensed": False,
-                "totalPackages": 0,
-            },
+            result={"isEPPConfigured": False},
             validation=validation,
-            fail_reasons=["No account data returned from the getAccount endpoint; cannot confirm anti-phishing protection is active."],
-            recommendations=["Verify Mimecast API credentials and account access, then re-evaluate."],
-            input_summary={"accountCount": 0, "antiPhishingPackagesFound": []},
+            fail_reasons=[
+                "Unable to retrieve prevention policy data from CrowdStrike Falcon API; "
+                "cannot confirm an enabled prevention policy assigned to a host group."
+            ],
+            recommendations=[
+                "Investigate the getCombinedPreventionPolicies API integration error and re-run "
+                "the scan once the vendor API responds successfully."
+            ],
+            input_summary=input_summary,
+            api_errors=api_errors,
             metadata={
-                "transformationId": "isAntiPhishingEnabled",
-                "vendor": "Mimecast",
-                "category": "emailsecurity",
+                "transformationId": "isEPPConfigured",
+                "vendor": "CrowdStrike Falcon",
+                "category": "epp",
             },
         )
 
-    account = accounts[0] if isinstance(accounts[0], dict) else {}
-    packages = account.get("packages") or []
-    account_name = account.get("accountName") or "unknown"
-
-    IMPERSONATION_PROTECTION = "Impersonation Protection [1060]"
-    URL_PROTECTION = "URL Protection (Site) [1043]"
-    BEC = "Business Email Compromise [1109]"
-
-    has_impersonation = IMPERSONATION_PROTECTION in packages
-    has_url_protection = URL_PROTECTION in packages
-    has_bec = BEC in packages
-
-    is_enabled = has_impersonation
-
-    found_packages = []
-    if has_impersonation:
-        found_packages.append(IMPERSONATION_PROTECTION)
-    if has_url_protection:
-        found_packages.append(URL_PROTECTION)
-    if has_bec:
-        found_packages.append(BEC)
-
-    if is_enabled:
+    if is_configured:
+        names = [p.get("name") for p in configured_policies if p.get("name")]
+        sample_names = ", ".join([str(n) for n in names[:3]]) if names else "unnamed policy"
         pass_reasons = [
-            f"Account '{account_name}' has 'Impersonation Protection [1060]' in the licensed packages array, confirming TTP Impersonation Protection (anti-phishing) is active."
+            f"Found {len(configured_policies)} of {total_policies} prevention policy(ies) with "
+            f"enabled=true, non-empty prevention_settings, and assigned host groups "
+            f"(e.g. {sample_names}), confirming EPP is configured and assigned to a host group "
+            f"covering the endpoint population."
         ]
-        if has_url_protection:
-            pass_reasons.append("'URL Protection (Site) [1043]' is also licensed, providing additional phishing URL blocking coverage.")
-        if has_bec:
-            pass_reasons.append("'Business Email Compromise [1109]' is also licensed, extending anti-phishing protection to BEC-style attacks.")
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        fail_reasons = [
-            f"Account '{account_name}' does not include 'Impersonation Protection [1060]' in the licensed packages array. TTP Impersonation Protection (anti-phishing) is not confirmed as active."
-        ]
+        if total_policies == 0:
+            fail_reasons = [
+                "No prevention policies were returned by getCombinedPreventionPolicies; "
+                "there is no Prevention Policy record to confirm EPP configuration."
+            ]
+        else:
+            fail_reasons = [
+                f"Found {total_policies} prevention policy(ies), but none had enabled=true "
+                f"together with non-empty prevention_settings and at least one assigned host group."
+            ]
         recommendations = [
-            "License and enable Impersonation Protection (package ID 1060) in Mimecast to activate anti-phishing email filtering against display-name spoofing and targeted threat dictionary attacks."
+            "Create or enable a CrowdStrike Falcon Prevention Policy, configure its "
+            "prevention_settings (NGAV/ML detection toggles), and assign it to the host group "
+            "covering this endpoint population."
         ]
 
     return create_response(
-        result={
-            "isAntiPhishingEnabled": is_enabled,
-            "impersonationProtectionLicensed": has_impersonation,
-            "urlProtectionLicensed": has_url_protection,
-            "businessEmailCompromiseLicensed": has_bec,
-            "totalPackages": len(packages),
-        },
+        result={"isEPPConfigured": is_configured},
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "accountName": account_name,
-            "totalPackages": len(packages),
-            "antiPhishingPackagesFound": found_packages,
-        },
+        input_summary=input_summary,
         metadata={
-            "transformationId": "isAntiPhishingEnabled",
-            "vendor": "Mimecast",
-            "category": "emailsecurity",
+            "transformationId": "isEPPConfigured",
+            "vendor": "CrowdStrike Falcon",
+            "category": "epp",
         },
     )

@@ -1,0 +1,188 @@
+{
+  "passport_uid": "ef1397e7-b204-4061-a4d4-2852a4f07751",
+  "generated": "2026-04-23",
+  "environment": "production",
+  "summary": {
+    "total_groupings": 6,
+    "total_requirement_bundles": 6,
+    "total_criteria": 34,
+    "safeguard_categories": [
+      "Multifactor Authentication",
+      "Network Security",
+      "Threat & Vulnerability Management",
+      "Compliance Management",
+      "Cloud Security"
+    ]
+  },
+  "requirementGroupings": [
+    {
+      "groupingType": "Multifactor Authentication",
+      "groupingUid": "d0620979-a079-4ac7-b4b7-59978c44b26a",
+      "requirementsBundleUid": "943f5859-e98e-441c-bbdc-886c6c532f5c",
+      "vendor": "Okta",
+      "requirements": [
+        {
+          "requirementsUid": "87c18fbb-957e-464d-becc-1e6fb2c602c8",
+          "category": "Multifactor Authentication",
+          "type": "Technical",
+          "proofLevel": "4",
+          "criteria": [
+            {
+              "criteriaKey": "isMFAEnforcedForUsers",
+              "criteriaDescription": "Verifies that MFA is enforced for all users"
+            },
+            {
+              "criteriaKey": "isAuditLoggingEnabled",
+              "criteriaDescription": "Verifies that audit logging is enabled"
+            },
+            {
+              "criteriaKey": "confirmedLicensePurchased",
+              "criteriaDescription": "Verifies that valid licenses are in place"
+            },
+            {
+              "criteriaKey": "confirmPasswordPolicyEnforced",
+              "criteriaDescription": "Ensures password policies are properly enforced"
+            },
+            {
+              "criteriaKey": "authTypesAllowed",
+              "criteriaDescription": "Ensures only FIDO or OTP authentication factors are allowed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "groupingType": "Network Security",
+      "groupingUid": "56b77213-52c7-4c09-a14d-bf2a98fe119d",
+      "requirementsBundleUid": "ec2de606-bddd-404f-953e-cb2b3a4a92b2",
+      "vendor": "DNSFilter",
+      "requirements": [
+        {
+          "requirementsUid": "064db6b4-4a41-4cd6-b4fb-d3e850a80f4c",
+          "category": "Network Security",
+          "type": "Technical",
+          "proofLevel": "4",
+          "criteria": [
+            {
+              "criteriaKey": "confirmedLicensePurchased",
+              "criteriaDescription": "Ensures a valid response is returned, confirms active DNSFilter subscription."
+            },
+            {
+              "criteriaKey": "isDNSFilteringEnabled",
+              "criteriaDescription": "Validates that DNS filtering networks are configured and active"
+            },
+            {
+              "criteriaKey": "isDNSPolicyConfigured",
+              "criteriaDescription": "Ensures that DNS filtering policies are configured with appropriate category blocks"
+            },
+            {
+              "criteriaKey": "isDNSLoggingEnabled",
+              "criteriaDescription": "Validates that DNS query logging is enabled for audit and threat analysis"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "groupingType": "Threat & Vulnerability Management",
+      "groupingUid": "026f2cc1-a570-4464-8b7d-412b7ed7fa37",
+      "requirementsBundleUid": "7ef7ab57-1c63-4770-b2b7-d693f88b2d2c",
+      "vendor": "NinjaOne",
+      "requirements": [
+        {
+          "requirementsUid": "f3eddf83-6a46-47ff-9ab7-a0ae84d338c3",
+          "category": "Threat & Vulnerability Management",
+          "type": "Technical",
+          "proofLevel": "4",
+          "criteria": [
+            {
+              "criteriaKey": "confirmedLicensePurchased",
+              "criteriaDescription": "Ensures a valid response is returned, returns the licensePurchased field value from the response."
+            },
+            {
+              "criteriaKey": "isVulnerabilityScanningEnabled",
+              "criteriaDescription": "Validates that vulnerability scanning is enabled and devices are being monitored"
+            },
+            {
+              "criteriaKey": "isPatchManagementEnabled",
+              "criteriaDescription": "Ensure that patch management processes exist"
+            },
+            {
+              "criteriaKey": "isPatchManagementValid",
+              "criteriaDescription": "Ensure that processes exist and SLAs are met for vulnerability remediation"
+            },
+            {
+              "criteriaKey": "isVulnerabilityRemediationTracked",
+              "criteriaDescription": "Validates that vulnerability remediation activities are tracked and documented"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "groupingType": "Compliance Management",
+      "groupingUid": "f7f38917-ed7a-44fc-b9bd-70d3f61822cf",
+      "requirementsBundleUid": "836e588c-9926-4f1a-be1c-385ee627d178",
+      "vendor": "Huntress",
+      "requirements": [
+        {
+          "requirementsUid": "753fc82e-b548-4880-b222-6d7ace1a6dbd",
+          "category": "Compliance Management",
+          "type": "Technical",
+          "proofLevel": "4",
+          "vendorProduct": "Security Awareness Training",
+          "criteria": [
+            {
+              "criteriaKey": "confirmedLicensePurchased",
+              "criteriaDescription": "Ensures a valid response is returned, confirms active Huntress SAT subscription."
+            },
+            {
+              "criteriaKey": "isTrainingEnabled",
+              "criteriaDescription": "Validates that security awareness training assignments are active and running"
+            },
+            {
+              "criteriaKey": "isTrainingCompletionTracked",
+              "criteriaDescription": "Ensures training completion is tracked and learners are enrolled"
+            },
+            {
+              "criteriaKey": "isPhishingSimulationEnabled",
+              "criteriaDescription": "Validates that phishing simulation campaigns are configured and being sent"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "groupingType": "Cloud Security",
+      "groupingUid": "4dc4a5fe-e69f-46ed-9dae-77e044782e73",
+      "requirementsBundleUid": "3bdd9706-b973-40da-9f2b-f71c2d173e93",
+      "vendor": "Red Canary",
+      "requirements": [
+        {
+          "requirementsUid": "ee657d3b-1585-454c-ac18-c4d2ffd5928a",
+          "category": "Cloud Security",
+          "type": "Technical",
+          "proofLevel": "4",
+          "criteria": [
+            {
+              "criteriaKey": "confirmedLicensePurchased",
+              "criteriaDescription": "Ensures a valid response is returned, confirms active Red Canary subscription."
+            },
+            {
+              "criteriaKey": "isCloudMonitoringEnabled",
+              "criteriaDescription": "Validates that cloud detection and monitoring detectors are active"
+            },
+            {
+              "criteriaKey": "isAlertingConfigured",
+              "criteriaDescription": "Ensures detection alerting is configured and generating findings"
+            },
+            {
+              "criteriaKey": "isEndpointCoverageValid",
+              "criteriaDescription": "Validates that endpoint coverage meets the required threshold"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

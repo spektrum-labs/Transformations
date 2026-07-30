@@ -1,4 +1,3 @@
-"""Transformation: confirmedLicensePurchased — Mimecast getAccount"""
 import json
 from datetime import datetime
 
@@ -72,82 +71,84 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    # The Mimecast getAccount response wraps account records in a top-level "data" list
-    account_list = data.get("data") or []
-    fail_list = data.get("fail") or []
-    meta = data.get("meta") or {}
-    meta_status = meta.get("status") if isinstance(meta, dict) else None
-
-    # API-level errors surfaced in the "fail" array
     api_errors = []
-    if fail_list:
-        api_errors = [str(f) for f in fail_list]
+    if data.get("error") or data.get("errorType") == "internal":
+        msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
+        api_errors.append(f"CrowdStrike API returned an error: {msg}")
 
-    if not account_list:
-        # No account data returned — cannot confirm license
-        return create_response(
-            result={
-                "confirmedLicensePurchased": False,
-                "packageCount": 0,
-                "accountCode": None,
-            },
-            validation=validation,
-            pass_reasons=[],
-            fail_reasons=["No account data was returned in the getAccount response. Cannot confirm a valid Mimecast license."],
-            recommendations=["Verify that the API credentials have the Accounts | Dashboard | Read scope and that the account is active."],
-            input_summary={"accountCount": 0, "metaStatus": meta_status, "failCount": len(fail_list)},
-            api_errors=api_errors,
-            metadata={
-                "transformationId": "confirmedLicensePurchased",
-                "vendor": "Mimecast",
-                "category": "Email Security",
-            },
+    resources = data.get("resources")
+    if not isinstance(resources, list):
+        resources = []
+
+    total = len(resources)
+    active = 0
+    for device in resources:
+        if not isinstance(device, dict):
+            continue
+        status = device.get("status")
+        rfm = device.get("reduced_functionality_mode")
+        last_seen = device.get("last_seen")
+        agent_version = device.get("agent_version")
+        is_active = (
+            status == "normal"
+            and rfm is not True
+            and bool(agent_version)
+            and bool(last_seen)
+        )
+        if is_active:
+            active = active + 1
+
+    if total > 0:
+        percentage = round((active / total) * 100, 2)
+    else:
+        percentage = 0
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total > 0:
+        pass_reasons.append(
+            f"{active} of {total} known Falcon-managed devices report status='normal', "
+            f"reduced_functionality_mode!=true, a populated agent_version, and a recent last_seen "
+            f"timestamp, yielding a sensor coverage of {percentage}%."
+        )
+        if percentage < 100:
+            fail_reasons.append(
+                f"{total - active} of {total} devices ({round(100 - percentage, 2)}%) do not have "
+                f"an actively-reporting Falcon sensor (missing/rfm/stale)."
+            )
+            recommendations.append(
+                "Investigate devices with status != 'normal' or reduced_functionality_mode=true "
+                "and reinstall or repair the Falcon sensor to restore full coverage."
+            )
+    else:
+        fail_reasons.append(
+            "No device records were returned by getDeviceDetails; coverage percentage could not be computed "
+            "(total known devices = 0)."
+        )
+        recommendations.append(
+            "Verify the CrowdStrike Falcon API credentials and device inventory query returned results before "
+            "recomputing sensor coverage."
         )
 
-    account = account_list[0] if isinstance(account_list[0], dict) else {}
-    account_code = account.get("accountCode") or ""
-    account_name = account.get("accountName") or ""
-    packages = account.get("packages") or []
-    package_count = len(packages)
-
-    license_purchased = package_count > 0
-
-    if license_purchased:
-        pass_reasons = [
-            f"Mimecast account '{account_name}' (code: {account_code}) returned a valid getAccount response with {package_count} licensed packages, confirming an active Mimecast license is purchased."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            f"Mimecast account '{account_name}' (code: {account_code}) returned a valid response but the packages array is empty, indicating no licensed products were found."
-        ]
-        recommendations = [
-            "Contact Mimecast support to verify the account's license status and ensure at least one product package is assigned."
-        ]
+    result = {
+        "requiredCoveragePercentage": percentage,
+        "activeDevices": active,
+        "totalDevices": total,
+    }
 
     return create_response(
-        result={
-            "confirmedLicensePurchased": license_purchased,
-            "packageCount": package_count,
-            "accountCode": account_code,
-            "accountName": account_name,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "accountCount": len(account_list),
-            "accountCode": account_code,
-            "packageCount": package_count,
-            "metaStatus": meta_status,
+        input_summary={"totalDevices": total, "activeDevices": active},
+        metadata={
+            "transformationId": "requiredCoveragePercentage",
+            "vendor": "CrowdStrike Falcon",
+            "category": "epp",
         },
         api_errors=api_errors,
-        metadata={
-            "transformationId": "confirmedLicensePurchased",
-            "vendor": "Mimecast",
-            "category": "Email Security",
-        },
     )

@@ -75,6 +75,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def transform(input):
     data, validation = extract_input(input)
 
+    # Token-Service navigates into the response's "data" key, so this transform
+    # usually receives the bare list of managed URLs (meta/pagination stripped).
+    # Re-wrap so the access below works in the live pipeline and local testing.
+    if isinstance(data, list):
+        data = {"data": data}
     if not isinstance(data, dict):
         data = {}
 
@@ -84,8 +89,10 @@ def transform(input):
     pagination = meta.get("pagination") or {}
     url_items = data.get("data") or []
 
-    total_count = pagination.get("totalCount") or 0
     page_size = len(url_items)
+    # meta.pagination is stripped by the pipeline's response navigation, so fall
+    # back to the number of managed URLs visible in the delivered page.
+    total_count = pagination.get("totalCount") or page_size
 
     # Collect API-level error messages from the fail array
     api_errors = []
@@ -108,7 +115,9 @@ def transform(input):
     # Primary verdict: a non-zero totalCount confirms TTP URL Protect is active
     # and managing URLs through rewriting. An empty list means the feature has
     # no rules and is effectively not operational.
-    is_url_rewrite_enabled = total_count > 0
+    # When the pipeline strips meta.pagination, fall back to the page itself:
+    # any managed URL entries present confirm TTP URL Protect is operational.
+    is_url_rewrite_enabled = total_count > 0 or page_size > 0
 
     pass_reasons = []
     fail_reasons = []
