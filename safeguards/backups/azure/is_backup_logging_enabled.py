@@ -7,8 +7,12 @@ Checks whether Azure backup diagnostic settings are configured with log
 categories enabled and forwarding to a destination (Log Analytics workspace,
 Storage Account, or Event Hub).
 
-Data source: Azure Resource Graph query (getBackupDiagnosticSettings) returning
-hasDiagnosticSettings, logCategories, workspaces, storages, and eventHubs per vault.
+Data source: Azure Monitor diagnosticSettings ARM API (getVaultDiagnosticSettings),
+iterated per vault from listVaults. Each entry is a { "value": [ ... ] } response.
+
+Note: diagnostic settings are proxy resources and are NOT indexed by Azure Resource
+Graph, so they cannot be read via an ARG join. The previous ARG-based query always
+returned hasDiagnosticSettings=false regardless of configuration.
 """
 
 import json
@@ -93,26 +97,88 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Check for diagnostic settings in data rows
+        # Merged diagnosticSettings from iterating across all vaults, or a direct
+        # { "value": [...] } response for a single vault.
+        settings_data = data.get("diagnosticSettings", data)
+        responses = []
+        if isinstance(settings_data, list):
+            for entry in settings_data:
+                if isinstance(entry, dict):
+                    responses.append(entry)
+                elif isinstance(entry, list):
+                    for sub in entry:
+                        if isinstance(sub, dict):
+                            responses.append(sub)
+        elif isinstance(settings_data, dict):
+            responses.append(settings_data)
+
+        settings = []
+        for resp in responses:
+            value = resp.get("value", [])
+            if isinstance(value, list):
+                settings.extend([s for s in value if isinstance(s, dict)])
+            elif isinstance(resp.get("properties"), dict):
+                # A single diagnostic setting object rather than a list wrapper
+                settings.append(resp)
+
         logging_enabled = False
         log_categories_found = []
+        configured_settings = []
+        incomplete_settings = []
 
-        inner_data = data.get("data", data)
-        if 'rows' in inner_data:
-            rows = inner_data.get("rows", [])
-            for row in rows:
-                if isinstance(row, list):
-                    for item in row:
-                        if isinstance(item, dict):
-                            if 'hasDiagnosticSettings' in item:
-                                if item['hasDiagnosticSettings'] and 'logCategories' in item and item['logCategories']:
-                                    logging_enabled = True
-                                    log_categories_found.extend(item.get('logCategories', []))
+        for setting in settings:
+            props = setting.get("properties", {})
+            if not isinstance(props, dict):
+                continue
+
+            enabled_categories = []
+            for log in props.get("logs", []) or []:
+                if not isinstance(log, dict) or not log.get("enabled"):
+                    continue
+                # Modern settings use categoryGroup ("allLogs"/"audit") and leave
+                # category null; older ones name each category individually.
+                label = log.get("category") or log.get("categoryGroup")
+                if label:
+                    enabled_categories.append(label)
+
+            destinations = []
+            if props.get("workspaceId"):
+                destinations.append("LogAnalyticsWorkspace")
+            if props.get("storageAccountId"):
+                destinations.append("StorageAccount")
+            if props.get("eventHubAuthorizationRuleId") or props.get("eventHubName"):
+                destinations.append("EventHub")
+            if props.get("marketplacePartnerId"):
+                destinations.append("MarketplacePartner")
+
+            entry = {
+                "settingName": setting.get("name", "Unknown"),
+                "enabledCategories": enabled_categories,
+                "destinations": destinations
+            }
+
+            if enabled_categories and destinations:
+                logging_enabled = True
+                log_categories_found.extend(enabled_categories)
+                configured_settings.append(entry)
+            else:
+                incomplete_settings.append(entry)
 
         if logging_enabled:
-            pass_reasons.append(f"Backup logging is enabled with diagnostic settings configured")
-            if log_categories_found:
-                pass_reasons.append(f"Log categories: {', '.join(log_categories_found[:5])}")
+            pass_reasons.append(
+                f"Backup logging is enabled: {len(configured_settings)} diagnostic setting(s) forwarding logs to a destination"
+            )
+            unique_categories = sorted(set(log_categories_found))
+            if unique_categories:
+                pass_reasons.append(f"Log categories: {', '.join(unique_categories[:5])}")
+            destinations_found = sorted({d for s in configured_settings for d in s["destinations"]})
+            if destinations_found:
+                pass_reasons.append(f"Destinations: {', '.join(destinations_found)}")
+        elif settings:
+            fail_reasons.append(
+                f"{len(settings)} diagnostic setting(s) found, but none have both an enabled log category and a delivery destination"
+            )
+            recommendations.append("Enable at least one log category and set a Log Analytics workspace, Storage Account, or Event Hub destination")
         else:
             fail_reasons.append("Backup logging is not enabled or diagnostic settings not configured")
             recommendations.append("Enable diagnostic settings for backup resources and configure log categories")
@@ -125,8 +191,11 @@ def transform(input):
             recommendations=recommendations,
             input_summary={
                 "loggingEnabled": logging_enabled,
-                "logCategoriesCount": len(log_categories_found)
-            }
+                "vaultResponsesEvaluated": len(responses),
+                "diagnosticSettingsFound": len(settings),
+                "logCategoriesCount": len(set(log_categories_found))
+            },
+            additional_findings=incomplete_settings
         )
 
     except Exception as e:
