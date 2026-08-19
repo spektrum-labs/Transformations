@@ -1,25 +1,43 @@
 """Schema registry for this vendor's transformations."""
 
 from .adminLockoutThresholdCount import AdminLockoutThresholdCountInput
-from .confirmedLicensePurchased import ConfirmedLicensePurchasedInput
+from
+from .firewallLoggingEnabled import FirewallLoggingEnabledInput
+from .haModeEnabled import HaModeEnabledInput
+from .ipsEnabled import IpsEnabledInput
 from .isAdminIdleTimeoutEnforced import IsAdminIdleTimeoutEnforcedInput
-from .isApiKeyIpRestrictionEnabled import IsApiKeyIpRestrictionEnabledInput
+from
+from .isContentFilteringEnabled import IsContentFilteringEnabledInput
+from .isFirewallEnabled import IsFirewallEnabledInput
+from .isFirewallLoggingEnabled import IsFirewallLoggingEnabledInput
+from .isFirewallPerformant import IsFirewallPerformantInput
+from .isGatewayAntiVirusEnabled import IsGatewayAntiVirusEnabledInput
 from .isProgrammaticAccessEnabled import IsProgrammaticAccessEnabledInput
-from .isSSOEnabled import IsSSOEnabledInput
+from
 from .isStrongPasswordPolicyEnforced import IsStrongPasswordPolicyEnforcedInput
-from .isTwoFactorAuthEnforced import IsTwoFactorAuthEnforcedInput
+from
+from .isURLFilteringProfileEnabled import IsURLFilteringProfileEnabledInput
 from .vpnPeerReachablePercentage import VpnPeerReachablePercentageInput
-from .vpnTunnelEstablished import VpnTunnelEstablishedInput
+from
 
 __all__ = [
     "AdminLockoutThresholdCountInput",
     "ConfirmedLicensePurchasedInput",
+    "FirewallLoggingEnabledInput",
+    "HaModeEnabledInput",
+    "IpsEnabledInput",
     "IsAdminIdleTimeoutEnforcedInput",
     "IsApiKeyIpRestrictionEnabledInput",
+    "IsContentFilteringEnabledInput",
+    "IsFirewallEnabledInput",
+    "IsFirewallLoggingEnabledInput",
+    "IsFirewallPerformantInput",
+    "IsGatewayAntiVirusEnabledInput",
     "IsProgrammaticAccessEnabledInput",
     "IsSSOEnabledInput",
     "IsStrongPasswordPolicyEnforcedInput",
     "IsTwoFactorAuthEnforcedInput",
+    "IsURLFilteringProfileEnabledInput",
     "VpnPeerReachablePercentageInput",
     "VpnTunnelEstablishedInput",
 ]
