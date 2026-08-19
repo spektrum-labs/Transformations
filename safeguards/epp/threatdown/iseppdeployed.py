@@ -43,58 +43,60 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Evaluate EPP agent deployment coverage across ThreatDown endpoints."""
-    try:
-        total_count = 0
-        deployed_count = 0
+    """Percentage of endpoints running the ThreatDown Endpoint Protection agent.
 
+    Real shape: POST /nebula/v1/endpoints returns {total_count, endpoints[]}. Each
+    endpoint carries protection_status, connected, and agent.plugins keyed by
+    product (endpoint_protection, endpoint_detection_and_response, ...). The
+    documented GET route does not exist; this is a search endpoint.
+    """
+    endpoints = data.get("endpoints") or []
+    if not isinstance(endpoints, list):
         endpoints = []
-        if isinstance(data, list):
-            endpoints = data
-        elif isinstance(data, dict):
-            endpoints = (
-                data.get("endpoints", []) or
-                data.get("machines", []) or
-                data.get("devices", []) or
-                data.get("data", []) or
-                data.get("results", []) or
-                []
-            )
-            if "total_count" in data:
-                total_count = int(data["total_count"])
 
-        if not isinstance(endpoints, list):
-            endpoints = [endpoints] if endpoints else []
+    try:
+        total = int(data.get("total_count") or len(endpoints))
+    except Exception:
+        total = len(endpoints)
+    if total < len(endpoints):
+        total = len(endpoints)
 
-        if not total_count:
-            total_count = len(endpoints)
+    deployed = 0
+    protected = 0
+    offline = []
+    missing = []
 
-        for ep in endpoints:
-            if not isinstance(ep, dict):
-                continue
-            # Check if agent is installed and communicating
-            agent_status = str(ep.get("status", ep.get("agent_status", ""))).lower()
-            agent_version = ep.get("agent_version", ep.get("agentVersion", ""))
-            is_active = agent_status in ("online", "active", "protected", "deployed", "offline", "stale")
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict):
+            continue
+        name = endpoint.get("display_name") or (endpoint.get("agent") or {}).get("host_name") or "Unknown"
 
-            # If endpoint has an agent version, it's deployed (even if offline)
-            if agent_version or is_active:
-                deployed_count = deployed_count + 1
+        plugins = ((endpoint.get("agent") or {}).get("plugins") or {})
+        has_plugin = "endpoint_protection" in plugins
 
-        coverage_percentage = 0.0
-        if total_count > 0:
-            coverage_percentage = (deployed_count / total_count) * 100
+        if has_plugin:
+            deployed = deployed + 1
+        else:
+            missing.append(name)
 
-        is_deployed = coverage_percentage >= 80.0
+        if str(endpoint.get("protection_status", "")).strip().lower() == "protected":
+            protected = protected + 1
 
-        return {
-            "isEPPDeployed": is_deployed,
-            "totalEndpoints": total_count,
-            "eppDeployedCount": deployed_count,
-            "coveragePercentage": round(coverage_percentage, 2)
-        }
-    except Exception as e:
-        return {"isEPPDeployed": False, "error": str(e)}
+        # Reported but not failed on: an agent can be installed and simply offline.
+        if endpoint.get("connected") is False:
+            offline.append(name)
+
+    percentage = int(round((deployed * 100.0) / total)) if total else 0
+
+    return {
+        "isEPPDeployed": total > 0 and deployed == total,
+        "totalEndpoints": total,
+        "deployedEndpoints": deployed,
+        "deployedPercentage": percentage,
+        "protectedEndpoints": protected,
+        "endpointsMissingAgent": missing,
+        "offlineEndpoints": offline,
+    }
 
 
 def transform(input):
@@ -123,11 +125,11 @@ def transform(input):
         recommendations = []
 
         if result_value:
-            pass_reasons.append(f"EPP agent deployed on {extra_fields.get('eppDeployedCount', 0)} of {extra_fields.get('totalEndpoints', 0)} endpoints ({extra_fields.get('coveragePercentage', 0)}%)")
+            pass_reasons.append(f"EPP agent deployed on {extra_fields.get('deployedEndpoints', 0)} of {extra_fields.get('totalEndpoints', 0)} endpoints ({extra_fields.get('deployedPercentage', 0)}%)")
         else:
             total = extra_fields.get("totalEndpoints", 0)
-            deployed = extra_fields.get("eppDeployedCount", 0)
-            pct = extra_fields.get("coveragePercentage", 0)
+            deployed = extra_fields.get("deployedEndpoints", 0)
+            pct = extra_fields.get("deployedPercentage", 0)
             if total == 0:
                 fail_reasons.append("No endpoints found in ThreatDown Nebula")
                 recommendations.append("Verify ThreatDown agent is installed on managed endpoints")
