@@ -1,7 +1,8 @@
 """
-Transformation: isCodeExecutionEgressRestricted
+Transformation: isIPAllowlistEnabled
 Vendor: Anthropic  |  Category: Artificial Intelligence
-Evaluates: Ensures the code execution sandbox cannot reach the network, preventing data egress from executed code.
+Product: Claude
+Evaluates: Ensures organization access is restricted to an enforced IP allowlist containing at least one network range.
 API Source: getEffectiveOrganizationSettings
 """
 import json
@@ -74,13 +75,57 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 METADATA = {
-    "transformationId": "isCodeExecutionEgressRestricted",
+    "transformationId": "isIPAllowlistEnabled",
     "vendor": "Anthropic",
     "category": "Artificial Intelligence",
 }
 
 
 _MISSING = object()
+
+# HTTP status -> why the call was refused. These are NOT posture findings: they mean
+# the credential or tenancy cannot reach the endpoint, so the control is UNKNOWN
+# rather than absent. Anthropic's compliance org-data endpoints (settings, groups,
+# organizations, users) accept only a Compliance Access Key (sk-ant-api01-...)
+# created in claude.ai; an Admin API key (sk-ant-admin01-...) gets 403, and a
+# standalone Claude Console organization can reach the Activity Feed only.
+_REFUSAL = {
+    401: ("the credential was rejected",
+          "Confirm the key is an admin-class key and has not been revoked or expired."),
+    403: ("this organization's credential is not permitted to call the endpoint",
+          "This endpoint requires a Compliance Access Key (sk-ant-api01-...) created in "
+          "claude.ai > Organization settings > API with the read:org_audit scope. An Admin "
+          "API key (sk-ant-admin01-...) from Claude Console returns 403 here. A standalone "
+          "Claude Console organization cannot read these settings at all - treat this "
+          "criterion as not applicable for that tenant rather than failed."),
+    404: ("the endpoint or organization was not found",
+          "Check the Organization ID. The compliance endpoints take a compliance "
+          "organization uuid from GET /v1/compliance/organizations, which is a different "
+          "value from the Console organization id shown at "
+          "platform.claude.com/settings/organization."),
+    429: ("the vendor rate-limited the call",
+          "Compliance endpoints allow 600 requests/minute per parent organization. Retry."),
+}
+
+
+def _refusal(data):
+    """Return (status, why, fix) when the payload is an error envelope, else None."""
+    if not isinstance(data, dict):
+        return None
+    if not (data.get("error") or data.get("errorType") or data.get("status") == "Error"):
+        return None
+    status = data.get("statusCode") or data.get("status_code")
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = None
+    why, fix = _REFUSAL.get(status, (
+        "the vendor call did not succeed",
+        "Inspect the integration method response for the underlying error."))
+    detail = data.get("message") or data.get("errorMessage") or ""
+    if detail:
+        why = why + " (" + str(detail) + ")"
+    return status, why, fix
 
 
 def _as_bool(value):
@@ -122,67 +167,80 @@ def _evaluate(input):
     # navigation_keys), so this transform usually receives the bare navigated
     # value. Accept that, the returnSpec-mapped dict, and the raw API body so
     # the same file works in the live pipeline and in direct/local testing.
-    settings = _settings_map(data)
-    settings_count = len(settings)
-    egress_raw = settings.get("code_execution_network_egress_enabled", _MISSING)
-    exec_raw = settings.get("code_execution_enabled", _MISSING)
-
-    if egress_raw is _MISSING:
+    refusal = _refusal(data)
+    if refusal:
+        _status, _why, _fix = refusal
         return create_response(
-            result={"isCodeExecutionEgressRestricted": False, "codeExecutionEnabled": None,
-                    "networkEgressEnabled": None},
+            result={"isIPAllowlistEnabled": False, "endpointReachable": False, "httpStatus": _status},
             validation=validation,
             fail_reasons=[
-                "The effective organization settings response did not include a "
-                "'code_execution_network_egress_enabled' row, so sandbox egress restriction "
-                "cannot be proven."
+                "The organization settings could not be read because " + _why +
+                ". This is a connectivity or credential-scope result, not a finding about "
+                "the organization's configuration - the control's real state is unknown."
             ],
-            recommendations=["Confirm the organization's plan exposes the code execution controls."],
+            recommendations=[_fix],
+            input_summary={"endpointReachable": False, "httpStatus": _status},
+            metadata=METADATA,
+        )
+
+    settings = _settings_map(data)
+    settings_count = len(settings)
+    enabled_raw = settings.get("ip_allowlist_enabled", _MISSING)
+
+    if enabled_raw is _MISSING:
+        return create_response(
+            result={"isIPAllowlistEnabled": False, "ipAllowlistEnabled": None, "rangeCount": 0},
+            validation=validation,
+            fail_reasons=[
+                "The effective organization settings response did not include an "
+                "'ip_allowlist_enabled' row, so network restriction cannot be proven."
+            ],
+            recommendations=["Confirm the organization's plan exposes the IP allowlist control."],
             input_summary={"settingsReported": settings_count, "settingPresent": False},
             metadata=METADATA,
         )
 
-    egress_on = _as_bool(egress_raw)
-    exec_on = None if exec_raw is _MISSING else _as_bool(exec_raw)
-    result = not egress_on
-
-    findings = []
-    if exec_on is False:
-        findings.append(
-            "Code execution is disabled for this organization. Anthropic reports "
-            "code_execution_network_egress_enabled as false whenever code execution is off, so "
-            "this pass reflects an unused capability rather than a hardened sandbox."
-        )
-    elif exec_on is None:
-        findings.append("code_execution_enabled was not reported, so the pass cannot be attributed to a hardened sandbox versus an unused capability.")
+    ranges = settings.get("ip_allowlist_ip_ranges", _MISSING)
+    if ranges is _MISSING or not isinstance(ranges, list):
+        ranges = []
+    enabled = _as_bool(enabled_raw)
+    result = enabled and len(ranges) > 0
 
     if result:
         pass_reasons = [
-            "Code execution network egress is disabled, so code run in the sandbox cannot reach "
-            "the network."
+            "The IP allowlist is enforced with " + str(len(ranges)) + " configured range(s): " +
+            ", ".join(str(r) for r in ranges) + "."
         ]
         fail_reasons = []
         recommendations = []
+    elif not enabled:
+        pass_reasons = []
+        fail_reasons = ["The IP allowlist is disabled, so access is not restricted by source network."]
+        recommendations = [
+            "Enable the IP allowlist in claude.ai > Organization settings and add the corporate "
+            "egress ranges before enforcing it."
+        ]
     else:
         pass_reasons = []
         fail_reasons = [
-            "Code execution network egress is enabled, so code run in the sandbox can make "
-            "outbound network requests and exfiltrate data."
+            "The IP allowlist is enabled but contains no ranges, so it restricts nothing. "
+            "Anthropic reports ip_allowlist_enabled as true only while the allowlist is on and "
+            "has at least one active range, so an empty list here warrants investigation."
         ]
-        recommendations = ["Disable network egress for code execution in claude.ai > Organization settings."]
+        recommendations = ["Add at least one corporate egress range to the allowlist."]
 
     return create_response(
         result={
-            "isCodeExecutionEgressRestricted": result,
-            "codeExecutionEnabled": exec_on,
-            "networkEgressEnabled": egress_on,
+            "isIPAllowlistEnabled": result,
+            "ipAllowlistEnabled": enabled,
+            "rangeCount": len(ranges),
+            "ranges": [str(r) for r in ranges],
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        additional_findings=findings,
-        input_summary={"settingsReported": settings_count, "networkEgressEnabled": egress_on},
+        input_summary={"settingsReported": settings_count, "rangeCount": len(ranges)},
         metadata=METADATA,
     )
 
@@ -192,7 +250,7 @@ def transform(input):
         return _evaluate(input)
     except Exception as exc:  # never raise into the pipeline
         return create_response(
-            result={"isCodeExecutionEgressRestricted": False},
+            result={"isIPAllowlistEnabled": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             fail_reasons=["Transformation raised an unexpected error: " + str(exc)],

@@ -1,8 +1,8 @@
 """
-Transformation: isAgentTelemetryEnabled
+Transformation: isCodeExecutionNetworkEgressEnabled
 Vendor: Anthropic  |  Category: Artificial Intelligence
-Product: Claude Code
-Evaluates: Ensures Claude Code activity emits metrics telemetry so agent usage is observable by the organization.
+Product: Claude
+Evaluates: Ensures the code execution sandbox cannot reach the network, preventing data egress from executed code.
 API Source: getEffectiveOrganizationSettings
 """
 import json
@@ -75,7 +75,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 METADATA = {
-    "transformationId": "isAgentTelemetryEnabled",
+    "transformationId": "isCodeExecutionNetworkEgressEnabled",
     "vendor": "Anthropic",
     "category": "Artificial Intelligence",
 }
@@ -171,7 +171,7 @@ def _evaluate(input):
     if refusal:
         _status, _why, _fix = refusal
         return create_response(
-            result={"isAgentTelemetryEnabled": False, "endpointReachable": False, "httpStatus": _status},
+            result={"isCodeExecutionNetworkEgressEnabled": False, "endpointReachable": False, "httpStatus": _status},
             validation=validation,
             fail_reasons=[
                 "The organization settings could not be read because " + _why +
@@ -185,45 +185,69 @@ def _evaluate(input):
 
     settings = _settings_map(data)
     settings_count = len(settings)
-    raw = settings.get("claude_code_metrics_logging_enabled", _MISSING)
+    egress_raw = settings.get("code_execution_network_egress_enabled", _MISSING)
+    exec_raw = settings.get("code_execution_enabled", _MISSING)
 
-    if raw is _MISSING:
+    if egress_raw is _MISSING:
         return create_response(
-            result={"isAgentTelemetryEnabled": False, "claude_code_metrics_logging_enabled": None, "settingReported": False},
+            result={"isCodeExecutionNetworkEgressEnabled": False, "codeExecutionEnabled": None,
+                    "networkEgressEnabled": None},
             validation=validation,
             fail_reasons=[
                 "The effective organization settings response did not include a "
-                "'claude_code_metrics_logging_enabled' row, so agent usage observability cannot be proven. A setting this "
-                "organization's administrators cannot change is omitted entirely, "
-                "so an absent row means 'not controllable here', not 'off'."
+                "'code_execution_network_egress_enabled' row, so sandbox egress restriction "
+                "cannot be proven."
             ],
-            recommendations=[
-                "Confirm the organization's plan exposes this control, then re-run. "
-                "Enable Claude Code metrics logging in claude.ai > Organization settings and route it to the organization's collector."
-            ],
+            recommendations=["Confirm the organization's plan exposes the code execution controls."],
             input_summary={"settingsReported": settings_count, "settingPresent": False},
             metadata=METADATA,
         )
 
-    enabled = _as_bool(raw)
-    result = enabled is True
+    egress_on = _as_bool(egress_raw)
+    exec_on = None if exec_raw is _MISSING else _as_bool(exec_raw)
+    # This criterion reports the RAW setting value; the requirement token asserts
+    # it must equal false (inherited requirementsUid fcf72fbc-..., criteriaValue
+    # isEquals false). Compliant therefore means returning False here.
+    result = egress_on
+    compliant = not egress_on
 
-    if result:
-        pass_reasons = ["Claude Code metrics logging is enabled, so agent usage is observable in the organization's telemetry."]
+    findings = []
+    if exec_on is False:
+        findings.append(
+            "Code execution is disabled for this organization. Anthropic reports "
+            "code_execution_network_egress_enabled as false whenever code execution is off, so "
+            "this pass reflects an unused capability rather than a hardened sandbox."
+        )
+    elif exec_on is None:
+        findings.append("code_execution_enabled was not reported, so the pass cannot be attributed to a hardened sandbox versus an unused capability.")
+
+    if compliant:
+        pass_reasons = [
+            "Code execution network egress is disabled, so code run in the sandbox cannot reach "
+            "the network."
+        ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        fail_reasons = ["Claude Code metrics logging is disabled, so agent usage produces no telemetry for the organization to monitor."]
-        recommendations = ["Enable Claude Code metrics logging in claude.ai > Organization settings and route it to the organization's collector."]
+        fail_reasons = [
+            "Code execution network egress is enabled, so code run in the sandbox can make "
+            "outbound network requests and exfiltrate data."
+        ]
+        recommendations = ["Disable network egress for code execution in claude.ai > Organization settings."]
 
     return create_response(
-        result={"isAgentTelemetryEnabled": result, "claude_code_metrics_logging_enabled": enabled, "settingReported": True},
+        result={
+            "isCodeExecutionNetworkEgressEnabled": result,
+            "codeExecutionEnabled": exec_on,
+            "networkEgressEnabled": egress_on,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"settingsReported": settings_count, "claude_code_metrics_logging_enabled": enabled},
+        additional_findings=findings,
+        input_summary={"settingsReported": settings_count, "networkEgressEnabled": egress_on},
         metadata=METADATA,
     )
 
@@ -233,7 +257,7 @@ def transform(input):
         return _evaluate(input)
     except Exception as exc:  # never raise into the pipeline
         return create_response(
-            result={"isAgentTelemetryEnabled": False},
+            result={"isCodeExecutionNetworkEgressEnabled": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             fail_reasons=["Transformation raised an unexpected error: " + str(exc)],

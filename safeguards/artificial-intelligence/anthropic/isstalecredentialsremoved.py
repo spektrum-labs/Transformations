@@ -1,6 +1,7 @@
 """
 Transformation: isStaleCredentialsRemoved
 Vendor: Anthropic  |  Category: Artificial Intelligence
+Product: Claude Developer Platform (Claude API)
 Evaluates: Ensures no active organization API key has been in service beyond the maximum permitted age without rotation.
 API Source: listApiKeys
 """
@@ -80,6 +81,86 @@ METADATA = {
 }
 
 
+_MISSING = object()
+
+# HTTP status -> why the call was refused. These are NOT posture findings: they mean
+# the credential or tenancy cannot reach the endpoint, so the control is UNKNOWN
+# rather than absent. Anthropic's compliance org-data endpoints (settings, groups,
+# organizations, users) accept only a Compliance Access Key (sk-ant-api01-...)
+# created in claude.ai; an Admin API key (sk-ant-admin01-...) gets 403, and a
+# standalone Claude Console organization can reach the Activity Feed only.
+_REFUSAL = {
+    401: ("the credential was rejected",
+          "Confirm the key is an admin-class key and has not been revoked or expired."),
+    403: ("this organization's credential is not permitted to call the endpoint",
+          "This endpoint requires a Compliance Access Key (sk-ant-api01-...) created in "
+          "claude.ai > Organization settings > API with the read:org_audit scope. An Admin "
+          "API key (sk-ant-admin01-...) from Claude Console returns 403 here. A standalone "
+          "Claude Console organization cannot read these settings at all - treat this "
+          "criterion as not applicable for that tenant rather than failed."),
+    404: ("the endpoint or organization was not found",
+          "Check the Organization ID. The compliance endpoints take a compliance "
+          "organization uuid from GET /v1/compliance/organizations, which is a different "
+          "value from the Console organization id shown at "
+          "platform.claude.com/settings/organization."),
+    429: ("the vendor rate-limited the call",
+          "Compliance endpoints allow 600 requests/minute per parent organization. Retry."),
+}
+
+
+def _refusal(data):
+    """Return (status, why, fix) when the payload is an error envelope, else None."""
+    if not isinstance(data, dict):
+        return None
+    if not (data.get("error") or data.get("errorType") or data.get("status") == "Error"):
+        return None
+    status = data.get("statusCode") or data.get("status_code")
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = None
+    why, fix = _REFUSAL.get(status, (
+        "the vendor call did not succeed",
+        "Inspect the integration method response for the underlying error."))
+    detail = data.get("message") or data.get("errorMessage") or ""
+    if detail:
+        why = why + " (" + str(detail) + ")"
+    return status, why, fix
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "enabled", "on")
+    return bool(value)
+
+
+def _settings_map(data):
+    """Reduce the effective-settings rows to {name: value}.
+
+    A setting this organization's administrators cannot change is omitted from
+    the response entirely, so a missing name means "not controllable here",
+    never "off". Callers must distinguish absent from False, which is why this
+    returns a plain dict and callers use the _MISSING sentinel.
+    """
+    rows = None
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        for key in ("data", "settings"):
+            if isinstance(data.get(key), list):
+                rows = data[key]
+                break
+    if rows is None:
+        rows = []
+    out = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("name") is not None:
+            out[row["name"]] = row.get("value", _MISSING)
+    return out
+
+
 from datetime import timezone
 
 MAX_KEY_AGE_DAYS = 365
@@ -104,6 +185,22 @@ def _evaluate(input):
     # navigation_keys), so this transform usually receives the bare navigated
     # value. Accept that, the returnSpec-mapped dict, and the raw API body so
     # the same file works in the live pipeline and in direct/local testing.
+    refusal = _refusal(data)
+    if refusal:
+        _status, _why, _fix = refusal
+        return create_response(
+            result={"isStaleCredentialsRemoved": False, "endpointReachable": False, "httpStatus": _status},
+            validation=validation,
+            fail_reasons=[
+                "The vendor call did not return data because " + _why +
+                ". This is a connectivity or credential-scope result, not a finding about "
+                "the organization's configuration - the control's real state is unknown."
+            ],
+            recommendations=[_fix],
+            input_summary={"endpointReachable": False, "httpStatus": _status},
+            metadata=METADATA,
+        )
+
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
