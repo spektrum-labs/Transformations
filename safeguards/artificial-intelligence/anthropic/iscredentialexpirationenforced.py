@@ -16,7 +16,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for attempt in range(3):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -81,7 +81,10 @@ METADATA = {
 }
 
 
-_MISSING = object()
+# Unique sentinel. object() is unavailable in the RestrictedPython sandbox
+# Token-Service runs transforms in, so a fresh list is used instead: a list
+# literal is never interned, which keeps the "is MISSING" identity checks valid.
+MISSING = ["__missing__"]
 
 # HTTP status -> why the call was refused. These are NOT posture findings: they mean
 # the credential or tenancy cannot reach the endpoint, so the control is UNKNOWN
@@ -89,7 +92,7 @@ _MISSING = object()
 # organizations, users) accept only a Compliance Access Key (sk-ant-api01-...)
 # created in claude.ai; an Admin API key (sk-ant-admin01-...) gets 403, and a
 # standalone Claude Console organization can reach the Activity Feed only.
-_REFUSAL = {
+REFUSAL_REASONS = {
     401: ("the credential was rejected",
           "Confirm the key is an admin-class key and has not been revoked or expired."),
     403: ("this organization's credential is not permitted to call the endpoint",
@@ -108,7 +111,7 @@ _REFUSAL = {
 }
 
 
-def _refusal(data):
+def detect_refusal(data):
     """Return (status, why, fix) when the payload is an error envelope, else None."""
     if not isinstance(data, dict):
         return None
@@ -119,7 +122,7 @@ def _refusal(data):
         status = int(status)
     except (TypeError, ValueError):
         status = None
-    why, fix = _REFUSAL.get(status, (
+    why, fix = REFUSAL_REASONS.get(status, (
         "the vendor call did not succeed",
         "Inspect the integration method response for the underlying error."))
     detail = data.get("message") or data.get("errorMessage") or ""
@@ -128,7 +131,7 @@ def _refusal(data):
     return status, why, fix
 
 
-def _as_bool(value):
+def as_bool(value):
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -136,7 +139,7 @@ def _as_bool(value):
     return bool(value)
 
 
-def _settings_map(data):
+def settings_map(data):
     """Reduce the effective-settings rows to {name: value}.
 
     A setting this organization's administrators cannot change is omitted from
@@ -157,29 +160,29 @@ def _settings_map(data):
     out = {}
     for row in rows:
         if isinstance(row, dict) and row.get("name") is not None:
-            out[row["name"]] = row.get("value", _MISSING)
+            out[row["name"]] = row.get("value", MISSING)
     return out
 
 
-def _evaluate(input):
+def evaluate(input):
     data, validation = extract_input(input)
     # Token-Service navigates into the response's "data" key (codeexecutor
     # navigation_keys), so this transform usually receives the bare navigated
     # value. Accept that, the returnSpec-mapped dict, and the raw API body so
     # the same file works in the live pipeline and in direct/local testing.
-    refusal = _refusal(data)
+    refusal = detect_refusal(data)
     if refusal:
-        _status, _why, _fix = refusal
+        refusal_status, refusal_why, refusal_fix = refusal
         return create_response(
-            result={"isCredentialExpirationEnforced": False, "endpointReachable": False, "httpStatus": _status},
+            result={"isCredentialExpirationEnforced": False, "endpointReachable": False, "httpStatus": refusal_status},
             validation=validation,
             fail_reasons=[
-                "The vendor call did not return data because " + _why +
+                "The vendor call did not return data because " + refusal_why +
                 ". This is a connectivity or credential-scope result, not a finding about "
                 "the organization's configuration - the control's real state is unknown."
             ],
-            recommendations=[_fix],
-            input_summary={"endpointReachable": False, "httpStatus": _status},
+            recommendations=[refusal_fix],
+            input_summary={"endpointReachable": False, "httpStatus": refusal_status},
             metadata=METADATA,
         )
 
@@ -254,7 +257,7 @@ def _evaluate(input):
 
 def transform(input):
     try:
-        return _evaluate(input)
+        return evaluate(input)
     except Exception as exc:  # never raise into the pipeline
         return create_response(
             result={"isCredentialExpirationEnforced": False},
