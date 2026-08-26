@@ -12,11 +12,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -69,68 +69,66 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    # getOrganizations returns a columnar (struct-of-arrays) shape:
-    # {"id": [...], "name": [...], "nodeCount": [...], ...}
-    org_ids = data.get("id") or []
-    org_names = data.get("name") or []
-    node_counts = data.get("nodeCount") or []
+    if isinstance(data, list):
+        devices = data
+    elif isinstance(data, dict):
+        devices = data.get("data") or data.get("results") or []
+    else:
+        devices = []
 
-    if not isinstance(org_ids, list):
-        org_ids = []
-    if not isinstance(node_counts, list):
-        node_counts = []
-    if not isinstance(org_names, list):
-        org_names = []
+    total_devices = len(devices)
 
-    total_orgs = len(org_ids)
-    total_nodes = 0
-    orgs_with_nodes = 0
-    sample_org_names = []
+    approved_count = 0
+    communicating_count = 0
+    sample_names = []
 
-    idx = 0
-    while idx < len(node_counts):
-        raw_count = node_counts[idx]
-        count = raw_count if isinstance(raw_count, (int, float)) else 0
-        total_nodes = total_nodes + count
-        if count > 0:
-            orgs_with_nodes = orgs_with_nodes + 1
-            if idx < len(org_names) and len(sample_org_names) < 3:
-                sample_org_names.append(org_names[idx])
-        idx = idx + 1
+    for d in devices:
+        if not isinstance(d, dict):
+            continue
+        approval = d.get("approvalStatus")
+        if approval == "APPROVED":
+            approved_count = approved_count + 1
+        last_contact = d.get("lastContact")
+        if approval == "APPROVED" and last_contact:
+            communicating_count = communicating_count + 1
+            if len(sample_names) < 3:
+                sample_names.append(d.get("systemName") or str(d.get("id")))
 
-    is_deployed = total_nodes > 0
+    is_deployed = communicating_count > 0
 
     input_summary = {
-        "totalOrganizations": total_orgs,
-        "organizationsWithNodes": orgs_with_nodes,
-        "totalNodeCount": total_nodes,
+        "totalDevices": total_devices,
+        "approvedDevices": approved_count,
+        "communicatingDevices": communicating_count,
     }
 
     if is_deployed:
+        sample_str = ", ".join(sample_names) if sample_names else "none"
         pass_reasons = [
-            f"Found {total_nodes} total device(s) (nodeCount) across {orgs_with_nodes} of {total_orgs} organization(s), indicating the NinjaOne agent is installed and reporting."
+            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
+            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
+            f"and actively communicating (e.g. {sample_str})."
         ]
-        if sample_org_names:
-            pass_reasons.append(
-                f"Organizations with enrolled devices include: {', '.join([str(n) for n in sample_org_names])}."
-            )
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"No organizations report a positive nodeCount ({total_orgs} organization(s) inspected, totalNodeCount={total_nodes}), indicating no NinjaOne agents are currently enrolled/communicating."
+            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
+            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
         ]
         recommendations = [
-            "Deploy the NinjaOne agent installer to at least one endpoint and confirm it completes enrollment (approvalStatus=APPROVED) and reports online status."
+            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
+            "are approved in the console (Administration > Devices > Approval)."
         ]
 
     result = {
         "isAgentDeployed": is_deployed,
-        "totalNodeCount": total_nodes,
-        "organizationsWithNodes": orgs_with_nodes,
+        "totalDevices": total_devices,
+        "approvedDevices": approved_count,
+        "communicatingDevices": communicating_count,
     }
 
     return create_response(
