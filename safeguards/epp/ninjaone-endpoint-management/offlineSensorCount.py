@@ -69,86 +69,50 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
     data = data if isinstance(data, (dict, list)) else []
 
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
+        devices = data.get("data") or data.get("results") or []
         if not isinstance(devices, list):
             devices = []
     else:
         devices = []
 
     total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
-
-    for device in devices:
-        if not isinstance(device, dict):
+    offline_count = 0
+    offline_ids = []
+    for d in devices:
+        if not isinstance(d, dict):
+            continue
+        if "_truncated" in d and "offline" not in d:
             continue
         total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        if d.get("offline") is True:
+            offline_count = offline_count + 1
+            if len(offline_ids) < 10:
+                offline_ids.append(d.get("id"))
 
-    is_agent_deployed = approved_and_online > 0
-
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
-    }
-
-    if is_agent_deployed:
+    if total_devices > 0:
+        sample_ids = ", ".join([str(i) for i in offline_ids])
         pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
+            f"Scanned {total_devices} devices from getDevicesDetailed; found {offline_count} with offline=true (sample ids: {sample_ids})."
         ]
-        fail_reasons = []
         recommendations = []
+        if offline_count > 0:
+            recommendations = [
+                "Investigate offline devices to determine if they are decommissioned, in transit, or experiencing connectivity/agent issues."
+            ]
+        fail_reasons = []
     else:
         pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
-        ]
+        fail_reasons = ["No device records were present in the getDevicesDetailed response to evaluate."]
+        recommendations = ["Verify the NinjaOne integration is returning device inventory data."]
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
+        "offlineSensorCount": offline_count,
         "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
     }
 
     return create_response(
@@ -157,10 +121,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevices": total_devices, "offlineCount": offline_count},
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "offlineSensorCount",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

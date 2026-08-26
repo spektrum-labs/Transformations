@@ -67,88 +67,84 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+OFFLINE_KEYWORDS = ["offline", "not seen", "unreachable", "no contact", "connectivity"]
+
+
+def record_mentions_offline(record):
+    if not isinstance(record, dict):
+        return False
+    fields_to_check = []
+    for key in ("message", "subject", "sourceName", "sourceType", "sourceConfigUid"):
+        val = record.get(key)
+        if isinstance(val, str):
+            fields_to_check.append(val.lower())
+    for text in fields_to_check:
+        for kw in OFFLINE_KEYWORDS:
+            if kw in text:
+                return True
+    return False
+
+
 def transform(input):
     data, validation = extract_input(input)
 
-    data = data if isinstance(data, (dict, list)) else []
-
+    # Normalize into a flat list of "pages" (dicts with results), since the
+    # captured response is a list of {cursor, results} pages.
+    pages = []
     if isinstance(data, list):
-        devices = data
+        for entry in data:
+            if isinstance(entry, dict):
+                pages.append(entry)
+            elif isinstance(entry, list):
+                pages.append({"results": entry})
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
-        if not isinstance(devices, list):
-            devices = []
+        pages.append(data)
     else:
-        devices = []
+        pages = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    all_alerts = []
+    for page in pages:
+        results = page.get("results") if isinstance(page, dict) else None
+        if isinstance(results, list):
+            for r in results:
+                all_alerts.append(r)
 
-    for device in devices:
-        if not isinstance(device, dict):
-            continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+    total_alerts = len(all_alerts)
+    offline_alerts = [a for a in all_alerts if record_mentions_offline(a)]
+    offline_count = len(offline_alerts)
 
-    is_agent_deployed = approved_and_online > 0
+    is_enabled = offline_count > 0
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
-    }
+    sample_names = []
+    for a in offline_alerts[:5]:
+        name = a.get("sourceName") or a.get("subject") or a.get("message") or "unknown"
+        sample_names.append(str(name))
 
-    if is_agent_deployed:
+    if is_enabled:
         pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
+            f"Found {offline_count} of {total_alerts} alert record(s) referencing an offline/connectivity "
+            f"condition (examples: {', '.join(sample_names)}), confirming a device-offline alerting policy "
+            f"condition exists and has fired."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
+        fail_reasons = [
+            f"Scanned {total_alerts} alert record(s) across all fetched alert pages and found none whose "
+            f"message/subject/sourceName referenced an offline or connectivity condition, so no evidence of "
+            f"an active device-offline alerting policy condition was found."
+        ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
+            "Configure a policy condition (e.g. under Policy > Conditions > Offline) that alerts technicians "
+            "when a device has been offline beyond a configured duration, and confirm it is enabled for the "
+            "relevant device policies."
         ]
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+        "isDeviceOfflineAlertingEnabled": is_enabled,
+        "totalAlertsScanned": total_alerts,
+        "offlineRelatedAlertCount": offline_count,
     }
 
     return create_response(
@@ -157,10 +153,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalAlertsScanned": total_alerts, "offlineRelatedAlertCount": offline_count},
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isDeviceOfflineAlertingEnabled",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

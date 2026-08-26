@@ -69,86 +69,68 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
-        if not isinstance(devices, list):
-            devices = []
+        results = data.get("results") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    if not isinstance(results, list):
+        results = []
 
-    for device in devices:
-        if not isinstance(device, dict):
+    device_states = {}
+    for r in results:
+        if not isinstance(r, dict):
             continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        dev = r.get("deviceId")
+        if dev is None:
+            continue
+        state = r.get("productState")
+        if dev not in device_states:
+            device_states[dev] = []
+        device_states[dev].append(state)
 
-    is_agent_deployed = approved_and_online > 0
+    total_devices = len(device_states)
+    unprotected_devices = []
+    for dev, states in device_states.items():
+        has_on = False
+        for s in states:
+            if s == "ON":
+                has_on = True
+                break
+        if not has_on:
+            unprotected_devices.append(dev)
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
-    }
+    unprotected_count = len(unprotected_devices)
 
-    if is_agent_deployed:
+    if total_devices == 0:
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = ["No antivirus status records were returned; unable to confirm endpoint protection coverage."]
+    elif unprotected_count == 0:
         pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
+            "All %d devices reporting to the antivirus-status endpoint have at least one AV product with productState=ON." % total_devices
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
+        sample = unprotected_devices[:10]
+        fail_reasons = [
+            "%d of %d devices have no AV product reporting productState=ON (e.g. deviceIds: %s)." % (
+                unprotected_count, total_devices, sample
+            )
+        ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
+            "Investigate and remediate unprotected endpoints (deviceIds: %s) by enabling or reinstalling their antivirus/EPP agent." % sample
         ]
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+        "endpointOperationalStatusUnprotectedCount": unprotected_count,
+        "totalDevicesReporting": total_devices,
     }
 
     return create_response(
@@ -157,10 +139,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevicesReporting": total_devices, "unprotectedCount": unprotected_count},
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "endpointOperationalStatusUnprotectedCount",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

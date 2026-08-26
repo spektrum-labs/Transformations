@@ -69,86 +69,86 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
-        if not isinstance(devices, list):
-            devices = []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    if not isinstance(results, list):
+        results = []
 
-    for device in devices:
-        if not isinstance(device, dict):
+    total_records = 0
+    out_of_date_records = 0
+    up_to_date_records = 0
+    out_of_date_samples = []
+
+    for rec in results:
+        if not isinstance(rec, dict):
             continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        # skip cursor-only wrapper items (e.g. from getAlerts-like shape)
+        if "definitionStatus" not in rec:
+            continue
+        total_records = total_records + 1
+        status = rec.get("definitionStatus") or ""
+        status_norm = status.strip().lower()
+        if status_norm == "up-to-date" or status_norm == "up to date":
+            up_to_date_records = up_to_date_records + 1
+        else:
+            out_of_date_records = out_of_date_records + 1
+            if len(out_of_date_samples) < 5:
+                out_of_date_samples.append({
+                    "deviceId": rec.get("deviceId"),
+                    "productName": rec.get("productName"),
+                    "definitionStatus": status,
+                })
 
-    is_agent_deployed = approved_and_online > 0
+    is_up_to_date = total_records > 0 and out_of_date_records == 0
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
+        "totalDefinitionRecords": total_records,
+        "upToDateRecords": up_to_date_records,
+        "outOfDateRecords": out_of_date_records,
     }
 
-    if is_agent_deployed:
-        pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
-        ]
-        fail_reasons = []
-        recommendations = []
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total_records == 0:
+        fail_reasons.append(
+            "No antivirus-status records with a definitionStatus field were returned; "
+            "signature currency could not be confirmed."
+        )
+        recommendations.append(
+            "Verify the Antivirus Status report is populated for enrolled devices and re-run the scan."
+        )
+    elif is_up_to_date:
+        pass_reasons.append(
+            f"All {total_records} antivirus-status records report definitionStatus='Up-to-Date' "
+            f"({up_to_date_records} up-to-date, {out_of_date_records} out-of-date)."
+        )
     else:
-        pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
-        ]
+        sample_desc = ", ".join(
+            f"device {s.get('deviceId')} ({s.get('productName')}: {s.get('definitionStatus')})"
+            for s in out_of_date_samples
+        )
+        fail_reasons.append(
+            f"{out_of_date_records} of {total_records} antivirus-status records report a "
+            f"non-'Up-to-Date' definitionStatus, e.g. {sample_desc}."
+        )
+        recommendations.append(
+            "Force a signature/definition update on the affected devices or verify network "
+            "connectivity to the AV vendor's update servers."
+        )
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+        "isSignatureUpToDate": is_up_to_date,
+        "totalDefinitionRecords": total_records,
+        "outOfDateRecords": out_of_date_records,
     }
 
     return create_response(
@@ -159,8 +159,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isSignatureUpToDate",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

@@ -69,87 +69,88 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
+        devices = data.get("data") or data.get("results") or []
         if not isinstance(devices, list):
             devices = []
     else:
         devices = []
 
+    STALE_THRESHOLD_SECONDS = 14 * 24 * 60 * 60  # 14 days
+
+    now_ts = datetime.utcnow().timestamp()
+
     total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    stale_count = 0
+    stale_samples = []
+    missing_last_contact = 0
 
     for device in devices:
         if not isinstance(device, dict):
             continue
         total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        last_contact = device.get("lastContact")
+        if last_contact is None:
+            missing_last_contact = missing_last_contact + 1
+            continue
+        try:
+            last_contact_val = float(last_contact)
+        except (TypeError, ValueError):
+            missing_last_contact = missing_last_contact + 1
+            continue
+        age_seconds = now_ts - last_contact_val
+        if age_seconds >= STALE_THRESHOLD_SECONDS:
+            stale_count = stale_count + 1
+            if len(stale_samples) < 5:
+                stale_samples.append({
+                    "id": device.get("id"),
+                    "lastContact": last_contact_val,
+                    "ageDays": round(age_seconds / 86400.0, 1),
+                })
 
-    is_agent_deployed = approved_and_online > 0
+    if total_devices == 0:
+        result = {
+            "staleSensorCount": 0,
+            "totalDevices": 0,
+            "missingLastContact": 0,
+        }
+        return create_response(
+            result=result,
+            validation=validation,
+            pass_reasons=[],
+            fail_reasons=["No device records were returned by getDevicesDetailed, so stale sensor count could not be computed."],
+            recommendations=["Verify the getDevicesDetailed endpoint is returning fleet data for this tenant."],
+            input_summary={"totalDevices": 0},
+        )
 
-    input_summary = {
+    sample_desc = ", ".join(
+        [f"id={s['id']} lastContact age={s['ageDays']}d" for s in stale_samples]
+    )
+
+    result = {
+        "staleSensorCount": stale_count,
         "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
+        "missingLastContact": missing_last_contact,
     }
 
-    if is_agent_deployed:
+    if stale_count > 0:
+        pass_reasons = []
+        fail_reasons = [
+            f"{stale_count} of {total_devices} devices have lastContact older than 14 days (threshold={STALE_THRESHOLD_SECONDS}s). Examples: {sample_desc}."
+        ]
+        recommendations = [
+            "Investigate the stale devices for connectivity or agent-health issues and re-enroll or decommission devices that no longer check in."
+        ]
+    else:
         pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
+            f"All {total_devices} devices report a lastContact timestamp within the last 14 days; no stale devices detected."
         ]
         fail_reasons = []
         recommendations = []
-    else:
-        pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
-        ]
-
-    result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-    }
 
     return create_response(
         result=result,
@@ -157,10 +158,9 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
-        metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
-            "category": "epp",
+        input_summary={
+            "totalDevices": total_devices,
+            "staleSensorCount": stale_count,
+            "missingLastContact": missing_last_contact,
         },
     )

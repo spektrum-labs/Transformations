@@ -69,86 +69,67 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
-        if not isinstance(devices, list):
-            devices = []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    if not isinstance(results, list):
+        results = []
 
-    for device in devices:
-        if not isinstance(device, dict):
+    failed_records = []
+    pending_count = 0
+    rejected_count = 0
+    failed_device_ids = {}
+
+    for rec in results:
+        if not isinstance(rec, dict):
             continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        status = str(rec.get("status") or "").upper()
+        if status == "FAILED":
+            failed_records.append(rec)
+            device_id = rec.get("deviceId")
+            if device_id is not None:
+                failed_device_ids[device_id] = True
+        elif status == "PENDING":
+            pending_count = pending_count + 1
+        elif status == "REJECTED":
+            rejected_count = rejected_count + 1
 
-    is_agent_deployed = approved_and_online > 0
+    scan_failure_count = len(failed_device_ids) if failed_device_ids else len(failed_records)
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
-    }
+    sample_names = []
+    for rec in failed_records[:5]:
+        nm = rec.get("name") or rec.get("kbNumber") or "unknown patch"
+        did = rec.get("deviceId")
+        sample_names.append(f"{nm} on device {did}")
 
-    if is_agent_deployed:
+    if scan_failure_count > 0:
+        pass_reasons = []
+        fail_reasons = [
+            f"{scan_failure_count} device(s) report a FAILED OS patch status in the pending/failed/rejected patches report. "
+            f"Examples: {'; '.join(sample_names)}."
+        ]
+        recommendations = [
+            "Investigate and remediate the failed OS patch installations on the affected devices, then re-run the patch scan cycle."
+        ]
+    else:
         pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
+            f"No devices report a FAILED OS patch status among {len(results)} records inspected in the pending/failed/rejected patches report "
+            f"(pending={pending_count}, rejected={rejected_count})."
         ]
         fail_reasons = []
         recommendations = []
-    else:
-        pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
-        ]
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+        "scanFailureCount": scan_failure_count,
+        "totalRecordsInspected": len(results),
+        "pendingCount": pending_count,
+        "rejectedCount": rejected_count,
     }
 
     return create_response(
@@ -157,10 +138,15 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={
+            "totalRecords": len(results),
+            "failedCount": scan_failure_count,
+            "pendingCount": pending_count,
+            "rejectedCount": rejected_count,
+        },
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "scanFailureCount",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

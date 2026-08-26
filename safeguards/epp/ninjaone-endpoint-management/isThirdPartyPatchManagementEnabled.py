@@ -69,86 +69,67 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
-        if not isinstance(devices, list):
-            devices = []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    if not isinstance(results, list):
+        results = []
 
-    for device in devices:
-        if not isinstance(device, dict):
+    total_records = len(results)
+
+    installed_statuses = set(["INSTALLED", "SUCCESS", "COMPLETED"])
+    installed_count = 0
+    device_ids = set()
+    sample_titles = []
+    for rec in results:
+        if not isinstance(rec, dict):
             continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        device_id = rec.get("deviceId")
+        if device_id is not None:
+            device_ids.add(device_id)
+        status = rec.get("status")
+        if isinstance(status, str) and status.upper() in installed_statuses:
+            installed_count = installed_count + 1
+            if len(sample_titles) < 5:
+                title = rec.get("title") or rec.get("productIdentifier") or "unknown"
+                sample_titles.append(title)
 
-    is_agent_deployed = approved_and_online > 0
+    is_enabled = installed_count > 0
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
-    }
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
-    if is_agent_deployed:
-        pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
-        ]
-        fail_reasons = []
-        recommendations = []
+    if is_enabled:
+        sample_str = ", ".join([str(t) for t in sample_titles])
+        pass_reasons.append(
+            f"Software patch installs report returned {installed_count} installed third-party "
+            f"patch records across {len(device_ids)} devices (sample titles: {sample_str}), "
+            f"confirming third-party patch management is active."
+        )
     else:
-        pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
-        ]
+        fail_reasons.append(
+            f"Software patch installs report (getSoftwarePatchInstallsReport) returned "
+            f"{total_records} total records and 0 records with an installed status, "
+            f"indicating no third-party patch installation activity is currently tracked."
+        )
+        recommendations.append(
+            "Enable and configure third-party software patch management policies in NinjaOne "
+            "so that browser/Java/Adobe and other third-party application patches are scanned "
+            "for and installed, then verify installs appear in the software-patch-installs report."
+        )
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+        "isThirdPartyPatchManagementEnabled": is_enabled,
+        "totalPatchInstallRecords": total_records,
+        "installedPatchCount": installed_count,
+        "devicesWithInstalls": len(device_ids),
     }
 
     return create_response(
@@ -157,10 +138,13 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={
+            "totalPatchInstallRecords": total_records,
+            "installedPatchCount": installed_count,
+        },
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isThirdPartyPatchManagementEnabled",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

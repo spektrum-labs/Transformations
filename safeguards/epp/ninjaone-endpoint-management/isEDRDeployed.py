@@ -67,88 +67,95 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+EDR_PRODUCT_MARKERS = [
+    "crowdstrike",
+    "sentinelone",
+    "sentinel one",
+    "bitdefender",
+    "carbon black",
+    "cortex xdr",
+    "cylance",
+    "intercept x",
+    "sophos",
+    "trend micro",
+    "symantec endpoint",
+    "mvision",
+    "fireeye",
+    "elastic endpoint",
+    "deep instinct",
+    "huntress",
+    "cybereason",
+    "tanium",
+]
+
+
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
-        if not isinstance(devices, list):
-            devices = []
+        results = data.get("results") or data.get("data") or []
+        if not isinstance(results, list):
+            results = []
     else:
-        devices = []
+        results = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    edr_products_found = []
+    edr_device_ids = set()
+    total_records = 0
 
-    for device in devices:
-        if not isinstance(device, dict):
+    for rec in results:
+        if not isinstance(rec, dict):
             continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        total_records = total_records + 1
+        name = rec.get("productName") or ""
+        name_lower = name.lower()
+        is_edr = False
+        for marker in EDR_PRODUCT_MARKERS:
+            if marker in name_lower:
+                is_edr = True
+                break
+        if is_edr:
+            if name not in edr_products_found:
+                edr_products_found.append(name)
+            device_id = rec.get("deviceId")
+            if device_id is not None:
+                edr_device_ids.add(device_id)
 
-    is_agent_deployed = approved_and_online > 0
+    is_edr_deployed = len(edr_device_ids) > 0
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
+        "totalAntivirusStatusRecords": total_records,
+        "edrProductsFound": edr_products_found,
+        "edrDeviceCount": len(edr_device_ids),
     }
 
-    if is_agent_deployed:
+    if is_edr_deployed:
         pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
+            "Antivirus status report shows " + str(len(edr_device_ids)) +
+            " device(s) reporting a third-party EDR product ("
+            + ", ".join(edr_products_found) + ") via productName in /v2/queries/antivirus-status results."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
+        fail_reasons = [
+            "None of the " + str(total_records) +
+            " antivirus-status records reported a recognized third-party EDR productName "
+            "(only Microsoft Defender Antivirus or no matching EDR marker were found)."
+        ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
+            "Deploy and enroll a third-party EDR agent (e.g. CrowdStrike Falcon, SentinelOne, Bitdefender) "
+            "on managed endpoints so it reports through the NinjaOne antivirus-status integration."
         ]
 
     result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+        "isEDRDeployed": is_edr_deployed,
+        "edrDeviceCount": len(edr_device_ids),
+        "edrProductsFound": edr_products_found,
     }
 
     return create_response(
@@ -159,8 +166,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isEDRDeployed",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

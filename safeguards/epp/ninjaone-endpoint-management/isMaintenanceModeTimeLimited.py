@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -69,86 +67,92 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("items") or []
+        devices = data.get("data") or data.get("results") or []
         if not isinstance(devices, list):
             devices = []
     else:
         devices = []
 
-    total_devices = 0
-    approved_devices = 0
-    online_devices = 0
-    approved_and_online = 0
+    total_devices = len(devices)
 
+    maintenance_windows = []
     for device in devices:
         if not isinstance(device, dict):
             continue
-        total_devices = total_devices + 1
-        approval_status = device.get("approvalStatus")
-        offline_flag = device.get("offline")
-        is_approved = approval_status == "APPROVED"
-        is_online = offline_flag is False
-        if is_approved:
-            approved_devices = approved_devices + 1
-        if is_online:
-            online_devices = online_devices + 1
-        if is_approved and is_online:
-            approved_and_online = approved_and_online + 1
+        maint = device.get("maintenance")
+        if isinstance(maint, list):
+            for entry in maint:
+                if isinstance(entry, dict) and entry:
+                    maintenance_windows.append(entry)
+        elif isinstance(maint, dict) and maint:
+            maintenance_windows.append(maint)
 
-    is_agent_deployed = approved_and_online > 0
+    bounded_count = 0
+    unbounded_count = 0
+    unbounded_samples = []
+    for entry in maintenance_windows:
+        start_val = entry.get("start")
+        end_val = entry.get("end")
+        if start_val and end_val:
+            bounded_count = bounded_count + 1
+        else:
+            unbounded_count = unbounded_count + 1
+            if len(unbounded_samples) < 3:
+                unbounded_samples.append(entry)
+
+    total_windows = len(maintenance_windows)
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total_windows == 0:
+        is_time_limited = True
+        pass_reasons.append(
+            f"Scanned {total_devices} devices via getDevicesDetailed and found no active maintenance windows "
+            f"(all 'maintenance' fields were empty), so no indefinite-suppression window is currently present."
+        )
+    else:
+        if unbounded_count == 0:
+            is_time_limited = True
+            pass_reasons.append(
+                f"All {total_windows} maintenance window(s) observed across {total_devices} devices include both "
+                f"'start' and 'end' timestamps, confirming maintenance mode is time-bounded rather than indefinite."
+            )
+        else:
+            is_time_limited = False
+            fail_reasons.append(
+                f"{unbounded_count} of {total_windows} maintenance window(s) across {total_devices} devices are "
+                f"missing a 'start' or 'end' timestamp, indicating an indefinite (unbounded) maintenance suppression."
+            )
+            recommendations.append(
+                "Configure an explicit end time for all maintenance windows so alert suppression cannot persist indefinitely."
+            )
+
+    result = {
+        "isMaintenanceModeTimeLimited": is_time_limited,
+        "totalDevices": total_devices,
+        "totalMaintenanceWindows": total_windows,
+        "boundedWindows": bounded_count,
+        "unboundedWindows": unbounded_count,
+    }
 
     input_summary = {
         "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
-        "approvedAndOnlineDevices": approved_and_online,
+        "totalMaintenanceWindows": total_windows,
+        "boundedWindows": bounded_count,
+        "unboundedWindows": unbounded_count,
     }
 
-    if is_agent_deployed:
-        pass_reasons = [
-            (
-                "%d of %d devices returned by getDevicesDetailed have approvalStatus='APPROVED' "
-                "and offline=false, confirming the NinjaOne management agent is installed and "
-                "actively communicating on at least one endpoint."
-            )
-            % (approved_and_online, total_devices)
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        if total_devices == 0:
-            fail_reasons = [
-                "getDevicesDetailed returned no device records, so no evidence of an installed "
-                "and communicating NinjaOne agent was found."
-            ]
-        else:
-            fail_reasons = [
-                (
-                    "Of %d devices returned by getDevicesDetailed, none had both "
-                    "approvalStatus='APPROVED' and offline=false (approved=%d, online=%d), "
-                    "so no device could be confirmed as actively running and communicating "
-                    "the NinjaOne agent."
-                )
-                % (total_devices, approved_devices, online_devices)
-            ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that "
-            "devices are approved in the NinjaOne console (Administration > Approvals) and "
-            "have network connectivity to check in."
-        ]
-
-    result = {
-        "isAgentDeployed": is_agent_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_devices,
-        "onlineDevices": online_devices,
+    metadata = {
+        "transformationId": "isMaintenanceModeTimeLimited",
+        "vendor": "NinjaOne Endpoint Management",
+        "category": "epp",
     }
 
     return create_response(
@@ -158,9 +162,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
-            "category": "epp",
-        },
+        metadata=metadata,
     )
