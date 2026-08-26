@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,63 +70,67 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        items = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        items = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        items = []
 
-    total_devices = len(devices)
+    if not isinstance(items, list):
+        items = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    failed_device_ids = set()
+    pending_count = 0
+    rejected_count = 0
+    total_records = len(items)
 
-    for d in devices:
-        if not isinstance(d, dict):
+    for item in items:
+        if not isinstance(item, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        status = item.get("status") or ""
+        status_upper = str(status).upper()
+        device_id = item.get("deviceId")
+        if status_upper == "FAILED":
+            if device_id is not None:
+                failed_device_ids.add(device_id)
+            else:
+                failed_device_ids.add(len(failed_device_ids))
+        elif status_upper == "PENDING":
+            pending_count = pending_count + 1
+        elif status_upper == "REJECTED":
+            rejected_count = rejected_count + 1
 
-    is_deployed = communicating_count > 0
+    scan_failure_count = len(failed_device_ids)
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
-        pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
-        ]
-        fail_reasons = []
-        recommendations = []
+    if total_records == 0:
+        fail_reasons.append(
+            "No OS patch install records were returned by the os-patch-installs report; "
+            "scanFailureCount could not be derived from this scan cycle's data."
+        )
+        recommendations.append(
+            "Verify the OS patch scan cycle has executed recently and that devices are reporting patch install status."
+        )
     else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
+        if scan_failure_count > 0:
+            pass_reasons.append(
+                f"Identified {scan_failure_count} distinct device(s) with status=FAILED across "
+                f"{total_records} OS patch install records ({pending_count} PENDING, {rejected_count} REJECTED)."
+            )
+        else:
+            pass_reasons.append(
+                f"No devices reported status=FAILED across {total_records} OS patch install records "
+                f"({pending_count} PENDING, {rejected_count} REJECTED) in the current scan cycle."
+            )
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "scanFailureCount": scan_failure_count,
+        "totalPatchInstallRecords": total_records,
+        "pendingCount": pending_count,
+        "rejectedCount": rejected_count,
     }
 
     return create_response(
@@ -137,9 +139,14 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={
+            "totalPatchInstallRecords": total_records,
+            "failedDeviceCount": scan_failure_count,
+            "pendingCount": pending_count,
+            "rejectedCount": rejected_count,
+        },
         metadata={
-            "transformationId": "isAgentDeployed",
+            "transformationId": "scanFailureCount",
             "vendor": "NinjaOne",
             "category": "epp",
         },

@@ -72,75 +72,88 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = len(devices)
+    if not isinstance(results, list):
+        results = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
-
-    for d in devices:
-        if not isinstance(d, dict):
+    # Build per-device set of product states.
+    device_states = {}
+    for row in results:
+        if not isinstance(row, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        device_id = row.get("deviceId")
+        product_state = row.get("productState")
+        if device_id is None:
+            continue
+        existing = device_states.get(device_id) or []
+        existing = existing + [product_state]
+        device_states[device_id] = existing
 
-    is_deployed = communicating_count > 0
+    total_devices = len(device_states)
+    devices_with_active_av = 0
+    device_ids_active = []
+    device_ids_inactive = []
+    for device_id, states in device_states.items():
+        has_on = False
+        for s in states:
+            if isinstance(s, str) and s.strip().upper() == "ON":
+                has_on = True
+                break
+        if has_on:
+            devices_with_active_av = devices_with_active_av + 1
+            device_ids_active.append(device_id)
+        else:
+            device_ids_inactive.append(device_id)
+
+    is_epp_enabled = total_devices > 0 and devices_with_active_av == total_devices
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total_devices == 0:
+        fail_reasons.append(
+            "The antivirus-status report returned zero device rows, so no device could be confirmed to have an AV/EPP product in the ON (enabled) state."
+        )
+        recommendations.append(
+            "Verify the NinjaOne antivirus-status query is scoped to the correct organizations and that agents are reporting AV status."
+        )
+    elif is_epp_enabled:
+        pass_reasons.append(
+            f"All {total_devices} device(s) observed in the antivirus-status report have at least one AV/EPP product reporting productState='ON' (e.g. deviceIds sample: {device_ids_active[:5]})."
+        )
+    else:
+        fail_reasons.append(
+            f"{len(device_ids_inactive)} of {total_devices} device(s) have no AV/EPP product in productState='ON' in the antivirus-status report (sample inactive deviceIds: {device_ids_inactive[:5]})."
+        )
+        recommendations.append(
+            "Investigate devices with no active AV/EPP product state and enable or reinstall the endpoint protection agent on those endpoints."
+        )
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
-
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
-        pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
-
-    result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "totalDevicesObserved": total_devices,
+        "devicesWithActiveAV": devices_with_active_av,
     }
 
     return create_response(
-        result=result,
+        result={
+            "isEPPEnabled": is_epp_enabled,
+            "totalDevicesObserved": total_devices,
+            "devicesWithActiveAV": devices_with_active_av,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isEPPEnabled",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

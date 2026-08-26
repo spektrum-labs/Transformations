@@ -72,63 +72,88 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        volumes = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        volumes = data.get("results") or data.get("data") or []
+        if not isinstance(volumes, list):
+            volumes = []
     else:
-        devices = []
+        volumes = []
 
-    total_devices = len(devices)
-
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
-
-    for d in devices:
-        if not isinstance(d, dict):
+    system_volumes = []
+    for v in volumes:
+        if not isinstance(v, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        letter = (v.get("driveLetter") or "").strip()
+        name = (v.get("name") or "").strip()
+        is_system = letter == "C:" or name == "/"
+        if is_system:
+            system_volumes.append(v)
 
-    is_deployed = communicating_count > 0
+    total = len(system_volumes)
+    encrypted_count = 0
+    unencrypted_devices = []
+    sample_statuses = []
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
+    for v in system_volumes:
+        bl = v.get("bitLockerStatus")
+        fv = v.get("fileVaultStatus")
+        status = bl if bl is not None else fv
+        is_enc = False
+        if status is not None:
+            s = str(status).strip().lower()
+            if s in ("enabled", "on", "encrypted", "protected", "fullyencrypted"):
+                is_enc = True
+        if is_enc:
+            encrypted_count = encrypted_count + 1
+        else:
+            unencrypted_devices.append(v.get("deviceId"))
+        if len(sample_statuses) < 5:
+            sample_statuses.append({"deviceId": v.get("deviceId"), "status": status})
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
-        pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
-        ]
-        fail_reasons = []
-        recommendations = []
+    if total > 0:
+        is_enabled = encrypted_count == total
     else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
+        is_enabled = False
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total == 0:
+        fail_reasons.append(
+            "No system volumes (Windows C: or macOS root '/') were found in the getVolumes response, "
+            "so disk encryption status could not be confirmed for any device."
+        )
+        recommendations.append(
+            "Verify that the NinjaOne agent is reporting volume data (bitLockerStatus/fileVaultStatus) "
+            "for enrolled devices."
+        )
+    elif is_enabled:
+        pass_reasons.append(
+            f"All {total} system volumes report an encrypted bitLockerStatus/fileVaultStatus "
+            f"(e.g. sample: {sample_statuses})."
+        )
+    else:
+        fail_reasons.append(
+            f"Only {encrypted_count} of {total} system volumes report an encrypted status; "
+            f"unencrypted device IDs include: {unencrypted_devices[:10]}."
+        )
+        recommendations.append(
+            "Enable BitLocker on Windows devices and FileVault on macOS devices for the system volume, "
+            "and confirm the NinjaOne policy enforces full-disk encryption."
+        )
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "isEncryptionEnabled": is_enabled,
+        "totalSystemVolumes": total,
+        "encryptedSystemVolumes": encrypted_count,
+    }
+
+    input_summary = {
+        "totalVolumesReturned": len(volumes) if isinstance(volumes, list) else 0,
+        "systemVolumesIdentified": total,
+        "encryptedSystemVolumes": encrypted_count,
     }
 
     return create_response(
@@ -139,8 +164,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isEncryptionEnabled",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

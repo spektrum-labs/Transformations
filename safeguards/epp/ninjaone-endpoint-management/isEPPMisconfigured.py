@@ -72,63 +72,80 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
+
+    if not isinstance(results, list):
+        results = []
+
+    devices = {}
+    for rec in results:
+        if not isinstance(rec, dict):
+            continue
+        device_id = rec.get("deviceId")
+        if device_id is None:
+            continue
+        devices.setdefault(device_id, []).append(rec)
+
+    misconfigured_device_ids = []
+    conflicting_count = 0
+    missing_count = 0
+    outdated_count = 0
+
+    for device_id, records in devices.items():
+        on_products = [r for r in records if r.get("productState") == "ON"]
+        outdated_on_products = [r for r in on_products if r.get("definitionStatus") != "Up-to-Date"]
+
+        device_issue = False
+        if len(on_products) > 1:
+            conflicting_count = conflicting_count + 1
+            device_issue = True
+        if len(on_products) == 0:
+            missing_count = missing_count + 1
+            device_issue = True
+        if len(outdated_on_products) > 0:
+            outdated_count = outdated_count + 1
+            device_issue = True
+
+        if device_issue:
+            misconfigured_device_ids.append(device_id)
 
     total_devices = len(devices)
-
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
-
-    for d in devices:
-        if not isinstance(d, dict):
-            continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
-
-    is_deployed = communicating_count > 0
+    misconfigured_count = len(misconfigured_device_ids)
+    is_misconfigured = misconfigured_count > 0
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "totalDevicesObserved": total_devices,
+        "misconfiguredDevices": misconfigured_count,
+        "conflictingProductDevices": conflicting_count,
+        "noActiveAVDevices": missing_count,
+        "outdatedDefinitionDevices": outdated_count,
     }
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
-        pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
+    if is_misconfigured:
+        sample_ids = misconfigured_device_ids[:5]
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
+            "Found %d of %d observed devices with an AV health condition: %d with no active (ON) AV product, %d with multiple conflicting ON AV products, and %d with an active product reporting definitionStatus != 'Up-to-Date'. Sample affected deviceIds: %s"
+            % (misconfigured_count, total_devices, missing_count, conflicting_count, outdated_count, sample_ids)
         ]
+        pass_reasons = []
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Review antivirus-status report for deviceIds %s and remediate: enable a single active AV product, resolve conflicting products, and update AV definitions." % sample_ids
         ]
+    else:
+        fail_reasons = []
+        pass_reasons = [
+            "All %d observed devices in the antivirus-status report have exactly one active (productState=ON) AV product with definitionStatus='Up-to-Date' and no conflicting products." % total_devices
+        ]
+        recommendations = []
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "isEPPMisconfigured": is_misconfigured,
+        "totalDevicesObserved": total_devices,
+        "misconfiguredDevices": misconfigured_count,
     }
 
     return create_response(
@@ -139,8 +156,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isEPPMisconfigured",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

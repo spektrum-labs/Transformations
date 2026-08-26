@@ -72,63 +72,72 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = len(devices)
+    if not isinstance(results, list):
+        results = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    device_ids_with_epp = set()
+    device_ids_seen = set()
+    product_names_seen = set()
 
-    for d in devices:
-        if not isinstance(d, dict):
+    for row in results:
+        if not isinstance(row, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        device_id = row.get("deviceId")
+        if device_id is None:
+            continue
+        device_ids_seen.add(device_id)
+        product_name = row.get("productName") or ""
+        product_state = row.get("productState") or ""
+        if product_name:
+            product_names_seen.add(product_name)
+        if product_state == "ON":
+            device_ids_with_epp.add(device_id)
 
-    is_deployed = communicating_count > 0
+    total_devices_reporting = len(device_ids_seen)
+    devices_with_active_epp = len(device_ids_with_epp)
+
+    is_epp_deployed = devices_with_active_epp > 0
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "totalAntivirusRecords": len(results),
+        "totalDevicesReporting": total_devices_reporting,
+        "devicesWithActiveEPP": devices_with_active_epp,
+        "productNamesSeen": sorted(list(product_names_seen)),
     }
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if is_epp_deployed:
+        sample_products = ", ".join(sorted(list(product_names_seen))[:3])
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            f"Antivirus-status report returned {len(results)} product records across "
+            f"{total_devices_reporting} devices; {devices_with_active_epp} devices have at "
+            f"least one product with productState='ON' (e.g. {sample_products}), confirming "
+            f"an EPP agent is installed and actively reporting."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
+            f"Antivirus-status report returned {len(results)} records across "
+            f"{total_devices_reporting} devices, but none report productState='ON'. No "
+            f"evidence of an actively reporting EPP product was found."
         ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Verify that an endpoint protection product (e.g. CrowdStrike Falcon Sensor, "
+            "Microsoft Defender Antivirus) is installed and enabled on managed devices, and "
+            "confirm the NinjaOne agent is reporting antivirus status correctly."
         ]
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "isEPPDeployed": is_epp_deployed,
+        "totalDevicesReporting": total_devices_reporting,
+        "devicesWithActiveEPP": devices_with_active_epp,
     }
 
     return create_response(
@@ -139,8 +148,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isEPPDeployed",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

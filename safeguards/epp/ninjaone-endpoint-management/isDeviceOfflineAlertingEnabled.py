@@ -67,68 +67,74 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def condition_is_offline_alert(cond):
+    if not isinstance(cond, dict):
+        return False
+    text_bits = []
+    for key in ["type", "conditionType", "name", "category", "alertType"]:
+        val = cond.get(key)
+        if isinstance(val, str):
+            text_bits.append(val.lower())
+    combined = " ".join(text_bits)
+    if "offline" in combined:
+        return True
+    return False
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        policies = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        policies = data.get("data") or data.get("results") or data.get("policies") or []
+        if not isinstance(policies, list):
+            policies = []
     else:
-        devices = []
+        policies = []
 
-    total_devices = len(devices)
+    total_policies = len(policies)
+    policies_with_offline_condition = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
-
-    for d in devices:
-        if not isinstance(d, dict):
+    for policy in policies:
+        if not isinstance(policy, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        conditions = policy.get("conditions")
+        if not isinstance(conditions, list):
+            continue
+        for cond in conditions:
+            if condition_is_offline_alert(cond):
+                policies_with_offline_condition.append(policy.get("name") or policy.get("id"))
+                break
 
-    is_deployed = communicating_count > 0
+    is_enabled = len(policies_with_offline_condition) > 0
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "totalPolicies": total_policies,
+        "policiesWithOfflineCondition": len(policies_with_offline_condition),
     }
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if is_enabled:
+        sample = policies_with_offline_condition[:5]
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            f"Found {len(policies_with_offline_condition)} of {total_policies} policies with an offline-duration alert condition configured, including: {sample}."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
+            f"Scanned {total_policies} policies via getPolicies; none of the returned 'conditions' arrays contain an offline-duration alert condition (no condition entries reference 'offline' in type/name/category fields)."
         ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Configure a device offline condition (e.g. an 'Offline' condition with a duration threshold) on at least one active policy so technicians are alerted when devices go offline beyond the configured duration."
         ]
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "isDeviceOfflineAlertingEnabled": is_enabled,
+        "totalPolicies": total_policies,
+        "policiesWithOfflineCondition": len(policies_with_offline_condition),
     }
 
     return create_response(
@@ -139,8 +145,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isDeviceOfflineAlertingEnabled",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

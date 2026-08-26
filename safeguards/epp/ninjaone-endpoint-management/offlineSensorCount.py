@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -78,57 +76,38 @@ def transform(input):
     else:
         devices = []
 
-    total_devices = len(devices)
-
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    total_devices = 0
+    offline_count = 0
+    offline_names = []
+    transform_errors = []
 
     for d in devices:
         if not isinstance(d, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        total_devices = total_devices + 1
+        if d.get("offline") is True:
+            offline_count = offline_count + 1
+            name = d.get("systemName") or ("device-%s" % str(d.get("id")))
+            if len(offline_names) < 5:
+                offline_names.append(name)
 
-    is_deployed = communicating_count > 0
-
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
-
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if total_devices == 0:
+        pass_reasons = []
+        fail_reasons = ["No device records were present in the getDevicesDetailed response; offline count could not be determined."]
+        recommendations = ["Verify the NinjaOne getDevicesDetailed integration is returning device inventory data."]
+    else:
+        sample = ", ".join(offline_names) if offline_names else "none"
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            "Counted %d offline device(s) out of %d total managed devices in getDevicesDetailed (offline=true). Sample offline devices: %s" % (offline_count, total_devices, sample)
         ]
         fail_reasons = []
         recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
+        if offline_count > 0:
+            recommendations = ["Investigate offline devices (e.g. %s) to confirm they are decommissioned or restore connectivity." % sample]
 
     result = {
-        "isAgentDeployed": is_deployed,
+        "offlineSensorCount": offline_count,
         "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
     }
 
     return create_response(
@@ -137,10 +116,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevices": total_devices, "offlineCount": offline_count},
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "offlineSensorCount",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

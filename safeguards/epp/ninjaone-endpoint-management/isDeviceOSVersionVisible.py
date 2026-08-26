@@ -74,61 +74,50 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        devices = data.get("data") or data.get("items") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
     total_devices = len(devices)
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    devices_with_os_field = [d for d in devices if isinstance(d, dict) and "os" in d and isinstance(d.get("os"), dict)]
+    devices_with_populated_os = [
+        d for d in devices_with_os_field
+        if d.get("os", {}).get("name") and d.get("os", {}).get("buildNumber") is not None
+    ]
 
-    for d in devices:
-        if not isinstance(d, dict):
-            continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+    total_with_os_field = len(devices_with_os_field)
+    total_with_populated_os = len(devices_with_populated_os)
 
-    is_deployed = communicating_count > 0
+    is_visible = total_with_populated_os > 0
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
+    sample_names = [d.get("os", {}).get("name") for d in devices_with_populated_os[:3]]
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if is_visible:
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            f"{total_with_populated_os} of {total_devices} device records inspected carry a populated os object with name and buildNumber (examples: {sample_names}), confirming the getDevicesDetailed report surfaces OS name/build/version per device."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
+        if total_devices == 0:
+            fail_reasons = ["getDevicesDetailed returned no device records, so OS version visibility could not be confirmed."]
+        else:
+            fail_reasons = [
+                f"None of the {total_devices} device records inspected contained a populated os object with name and buildNumber fields."
+            ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Verify agent check-in and OS reporting is enabled on managed devices, or confirm the devices-detailed endpoint returns the os object for this tenant."
         ]
 
     result = {
-        "isAgentDeployed": is_deployed,
+        "isDeviceOSVersionVisible": is_visible,
         "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "devicesWithOsField": total_with_os_field,
+        "devicesWithPopulatedOs": total_with_populated_os,
     }
 
     return create_response(
@@ -137,10 +126,14 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={
+            "totalDevices": total_devices,
+            "devicesWithOsField": total_with_os_field,
+            "devicesWithPopulatedOs": total_with_populated_os,
+        },
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isDeviceOSVersionVisible",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

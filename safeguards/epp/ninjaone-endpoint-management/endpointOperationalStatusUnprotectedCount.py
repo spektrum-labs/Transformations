@@ -72,63 +72,60 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = len(devices)
+    if not isinstance(results, list):
+        results = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
-
-    for d in devices:
-        if not isinstance(d, dict):
+    # Group AV product rows by deviceId, tracking whether any product
+    # for that device reports an active/on state.
+    device_active = {}
+    for row in results:
+        if not isinstance(row, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        device_id = row.get("deviceId")
+        if device_id is None:
+            continue
+        product_state = row.get("productState") or ""
+        is_on = isinstance(product_state, str) and product_state.strip().upper() == "ON"
+        if device_id not in device_active:
+            device_active[device_id] = False
+        if is_on:
+            device_active[device_id] = True
 
-    is_deployed = communicating_count > 0
+    total_devices = len(device_active)
+    unprotected_devices = [dev_id for dev_id, active in device_active.items() if not active]
+    unprotected_count = len(unprotected_devices)
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
-
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if total_devices == 0:
+        pass_reasons = []
+        fail_reasons = ["No antivirus-status records were returned by getAntivirusStatusReport, so no device coverage could be confirmed."]
+        recommendations = ["Verify the antivirus-status query endpoint is returning data for the tenant's managed devices."]
+    elif unprotected_count == 0:
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            "All %d devices reporting in the antivirus-status feed have at least one product with productState=ON." % total_devices
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
+        sample_ids = unprotected_devices[:5]
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
+            "%d of %d devices in the antivirus-status feed report no product with productState=ON (unprotected device IDs include: %s)." % (
+                unprotected_count, total_devices, ", ".join([str(x) for x in sample_ids])
+            )
         ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Investigate and remediate the AV agent on the unprotected devices, e.g. reinstall or re-enable the AV product so productState reports ON."
         ]
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "endpointOperationalStatusUnprotectedCount": unprotected_count,
+        "totalDevicesReporting": total_devices,
     }
 
     return create_response(
@@ -137,10 +134,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevicesReporting": total_devices, "unprotectedCount": unprotected_count},
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "endpointOperationalStatusUnprotectedCount",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

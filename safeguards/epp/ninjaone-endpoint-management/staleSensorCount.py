@@ -67,6 +67,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+STALE_THRESHOLD_SECONDS = 14 * 24 * 60 * 60
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
@@ -75,60 +78,85 @@ def transform(input):
         devices = data
     elif isinstance(data, dict):
         devices = data.get("data") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
-    total_devices = len(devices)
+    now_ts = datetime.utcnow().timestamp()
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    stale_devices = []
+    total_devices = 0
+    missing_lastcontact = 0
 
-    for d in devices:
-        if not isinstance(d, dict):
+    for device in devices:
+        if not isinstance(device, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        total_devices = total_devices + 1
+        last_contact = device.get("lastContact")
+        if last_contact is None:
+            missing_lastcontact = missing_lastcontact + 1
+            continue
+        try:
+            last_contact_val = float(last_contact)
+        except (TypeError, ValueError):
+            missing_lastcontact = missing_lastcontact + 1
+            continue
+        age_seconds = now_ts - last_contact_val
+        if age_seconds > STALE_THRESHOLD_SECONDS:
+            stale_devices.append({
+                "id": device.get("id"),
+                "systemName": device.get("systemName"),
+                "lastContact": last_contact_val,
+            })
 
-    is_deployed = communicating_count > 0
+    stale_count = len(stale_devices)
+
+    sample_names = [d.get("systemName") for d in stale_devices[:5] if d.get("systemName")]
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total_devices == 0:
+        fail_reasons.append("No device records were returned by getDevicesDetailed; staleSensorCount could not be computed.")
+        recommendations.append("Verify the getDevicesDetailed endpoint is returning the enrolled device fleet.")
+    else:
+        if stale_count > 0:
+            names_str = ", ".join(sample_names) if sample_names else "N/A"
+            fail_reasons.append(
+                f"{stale_count} of {total_devices} devices have lastContact older than 14 days (threshold {STALE_THRESHOLD_SECONDS} seconds). Sample stale devices: {names_str}."
+            )
+            recommendations.append(
+                "Investigate and remediate devices with stale lastContact timestamps (agent connectivity, decommissioned hosts, or network issues) and re-approve or remove non-reporting endpoints."
+            )
+        else:
+            pass_reasons.append(
+                f"All {total_devices} devices report lastContact within the 14-day staleness threshold ({STALE_THRESHOLD_SECONDS} seconds)."
+            )
+
+    if missing_lastcontact > 0:
+        fail_reasons.append(
+            f"{missing_lastcontact} of {total_devices} devices had a missing or unparsable lastContact value and were excluded from the stale calculation."
+        )
+
+    result = {
+        "staleSensorCount": stale_count,
+        "totalDevices": total_devices,
+        "missingLastContact": missing_lastcontact,
+    }
 
     input_summary = {
         "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "staleDevices": stale_count,
+        "missingLastContact": missing_lastcontact,
+        "staleThresholdSeconds": STALE_THRESHOLD_SECONDS,
     }
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
-        pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
-
-    result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+    metadata = {
+        "transformationId": "staleSensorCount",
+        "vendor": "NinjaOne Endpoint Management",
+        "category": "epp",
     }
 
     return create_response(
@@ -138,9 +166,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
-            "category": "epp",
-        },
+        metadata=metadata,
     )

@@ -74,61 +74,41 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        devices = data.get("data") or data.get("results") or data.get("devices") or []
     else:
         devices = []
 
     total_devices = len(devices)
+    pending_devices = [
+        d for d in devices
+        if isinstance(d, dict) and d.get("approvalStatus") == "PENDING"
+    ]
+    pending_count = len(pending_devices)
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    sample_names = [
+        d.get("systemName", "unknown") for d in pending_devices[:5]
+    ]
 
-    for d in devices:
-        if not isinstance(d, dict):
-            continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
-
-    is_deployed = communicating_count > 0
-
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
-
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if pending_count > 0:
+        pass_reasons = []
+        fail_reasons = [
+            f"{pending_count} of {total_devices} devices report approvalStatus=PENDING, "
+            f"including: {', '.join(sample_names) if sample_names else 'n/a'}."
+        ]
+        recommendations = [
+            "Review pending devices in the NinjaOne console under Devices > Approvals "
+            "and approve or reject each to keep the managed fleet accurate."
+        ]
+    else:
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            f"No devices report approvalStatus=PENDING out of {total_devices} devices scanned."
         ]
         fail_reasons = []
         recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
 
     result = {
-        "isAgentDeployed": is_deployed,
+        "pendingApprovalRequestCount": pending_count,
         "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
     }
 
     return create_response(
@@ -137,10 +117,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevices": total_devices, "pendingDevices": pending_count},
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "pendingApprovalRequestCount",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

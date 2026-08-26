@@ -1,3 +1,4 @@
+
 import json
 from datetime import datetime
 
@@ -69,66 +70,60 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
+    data = data if isinstance(data, (dict, list)) else []
 
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
         devices = data.get("data") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
     total_devices = len(devices)
+    configured_count = 0
+    sample_systems = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
-
-    for d in devices:
-        if not isinstance(d, dict):
+    for device in devices:
+        if not isinstance(device, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+        policy_id = device.get("policyId")
+        has_policy = False
+        if isinstance(policy_id, list):
+            has_policy = len(policy_id) > 0
+        elif isinstance(policy_id, (int, str)):
+            has_policy = bool(policy_id)
+        if has_policy:
+            configured_count = configured_count + 1
+            if len(sample_systems) < 5:
+                sample_systems.append(device.get("systemName") or str(device.get("id")))
 
-    is_deployed = communicating_count > 0
+    is_configured = configured_count > 0
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
-
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if total_devices == 0:
+        fail_reasons = ["No device records were returned by getDevicesDetailed, so EPP policy assignment could not be verified."]
+        recommendations = ["Verify NinjaOne device inventory API connectivity and confirm devices are enrolled."]
+        pass_reasons = []
+    elif is_configured:
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            f"{configured_count} of {total_devices} devices report a non-empty policyId, indicating an endpoint protection policy is assigned. Sample devices: {sample_systems}."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
+            f"None of the {total_devices} devices returned by getDevicesDetailed have a policyId assigned (all policyId fields were empty), so no endpoint protection policy is configured on any device."
         ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Assign a NinjaOne policy that enables antivirus/EPP settings to each device's organization or device group."
         ]
 
     result = {
-        "isAgentDeployed": is_deployed,
+        "isEPPConfigured": is_configured,
         "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "devicesWithAssignedPolicy": configured_count,
     }
 
     return create_response(
@@ -137,9 +132,9 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevices": total_devices, "devicesWithAssignedPolicy": configured_count},
         metadata={
-            "transformationId": "isAgentDeployed",
+            "transformationId": "isEPPConfigured",
             "vendor": "NinjaOne",
             "category": "epp",
         },

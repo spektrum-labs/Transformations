@@ -72,63 +72,79 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        results = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        results = data.get("results") or data.get("data") or []
     else:
-        devices = []
+        results = []
 
-    total_devices = len(devices)
+    if not isinstance(results, list):
+        results = []
 
-    approved_count = 0
-    communicating_count = 0
-    sample_names = []
+    failed_statuses = ["FAILED", "ERROR", "STUCK", "TIMEOUT", "CANCELLED"]
+    total = len(results)
 
-    for d in devices:
-        if not isinstance(d, dict):
-            continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
-            approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
-            communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
+    failed_records = []
+    for r in results:
+        if isinstance(r, dict):
+            status_val = str(r.get("status") or "").upper()
+            if status_val in failed_statuses:
+                failed_records.append(r)
 
-    is_deployed = communicating_count > 0
+    failed_count = len(failed_records)
 
     input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "totalPatchInstallRecords": total,
+        "failedPatchInstallRecords": failed_count,
     }
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
+    if total == 0:
+        is_valid = False
+        result = {
+            "isPatchManagementValid": is_valid,
+            "totalPatchInstallRecords": total,
+            "failedPatchInstallRecords": failed_count,
+        }
+        return create_response(
+            result=result,
+            validation=validation,
+            pass_reasons=[],
+            fail_reasons=[
+                "getOSPatchInstalls returned zero patch-install records fleet-wide; there is no evidence that OS patch scanning/installation has executed for any device."
+            ],
+            recommendations=[
+                "Confirm patch management policies are assigned to devices and that scheduled OS patch scans/installs are actually running; investigate why no os-patch-install history exists for this tenant."
+            ],
+            input_summary=input_summary,
+            metadata={
+                "transformationId": "isPatchManagementValid",
+                "vendor": "NinjaOne Endpoint Management",
+                "category": "epp",
+            },
+        )
+
+    is_valid = failed_count == 0
+
+    if is_valid:
         pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
+            f"All {total} patch install records returned by getOSPatchInstalls report non-failure statuses (none of the {total} records matched FAILED/ERROR/STUCK/TIMEOUT/CANCELLED), indicating patch scanning/installation is executing successfully."
         ]
         fail_reasons = []
         recommendations = []
     else:
+        sample_ids = [str(r.get("deviceId")) for r in failed_records[:5] if isinstance(r, dict)]
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
+            f"{failed_count} of {total} patch install records report a failure-type status (e.g. FAILED/ERROR/STUCK/TIMEOUT/CANCELLED); sample affected deviceIds: {', '.join(sample_ids) if sample_ids else 'unknown'}."
         ]
         recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
+            "Investigate the devices with failed or stuck patch installs, re-run the patch scan/install job, and verify agent connectivity and disk space on affected endpoints."
         ]
 
     result = {
-        "isAgentDeployed": is_deployed,
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
+        "isPatchManagementValid": is_valid,
+        "totalPatchInstallRecords": total,
+        "failedPatchInstallRecords": failed_count,
     }
 
     return create_response(
@@ -139,8 +155,8 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isAgentDeployed",
-            "vendor": "NinjaOne",
+            "transformationId": "isPatchManagementValid",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )
