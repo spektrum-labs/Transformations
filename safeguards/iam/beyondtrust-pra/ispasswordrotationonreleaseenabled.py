@@ -45,7 +45,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _is_truthy(val):
+def is_truthy(val):
     if isinstance(val, bool):
         return val
     if isinstance(val, str):
@@ -56,47 +56,42 @@ def _is_truthy(val):
 
 
 def evaluate(data):
+    """Rotation-after-checkin is a Vault ACCOUNT POLICY setting, not an account field.
+
+    Source: GET /api/config/v1/vault/account-policy -> VaultAccountPolicy
+    Field:  auto_rotate_credentials (bool) - "change the account's password after it is checked in"
+    """
     try:
         if isinstance(data, dict):
-            accounts = data.get("accounts", data.get("items", data.get("results", [])))
+            policies = data.get("account_policies", data.get("items", data.get("results", [])))
+            if isinstance(policies, dict):
+                policies = [policies]
         elif isinstance(data, list):
-            accounts = data
+            policies = data
         else:
-            return {
-                "isPasswordRotationOnReleaseEnabled": False,
-                "rotationCount": 0,
-                "totalAccounts": 0,
-                "rotationPercent": 0.0,
-                "reason": "Unexpected type"
-            }
+            return {"isPasswordRotationOnReleaseEnabled": False, "rotatingPolicies": 0,
+                    "totalPolicies": 0, "rotationPercent": 0.0, "reason": "Unexpected type"}
 
-        total = len(accounts)
+        total = len(policies)
         if total == 0:
-            return {
-                "isPasswordRotationOnReleaseEnabled": False,
-                "rotationCount": 0,
-                "totalAccounts": 0,
-                "rotationPercent": 0.0,
-                "reason": "No vault accounts found"
-            }
+            return {"isPasswordRotationOnReleaseEnabled": False, "rotatingPolicies": 0,
+                    "totalPolicies": 0, "rotationPercent": 0.0,
+                    "reason": "No vault account policies found"}
 
-        rotation_count = 0
-        for account in accounts:
-            if not isinstance(account, dict):
-                continue
-            if _is_truthy(account.get("password_rotation_on_release")):
-                rotation_count += 1
+        rotating = 0
+        for policy in policies:
+            if isinstance(policy, dict) and is_truthy(policy.get("auto_rotate_credentials")):
+                rotating += 1
 
-        rotation_pct = (rotation_count / total) * 100
+        rotation_pct = (rotating / total) * 100
         return {
             "isPasswordRotationOnReleaseEnabled": rotation_pct >= ROTATION_THRESHOLD,
-            "rotationCount": rotation_count,
-            "totalAccounts": total,
+            "rotatingPolicies": rotating,
+            "totalPolicies": total,
             "rotationPercent": round(rotation_pct, 2)
         }
     except Exception as e:
         return {"isPasswordRotationOnReleaseEnabled": False, "error": str(e)}
-
 
 def transform(input):
     criteriaKey = "isPasswordRotationOnReleaseEnabled"
