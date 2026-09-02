@@ -45,7 +45,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _is_truthy(val):
+def is_truthy(val):
     if isinstance(val, bool):
         return val
     if isinstance(val, str):
@@ -54,30 +54,40 @@ def _is_truthy(val):
 
 
 def evaluate(data):
+    """A credential policy = a Vault Account Policy that actually governs password behaviour.
+
+    Source: GET /api/config/v1/vault/account-policy -> VaultAccountPolicy
+    Fields: scheduled_password_rotation, auto_rotate_credentials, maximum_password_age
+    NOTE: GET /group-policy exposes only Jump/access perms (perm_jump_client, perm_remote_rdp,
+    access_perm_status ...) and carries NO perm_vault_* fields, so it cannot answer this.
+    """
     try:
         if isinstance(data, dict):
-            policies = data.get("group_policies", data.get("items", data.get("results", [])))
+            policies = data.get("account_policies", data.get("items", data.get("results", [])))
+            if isinstance(policies, dict):
+                policies = [policies]
         elif isinstance(data, list):
             policies = data
         else:
-            return {"isPasswordPolicyConfigured": False, "policyCount": 0, "credentialPolicyCount": 0, "reason": "Unexpected type"}
+            return {"isPasswordPolicyConfigured": False, "policyCount": 0,
+                    "credentialPolicyCount": 0, "reason": "Unexpected type"}
 
         total = len(policies)
         if total == 0:
-            return {"isPasswordPolicyConfigured": False, "policyCount": 0, "credentialPolicyCount": 0}
+            return {"isPasswordPolicyConfigured": False, "policyCount": 0,
+                    "credentialPolicyCount": 0, "reason": "No vault account policies found"}
 
-        # Count group policies that grant vault credential management permissions
         credential_policy_count = 0
         for policy in policies:
             if not isinstance(policy, dict):
                 continue
-            manages_vault = (
-                _is_truthy(policy.get("perm_vault_add_accounts"))
-                or _is_truthy(policy.get("perm_vault_manage_accounts"))
-                or _is_truthy(policy.get("perm_vault_manage_account_groups"))
-                or _is_truthy(policy.get("perm_vault_administrator"))
+            max_age = policy.get("maximum_password_age")
+            governs_passwords = (
+                is_truthy(policy.get("scheduled_password_rotation"))
+                or is_truthy(policy.get("auto_rotate_credentials"))
+                or (isinstance(max_age, (int, float)) and max_age > 0)
             )
-            if manages_vault:
+            if governs_passwords:
                 credential_policy_count += 1
 
         return {
@@ -87,7 +97,6 @@ def evaluate(data):
         }
     except Exception as e:
         return {"isPasswordPolicyConfigured": False, "error": str(e)}
-
 
 def transform(input):
     criteriaKey = "isPasswordPolicyConfigured"
