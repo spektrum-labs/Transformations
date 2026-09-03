@@ -1,0 +1,139 @@
+# Self-healing documentation: on a schedule (and on demand), check whether the
+# code has drifted from the pin the docs were verified against — on BOTH
+# branches that matter: develop (where PRs land) and main (production; live
+# customer behavior). If either has drifted, run Claude Code with the repo's
+# /docs-sync skill to repair the docs, then open a `docs:` PR against develop
+# for human review. Main-only differences are documented as
+# "in production (main) this differs" callouts, per the docs2 standard — the
+# repair PR never targets main directly; docs reach main via the release train.
+# Docs are never force-updated — the PR review is the safety valve that keeps
+# "code-verified" meaningful.
+#
+# SETUP (one-time): add ANTHROPIC_API_KEY to the repo's Actions secrets.
+# Without it, the job stops after reporting drift (no repair attempted).
+name: docs-sync
+
+on:
+  schedule:
+    - cron: "0 11 * * 1-5" # weekday mornings ~6-7am ET
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: docs-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Check for drift vs the docs pin (develop and production/main)
+        id: drift
+        run: |
+          set +e
+          DEV_REPORT=$(python3 scripts/docs_drift_check.py)
+          DEV_DRIFT=$?
+          MAIN_REPORT=$(python3 scripts/docs_drift_check.py --head origin/main)
+          MAIN_DRIFT=$?
+          set -e
+          {
+            echo 'dev_report<<EOF'
+            echo "$DEV_REPORT"
+            echo 'EOF'
+            echo 'main_report<<EOF'
+            echo "$MAIN_REPORT"
+            echo 'EOF'
+            echo "dev_drift=$DEV_DRIFT"
+            echo "main_drift=$MAIN_DRIFT"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '## develop vs docs pin'
+            echo '```'
+            echo "$DEV_REPORT"
+            echo '```'
+            echo '## production (main) vs docs pin'
+            echo '```'
+            echo "$MAIN_REPORT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skip repair (no API key configured)
+        if: (steps.drift.outputs.dev_drift == '1' || steps.drift.outputs.main_drift == '1') && env.HAS_KEY == ''
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "Drift found but ANTHROPIC_API_KEY is not configured; repair skipped." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Repair docs with /docs-sync
+        if: (steps.drift.outputs.dev_drift == '1' || steps.drift.outputs.main_drift == '1') && env.HAS_KEY != ''
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Run the /docs-sync skill (defined at .claude/skills/docs-sync/SKILL.md)
+            to repair the documentation drift reported below. Follow the skill's
+            procedure exactly: read the actual code diffs, update only invalidated
+            claims/citations/diagrams under docs2/, re-validate, and bump the pin
+            in docs2/README.md and in the headers of every doc you touched.
+            Edit ONLY files under docs2/. Do not run git commit or git push —
+            the workflow handles that.
+
+            Two drift reports follow. The DEVELOP report is drift on this branch:
+            update the docs to match develop's code. The PRODUCTION (main) report
+            is drift between the docs and origin/main, which runs live customer
+            traffic: where main's behavior differs from develop's, do NOT rewrite
+            the doc to main — keep develop as the base and add or update an
+            "in production (main) this differs" callout ('> [!CAUTION]') citing
+            the main-side evidence, consistent with the branch-skew section of
+            13-deployment-and-release.md.
+
+            DEVELOP drift report:
+            ${{ steps.drift.outputs.dev_report }}
+
+            PRODUCTION (main) drift report:
+            ${{ steps.drift.outputs.main_report }}
+          claude_args: "--allowedTools 'Read,Grep,Glob,Edit,Write,Bash(python3 scripts/docs_drift_check.py:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git ls-tree:*),Bash(npx -y @mermaid-js/mermaid-cli:*)'"
+
+      - name: Open docs PR
+        if: (steps.drift.outputs.dev_drift == '1' || steps.drift.outputs.main_drift == '1') && env.HAS_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEV_REPORT: ${{ steps.drift.outputs.dev_report }}
+          MAIN_REPORT: ${{ steps.drift.outputs.main_report }}
+        run: |
+          git diff --quiet -- docs2/ && { echo "Claude made no doc changes; nothing to PR." >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          BRANCH="docs/sync-$(date -u +%Y%m%d-%H%M)"
+          git config user.name "docs-sync bot"
+          git config user.email "docs-sync@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs2/
+          git commit -m "docs: sync docs2 with develop and production (scheduled drift repair)"
+          git push origin "$BRANCH"
+          gh pr create --base develop --head "$BRANCH" \
+            --title "docs: sync docs2 with develop and production" \
+            --body "Scheduled drift repair by the docs-sync workflow.
+
+          Develop drift that triggered this run:
+          \`\`\`
+          $DEV_REPORT
+          \`\`\`
+
+          Production (main) drift:
+          \`\`\`
+          $MAIN_REPORT
+          \`\`\`
+
+          Review like any docs change: every updated claim must carry a valid \`path:line\` citation; main-only behavior appears as 'in production (main) this differs' callouts, not rewrites. The pin in docs2/README.md has been advanced.
+
+          🤖 Generated with [Claude Code](https://claude.com/claude-code)"
