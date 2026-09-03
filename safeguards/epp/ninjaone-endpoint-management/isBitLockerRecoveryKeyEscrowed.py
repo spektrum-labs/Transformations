@@ -67,49 +67,76 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-ENCRYPTED_VALUES = ("enabled", "on", "encrypted", "true", "yes")
-RECOVERY_KEY_FIELDS = [
-    "recoveryKey",
-    "recoveryPassword",
-    "recoveryKeyId",
-    "keyEscrowed",
-    "escrowed",
-    "bitLockerRecoveryKey",
-    "fileVaultRecoveryKey",
-    "keyProtectorType",
-    "recoveryKeyEscrowed",
-]
+# --- What NinjaOne can and cannot tell us about recovery-key escrow ---------------------
+# Verified against the live "NinjaOne Public API 2.0" spec (v2.0.9, 2026-09-03):
+# * The fields this transform used to look for (recoveryKey, recoveryPassword, recoveryKeyId,
+#   keyEscrowed, escrowed, bitLockerRecoveryKey, fileVaultRecoveryKey, keyProtectorType,
+#   recoveryKeyEscrowed) do not exist. "recover" and "escrow" have ZERO matches across the
+#   entire API surface. NinjaOne stores recovery keys and shows them in its UI, but never
+#   exposes them, or an escrow flag, through the public API.
+# * The closest available signal is bitLockerStatus.protectionStatus, spec'd as "indicates
+#   whether the volume and its encryption key (if any) are secured". PROTECTED means
+#   BitLocker protection is active with key protectors in place. That is a proxy for
+#   "the key is secured", NOT proof the key is escrowed centrally -- surfaced in
+#   additionalFindings so nobody reads more into it than it says.
+# * bitLockerStatus is only present when the request carries include=bl, and it is an
+#   OBJECT, not a string. It exists for Windows only; there is no FileVault equivalent.
+ENCRYPTED_CONVERSION_STATES = ("fully_encrypted",)
+PROTECTED_STATES = ("protected",)
 
 
-def is_truthy_value(value):
-    if value is None:
+def get_bitlocker_status(volume):
+    """Return the bitLockerStatus object, or None when the field is absent/not an object."""
+    status = volume.get("bitLockerStatus")
+    return status if isinstance(status, dict) else None
+
+
+def is_windows_volume(volume):
+    """A drive letter (C:, D:, ...) is only ever reported for Windows volumes."""
+    return len((volume.get("driveLetter") or "").strip()) > 0
+
+
+def is_volume_encrypted(volume):
+    status = get_bitlocker_status(volume)
+    if status is None:
         return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return len(value.strip()) > 0
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, (list, dict)):
-        return len(value) > 0
-    return False
+    return str(status.get("conversionStatus") or "").strip().lower() in ENCRYPTED_CONVERSION_STATES
 
 
-def is_encrypted_volume(volume):
-    for key in ("bitLockerStatus", "fileVaultStatus", "encryptionStatus"):
-        val = volume.get(key)
-        if isinstance(val, str) and val.strip().lower() in ENCRYPTED_VALUES:
-            return True
-        if isinstance(val, bool) and val:
-            return True
-    return False
+def describe_volume(volume):
+    """Label a volume so a reader can find the machine: 'C: (device 15)'."""
+    name = volume.get("name") or volume.get("driveLetter") or "?"
+    return f"{name} (device {volume.get('deviceId')})"
 
 
-def has_recovery_key(volume):
-    for key in RECOVERY_KEY_FIELDS:
-        if key in volume and is_truthy_value(volume.get(key)):
-            return True
-    return False
+def is_key_secured(volume):
+    status = get_bitlocker_status(volume)
+    if status is None:
+        return False
+    return str(status.get("protectionStatus") or "").strip().lower() in PROTECTED_STATES
+
+
+# --- Completeness guard ------------------------------------------------------------------
+# NinjaOne DEFECT, measured live 2026-09-03: `include=bl` combined with cursor pagination
+# silently drops records, and the dropped records are exactly the Windows volumes carrying
+# bitLockerStatus (41-volume tenant: pageSize=1000 -> 3 bitLocker records; pageSize=5 -> 0).
+# Without `include` pagination is exact. The definition requests pageSize=10000 to stay on
+# the single-call path; if a fleet exceeds it, `cursor.count` exceeds what we received and
+# we refuse to emit a verdict rather than grade a subset missing the encrypted machines.
+def get_expected_total(data):
+    """API-reported total volume count, or None when the envelope isn't available."""
+    if not isinstance(data, dict):
+        return None
+    cursor = data.get("cursor")
+    if not isinstance(cursor, dict):
+        return None
+    count = cursor.get("count")
+    return count if isinstance(count, int) else None
+
+
+def is_truncated(data, received):
+    expected = get_expected_total(data)
+    return expected is not None and expected > received
 
 
 def transform(input):
@@ -125,66 +152,103 @@ def transform(input):
     else:
         volumes = []
 
-    total_volumes = len(volumes)
+    windows_volumes = []
+    non_windows_count = 0
+    for v in volumes:
+        if not isinstance(v, dict):
+            continue
+        if is_windows_volume(v):
+            windows_volumes.append(v)
+        else:
+            non_windows_count = non_windows_count + 1
+
+    total_volumes = len(windows_volumes)
     encrypted_count = 0
     escrowed_count = 0
     sample_escrowed_names = []
     sample_missing_names = []
 
-    for vol in volumes:
-        if not isinstance(vol, dict):
-            continue
-        if is_encrypted_volume(vol):
+    for vol in windows_volumes:
+        if is_volume_encrypted(vol):
             encrypted_count = encrypted_count + 1
-            if has_recovery_key(vol):
+            if is_key_secured(vol):
                 escrowed_count = escrowed_count + 1
                 if len(sample_escrowed_names) < 5:
-                    sample_escrowed_names.append(vol.get("name") or vol.get("deviceId"))
+                    sample_escrowed_names.append(describe_volume(vol))
             else:
                 if len(sample_missing_names) < 5:
-                    sample_missing_names.append(vol.get("name") or vol.get("deviceId"))
+                    sample_missing_names.append(describe_volume(vol))
+
+    truncated = is_truncated(data, len(volumes))
 
     input_summary = {
-        "totalVolumes": total_volumes,
+        "totalVolumesReturned": len(volumes) if isinstance(volumes, list) else 0,
+        "windowsVolumesEvaluated": total_volumes,
         "encryptedVolumes": encrypted_count,
         "escrowedVolumes": escrowed_count,
+        "reportedTotalVolumes": get_expected_total(data),
+        "dataTruncated": truncated,
     }
 
-    if encrypted_count == 0:
+    additional_findings = [
+        "NinjaOne's public API exposes neither the recovery key nor an escrow flag, so this "
+        "result uses bitLockerStatus.protectionStatus=PROTECTED ('the volume and its encryption "
+        "key are secured') as a proxy for key escrow. It confirms BitLocker key protectors are "
+        "in place, not that the key is held centrally. macOS (FileVault) volumes have no "
+        "equivalent field at all and are excluded."
+    ]
+    if non_windows_count > 0:
+        additional_findings.append(
+            f"{non_windows_count} non-Windows volume(s) were returned and excluded: NinjaOne "
+            "reports no encryption or recovery-key data for them."
+        )
+
+    if truncated:
         is_escrowed = False
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_volumes} volumes returned by getVolumes report an "
-            "encryption status (bitLockerStatus/fileVaultStatus) of Enabled/On/Encrypted, "
-            "and no recovery-key fields were present, so no encrypted volume with an escrowed "
-            "recovery key could be confirmed."
+            f"Incomplete data: NinjaOne reported {get_expected_total(data)} volumes but only "
+            f"{len(volumes)} were returned. Combining include=bl with cursor pagination drops "
+            "records -- and the dropped records are the ones carrying bitLockerStatus -- so "
+            "recovery-key protection cannot be assessed from this response."
         ]
         recommendations = [
-            "Confirm BitLocker/FileVault is enabled on managed endpoints and that the volumes "
-            "report an encryption status through the NinjaOne agent so recovery-key escrow can "
-            "be verified."
+            "Raise the getVolumes pageSize so the fleet fits in a single page, or fetch "
+            "BitLocker status per device via /v2/device/{id}/volumes."
+        ]
+    elif encrypted_count == 0:
+        is_escrowed = False
+        pass_reasons = []
+        fail_reasons = [
+            f"None of the {total_volumes} Windows volumes returned by getVolumes report "
+            "bitLockerStatus.conversionStatus=FULLY_ENCRYPTED, so no encrypted volume with a "
+            "secured recovery key could be confirmed."
+        ]
+        recommendations = [
+            "Confirm BitLocker is enabled on managed Windows endpoints, and that the getVolumes "
+            "request carries include=bl -- without it NinjaOne omits bitLockerStatus entirely."
         ]
     else:
         is_escrowed = escrowed_count == encrypted_count
         if is_escrowed:
             pass_reasons = [
-                f"All {encrypted_count} encrypted volumes (out of {total_volumes} total volumes) "
-                f"carry a non-empty recovery-key field (e.g. {sample_escrowed_names}), confirming "
-                "the BitLocker/FileVault recovery key is captured and escrowed centrally."
+                f"All {encrypted_count} encrypted Windows volumes (of {total_volumes} evaluated) "
+                f"report bitLockerStatus.protectionStatus=PROTECTED (e.g. {sample_escrowed_names}), "
+                "indicating the volume's encryption key is secured."
             ]
             fail_reasons = []
             recommendations = []
         else:
             pass_reasons = []
             fail_reasons = [
-                f"{escrowed_count} of {encrypted_count} encrypted volumes have a recovery-key "
-                f"field populated; the remaining {encrypted_count - escrowed_count} encrypted "
-                f"volumes (e.g. {sample_missing_names}) show no recovery-key value, meaning their "
-                "keys are not confirmed escrowed."
+                f"{escrowed_count} of {encrypted_count} encrypted Windows volumes report "
+                f"protectionStatus=PROTECTED; the remaining {encrypted_count - escrowed_count} "
+                f"(e.g. {sample_missing_names}) do not, so their encryption key is not confirmed "
+                "secured."
             ]
             recommendations = [
-                "Investigate the encrypted volumes missing a recovery-key value and re-enroll or "
-                "trigger a key backup so BitLocker/FileVault recovery keys are escrowed centrally."
+                "Investigate the encrypted volumes without protectionStatus=PROTECTED and "
+                "re-trigger BitLocker key-protector backup for them."
             ]
 
     result = {
@@ -200,6 +264,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
+        additional_findings=additional_findings,
         input_summary=input_summary,
         metadata={
             "transformationId": "isBitLockerRecoveryKeyEscrowed",
