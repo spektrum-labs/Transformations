@@ -132,6 +132,88 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
+        controlName = "mdo_safelinksforemail"
+
+        # LABS-3088: Today this criterion is fed subscribedSkus, which has no urlRewrite flag.
+        # After the Integration-Service repoint, it receives secureScores; mirror
+        # issafelinksenabled.py and evaluate the Safe Links for email control.
+        values = data.get("value") or []
+        if (isinstance(values, list) and len(values) > 0 and isinstance(values[0], dict)
+                and isinstance(values[0].get("controlScores"), list)):
+            control_scores = values[0].get("controlScores") or []
+            matched_object_list = [
+                i for i in control_scores
+                if isinstance(i, dict) and i.get("controlName") == controlName
+            ]
+            score_in_percentage = 0.0
+            count = 0
+            total = 0
+
+            if len(matched_object_list) == 1:
+                matched_object = matched_object_list[0]
+
+                raw_score = matched_object.get("scoreInPercentage", 0.0)
+                if isinstance(raw_score, str):
+                    try:
+                        score_in_percentage = float(raw_score)
+                    except ValueError:
+                        score_in_percentage = 0.0
+                else:
+                    score_in_percentage = raw_score
+                is_enabled = score_in_percentage == 100.00
+
+                raw_count = matched_object.get("count", 0)
+                raw_total = matched_object.get("total", 0)
+                if isinstance(raw_count, str):
+                    try:
+                        count = int(raw_count)
+                    except ValueError:
+                        count = 0
+                else:
+                    count = raw_count or 0
+                if isinstance(raw_total, str):
+                    try:
+                        total = int(raw_total)
+                    except ValueError:
+                        total = 0
+                else:
+                    total = raw_total or 0
+
+                if is_enabled:
+                    pass_reasons.append(
+                        f"Safe Links URL rewrite enabled (Secure Score control '{controlName}' at 100%)")
+                else:
+                    fail_reasons.append(
+                        f"Safe Links URL rewrite score is {score_in_percentage}% (control '{controlName}')")
+                    recommendations.append(
+                        "Enable Safe Links URL rewrite in the Microsoft Defender for Office 365 policy")
+            else:
+                is_enabled = False
+                fail_reasons.append(f"Secure Score control '{controlName}' not found in Secure Score")
+                recommendations.append(
+                    "Verify Microsoft Defender for Office 365 (Safe Links) is licensed and configured")
+
+            return create_response(
+                result={
+                    criteriaKey: is_enabled,
+                    "scoreInPercentage": score_in_percentage,
+                    "count": count,
+                    "total": total
+                },
+                validation=validation,
+                pass_reasons=pass_reasons,
+                fail_reasons=fail_reasons,
+                recommendations=recommendations,
+                input_summary={
+                    "urlRewriteEnabled": is_enabled,
+                    "source": "secureScore",
+                    "controlName": controlName,
+                    "scoreInPercentage": score_in_percentage,
+                    "protectedCount": count,
+                    "totalCount": total
+                }
+            )
+
         is_enabled = bool(data.get('urlRewrite', False))
 
         if is_enabled:

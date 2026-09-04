@@ -43,71 +43,79 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Check ThreatDown policies for misconfigurations."""
-    try:
+    """Assess endpoint-protection policy configuration from GET /nebula/v1/policies.
+
+    Real shape: policies[] -> contents{status, policy{...}, packages[]}. The
+    protection settings live inside contents, not at the policy root. The Windows
+    "Endpoint Protection" package carries rtp_settings / self_protection /
+    protection_update_enabled.
+    """
+    policies = data.get("policies") or []
+    if not isinstance(policies, list):
         policies = []
-        if isinstance(data, list):
-            policies = data
-        elif isinstance(data, dict):
-            policies = (
-                data.get("policies", []) or
-                data.get("data", []) or
-                data.get("results", []) or
-                []
-            )
 
-        if not isinstance(policies, list):
-            policies = [policies] if policies else []
+    total = 0
+    configured = 0
+    misconfigured = []
 
-        total_policies = len(policies)
-        misconfigured_count = 0
-        misconfigured_names = []
+    for policy in policies:
+        if not isinstance(policy, dict):
+            continue
+        total = total + 1
+        name = policy.get("name", "Unknown")
 
-        for policy in policies:
-            if not isinstance(policy, dict):
-                continue
+        contents = policy.get("contents") or {}
+        status_ok = str(contents.get("status", "")).strip().lower() == "ok"
+        policy_body = contents.get("policy") or {}
+        protect_service = bool(policy_body.get("protect_service"))
 
-            issues = []
-            policy_name = policy.get("name", policy.get("policyName", "Unknown"))
+        endpoint_protection = None
+        for package in (contents.get("packages") or []):
+            if isinstance(package, dict) and package.get("product_name") == "Endpoint Protection":
+                endpoint_protection = package
+                break
 
-            # Check real-time protection
-            rtp = policy.get("real_time_protection", policy.get("realTimeProtection", policy.get("rtp", None)))
-            if rtp is not None:
-                if (isinstance(rtp, bool) and not rtp) or str(rtp).lower() in ("false", "0", "disabled", "off"):
-                    issues.append("real-time protection disabled")
+        package_enabled = bool(endpoint_protection.get("enabled")) if endpoint_protection else False
+        package_policy = (endpoint_protection or {}).get("policy") or {}
 
-            # Check scan schedule
-            scan_schedule = policy.get("scan_schedule", policy.get("scheduledScan", policy.get("scanEnabled", None)))
-            if scan_schedule is not None:
-                if (isinstance(scan_schedule, bool) and not scan_schedule) or str(scan_schedule).lower() in ("false", "0", "disabled", "off"):
-                    issues.append("scheduled scanning disabled")
+        rtp_settings = package_policy.get("rtp_settings") or {}
+        realtime_on = False
+        for setting_name, setting in rtp_settings.items():
+            if isinstance(setting, dict) and setting.get("enabled"):
+                realtime_on = True
+                break
 
-            # Check tamper protection
-            tamper = policy.get("tamper_protection", policy.get("tamperProtection", None))
-            if tamper is not None:
-                if (isinstance(tamper, bool) and not tamper) or str(tamper).lower() in ("false", "0", "disabled", "off"):
-                    issues.append("tamper protection disabled")
+        self_protection = bool(package_policy.get("self_protection"))
+        auto_updates = bool(package_policy.get("protection_update_enabled"))
 
-            # Check quarantine settings
-            quarantine = policy.get("quarantine", policy.get("autoQuarantine", None))
-            if quarantine is not None:
-                if (isinstance(quarantine, bool) and not quarantine) or str(quarantine).lower() in ("false", "0", "disabled", "off"):
-                    issues.append("auto-quarantine disabled")
+        missing = []
+        if not status_ok:
+            missing.append("policy status not ok")
+        if not protect_service:
+            missing.append("protection service disabled")
+        if not package_enabled:
+            missing.append("Endpoint Protection package disabled")
+        if not realtime_on:
+            missing.append("real-time protection disabled")
+        if not self_protection:
+            missing.append("self-protection disabled")
+        if not auto_updates:
+            missing.append("protection updates disabled")
 
-            if issues:
-                misconfigured_count = misconfigured_count + 1
-                misconfigured_names.append(f"{policy_name}: {', '.join(issues)}")
+        if missing:
+            misconfigured.append(name + ": " + ", ".join(missing))
+        else:
+            configured = configured + 1
 
-        is_misconfigured = misconfigured_count > 0
+    percentage = int(round((configured * 100.0) / total)) if total else 0
 
-        return {
-            "isEPPMisconfigured": is_misconfigured,
-            "totalPolicies": total_policies,
-            "misconfiguredCount": misconfigured_count,
-            "misconfiguredDetails": misconfigured_names
-        }
-    except Exception as e:
-        return {"isEPPMisconfigured": False, "error": str(e)}
+    return {
+        "isEPPConfigured": total > 0 and configured == total,
+        "totalPolicies": total,
+        "configuredPolicies": configured,
+        "configuredPercentage": percentage,
+        "misconfiguredPolicies": misconfigured,
+    }
 
 
 def transform(input):
@@ -143,9 +151,9 @@ def transform(input):
             else:
                 pass_reasons.append(f"All {total} ThreatDown policies are properly configured")
         else:
-            misconfigured = extra_fields.get("misconfiguredCount", 0)
+            misconfigured = (extra_fields.get("totalPolicies", 0) - extra_fields.get("configuredPolicies", 0))
             total = extra_fields.get("totalPolicies", 0)
-            details = extra_fields.get("misconfiguredDetails", [])
+            details = extra_fields.get("misconfiguredPolicies", [])
             fail_reasons.append(f"{misconfigured} of {total} policies have configuration issues")
             for detail in details:
                 fail_reasons.append(detail)
@@ -158,7 +166,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={criteriaKey: result_value, "totalPolicies": extra_fields.get("totalPolicies", 0), "misconfiguredCount": extra_fields.get("misconfiguredCount", 0)}
+            input_summary={criteriaKey: result_value, "totalPolicies": extra_fields.get("totalPolicies", 0), "misconfiguredCount": (extra_fields.get("totalPolicies", 0) - extra_fields.get("configuredPolicies", 0))}
         )
 
     except Exception as e:
