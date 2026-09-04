@@ -1,8 +1,8 @@
 # Transformations: code that IS the deployment
 
-> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 5c5ccde5` and production `main @ c1d935da` (2026-09-03). Status: draft for engineer review.
+> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 8bf278fb` and production `main @ 9d0262aa` (2026-09-04). Status: draft for engineer review.
 
-**In one sentence:** This repo holds 765 standalone Python transform modules (one per vendor criterion) that Token-Service downloads from GitHub's raw CDN — pinned to `refs/heads/main` — and executes in a [RestrictedPython](GLOSSARY.md#restrictedpython) sandbox during every passport evaluation, so the repo has no deploy pipeline because the repo *is* the deployment.
+**In one sentence:** This repo holds 772 standalone Python transform modules (one per vendor criterion) that Token-Service downloads from GitHub's raw CDN — pinned to `refs/heads/main` — and executes in a [RestrictedPython](GLOSSARY.md#restrictedpython) sandbox during every passport evaluation, so the repo has no deploy pipeline because the repo *is* the deployment.
 
 > [!IMPORTANT]
 > **The three defining facts.** Everything else in these docs follows from them:
@@ -13,12 +13,12 @@
 ## At a glance
 
 - **What a file is:** one Python module per vendor criterion, exposing `def transform(input)`, converting a vendor API response into camelCase criteria values (`{"isMFAEnforcedForUsers": true}`) that Token-Service compares against requirements.
-- **Scale (main @ `c1d935da`):** 1,276 `.py` files under `safeguards/` — 765 transform modules, 509 generated Pydantic schemas, 2 `common/` helpers. Full inventory in [04-catalog.md](04-catalog.md).
+- **Scale (main @ `9d0262aa`):** 1,285 `.py` files under `safeguards/` — 772 transform modules, 511 generated Pydantic schemas, 2 `common/` helpers. Full inventory in [04-catalog.md](04-catalog.md).
 - **Who mints the URL:** Integration-Service's `generate_config` embeds `https://raw.githubusercontent.com/spektrum-labs/Transformations/refs/heads/main/safeguards/{srn}/{method}.py` — **lowercasing both segments** (`src/models/integrator.py:2601`, see Integration-Service docs2). DB-stored criteria-mapping URLs override the minted default and are used verbatim.
 - **Who runs it:** Token-Service, per evaluation: allowlist check (org/repo only) → anonymous fetch → AST validation → RestrictedPython sandbox → `transform(input)` → `compare_values` (see token-service docs2 and [02-execution-contract.md](02-execution-contract.md)).
 - **Failures are silent by design:** any 404, syntax error, or exception becomes `{"error": True, ...}` → `isEvaluated: False` → a task, never a gap. A broken file can stay unmeasured for months.
 - **Two directory layouts coexist:** 22 SRN/UUID dirs (minted-URL territory) and 27 category dirs (reachable *only* via exact-case DB URLs). Casing decides reachability — details below.
-- **Branch skew is severe:** develop is 505 commits ahead and invisible to minted production URLs; main carries 81 hotfix commits develop lacks (see [13-release-and-branches.md](13-release-and-branches.md)).
+- **Branch skew is severe:** develop is 536 commits ahead and invisible to minted production URLs; main carries 83 hotfix commits develop lacks (see [13-release-and-branches.md](13-release-and-branches.md)).
 
 ```mermaid
 flowchart LR
@@ -51,7 +51,7 @@ This is the platform's per-vendor evaluation logic — the code that decides whe
 | Count on main | 22 (e.g. `874a78ff-…`, `7BC425FA-…`) | 27 (e.g. `epp/`, `emailsecurity/`, `iam/`) |
 | Path shape | `safeguards/{srn}/{method}.py` — 2 segments | `safeguards/{category}/{vendor}/{method}.py` — 3 (rarely 4) segments |
 | Reached by | Integration-Service's **minted default URL**, which lowercases both segments | **Only** explicit DB-stored `transformationLogic` URLs, used byte-for-byte verbatim |
-| Casing rule in practice | Filename must be the exact lowercased criteria key (the minted URL forces `str(key).lower()` — snake_case names 404 too) | 47 camelCase filenames on main work *iff* the stored URL matches committed casing exactly |
+| Casing rule in practice | Filename must be the exact lowercased criteria key (the minted URL forces `str(key).lower()` — snake_case names 404 too) | 54 camelCase filenames on main work *iff* the stored URL matches committed casing exactly |
 
 The consequence chain: the minted URL is built as `str(self.SRN).lower() + "/" + str(key).lower() + ".py"` (`Integration-Service src/models/integrator.py:2601`, Integration-Service docs2), Token-Service fetches it byte-for-byte with no path normalization, and **raw.githubusercontent.com paths are case-sensitive**. Verified live 2026-09-03:
 
@@ -83,10 +83,10 @@ Walkthrough: which of your two possible paths production actually fetches is dec
 
 ## The transform contract, in brief
 
-Every module exposes one entry point — of 765 transform modules on main, **763 define exactly `def transform(input):`** (the 2 outliers are documented in [14-known-issues.md](14-known-issues.md)). Input arrives as the vendor API response (dict/JSON), either raw-and-unwrapped (legacy) or enriched to `{"data": ..., "validation": ...}` when a `schemas/` sidecar validated it. Two return generations coexist on main:
+Every module exposes one entry point — of 772 transform modules on main, **770 define exactly `def transform(input):`** (the 2 outliers are documented in [14-known-issues.md](14-known-issues.md)). Input arrives as the vendor API response (dict/JSON), either raw-and-unwrapped (legacy) or enriched to `{"data": ..., "validation": ...}` when a `schemas/` sidecar validated it. Two return generations coexist on main:
 
-- **Enriched envelope** — 496 of 765 (65%), 100% of UUID-dir files, all new work: `{"transformedResponse": {...criteria keys...}, "additionalInfo": {...}}` (spec at `CONTRIBUTING.md:141-187`).
-- **Legacy bare dict** — 269 of 765 (35%), all in category dirs: `return {"isAzureADAuthEnabled": is_enabled}` (`main:safeguards/encryption/microsoft/isAzureADAuthEnabled.py:53`). Token-Service accepts both; it tries `transformedResponse[key]` first, then the top-level key (token-service docs2).
+- **Enriched envelope** — 503 of 772 (65%), 100% of UUID-dir files, all new work: `{"transformedResponse": {...criteria keys...}, "additionalInfo": {...}}` (spec at `CONTRIBUTING.md:141-187`).
+- **Legacy bare dict** — 269 of 772 (35%), all in category dirs: `return {"isAzureADAuthEnabled": is_enabled}` (`main:safeguards/encryption/microsoft/isAzureADAuthEnabled.py:53`). Token-Service accepts both; it tries `transformedResponse[key]` first, then the top-level key (token-service docs2).
 
 Three rules trip newcomers immediately: the **filename** is the lowercased criteria key, but the **key inside the returned dict** must be exact camelCase (Token-Service's lookup is case-sensitive, `Token-Service main:src/utils/evaluate/evaluate.py:2340-2343`); imports are limited to 8 stdlib modules, so helpers like `extract_input` are **inlined into every file** — `safeguards/common/response_helper.py` is a template, not a dependency (no transform imports it); and several innocuous-looking constructs (`map()`, `datetime.strptime`, `d["k"] += 1`, underscore-prefixed helper names) fail only in the production sandbox. The full contract, conventions, and anti-patterns are in [03-writing-a-transform.md](03-writing-a-transform.md); the runtime mechanics are in [02-execution-contract.md](02-execution-contract.md).
 
@@ -97,8 +97,8 @@ Everything lives at the root or under `safeguards/`. Root tooling is byte-identi
 | Path | What it is | Notes |
 |---|---|---|
 | `safeguards/{uuid}/` | 22 SRN dirs, one per integration safeguard | minted-URL territory; 10 are uppercase (DB-URL only) |
-| `safeguards/{category}/{vendor}/` | 27 category dirs, 98 vendor subdirs | DB-URL only; two 4-level nests (`firewall/cisco/fmc/`, `epp/kaseya/vsa/`) |
-| `safeguards/{dir}/schemas/` | 509 generated Pydantic input schemas (68 dirs) | optional; fetched as `{base}/schemas/{same filename}` — must mirror the transform's exact casing; failure is non-fatal |
+| `safeguards/{category}/{vendor}/` | 28 category dirs, 99 vendor subdirs | DB-URL only; two 4-level nests (`firewall/cisco/fmc/`, `epp/kaseya/vsa/`) |
+| `safeguards/{dir}/schemas/` | 511 generated Pydantic input schemas (69 dirs) | optional; fetched as `{base}/schemas/{same filename}` — must mirror the transform's exact casing; failure is non-fatal |
 | `safeguards/common/response_helper.py` | canonical `extract_input`/`create_response` source | **never imported by any transform** (only `common/__init__.py` imports it) — the sandbox rejects relative imports; copy-pasted into 489 files instead |
 | `safeguards/registry.json` | SRN → vendor/category index | **zero programmatic consumers** (grep over Integration-Service and Token-Service `src/`: no hits); covers only 19 of 22 UUID dirs; last touched 2026-02-06 |
 | `README.md` | "Safeguard Registry" tables (`README.md:28-91`) | same mapping as registry.json, same drift |
@@ -125,8 +125,8 @@ Everything lives at the root or under `safeguards/`. Root tooling is byte-identi
 
 | Concern | Location |
 |---|---|
-| Transform modules (production) | `main:safeguards/**/*.py` (765 transform modules — non-schema, non-`common/`) |
-| Generated input schemas | `main:safeguards/**/schemas/*.py` (509 files, 68 dirs) |
+| Transform modules (production) | `main:safeguards/**/*.py` (772 transform modules — non-schema, non-`common/`) |
+| Generated input schemas | `main:safeguards/**/schemas/*.py` (511 files, 69 dirs) |
 | Helper template (never imported by transforms) | `main:safeguards/common/response_helper.py` |
 | SRN → vendor index (docs only) | `main:safeguards/registry.json`; tables at `main:README.md:28-91` |
 | Contract + sandbox bans | `main:CONTRIBUTING.md` (esp. :141-187, :318-350) |

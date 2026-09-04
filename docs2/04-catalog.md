@@ -1,17 +1,17 @@
 # The catalog
 
-> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 5c5ccde5` and production `main @ c1d935da` (2026-09-03). Status: draft for engineer review.
+> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 8bf278fb` and production `main @ 9d0262aa` (2026-09-04). Status: draft for engineer review.
 
-**In one sentence:** This is the full inventory of `safeguards/` — 22 UUID-named SRN directories and 27 category directories holding 765 production transform modules and 509 schema files — plus the honest answer to which of those files production URLs can actually reach, and the 244-file develop-side delta that has not shipped.
+**In one sentence:** This is the full inventory of `safeguards/` — 22 UUID-named SRN directories and 28 category directories holding 772 production transform modules and 511 schema files — plus the honest answer to which of those files production URLs can actually reach, and the 269-file develop-side delta that has not shipped.
 
 ## At a glance
 
-- **50 top-level directories** in `safeguards/` on main: 22 [SRN](GLOSSARY.md#srn-dir) (UUID) dirs + 27 category dirs + `common/`, plus one file, `registry.json`.
-- **765 transform modules** on main: 603 in category dirs (across 98 vendor subdirs), 162 in SRN dirs. Plus 509 generated Pydantic schema files and 2 `common/` helpers — 1,276 `.py` in total.
+- **51 top-level directories** in `safeguards/` on main: 22 [SRN](GLOSSARY.md#srn-dir) (UUID) dirs + 28 category dirs + `common/`, plus one file, `registry.json`.
+- **772 transform modules** on main: 610 in category dirs (across 99 vendor subdirs), 162 in SRN dirs. Plus 511 generated Pydantic schema files and 2 `common/` helpers — 1,285 `.py` in total.
 - **Two addressing schemes coexist**: SRN dirs are the targets of Integration-Service's [minted default URLs](GLOSSARY.md#minted-url) (`safeguards/{srn.lower()}/{key.lower()}.py`); category/vendor paths are reached only by explicit [`retrievalTransformationArray` ("RTA")](GLOSSARY.md#exact-case-db-url)/criteria-mapping URLs stored in the DB and fetched byte-for-byte.
-- **Reachability is a casing question**: raw.githubusercontent.com paths are case-sensitive, 10 of the 22 SRN dirs are committed UPPERCASE, and 47 main method files are camelCase — every one of those paths 404s under the lowercased minted default (curl-verified 2026-09-03).
+- **Reachability is a casing question**: raw.githubusercontent.com paths are case-sensitive, 10 of the 22 SRN dirs are committed UPPERCASE, and 54 main method files are camelCase — every one of those paths 404s under the lowercased minted default (curl-verified 2026-09-04, including the Lookout files new on main).
 - **The registry is incomplete and dead weight**: `safeguards/registry.json` names 19 of 22 SRN dirs (last touched 2026-02-06) and nothing machine-reads it.
-- **Develop stages 244 more files** — 119 new transform modules, 107 schemas, 10 test files, 8 JSON fixtures — including two whole new category dirs (`firewalls/`, sic, and `mobile-security/`) and a URL-breaking `cloudsecurity/redcanary` → `mdr/red-canary` rename.
+- **Develop stages 269 more files** — 128 new transform modules, 123 schemas, 10 test files, 8 JSON fixtures — including three whole new category dirs (`firewalls/`, sic, `devsecops/`, and `threat-vulnerability-management/`) and a URL-breaking `cloudsecurity/redcanary` → `mdr/red-canary` rename. (`mobile-security/` left this list on 2026-09-04: main's Lookout hotfix PR #548 made it a production category — with copies develop now lags; see [13-release-and-branches.md](13-release-and-branches.md).)
 - **Main also has 43 files develop lacks** (the whole `artificial-intelligence/anthropic/` set among them) — the skew is bidirectional; see [13-release-and-branches.md](13-release-and-branches.md).
 
 Two URL sources feed Token-Service's fetch, and they see different halves of the tree:
@@ -20,10 +20,10 @@ Two URL sources feed Token-Service's fetch, and they see different halves of the
 flowchart LR
     MINT["Minted default URL<br/>lowercased SRN + key<br/>(Integration-Service)"]
     RTA["Explicit DB config URL<br/>(RTA / criteria mapping)<br/>fetched byte-for-byte"]
-    subgraph SAFE["safeguards/ on main - 50 dirs + registry.json"]
+    subgraph SAFE["safeguards/ on main - 51 dirs + registry.json"]
         LC["12 lowercase SRN dirs<br/>107 transforms"]
         UC["10 UPPERCASE SRN dirs<br/>55 transforms"]
-        CAT["27 category dirs<br/>98 vendors, 603 transforms"]
+        CAT["28 category dirs<br/>99 vendors, 610 transforms"]
         COM["common/ - 2 helpers, never fetched"]
         REG["registry.json - 19 of 22 SRNs, no code reads it"]
     end
@@ -41,19 +41,19 @@ Walkthrough: the minted default can only land in an SRN dir (its path has exactl
 
 ## Headline totals
 
-| Metric | main (production) `c1d935da` | develop (staging ground) `5c5ccde5` |
+| Metric | main (production) `9d0262aa` | develop (staging ground) `8bf278fb` |
 |---|---|---|
-| Top-level entries in `safeguards/` | 50 dirs + `registry.json` | 52 dirs + `registry.json` (adds `firewalls/`, `mobile-security/`) |
+| Top-level entries in `safeguards/` | 51 dirs + `registry.json` | 54 dirs + `registry.json` (adds `firewalls/`, `devsecops/`, `threat-vulnerability-management/`) |
 | SRN (UUID) directories | 22 (10 UPPERCASE, 12 lowercase) | 22 (same set) |
-| Category directories | 27 (+ `common/`) | 29 (+ `common/`) |
-| Vendor subdirectories | 98 | 104 — 12 new, and 6 of main's absent (see [staged inventory](#staged-on-develop-the-delta)) |
-| Transform modules (non-schema, non-test, excl. `common/`) | **765** — 603 category-side, 162 SRN-side | 843 |
-| Schema files (`*/schemas/*.py`, incl. `__init__.py`) | **509** (68 `schemas/` dirs) | 614 |
+| Category directories | 28 (+ `common/`) | 31 (+ `common/`) |
+| Vendor subdirectories | 99 | 106 — 13 new, and 6 of main's absent (see [staged inventory](#staged-on-develop-the-delta)) |
+| Transform modules (non-schema, non-test, excl. `common/`) | **772** — 610 category-side, 162 SRN-side | 859 |
+| Schema files (`*/schemas/*.py`, incl. `__init__.py`) | **511** (69 `schemas/` dirs) | 632 |
 | Test files inside `safeguards/` | 0 | 10 (`test_*.py` + `conftest.py`) |
-| Total `.py` under `safeguards/` | 1,276 | 1,469 |
+| Total `.py` under `safeguards/` | 1,285 | 1,503 |
 | Non-Python files under `safeguards/` | 2 (`registry.json`, `backups/datto/README.md`) | +8 `firewall/sonicwall/fixtures/*.json` |
 
-All counts computed from the pinned tips via `git ls-tree` (findings corpus, re-verified 2026-09-03). "Schemas" per directory below include that directory's `schemas/__init__.py`, which is why a schema count is typically methods + 1.
+All counts computed from the pinned tips via `git ls-tree` (findings corpus, re-verified 2026-09-04). "Schemas" per directory below include that directory's `schemas/__init__.py`, which is why a schema count is typically methods + 1.
 
 > [!NOTE]
 > The only root-level difference between the branches is develop's `customer_requirements_ef1397e7.json`, a production passport requirements snapshot (identified here by location only). Root tooling (`generate_schemas.py`, `local_tester.py`, README, CONTRIBUTING, CLAUDE.md, `.gitignore`) is byte-identical on both tips.
@@ -106,7 +106,7 @@ Directory names below are **verbatim** — casing is load-bearing. "Transforms" 
 
 <details><summary><b>Deep dive:</b> per-SRN method inventories</summary>
 
-Full basename lists (non-schema `.py`, from the verified findings corpus, re-derived via `git ls-tree` at `c1d935da`):
+Full basename lists (non-schema `.py`, from the verified findings corpus, re-derived via `git ls-tree`, unchanged at `9d0262aa`):
 
 - `0450D686-…` (Fortinet): `confirmedlicensepurchased`, `firewall_transform`
 - `0C281CE9-…` (Trend Micro): `confirmedlicensepurchased`, `epp_transform`, `isidpenabled` — note: EPP-shaped files in an "Email Security" SRN
@@ -143,7 +143,7 @@ Integration-Service mints the default URL with **both** path segments lowercased
 "url": "https://raw.githubusercontent.com/spektrum-labs/Transformations/refs/heads/main/safeguards/" + str(self.SRN).lower() + "/" + str(key).lower() + ".py",
 ```
 
-Token-Service validates only the repo (case-insensitively) and fetches the URL **byte-for-byte** — no path normalization, no auth header (token-service docs2, evaluate-engine; `Token-Service main:src/utils/transformation_url.py:39`, `src/utils/codeexecutor.py:308-309`). raw.githubusercontent.com paths are case-sensitive — verified live against this public repo on 2026-09-03:
+Token-Service validates only the repo (case-insensitively) and fetches the URL **byte-for-byte** — no path normalization, no auth header (token-service docs2, evaluate-engine; `Token-Service main:src/utils/transformation_url.py:39`, `src/utils/codeexecutor.py:308-309`). raw.githubusercontent.com paths are case-sensitive — verified live against this public repo on 2026-09-04:
 
 | URL path (`safeguards/…`) | HTTP |
 |---|---|
@@ -152,11 +152,13 @@ Token-Service validates only the repo (case-insensitively) and fetches the URL *
 | `874a78ff-2ca3-4c0e-ab86-19277536ac87/isdkimconfigured.py` (lowercase dir, as minted) | 200 |
 | `encryption/microsoft/isAzureADAuthEnabled.py` (exact case) | 200 |
 | `encryption/microsoft/isazureadauthenabled.py` (as minting would produce) | **404** |
+| `mobile-security/lookout/isDeviceEncrypted.py` (exact case — the 2026-09-04 hotfix) | 200 |
+| `mobile-security/lookout/isdeviceencrypted.py` (as minting would produce) | **404** |
 
 The three classes:
 
 1. **Minted-URL-reachable** — lowercase SRN dir + lowercase filename. The default URL resolves with no DB row needed. 12 SRN dirs (107 transforms, minus their snake_case files) qualify.
-2. **Exact-case-DB-only** — the file exists and serves traffic **iff** a DB-stored `transformationLogic` URL matches the committed path byte-for-byte. This class covers: all 10 uppercase SRN dirs (55 transforms), all 47 camelCase category-side method files, all snake_case criteria files, and — by construction — the **entire category/vendor tree** (603 transforms), because the minted URL has exactly two path segments and category paths have three or four. Exact-case URLs demonstrably circulate (`Token-Service main:src/schemas/documentation/route_configs.py:484`; Integration-Service docs2 config-registry shows `safeguards/epp/sophos/isepploggingenabled.py` in a production reference config).
+2. **Exact-case-DB-only** — the file exists and serves traffic **iff** a DB-stored `transformationLogic` URL matches the committed path byte-for-byte. This class covers: all 10 uppercase SRN dirs (55 transforms), all 54 camelCase category-side method files, all snake_case criteria files, and — by construction — the **entire category/vendor tree** (610 transforms), because the minted URL has exactly two path segments and category paths have three or four. Exact-case URLs demonstrably circulate (`Token-Service main:src/schemas/documentation/route_configs.py:484`; Integration-Service docs2 config-registry shows `safeguards/epp/sophos/isepploggingenabled.py` in a production reference config).
 3. **Verified-dead as-minted** — the lowercased minted form of every uppercase-dir and camelCase path returns 404 (curl receipts above). Whether any live integration actually falls through to a minted default for these — and has therefore been silently `isEvaluated: False` in production — is a DB question this repo cannot answer (open question in the findings corpus; the DB rows are authoritative, `integration_configs/` are reference copies).
 
 ```mermaid
@@ -182,7 +184,7 @@ Walkthrough: an explicit DB URL wins and is used verbatim; otherwise the lowerca
 
 ## Category directories
 
-27 categories, 98 vendor subdirs, 603 transforms, 324 schema files. No category dir contains top-level `.py` — every transform sits under a vendor subdir, with exactly two deeper nests (`firewall/cisco/fmc/`, `epp/kaseya/vsa/`). All of these paths are **exact-case-DB-only** (class 2 above). The 47 camelCase method files that additionally demand exact-case URLs: `encryption/microsoft/` (16), `identity-and-access-management/beyondtrust/` (8), `networksecurity/dnsfilter/` (14), `epp/halcyon/` (3), `epp/ninjaone-endpoint-management/` (2), `iam/duo/` (3), `firewall/cato-networks/` (1).
+28 categories, 99 vendor subdirs, 610 transforms, 326 schema files. No category dir contains top-level `.py` — every transform sits under a vendor subdir, with exactly two deeper nests (`firewall/cisco/fmc/`, `epp/kaseya/vsa/`). All of these paths are **exact-case-DB-only** (class 2 above). The 54 camelCase method files that additionally demand exact-case URLs: `encryption/microsoft/` (16), `networksecurity/dnsfilter/` (14), `identity-and-access-management/beyondtrust/` (8), `mobile-security/lookout/` (7), `epp/halcyon/` (3), `iam/duo/` (3), `epp/ninjaone-endpoint-management/` (2), `firewall/cato-networks/` (1).
 
 | Category | Vendors | Transforms | Schemas | Notes |
 |---|---|---|---|---|
@@ -207,15 +209,16 @@ Walkthrough: an explicit DB URL wins and is used verbatim; otherwise the lowerca
 | `logging` | 1 | 3 | 0 | |
 | `mdr` | 3 | 9 | 10 | |
 | `mfa` | 3 | 29 | 27 | `azure/` is a divergent twin of SRN `d9b6f27a-…` |
+| `mobile-security` | 1 | 7 | 2 | all 7 filenames camelCase; landed via hotfix PR #548 (2026-09-04) after staging on develop — develop's copies now lag main's fleet-count fix |
 | `networksecurity` | 4 | 33 | 18 | `dnsfilter/` breaks both filename rules |
 | `sase` | 3 | 16 | 9 | |
 | `siem` | 3 | 20 | 6 | `blumira/` uses 10 snake_case `*_transform.py` names |
 | `threatintelligence` | 1 | 1 | 3 | |
 | `training` | 3 | 15 | 18 | |
 | `vulnerabilitymgmt` | 3 | 16 | 19 | |
-| **Total** | **98** | **603** | **324** | |
+| **Total** | **99** | **610** | **326** | |
 
-Per-vendor matrices (transform / schema counts per vendor dir, main @ `c1d935da`):
+Per-vendor matrices (transform / schema counts per vendor dir, main @ `9d0262aa`):
 
 <details><summary><b>Deep dive:</b> artificial-intelligence, asm, assetmgmt, backups</summary>
 
@@ -373,7 +376,7 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `c1d935da`
 
 </details>
 
-<details><summary><b>Deep dive:</b> logging, mdr, mfa, networksecurity</summary>
+<details><summary><b>Deep dive:</b> logging, mdr, mfa, mobile-security, networksecurity</summary>
 
 **logging** — `microsoft` 3 / 0.
 
@@ -392,6 +395,12 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `c1d935da`
 | `azure` | 19 | 19 | divergent twin of SRN `d9b6f27a-…` (`mfa_transform.py` differs by direct diff) |
 | `microsoftauthenticator` | 3 | 0 | |
 | `pingfederate` | 7 | 8 | |
+
+**mobile-security**
+
+| Vendor dir | Transforms | Schemas | Notes |
+|---|---|---|---|
+| `lookout` | 7 | 2 | all camelCase; main's copies carry the fleet-count fix (`382dc385`, PR #548) that develop's staged copies lack |
 
 **networksecurity**
 
@@ -444,30 +453,31 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `c1d935da`
 
 ## Staged on develop (the delta)
 
-Tip-to-tip (`git diff -M origin/main origin/develop -- safeguards/`): 339 files changed — **244 added, 43 modified, 9 renamed, 43 "deleted"** (the 43 D-status files are main-only additions develop never received, not develop-side deletions — none existed at the merge-base). The 244 adds split into **119 new transform modules + 107 schemas + 10 test files + 8 JSON fixtures** (the findings corpus's "129 new non-schema `.py`" = 119 transforms + 10 tests). Verified per-directory:
+Tip-to-tip (`git diff -M origin/main origin/develop -- safeguards/`, re-measured 2026-09-04): 370 files changed — **269 added, 49 modified, 9 renamed, 43 "deleted"** (the 43 D-status files are main-only additions develop never received, not develop-side deletions — none existed at the merge-base; the 49 modified now include develop's 6 stale `mobile-security/lookout` copies, which lag main's fleet-count hotfix). The 269 adds split into **128 new transform modules + 123 schemas + 10 test files + 8 JSON fixtures**. Verified per-directory:
 
 | Directory (develop) | Files added | Transforms / schemas / tests / fixtures | New-transform casing |
 |---|---|---|---|
 | `emailsecurity/check-point-software-technologies-email-security` | 49 | 24 / 25 / – / – | all camelCase |
 | `epp/ninjaone-endpoint-management` | 40 | 20 / 20 / – / – | all camelCase |
+| `threat-vulnerability-management/horizon3-nodezero` | 29 | 14 / 15 / – / – | all camelCase — **new category** (main's live `threatintelligence/horizon3` is a different, older vendor dir) |
 | `firewall/sonicwall` | 25 | 5 / 6 / 6 / 8 | lowercase |
 | `epp/crowdstrike-falcon` | 24 | 12 / 12 / – / – | all camelCase |
 | `firewalls/cisco-meraki-mx` | 21 | 10 / 11 / – / – | all camelCase — **new plural category** |
 | `epp/sentinelone` | 15 | 9 / 6 / – / – | all camelCase |
 | `threatintelligence/wordfence-intelligence` | 11 | 5 / 6 / – / – | all camelCase |
-| `mobile-security/lookout` | 9 | 7 / 2 / – / – | all camelCase — **new category** |
 | `mfa/azure` | 8 | 8 / 0 / – / – | lowercase (3 of 8 broken — see note) |
 | `iam/okta` | 7 | 3 / 4 / – / – | camelCase |
 | `incidentmgmt/sumo-logic-continuous-intelligence-service` | 7 | 3 / 4 / – / – | camelCase |
 | `emailsecurity/abnormal-security-inbound-email` | 7 | 3 / 4 / – / – | camelCase |
 | `mdr/red-canary` | 6 (+9 renamed in) | 3 / 3 / – / – | camelCase |
+| `devsecops/github` | 5 | 2 / 3 / – / – | all camelCase — **new category**; landed as a `make-live:` direct push to develop (`8bf278fb`, 2026-09-04) |
 | `7BC425FA-0638-4BF1-8194-19E7E4F2F43C` | 4 | 2 / 0 / 2 / – | lowercase (incl. `microsoft_endpoint_oneclick`) |
 | `backups/crashplan` | 3 | 1 / 2 / – / – | camelCase (`isSAMLEnforced`) |
 | `artificial-intelligence/anthropic-claude-developer-platform-claude-api` | 3 | 1 / 2 / – / – | camelCase (`isComplianceAPIEnabled`) |
 | `874a78ff-2ca3-4c0e-ab86-19277536ac87` | 2 | 1 / 0 / 1 / – | lowercase (`isantiphishingenabled_oneclick`) |
 | `1BC425FA-0638-4BF1-8194-19E7E4F2F43C` | 2 | 2 / 0 / – / – | lowercase |
 | `emailsecurity/cloudflare` | 1 | 0 / 0 / 1 / – | test only |
-| **Total** | **244** | **119 / 107 / 10 / 8** | 101 of 119 camelCase |
+| **Total** | **269** | **128 / 123 / 10 / 8** | 110 of 128 camelCase |
 
 > [!WARNING]
 > Develop's `firewalls/cisco-meraki-mx/` creates a **plural** `firewalls/` category next to main's singular `firewall/`. It mirrors Integration-Service's own config path `firewalls/cisco-meraki-mx.json`, so it may be deliberate — but anyone hunting for Meraki MX transforms under `firewall/` will find only main's older `firewall/meraki/`, a different vendor dir. Two spellings of the same category are now both load-bearing.
@@ -481,7 +491,7 @@ Tip-to-tip (`git diff -M origin/main origin/develop -- safeguards/`): 339 files 
 > [!NOTE]
 > Three of the eight new `mfa/azure` files (`areadminaccountsseparate.py`, `isadminmfaphishingresistant.py`, `ismfaenforced.py`) define top-level `_`-prefixed helpers, which RestrictedPython rejects — they would deploy as always-`isEvaluated: False`. Main's tree has zero top-level `_`-prefixed defs. See [14-known-issues.md](14-known-issues.md).
 
-101 of the 119 new transform modules have camelCase basenames (whole check-point, crowdstrike-falcon, sentinelone, cisco-meraki-mx, lookout, wordfence sets) — every one lands in the exact-case-DB-only reachability class the moment it merges, contradicting `main:CONTRIBUTING.md:60` ("Criteria file — Lowercase criteria key"). Develop also introduces pytest scaffolding (`test_*.py`, `conftest.py`, `fixtures/*.json`) inside fetchable `safeguards/` paths — a convention main does not have.
+110 of the 128 new transform modules have camelCase basenames (whole check-point, crowdstrike-falcon, sentinelone, cisco-meraki-mx, horizon3-nodezero, github, wordfence sets) — every one lands in the exact-case-DB-only reachability class the moment it merges, contradicting `main:CONTRIBUTING.md:60` ("Criteria file — Lowercase criteria key"). Develop also introduces pytest scaffolding (`test_*.py`, `conftest.py`, `fixtures/*.json`) inside fetchable `safeguards/` paths — a convention main does not have.
 
 For the other side of the skew — the 43 main-only files develop lacks (all 24 `artificial-intelligence/anthropic/` methods, 7 of `cloudsecurity/awssecurityhub/`, `emailsecurity/proofpoint-threat-protection/`, and the ENG-279/ENG-309 sophos additions, one of which a production config names) — see [13-release-and-branches.md](13-release-and-branches.md).
 
@@ -510,7 +520,7 @@ For the other side of the skew — the 43 main-only files develop lacks (all 24 
 > **Twin trees are divergent, not copies.** `mfa/azure/` vs SRN `d9b6f27a-…`, `backups/azure/` vs SRN `729cebc6-…` (production's config was repointed to the SRN copy, stranding the category copy), `iam/microsoftentra/` vs `iam/msentra/` (same filenames, different content), and sharpest of all `iam/beyondtrust/` vs `identity-and-access-management/beyondtrust/`: same 8 criteria, all 8 file pairs differ, and `isPAMEnabled` counts ManagedAccounts on one side and ManagedSystems on the other (`main:safeguards/iam/beyondtrust/ispamenabled.py` vs `main:safeguards/identity-and-access-management/beyondtrust/isPAMEnabled.py`). Which verdict a customer gets depends on which path their DB URL targets. Fix the twin the DB actually fetches — a fix to the other one is a silent no-op.
 
 > [!WARNING]
-> **Nothing shared is actually shared.** `common/response_helper.py` is imported by nothing but its own `common/__init__.py` — no transform can import it, because Token-Service fetches and executes each file standalone — so the `extract_input`/`create_response` pattern is inlined in 489 of 765 main transforms, and `confirmedlicensepurchased.py` exists as **79 independent copies** with drifted logic. A bug fixed in one place is fixed in one place.
+> **Nothing shared is actually shared.** `common/response_helper.py` is imported by nothing but its own `common/__init__.py` — no transform can import it, because Token-Service fetches and executes each file standalone — so the `extract_input`/`create_response` pattern is inlined in 496 of 772 main transforms, and `confirmedlicensepurchased.py` exists as **79 independent copies** with drifted logic. A bug fixed in one place is fixed in one place.
 
 > [!WARNING]
 > **Two directories break the `{category}/{vendor}/{file}` shape**: `firewall/cisco/fmc/` and `epp/kaseya/vsa/` add a product level. Tooling or greps assuming three path segments will miss them — as will anyone assuming `networksecurity/dnsfilter/`'s 14 camelCase `*_transform.py` files follow either naming rule.
@@ -523,8 +533,8 @@ For the other side of the skew — the 43 main-only files develop lacks (all 24 
 | Path | What it is |
 |---|---|
 | `main:safeguards/{UUID}/` | 22 SRN dirs — minted-URL territory (table above; 10 uppercase are exact-case-DB-only) |
-| `main:safeguards/{category}/{vendor}/` | 27 categories × 98 vendor dirs — exact-case-DB-only, never minted |
-| `main:safeguards/{dir}/schemas/` | 68 optional Pydantic sidecar dirs (509 files); fetched as `{base}/schemas/{filename}` verbatim, so casing must mirror the transform |
+| `main:safeguards/{category}/{vendor}/` | 28 categories × 99 vendor dirs — exact-case-DB-only, never minted |
+| `main:safeguards/{dir}/schemas/` | 69 optional Pydantic sidecar dirs (511 files); fetched as `{base}/schemas/{filename}` verbatim, so casing must mirror the transform |
 | `main:safeguards/common/` | `response_helper.py` + `__init__.py` — inline-me template; never fetched, imported by no transform |
 | `main:safeguards/registry.json` | 19-entry SRN → vendor/category map; documentation-only, stale since 2026-02-06 |
 | `main:generate_schemas.py` | schema scaffolder (expects uncommitted `api_responses/` samples — see [12-local-development.md](12-local-development.md)) |

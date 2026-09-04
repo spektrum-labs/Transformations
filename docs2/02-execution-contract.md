@@ -1,6 +1,6 @@
 # How transforms run in production
 
-> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 5c5ccde5` and production `main @ c1d935da` (2026-09-03). Status: draft for engineer review.
+> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 8bf278fb` and production `main @ 9d0262aa` (2026-09-04). Status: draft for engineer review.
 >
 > Cross-service receipts: `TS:` = Token-Service production `main @ b60e209d` (mechanics documented in the **token-service docs2** evaluate-engine doc), `IS:` = Integration-Service production `main @ c8aa9a4b` (mechanics in the **Integration-Service docs2** execution-lifecycle doc). `main:` = this repo's production branch.
 
@@ -14,7 +14,7 @@
 - **The sandbox has two layers**: Token-Service's own AST validator, then RestrictedPython (`>=8.0,<9.0`). The effective import allowlist is 8 stdlib modules; a long list of ordinary Python constructs is banned (table below).
 - **There is no execution timeout or memory limit** — an infinite loop in a transform blocks an evaluation worker indefinitely.
 - **Every failure becomes one envelope**: `{"error": True, "message": ..., "original_response": ...}` → `requirementSatisfied: False, isEvaluated: False` → a task is created, no gap is created, and **existing gaps for the criterion are kept** (LABS-3165, token-service docs2).
-- **Minted URLs are lowercased but GitHub raw paths are case-sensitive** — 10 uppercase [SRN](GLOSSARY.md#srn-dir) dirs and 47 mixed-case filenames on main are unreachable by the default URL (live-verified 404s). See [the dead zone](#the-case-sensitivity-dead-zone).
+- **Minted URLs are lowercased but GitHub raw paths are case-sensitive** — 10 uppercase [SRN](GLOSSARY.md#srn-dir) dirs and 54 mixed-case filenames on main are unreachable by the default URL (live-verified 404s). See [the dead zone](#the-case-sensitivity-dead-zone).
 - **A second, unsandboxed execution path exists** in Integration-Service — no allowlist, no sandbox, currently no known publisher. Dormant, not gone.
 
 The full hot path, per evaluation criterion:
@@ -93,7 +93,7 @@ Three layers sit between a merge to main and execution:
 Net: worst-case propagation after a merge ≈ 300s + 3600s per worker; a cold-cache worker picks it up in seconds. There is no Redis or cross-instance code cache on the evaluation path.
 
 > [!NOTE]
-> **The in-process cache is unbounded on production Token-Service** — a regression. The cache-definition block is duplicated in `TS:src/utils/codeexecutor.py` (:30-122 and :124-185); Python's later definitions win, so the effective setter has no max-size eviction (the `_TRANSFORMATION_CACHE_MAX_SIZE = 200` constant at :55 is dead code) and the effective getter returns `None` on expiry but never deletes the entry. With ~765 transform URLs on main this is a slow per-worker leak, not an outage — but any "200 entries max" claim is false in effect. TS develop has the capped version.
+> **The in-process cache is unbounded on production Token-Service** — a regression. The cache-definition block is duplicated in `TS:src/utils/codeexecutor.py` (:30-122 and :124-185); Python's later definitions win, so the effective setter has no max-size eviction (the `_TRANSFORMATION_CACHE_MAX_SIZE = 200` constant at :55 is dead code) and the effective getter returns `None` on expiry but never deletes the entry. With ~772 transform URLs on main this is a slow per-worker leak, not an outage — but any "200 entries max" claim is false in effect. TS develop has the capped version.
 
 > [!WARNING]
 > **Fetch errors execute stale code silently.** The fallback at `TS:src/utils/codeexecutor.py:324-329` runs the *expired* cached copy on any fetch exception ("Using stale cached transformation code due to fetch error"). A file deleted from main — 43 main-only files exist today, so deletions happen — keeps evaluating from cache in long-lived workers until process restart. Conversely, a GitHub raw outage fails closed to `isEvaluated: False` only for URLs no worker has cached.
@@ -211,7 +211,7 @@ The complete matrix:
 ## The case-sensitivity dead zone
 
 > [!CAUTION]
-> **The default minted URL lowercases both path segments, and raw GitHub paths are case-sensitive — so a whole population of files on main can never be fetched by the default URL.** `str(self.SRN).lower() + "/" + str(key).lower() + ".py"` (`IS:src/models/integrator.py:2601`) collides with: **(a)** the **10 of 22 uppercase UUID directories** on main (e.g. `4BC425FA-...`), and **(b)** the **47 mixed-case transform filenames** (e.g. `main:safeguards/epp/ninjaone-endpoint-management/isBitLockerRecoveryKeyEscrowed.py`, all 16 `encryption/microsoft/*.py`, all 14 `networksecurity/dnsfilter/*_transform.py`) — including **both files of the NinjaOne disk-encryption hotfix** (`5ae4693a`, merged as main HEAD `c1d935da`). Live-verified 2026-09-03: the exact-case URL returns **200**, the as-minted lowercased URL returns **404**. A 404 does not alarm — it becomes `isEvaluated: False`, task only. **Renaming a file or directory's case, or adding a camelCase filename for a minted-default vendor, is a production incident that looks like nothing.**
+> **The default minted URL lowercases both path segments, and raw GitHub paths are case-sensitive — so a whole population of files on main can never be fetched by the default URL.** `str(self.SRN).lower() + "/" + str(key).lower() + ".py"` (`IS:src/models/integrator.py:2601`) collides with: **(a)** the **10 of 22 uppercase UUID directories** on main (e.g. `4BC425FA-...`), and **(b)** the **54 mixed-case transform filenames** (e.g. `main:safeguards/epp/ninjaone-endpoint-management/isBitLockerRecoveryKeyEscrowed.py`, all 16 `encryption/microsoft/*.py`, all 14 `networksecurity/dnsfilter/*_transform.py`) — including **both files of the NinjaOne disk-encryption hotfix** (`5ae4693a`, PR #544) and **all 7 transforms of the Lookout fleet-count hotfix merged as main HEAD** (`9d0262aa`, PR #548, 2026-09-04). Live-verified 2026-09-04: the exact-case URL returns **200**, the as-minted lowercased URL returns **404**. A 404 does not alarm — it becomes `isEvaluated: False`, task only. **Renaming a file or directory's case, or adding a camelCase filename for a minted-default vendor, is a production incident that looks like nothing.**
 
 | URL path (`safeguards/...`) | HTTP |
 |---|---|
@@ -221,7 +221,7 @@ The complete matrix:
 | `encryption/microsoft/isazureadauthenabled.py` (as minting would produce) | **404** |
 
 - **The only rescue path is an explicit URL in the database.** Definition / `IntegrationCriteriaMapping` `transformationLogic` URLs are used **verbatim** (Integration-Service docs2), so exact-case URLs stored there work. Such URLs demonstrably circulate — Token-Service's own route docs embed an uppercase `1BC425FA-...` URL (`TS:src/schemas/documentation/route_configs.py:484`).
-- **Category-path transforms are DB-URL-only by construction** — the minted default has exactly two path segments, so `{category}/{vendor}/{file}` paths are never minted at all. Their 47 camelCase filenames work *iff* the stored URL matches the committed casing byte-for-byte.
+- **Category-path transforms are DB-URL-only by construction** — the minted default has exactly two path segments, so `{category}/{vendor}/{file}` paths are never minted at all. Their 54 camelCase filenames work *iff* the stored URL matches the committed casing byte-for-byte.
 - **Your Mac will lie to you.** macOS checkouts are case-insensitive; `git ls-tree` is the only truth for committed casing. Full casing census in [04-catalog.md](04-catalog.md).
 
 **Open question (stated, not settled):** whether every live method of every uppercase-dir integration has an exact-case DB URL — or whether some minted-default fetches have been quietly 404ing as `isEvaluated: False` — is a production Integration-DB question this repo cannot answer. The mixed-case set includes files added the week of the pinned tips, so someone presumably believes they run.
@@ -234,7 +234,7 @@ The complete matrix:
 ## The repo is public — and production depends on it
 
 > [!CAUTION]
-> **The entire production compliance-evaluation logic is world-readable, and the fetch path only works because it is.** Token-Service sends no `Authorization` header (`TS:src/utils/codeexecutor.py:308-309`), and an anonymous `curl` of a main transform URL returns HTTP 200 (live-verified 2026-09-03). The boundaries this sets: **reads = the whole world** (every vendor check, threshold, and workaround in 1,276+ files); **writes = repo write access plus Integration-definition contents** (because the allowlist pins only the repo, and definitions can point at any URL verbatim). Making the repo private without adding auth to the fetch would break every evaluation; treat repo visibility as production infrastructure, not a settings toggle.
+> **The entire production compliance-evaluation logic is world-readable, and the fetch path only works because it is.** Token-Service sends no `Authorization` header (`TS:src/utils/codeexecutor.py:308-309`), and an anonymous `curl` of a main transform URL returns HTTP 200 (live-verified 2026-09-04). The boundaries this sets: **reads = the whole world** (every vendor check, threshold, and workaround in 1,285+ files); **writes = repo write access plus Integration-definition contents** (because the allowlist pins only the repo, and definitions can point at any URL verbatim). Making the repo private without adding auth to the fetch would break every evaluation; treat repo visibility as production infrastructure, not a settings toggle.
 
 ## Gotchas
 
@@ -273,4 +273,4 @@ The complete matrix:
 | The transforms themselves | `main:safeguards/**` | layout in [04-catalog.md](04-catalog.md); authoring in [03-writing-a-transform.md](03-writing-a-transform.md) |
 | Local harness (unsandboxed) | `main:local_tester.py` | [12-local-development.md](12-local-development.md) |
 
-Pinned versions for every receipt above: Transformations `main @ c1d935da` / `develop @ 5c5ccde5`; Token-Service `main @ b60e209d`; Integration-Service `main @ c8aa9a4b`. Verification methodology is in [README.md](README.md).
+Pinned versions for every receipt above: Transformations `main @ 9d0262aa` / `develop @ 8bf278fb`; Token-Service `main @ b60e209d`; Integration-Service `main @ c8aa9a4b`. Verification methodology is in [README.md](README.md).

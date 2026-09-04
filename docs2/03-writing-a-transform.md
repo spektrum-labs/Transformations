@@ -1,14 +1,14 @@
 # Writing a transform
 
-> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 5c5ccde5` and production `main @ c1d935da` (2026-09-03). Status: draft for engineer review.
+> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 8bf278fb` and production `main @ 9d0262aa` (2026-09-04). Status: draft for engineer review.
 
 **In one sentence:** Write a single self-contained file that defines `def transform(input):`, inlines its own helpers, returns the enriched `{"transformedResponse", "additionalInfo"}` envelope with fail-closed logic, uses a lowercase filename matching the criteria key — and survives a RestrictedPython sandbox that no local tool will test for you.
 
 ## At a glance
 
-- **One function, one file** — 763 of main's 765 transform modules use the exact signature `def transform(input):` (the two outliers are `main:safeguards/emailsecurity/mimecast/isemailloggingenabled.py:71` and `main:safeguards/epp/crowdstrike/epp_transform.py:70`, cataloged in [14-known-issues.md](14-known-issues.md)). Match it.
+- **One function, one file** — 770 of main's 772 transform modules use the exact signature `def transform(input):` (the two outliers are `main:safeguards/emailsecurity/mimecast/isemailloggingenabled.py:71` and `main:safeguards/epp/crowdstrike/epp_transform.py:70`, cataloged in [14-known-issues.md](14-known-issues.md)). Match it.
 - **Your file runs alone.** Token-Service fetches it as a single file from raw GitHub and executes it in a [RestrictedPython](GLOSSARY.md#restrictedpython) sandbox — imports of other repo files can never work, so every helper is copy-pasted in, by mandate (`main:CONTRIBUTING.md:201`).
-- **Return the enriched envelope**, not the legacy bare dict. 496 of main's 765 transforms use the envelope; the other 269 are a frozen legacy generation you must never copy from.
+- **Return the enriched envelope**, not the legacy bare dict. 503 of main's 772 transforms use the envelope; the other 269 are a frozen legacy generation you must never copy from.
 - **The filename is the URL.** Integration-Service mints `.../{srn}.lower()/{criteriakey}.lower().py`; a camelCase or snake_case filename is unreachable via the default minted URL ([02 — execution contract](02-execution-contract.md), gotcha on case sensitivity).
 - **Nothing checks your work before production.** No CI on any branch, `local_tester.py` runs full CPython (not the sandbox), and a merge to `main` is an instant deploy ([13 — release and branches](13-release-and-branches.md)). The sandbox checklist below is the only gate, and you are it.
 - **Fail closed, with reasons.** The best files in the corpus return `False` plus a human-readable `failReasons` entry when data is missing — the worst return `True` because the API answered at all (anti-pattern gallery below).
@@ -37,7 +37,7 @@ Everything left of `compare_values` fails *silently* into a task; only the last 
 Your file must define a module-level callable named `transform` taking one argument. If it is absent, Token-Service falls back to hunting for module variables (`result`/`output`/`transformed_data`/`return_value`) and then errors — never rely on that (`TS-main:src/utils/codeexecutor.py:812, 835`, via [02](02-execution-contract.md)).
 
 > [!IMPORTANT]
-> The signature is `def transform(input):` — shadowing the `input` builtin is the established convention, present in 763 of 765 files. Uniformity matters more than style here: tooling, reviewers, and the AI generation pipeline all pattern-match on it.
+> The signature is `def transform(input):` — shadowing the `input` builtin is the established convention, present in 770 of 772 files. Uniformity matters more than style here: tooling, reviewers, and the AI generation pipeline all pattern-match on it.
 
 ### What arrives in `input`
 
@@ -97,7 +97,7 @@ The **current standard** — mandated by `main:CONTRIBUTING.md:143` ("All transf
 You never build this by hand — the inlined `create_response(...)` helper does (`main:CONTRIBUTING.md`, "Helper Functions"). Token-Service extracts `transformedResponse[criteriaKey]` and hands it to `compare_values`; the `additionalInfo` sections carry your pass/fail reasons and recommendations into tasks and the UI.
 
 > [!WARNING]
-> **Never copy a legacy file.** 269 of main's 765 transforms are a frozen older generation that returns a bare dict and, on failure, `{"criteriaKey": False, "error": str(e)}` (469 files carry that literal error shape). Token-Service tolerates them only via a wrapper shim (`_wrap_legacy_result`, `TS-main:src/utils/codeexecutor.py:959-1020`), their flat `"error"` key is **not** recognized as a transformation failure (the classifier requires Token-Service's own envelope — `error is True` *and* `original_response`, `TS-main:src/utils/evaluate/evaluate.py:2556-2578`), and the legacy population is where the anti-pattern gallery below concentrates. Legacy files cluster in `dlp/`, `logging/`, `incidentmgmt/`, `encryption/microsoft/`, `siem/blumira/`, `emailsecurity/proofpoint|sublime`, and similar older dirs.
+> **Never copy a legacy file.** 269 of main's 772 transforms are a frozen older generation that returns a bare dict and, on failure, `{"criteriaKey": False, "error": str(e)}` (469 files carry that literal error shape). Token-Service tolerates them only via a wrapper shim (`_wrap_legacy_result`, `TS-main:src/utils/codeexecutor.py:959-1020`), their flat `"error"` key is **not** recognized as a transformation failure (the classifier requires Token-Service's own envelope — `error is True` *and* `original_response`, `TS-main:src/utils/evaluate/evaluate.py:2556-2578`), and the legacy population is where the anti-pattern gallery below concentrates. Legacy files cluster in `dlp/`, `logging/`, `incidentmgmt/`, `encryption/microsoft/`, `siem/blumira/`, `emailsecurity/proofpoint|sublime`, and similar older dirs.
 
 > [!CAUTION]
 > The repo's own `CLAUDE.md` still documents the **legacy** contract — "Returns an error dict on failure: `{"criteriaKey": False, "error": str(e)}`" (`main:CLAUDE.md:33`) and an underscore-prefixed `_parse_input` helper (`main:CLAUDE.md:38`) that only compiles because Token-Service grandfathers exactly that one name. When `CLAUDE.md` and `CONTRIBUTING.md` disagree, **CONTRIBUTING.md wins** — it is the accurate contract document (with the caveats in the sandbox table below).
@@ -107,11 +107,11 @@ You never build this by hand — the inlined `create_response(...)` helper does 
 Sharing code between transforms is impossible by construction: production fetches one file at a time from raw GitHub with no package context, so a cross-file import can never resolve. `main:CONTRIBUTING.md:201` therefore orders: *"Copy these helper functions into your transformation file (required for RestrictedPython compatibility)"*.
 
 - **The master copies** live in `safeguards/common/response_helper.py` and in CONTRIBUTING.md's "Helper Functions" section — `response_helper.py` is a template, imported by nothing but its own `__init__.py`.
-- **The drift is real**: main has 489 inlined copies of `extract_input` in **25 variants** and 489 copies of `create_response` in **397 variants** (AST-hashed). A bug fixed in one copy stays broken in up to 488 others, with no CI to notice.
+- **The drift is real**: main has 496 inlined copies of `extract_input` in **25 variants** and 496 copies of `create_response` in **397 variants** (AST-hashed; the 7 Lookout copies new on main all match existing lineages). A bug fixed in one copy stays broken in up to 495 others, with no CI to notice.
 - **Metadata is baked into your copy**: `create_response` embeds the file's `transformationId`, `vendor`, and `category` — that per-file editing is why 397 variants exist. Edit those three values; change nothing else.
 
 > [!NOTE]
-> **Which variant to copy:** the dominant `extract_input` lineage — AST-identical in 352 of 489 files, e.g. `main:safeguards/compliancemanagement/knowbe4/phishingclickrate.py:10-25` — is functionally identical to the CONTRIBUTING.md master (verified by diff: only docstring/comments and one warning-string differ). Copy either that file's helpers or CONTRIBUTING.md's verbatim. Do **not** copy from a random neighboring transform: the other 24 lineages disagree about how many wrapper layers and which keys they unwrap, so identical vendor payloads can parse differently across criteria of the same integration.
+> **Which variant to copy:** the dominant `extract_input` lineage — AST-identical in 352 of 496 files, e.g. `main:safeguards/compliancemanagement/knowbe4/phishingclickrate.py:10-25` — is functionally identical to the CONTRIBUTING.md master (verified by diff: only docstring/comments and one warning-string differ). Copy either that file's helpers or CONTRIBUTING.md's verbatim. Do **not** copy from a random neighboring transform: the other 24 lineages disagree about how many wrapper layers and which keys they unwrap, so identical vendor payloads can parse differently across criteria of the same integration.
 
 **Positive examples to start from** (both on main = production):
 
@@ -216,7 +216,7 @@ Three casing rules, and they are not the same rule:
 - **Directory = `{category}/{vendor}`, all lowercase** — see [04 — the catalog](04-catalog.md) for reachability and the twin-tree traps.
 
 > [!WARNING]
-> **A mixed-case filename is unreachable via the minted default URL.** Main already carries 47 camelCase transform filenames (all 16 of `encryption/microsoft/`, `epp/ninjaone-endpoint-management/isBitLockerRecoveryKeyEscrowed.py`, ...) — including **both files of the NinjaOne hotfix merged as main HEAD** — that only work if the integration definition carries an explicit exact-case `transformationLogic` URL, and 404 silently (`isEvaluated: False`) otherwise. Snake_case is just as dead: lowercasing a camelCase key never produces underscores, so `is_backup_encrypted.py` can never be minted. On develop, 101 of the 119 newest transform modules are mixed-case. Name your file lowercase, no underscores, and never "normalize" an existing file's case — whichever URL variant currently works is a production dependency ([02](02-execution-contract.md), case-sensitivity gotcha).
+> **A mixed-case filename is unreachable via the minted default URL.** Main already carries 54 camelCase transform filenames (all 16 of `encryption/microsoft/`, `epp/ninjaone-endpoint-management/isBitLockerRecoveryKeyEscrowed.py`, ...) — including both files of the NinjaOne hotfix (PR #544) and **all 7 transforms of the Lookout hotfix merged as main HEAD** (PR #548) — that only work if the integration definition carries an explicit exact-case `transformationLogic` URL, and 404 silently (`isEvaluated: False`) otherwise. Snake_case is just as dead: lowercasing a camelCase key never produces underscores, so `is_backup_encrypted.py` can never be minted. On develop, 110 of the 128 newest transform modules are mixed-case. Name your file lowercase, no underscores, and never "normalize" an existing file's case — whichever URL variant currently works is a production dependency ([02](02-execution-contract.md), case-sensitivity gotcha).
 
 > [!CAUTION]
 > Get the *in-dict* key wrong — a typo, a rename, `isMfaEnforced` vs `isMFAEnforced` — and you don't get the safe `isEvaluated: False` path. Token-Service logs "transformedResponse exists but key not found" and the comparison proceeds against the wrong shape: a **measured** wrong answer that can open a genuine gap on a customer's passport (`TS-main:evaluate.py:2339-2360`). The criteria key string is the single most dispute-sensitive line in your file; copy it from the integration definition, character for character.
