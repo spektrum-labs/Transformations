@@ -1,3 +1,5 @@
+> 📚 **Documentation: start at [`docs2/`](docs2/README.md)** — the code-verified core documentation for this repo. Critical context it carries: **a merge to `main` is an instant, ungated production deploy** (Token-Service fetches and executes these files live from raw GitHub), the repo is public, and `docs2/14-known-issues.md` inventories the transform files currently broken in production. View as a site: `pip install -r requirements-docs.txt && mkdocs serve` → http://127.0.0.1:8304. Sync: `docs-drift`/`docs-sync` workflows + the `/docs-sync` skill (map: `docs2/.docmap.yml`).
+
 # Transformations
 
 The **Transformations** repository contains logic used to transform third-party API responses into values that can be evaluated by a Third Party Requirements token within the **Spektrum** network. This repository is designed to standardize the process of transforming various API responses into a format that Spektrum can understand and use.

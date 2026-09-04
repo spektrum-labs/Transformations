@@ -180,3 +180,5 @@ CLAUDE.md
 # Local scripts with hardcoded paths
 move_api_responses.py
 tests/
+# MkDocs build output (mkdocs.yml -> docs2)
+.docs-site/
