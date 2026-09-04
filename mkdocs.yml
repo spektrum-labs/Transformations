@@ -1,0 +1,75 @@
+# Local docs site for the docs2 onboarding/core documentation set.
+#   pip install -r requirements-docs.txt
+#   mkdocs serve          -> http://127.0.0.1:8304
+# Port 8304: siblings hold 8300 (Token-Service), 8301 (Integration-Service), 8302 (fusion-api), 8303 (flux).
+# both stay clear of the local platform map (8080/8081/8090/8091/6379/5555/5678/5679).
+site_name: Transformations Docs
+site_description: Ground-truth engineering documentation for the Spektrum Transformations repo
+docs_dir: docs2
+site_dir: .docs-site
+dev_addr: 127.0.0.1:8304
+use_directory_urls: false
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - gh-admonitions
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Getting started:
+      - Overview: README.md
+      - The Spektrum platform: 00-platform-overview.md
+  - The system:
+      - What this repo is: 01-transformations-overview.md
+      - The execution contract: 02-execution-contract.md
+  - Contributing:
+      - Writing a transform: 03-writing-a-transform.md
+      - Local testing and its limits: 12-local-development.md
+  - Reference:
+      - The catalog: 04-catalog.md
+      - Glossary: GLOSSARY.md
+  - Operations:
+      - Merge = deploy: 13-release-and-branches.md
+      - Known issues and corrections: 14-known-issues.md
