@@ -3,11 +3,34 @@ Transformation: authTypesAllowed
 Vendor: Generic IDP
 Category: Identity / Authentication
 
-Returns a list of Authenticator Types that are active and evaluates if only FIDO/OTP types are allowed.
+Returns a list of Authenticator Types that are active and evaluates whether every
+active type is an allowed one.
+
+The allowlist is written against the factorType strings Okta actually emits. It
+previously tested for the literal strings "fido" and "otp", which no Okta org
+ever returns: real FIDO2 arrives as webauthn, U2F as u2f and Okta FastPass as
+signed_nonce, so all three failed a check named "Only FIDO or OTP allowed".
+Okta Verify push (push) failed for the same reason.
+
+Two further defects fixed here:
+  - sms was skipped before the allowlist ran, so an org with SMS enabled passed
+    a check whose own description says it denies SMS.
+  - an empty or non-list payload passed with "No insecure authentication types
+    found", which made the check green off zero data.
 """
 
 import json
 from datetime import datetime
+
+# factorType values Okta emits that are acceptable as a second factor:
+# FIDO2/WebAuthn, legacy FIDO U2F, Okta FastPass, Okta Verify push, and an
+# authenticator app TOTP code. Every other active factorType fails, including
+# sms, call, email and question.
+ALLOWED_FACTOR_TYPES = ["webauthn", "u2f", "signed_nonce", "push", "token:software:totp"]
+
+# Display label only, preserved from the previous version so the rendered
+# authTypes list does not change shape for factors that already passed.
+DISPLAY_LABELS = {"token:software:totp": "OTP"}
 
 
 def extract_input(input_data):
@@ -93,36 +116,47 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Handle list input
-        if isinstance(data, list):
-            items = data
-        else:
-            items = []
+        # A payload carrying no factors cannot evidence anything. This used to
+        # fall through to "No insecure authentication types found" and pass.
+        if not isinstance(data, list) or len(data) == 0:
+            return create_response(
+                result={criteriaKey: False, "authTypes": []},
+                validation=validation,
+                fail_reasons=["No authenticator types returned by the identity provider"],
+                recommendations=["Verify the integration can read the organization's authenticator configuration"],
+                input_summary={"totalAuthTypes": 0, "secureAuthTypes": 0, "insecureAuthTypes": 0}
+            )
 
+        # Classify on the raw factorType; label only for display. sms is no
+        # longer skipped, so it reaches the allowlist and fails.
+        activeFactorTypes = []
         authTypes = []
-        for item in items:
-            if isinstance(item, dict) and item.get('status', '').lower() == 'active':
-                factor_type = item.get('factorType', '')
-                if factor_type.lower() != 'sms':
-                    if factor_type.lower() == 'token:software:totp':
-                        authTypes.append('OTP')
-                    else:
-                        authTypes.append(factor_type)
+        for item in data:
+            if isinstance(item, dict) and str(item.get('status', '')).lower() == 'active':
+                factor_type = str(item.get('factorType', ''))
+                if factor_type:
+                    activeFactorTypes.append(factor_type)
+                    authTypes.append(DISPLAY_LABELS.get(factor_type.lower(), factor_type))
 
-        # Filter to keep only auth types that are NOT FIDO or OTP
-        otherAuthTypes = [auth_type for auth_type in authTypes if auth_type.lower() not in ['fido', 'otp']]
+        if len(activeFactorTypes) == 0:
+            return create_response(
+                result={criteriaKey: False, "authTypes": []},
+                validation=validation,
+                fail_reasons=["No active authenticator types are enabled"],
+                recommendations=["Enable an allowed authenticator type"],
+                input_summary={"totalAuthTypes": 0, "secureAuthTypes": 0, "insecureAuthTypes": 0}
+            )
 
-        # Pass if only FIDO/OTP types are allowed (no other types)
+        secureFactorTypes = [f for f in activeFactorTypes if f.lower() in ALLOWED_FACTOR_TYPES]
+        otherAuthTypes = [f for f in activeFactorTypes if f.lower() not in ALLOWED_FACTOR_TYPES]
+
         is_allowed = len(otherAuthTypes) == 0
 
         if is_allowed:
-            if authTypes:
-                pass_reasons.append(f"Only secure authentication types are allowed: {', '.join(authTypes)}")
-            else:
-                pass_reasons.append("No insecure authentication types found")
+            pass_reasons.append(f"Only allowed authentication types are active: {', '.join(authTypes)}")
         else:
-            fail_reasons.append(f"Non-FIDO/OTP authentication types found: {', '.join(otherAuthTypes)}")
-            recommendations.append("Restrict authentication to FIDO and OTP methods only")
+            fail_reasons.append(f"Authentication types that are not allowed are active: {', '.join(otherAuthTypes)}")
+            recommendations.append("Restrict authentication to FIDO2/WebAuthn, U2F, Okta FastPass, Okta Verify push or an authenticator app code")
 
         return create_response(
             result={criteriaKey: is_allowed, "authTypes": authTypes},
@@ -131,8 +165,8 @@ def transform(input):
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary={
-                "totalAuthTypes": len(authTypes),
-                "secureAuthTypes": len([a for a in authTypes if a.lower() in ['fido', 'otp']]),
+                "totalAuthTypes": len(activeFactorTypes),
+                "secureAuthTypes": len(secureFactorTypes),
                 "insecureAuthTypes": len(otherAuthTypes)
             }
         )
