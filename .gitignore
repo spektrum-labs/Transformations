@@ -131,7 +131,13 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+# .env alone missed .env.development / .env.staging etc; cover every variant at
+# any depth, keeping *.example templates trackable.
 .env
+.env.*
+*.env
+*.env.*
+!.env*.example
 .venv
 env/
 venv/
