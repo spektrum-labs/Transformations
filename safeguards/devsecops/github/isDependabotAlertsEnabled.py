@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,72 +70,66 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        alerts = data
+        repos = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or data.get("apiResponse") or []
-        if not isinstance(alerts, list):
-            alerts = []
+        repos = data.get("data") or data.get("repos") or data.get("items") or []
+        if not isinstance(repos, list):
+            repos = []
     else:
-        alerts = []
+        repos = []
 
-    critical_open_count = 0
-    repos_affected = {}
-    ecosystems = {}
+    active_repos = [r for r in repos if isinstance(r, dict) and not r.get("archived") and not r.get("disabled")]
 
-    for alert in alerts:
-        if not isinstance(alert, dict):
-            continue
-        state = alert.get("state")
-        vuln = alert.get("security_vulnerability") or {}
-        severity = vuln.get("severity") if isinstance(vuln, dict) else None
-        if state == "open" and severity == "critical":
-            critical_open_count = critical_open_count + 1
-            repo = alert.get("repository") or {}
-            repo_name = repo.get("full_name") if isinstance(repo, dict) else None
-            if repo_name:
-                repos_affected[repo_name] = True
-            dep = alert.get("dependency") or {}
-            pkg = dep.get("package") or {} if isinstance(dep, dict) else {}
-            eco = pkg.get("ecosystem") if isinstance(pkg, dict) else None
-            if eco:
-                ecosystems[eco] = True
+    total = len(active_repos)
+    enabled_count = 0
+    disabled_repo_names = []
+    for r in active_repos:
+        sa = r.get("security_and_analysis") or {}
+        dsu = sa.get("dependabot_security_updates") or {}
+        status = dsu.get("status")
+        if status == "enabled":
+            enabled_count = enabled_count + 1
+        else:
+            name = r.get("full_name") or r.get("name") or "unknown"
+            disabled_repo_names.append(name)
 
-    total_records = len(alerts)
-    distinct_repos = len(repos_affected.keys())
-    distinct_ecosystems = len(ecosystems.keys())
+    is_enabled = bool(total > 0 and enabled_count == total)
 
-    if critical_open_count > 0:
-        pass_reasons = []
-        fail_reasons = [
-            f"Found {critical_open_count} open critical-severity Dependabot alerts across {distinct_repos} repositories (ecosystems: {distinct_ecosystems})."
-        ]
-        recommendations = [
-            "Prioritize remediation of open critical Dependabot alerts by upgrading affected dependencies to their first_patched_version."
-        ]
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if total == 0:
+        fail_reasons.append("No active (non-archived, non-disabled) repositories were found in the organization repo list to evaluate dependabot_security_updates.status.")
+        recommendations.append("Verify org repository listing access and re-run once repositories are visible.")
+    elif is_enabled:
+        pass_reasons.append(
+            f"All {total} active repositories report security_and_analysis.dependabot_security_updates.status='enabled' ({enabled_count}/{total})."
+        )
     else:
-        pass_reasons = [
-            f"No open critical-severity Dependabot alerts found among {total_records} records returned by the org-level Dependabot alerts API filtered to state=open and severity=critical."
-        ]
-        fail_reasons = []
-        recommendations = []
+        sample = ", ".join(disabled_repo_names[:5])
+        fail_reasons.append(
+            f"Only {enabled_count}/{total} active repositories have security_and_analysis.dependabot_security_updates.status='enabled'. Repos without it enabled include: {sample}."
+        )
+        recommendations.append(
+            "Enable Dependabot security updates (and alerts) by default for all repositories via org-level security settings, or enable it individually on the listed repositories."
+        )
+
+    result = {
+        "isDependabotAlertsEnabled": is_enabled,
+        "totalActiveRepos": total,
+        "reposWithDependabotEnabled": enabled_count,
+    }
 
     return create_response(
-        result={
-            "openCriticalDependabotAlertsCount": critical_open_count,
-            "distinctRepositoriesAffected": distinct_repos,
-            "distinctEcosystemsAffected": distinct_ecosystems,
-            "totalRecordsReturned": total_records,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalRecordsReturned": total_records,
-            "criticalOpenCount": critical_open_count,
-        },
+        input_summary={"totalActiveRepos": total, "reposWithDependabotEnabled": enabled_count},
         metadata={
-            "transformationId": "openCriticalDependabotAlertsCount",
+            "transformationId": "isDependabotAlertsEnabled",
             "vendor": "GitHub",
             "category": "devsecops",
         },

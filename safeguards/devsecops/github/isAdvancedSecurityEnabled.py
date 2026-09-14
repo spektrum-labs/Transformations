@@ -1,9 +1,9 @@
+
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +29,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,72 +71,90 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        alerts = data
+        repos = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or data.get("apiResponse") or []
-        if not isinstance(alerts, list):
-            alerts = []
+        repos = data.get("data") or data.get("apiResponse") or []
+        if not isinstance(repos, list):
+            repos = []
     else:
-        alerts = []
+        repos = []
 
-    critical_open_count = 0
-    repos_affected = {}
-    ecosystems = {}
+    total_repos = len(repos)
+    non_archived_non_disabled = [r for r in repos if isinstance(r, dict) and not r.get("archived") and not r.get("disabled")]
 
-    for alert in alerts:
-        if not isinstance(alert, dict):
-            continue
-        state = alert.get("state")
-        vuln = alert.get("security_vulnerability") or {}
-        severity = vuln.get("severity") if isinstance(vuln, dict) else None
-        if state == "open" and severity == "critical":
-            critical_open_count = critical_open_count + 1
-            repo = alert.get("repository") or {}
-            repo_name = repo.get("full_name") if isinstance(repo, dict) else None
-            if repo_name:
-                repos_affected[repo_name] = True
-            dep = alert.get("dependency") or {}
-            pkg = dep.get("package") or {} if isinstance(dep, dict) else {}
-            eco = pkg.get("ecosystem") if isinstance(pkg, dict) else None
-            if eco:
-                ecosystems[eco] = True
+    evaluated = []
+    enabled_count = 0
+    disabled_count = 0
+    missing_count = 0
 
-    total_records = len(alerts)
-    distinct_repos = len(repos_affected.keys())
-    distinct_ecosystems = len(ecosystems.keys())
+    for repo in non_archived_non_disabled:
+        sa = repo.get("security_and_analysis")
+        name = repo.get("full_name") or repo.get("name") or "unknown"
+        if isinstance(sa, dict):
+            adv = sa.get("advanced_security") or {}
+            status = adv.get("status") if isinstance(adv, dict) else None
+            if status == "enabled":
+                enabled_count = enabled_count + 1
+                evaluated.append(name)
+            elif status == "disabled":
+                disabled_count = disabled_count + 1
+            else:
+                missing_count = missing_count + 1
+        else:
+            missing_count = missing_count + 1
 
-    if critical_open_count > 0:
-        pass_reasons = []
+    applicable_total = enabled_count + disabled_count
+
+    if applicable_total == 0:
+        is_enabled = False
         fail_reasons = [
-            f"Found {critical_open_count} open critical-severity Dependabot alerts across {distinct_repos} repositories (ecosystems: {distinct_ecosystems})."
+            "No repository in the fetched list of %d repos exposed a readable security_and_analysis.advanced_security.status field, so GHAS enablement could not be confirmed." % total_repos
         ]
+        pass_reasons = []
         recommendations = [
-            "Prioritize remediation of open critical Dependabot alerts by upgrading affected dependencies to their first_patched_version."
+            "Verify the API token has admin/org-level access sufficient to read security_and_analysis on repositories, and enable GitHub Advanced Security at the organization level for new repositories."
         ]
-    else:
+    elif disabled_count == 0:
+        is_enabled = True
         pass_reasons = [
-            f"No open critical-severity Dependabot alerts found among {total_records} records returned by the org-level Dependabot alerts API filtered to state=open and severity=critical."
+            "All %d repositories with a readable security_and_analysis field report advanced_security.status='enabled' (checked out of %d total non-archived, non-disabled repos)." % (enabled_count, len(non_archived_non_disabled))
         ]
         fail_reasons = []
         recommendations = []
+    else:
+        is_enabled = False
+        fail_reasons = [
+            "%d of %d repositories with readable security_and_analysis have advanced_security.status not equal to 'enabled' (enabled=%d, disabled=%d, unreadable=%d)." % (disabled_count, applicable_total, enabled_count, disabled_count, missing_count)
+        ]
+        pass_reasons = []
+        recommendations = [
+            "Enable GitHub Advanced Security organization-wide (and specifically on the flagged repositories) so new repositories inherit code scanning, CodeQL, and secret scanning by default."
+        ]
+
+    result = {
+        "isAdvancedSecurityEnabled": is_enabled,
+        "totalRepositories": total_repos,
+        "applicableRepositories": applicable_total,
+        "advancedSecurityEnabledCount": enabled_count,
+        "advancedSecurityDisabledCount": disabled_count,
+        "unreadableSecurityAnalysisCount": missing_count,
+    }
+
+    input_summary = {
+        "totalRepositories": total_repos,
+        "nonArchivedNonDisabledRepos": len(non_archived_non_disabled),
+        "applicableRepositories": applicable_total,
+    }
 
     return create_response(
-        result={
-            "openCriticalDependabotAlertsCount": critical_open_count,
-            "distinctRepositoriesAffected": distinct_repos,
-            "distinctEcosystemsAffected": distinct_ecosystems,
-            "totalRecordsReturned": total_records,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalRecordsReturned": total_records,
-            "criticalOpenCount": critical_open_count,
-        },
+        input_summary=input_summary,
         metadata={
-            "transformationId": "openCriticalDependabotAlertsCount",
+            "transformationId": "isAdvancedSecurityEnabled",
             "vendor": "GitHub",
             "category": "devsecops",
         },
