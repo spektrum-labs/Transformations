@@ -70,71 +70,69 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        items = data
+        alerts = data
     elif isinstance(data, dict):
-        items = data.get("data") or data.get("apiResponse") or []
-        if not isinstance(items, list):
-            items = []
+        alerts = data.get("data") or data.get("alerts") or []
+        if not isinstance(alerts, list):
+            alerts = []
     else:
-        items = []
+        alerts = []
 
-    # Defensively re-check state/severity in case the vendor filter was not
-    # fully applied server-side; count only records that truly match.
-    matched = []
-    for alert in items:
-        if not isinstance(alert, dict):
+    open_critical = []
+    for a in alerts:
+        if not isinstance(a, dict):
             continue
-        state = alert.get("state")
+        state = a.get("state")
         sev = None
-        vuln = alert.get("security_vulnerability")
-        if isinstance(vuln, dict):
-            sev = vuln.get("severity")
+        sec_vuln = a.get("security_vulnerability")
+        if isinstance(sec_vuln, dict):
+            sev = sec_vuln.get("severity")
         if state == "open" and sev == "critical":
-            matched.append(alert)
+            open_critical.append(a)
 
-    # Some records may lack security_vulnerability details due to
-    # truncation of nested fields in captured samples; if state is open
-    # and severity info is entirely absent, still count it since the
-    # request itself was filtered to severity=critical server-side.
-    unverifiable_but_open = [
-        a for a in items
-        if isinstance(a, dict) and a.get("state") == "open"
-        and not isinstance(a.get("security_vulnerability"), dict)
-    ]
-
-    count = len(matched) + len(unverifiable_but_open)
+    count = len(open_critical)
 
     repos = set()
-    for a in matched + unverifiable_but_open:
+    packages = set()
+    for a in open_critical:
+        dep = a.get("dependency")
+        if isinstance(dep, dict):
+            pkg = dep.get("package")
+            if isinstance(pkg, dict) and pkg.get("name"):
+                packages.add(pkg.get("name"))
         repo = a.get("repository")
-        if isinstance(repo, dict):
-            full_name = repo.get("full_name")
-            if full_name:
-                repos.add(full_name)
+        if isinstance(repo, dict) and repo.get("full_name"):
+            repos.add(repo.get("full_name"))
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    sample_numbers = [a.get("number") for a in open_critical[:5] if a.get("number") is not None]
 
     if count == 0:
-        pass_reasons.append(
-            "No open critical-severity Dependabot alerts were found in the "
-            "org-level listing filtered to state=open and severity=critical."
-        )
+        pass_reasons = [
+            "Queried /orgs/{org}/dependabot/alerts?state=open&severity=critical and found 0 alerts matching state=open and severity=critical among the returned records."
+        ]
+        fail_reasons = []
+        recommendations = []
     else:
-        fail_reasons.append(
-            f"{count} open critical-severity Dependabot alerts found across "
-            f"{len(repos)} repositories (e.g. {', '.join(list(repos)[:5])})."
-        )
-        recommendations.append(
-            "Triage and remediate the open critical-severity Dependabot alerts "
-            "by upgrading affected dependencies to the patched versions listed "
-            "in each alert's security_advisory/security_vulnerability data."
-        )
+        pass_reasons = []
+        fail_reasons = [
+            f"Found {count} open critical-severity Dependabot alerts across the organization (alert numbers sample: {sample_numbers}).",
+        ]
+        if packages:
+            fail_reasons.append(f"Affected packages include: {sorted(list(packages))[:10]}.")
+        recommendations = [
+            "Prioritize remediation of critical Dependabot alerts by upgrading affected packages to their first_patched_version.",
+            "Review and merge outstanding Dependabot security update pull requests for the affected repositories.",
+        ]
 
     result = {
         "openCriticalDependabotAlertsCount": count,
         "affectedRepositoryCount": len(repos),
+        "affectedPackageCount": len(packages),
+    }
+
+    input_summary = {
+        "totalRecordsInResponse": len(alerts),
+        "openCriticalCount": count,
     }
 
     return create_response(
@@ -143,7 +141,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"recordsInResponse": len(items), "matchedCount": count},
+        input_summary=input_summary,
         metadata={
             "transformationId": "openCriticalDependabotAlertsCount",
             "vendor": "GitHub",
