@@ -66,70 +66,81 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
+    """Dependabot alerts enablement, read from the org code security configurations.
+
+    Reads `dependabot_alerts` on GET /orgs/{org}/code-security/configurations.
+
+    This criterion previously read security_and_analysis.dependabot_security_updates
+    on the repository list. Those are two different GitHub features: alerts tell you a
+    dependency has a CVE, security updates raise the patch PR. The repository object
+    carries no dependabot_alerts field at all, so the substitution reported alerts as
+    disabled on orgs where they are on -- contradicted by this integration's own
+    openCriticalDependabotAlertsCount, which counts those very alerts.
+
+    Configurations with target_type "global" are GitHub's own built-in templates and
+    are present in every organization with dependabot_alerts already enabled. They are
+    excluded: counting them would pass every customer regardless of configuration.
+    """
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        repos = data
+        configs = data
     elif isinstance(data, dict):
-        repos = data.get("data") or data.get("repositories") or []
-        if not isinstance(repos, list):
-            repos = []
+        configs = data.get("data") or data.get("configurations") or []
+        if not isinstance(configs, list):
+            configs = []
     else:
-        repos = []
+        configs = []
 
-    total = len(repos)
-    enabled_count = 0
-    disabled_repos = []
-    unknown_count = 0
+    owned = []
+    for cfg in configs:
+        if isinstance(cfg, dict) and str(cfg.get("target_type", "")).lower() in ("organization", "enterprise"):
+            owned.append(cfg)
 
-    for repo in repos:
-        if not isinstance(repo, dict):
-            continue
-        name = repo.get("full_name") or repo.get("name") or "unknown"
-        sec = repo.get("security_and_analysis") or {}
-        if not isinstance(sec, dict):
-            sec = {}
-        dep = sec.get("dependabot_security_updates") or {}
-        if not isinstance(dep, dict):
-            dep = {}
-        status = dep.get("status")
+    enabled_names = []
+    disabled_names = []
+    not_set_names = []
+    for cfg in owned:
+        name = cfg.get("name") or "unnamed configuration"
+        status = str(cfg.get("dependabot_alerts", "")).lower()
         if status == "enabled":
-            enabled_count = enabled_count + 1
+            enabled_names.append(name)
         elif status == "disabled":
-            disabled_repos.append(name)
+            disabled_names.append(name)
         else:
-            unknown_count = unknown_count + 1
+            not_set_names.append(name)
 
-    is_enabled = (total > 0) and (enabled_count == total) and (unknown_count == 0)
+    is_enabled = len(enabled_names) > 0 and len(disabled_names) == 0
 
     result = {
         "isDependabotAlertsEnabled": is_enabled,
-        "totalRepos": total,
-        "enabledRepos": enabled_count,
-        "disabledRepos": len(disabled_repos),
-        "unknownStatusRepos": unknown_count,
+        "totalConfigurations": len(configs),
+        "ownedConfigurations": len(owned),
+        "enabledConfigurations": len(enabled_names),
+        "disabledConfigurations": len(disabled_names),
+        "notSetConfigurations": len(not_set_names),
     }
 
-    if total == 0:
-        pass_reasons = []
-        fail_reasons = ["No repositories were returned by listOrgRepositories, so Dependabot alert enablement cannot be confirmed."]
-        recommendations = ["Verify org name and token scope; re-run once repositories are visible."]
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if len(configs) == 0:
+        fail_reasons.append("No code security configurations were returned, so Dependabot alert enablement cannot be confirmed.")
+        recommendations.append("Verify the organization name and that the token can read organization code security configurations.")
+    elif len(owned) == 0:
+        fail_reasons.append("Only GitHub's built-in global configuration templates are present; this organization has no code security configuration of its own.")
+        recommendations.append("Create an organization or enterprise code security configuration with Dependabot alerts enabled and apply it to all repositories.")
+    elif disabled_names:
+        fail_reasons.append(f"Dependabot alerts are disabled in {len(disabled_names)} of {len(owned)} code security configurations: {', '.join(disabled_names)}")
+        recommendations.append("Set Dependabot alerts to enabled in every organization and enterprise code security configuration.")
     elif is_enabled:
-        pass_reasons = [
-            f"All {total} organization repositories report security_and_analysis.dependabot_security_updates.status='enabled' (enabled_count={enabled_count}/{total})."
-        ]
-        fail_reasons = []
-        recommendations = []
+        pass_reasons.append(f"Dependabot alerts are enabled in all {len(enabled_names)} organization and enterprise code security configurations: {', '.join(enabled_names)}")
+        if not_set_names:
+            pass_reasons.append(f"{len(not_set_names)} configuration(s) leave it unset and inherit: {', '.join(not_set_names)}")
     else:
-        pass_reasons = []
-        sample = ", ".join(disabled_repos[:5]) if disabled_repos else "none named"
-        fail_reasons = [
-            f"Only {enabled_count} of {total} repositories have Dependabot security updates (and therefore Dependabot alerts) enabled; {len(disabled_repos)} explicitly disabled ({sample}), {unknown_count} with unknown/missing status."
-        ]
-        recommendations = [
-            "Enable Dependabot alerts (and security updates) by default for new repositories at the organization level, and enable it on the repositories currently reporting 'disabled' or unknown status."
-        ]
+        fail_reasons.append(f"Dependabot alerts are not enabled in any of the {len(owned)} organization or enterprise code security configurations; all leave it unset.")
+        recommendations.append("Set Dependabot alerts to enabled in the configuration applied to your repositories.")
 
     return create_response(
         result=result,
@@ -137,6 +148,11 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalRepos": total, "enabledRepos": enabled_count, "disabledRepos": len(disabled_repos), "unknownStatusRepos": unknown_count},
+        input_summary={
+            "totalConfigurations": len(configs),
+            "ownedConfigurations": len(owned),
+            "enabledConfigurations": len(enabled_names),
+            "disabledConfigurations": len(disabled_names),
+        },
         metadata={"transformationId": "isDependabotAlertsEnabled", "vendor": "GitHub", "category": "devsecops"},
     )

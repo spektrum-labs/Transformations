@@ -92,6 +92,29 @@ def transform(input):
 
     count = len(open_critical)
 
+    # Truncation guard. The organization Dependabot alerts endpoint advertises
+    # its next page only in a Link header, which the pagination handler cannot
+    # read, so this method fetches a single page of PAGE_SIZE and stops. A
+    # response holding exactly PAGE_SIZE alerts means there may be more we
+    # cannot see, and a count taken from it would understate the backlog.
+    # Report that as a collection error rather than a confident number.
+    # Remove once ENG-577 lands real cursor pagination.
+    PAGE_SIZE = 100
+    if len(alerts) >= PAGE_SIZE:
+        return create_response(
+            result={"openCriticalDependabotAlertsCount": None, "truncated": True},
+            validation=validation,
+            fail_reasons=[
+                f"Received exactly {len(alerts)} alerts, the maximum this method can fetch in one page, "
+                "so the open critical backlog cannot be counted completely. "
+                "Pagination for this endpoint is tracked in ENG-577."
+            ],
+            recommendations=["No customer action required; this is a retrieval limitation on our side."],
+            input_summary={"alertsReceived": len(alerts), "pageSize": PAGE_SIZE, "truncated": True},
+            api_errors=["Result set truncated at one page; next-page cursor is only available in the Link header."],
+            metadata={"transformationId": "openCriticalDependabotAlertsCount", "vendor": "GitHub", "category": "devsecops"},
+        )
+
     repos = set()
     packages = set()
     for a in open_critical:
