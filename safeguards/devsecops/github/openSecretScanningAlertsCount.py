@@ -74,7 +74,7 @@ def transform(input):
     if isinstance(data, list):
         alerts = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("apiResponse") or []
+        alerts = data.get("data") or data.get("alerts") or data.get("apiResponse") or []
         if not isinstance(alerts, list):
             alerts = []
     else:
@@ -84,38 +84,42 @@ def transform(input):
     open_count = len(open_alerts)
 
     secret_types = {}
-    repos = {}
+    repos_affected = {}
     for a in open_alerts:
-        st = a.get("secret_type") or "unknown"
+        st = a.get("secret_type_display_name") or a.get("secret_type") or "unknown"
         secret_types[st] = secret_types.get(st, 0) + 1
-        repo = a.get("repository") or {}
-        repo_name = repo.get("full_name") if isinstance(repo, dict) else None
+        repo = a.get("repository")
+        repo_name = None
+        if isinstance(repo, dict):
+            repo_name = repo.get("full_name") or repo.get("name")
+        if not repo_name:
+            url = a.get("url") or ""
+            parts = url.split("/repos/")
+            if len(parts) > 1:
+                repo_name = parts[1].split("/secret-scanning")[0]
         if repo_name:
-            repos[repo_name] = repos.get(repo_name, 0) + 1
+            repos_affected[repo_name] = repos_affected.get(repo_name, 0) + 1
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-    if open_count == 0:
-        pass_reasons.append(
-            "No open secret scanning alerts found across org repositories "
-            "(state=open filter applied at the API query level)."
-        )
+    if open_count > 0:
+        top_types = sorted(secret_types.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        type_summary = ", ".join([f"{name}: {cnt}" for name, cnt in top_types])
+        pass_reasons = []
+        fail_reasons = [
+            f"{open_count} open secret scanning alerts found across {len(repos_affected)} repositories. Top secret types: {type_summary}."
+        ]
+        recommendations = [
+            "Rotate and revoke all leaked secrets identified in the open alerts.",
+            "Enable secret scanning push protection to prevent future leaks.",
+            "Review and remediate open alerts in affected repositories, prioritizing publicly leaked secrets.",
+        ]
     else:
-        top_types = sorted(secret_types.items(), key=lambda kv: -kv[1])[:5]
-        type_summary = ", ".join([f"{t}: {c}" for t, c in top_types])
-        fail_reasons.append(
-            f"Found {open_count} open secret scanning alerts across "
-            f"{len(repos)} repositories. Top secret types: {type_summary}."
-        )
-        recommendations.append(
-            "Review and remediate the flagged secrets (rotate/revoke credentials) "
-            "and resolve the corresponding secret scanning alerts in the affected repositories."
-        )
+        pass_reasons = ["No open secret scanning alerts were found across eligible repositories in the organization."]
+        fail_reasons = []
+        recommendations = []
 
     result = {
         "openSecretScanningAlertsCount": open_count,
-        "affectedRepositoryCount": len(repos),
+        "repositoriesAffectedCount": len(repos_affected),
         "secretTypeBreakdown": secret_types,
     }
 

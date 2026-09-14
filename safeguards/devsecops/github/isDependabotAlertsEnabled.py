@@ -70,70 +70,66 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        alerts = data
+        repos = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or []
-        if not isinstance(alerts, list):
-            alerts = []
+        repos = data.get("data") or data.get("repositories") or []
+        if not isinstance(repos, list):
+            repos = []
     else:
-        alerts = []
+        repos = []
 
-    open_critical = []
-    for a in alerts:
-        if not isinstance(a, dict):
+    total = len(repos)
+    enabled_count = 0
+    disabled_repos = []
+    unknown_count = 0
+
+    for repo in repos:
+        if not isinstance(repo, dict):
             continue
-        state = a.get("state")
-        sev = None
-        sec_vuln = a.get("security_vulnerability")
-        if isinstance(sec_vuln, dict):
-            sev = sec_vuln.get("severity")
-        if state == "open" and sev == "critical":
-            open_critical.append(a)
+        name = repo.get("full_name") or repo.get("name") or "unknown"
+        sec = repo.get("security_and_analysis") or {}
+        if not isinstance(sec, dict):
+            sec = {}
+        dep = sec.get("dependabot_security_updates") or {}
+        if not isinstance(dep, dict):
+            dep = {}
+        status = dep.get("status")
+        if status == "enabled":
+            enabled_count = enabled_count + 1
+        elif status == "disabled":
+            disabled_repos.append(name)
+        else:
+            unknown_count = unknown_count + 1
 
-    count = len(open_critical)
+    is_enabled = (total > 0) and (enabled_count == total) and (unknown_count == 0)
 
-    repos = set()
-    packages = set()
-    for a in open_critical:
-        dep = a.get("dependency")
-        if isinstance(dep, dict):
-            pkg = dep.get("package")
-            if isinstance(pkg, dict) and pkg.get("name"):
-                packages.add(pkg.get("name"))
-        repo = a.get("repository")
-        if isinstance(repo, dict) and repo.get("full_name"):
-            repos.add(repo.get("full_name"))
+    result = {
+        "isDependabotAlertsEnabled": is_enabled,
+        "totalRepos": total,
+        "enabledRepos": enabled_count,
+        "disabledRepos": len(disabled_repos),
+        "unknownStatusRepos": unknown_count,
+    }
 
-    sample_numbers = [a.get("number") for a in open_critical[:5] if a.get("number") is not None]
-
-    if count == 0:
+    if total == 0:
+        pass_reasons = []
+        fail_reasons = ["No repositories were returned by listOrgRepositories, so Dependabot alert enablement cannot be confirmed."]
+        recommendations = ["Verify org name and token scope; re-run once repositories are visible."]
+    elif is_enabled:
         pass_reasons = [
-            "Queried /orgs/{org}/dependabot/alerts?state=open&severity=critical and found 0 alerts matching state=open and severity=critical among the returned records."
+            f"All {total} organization repositories report security_and_analysis.dependabot_security_updates.status='enabled' (enabled_count={enabled_count}/{total})."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
+        sample = ", ".join(disabled_repos[:5]) if disabled_repos else "none named"
         fail_reasons = [
-            f"Found {count} open critical-severity Dependabot alerts across the organization (alert numbers sample: {sample_numbers}).",
+            f"Only {enabled_count} of {total} repositories have Dependabot security updates (and therefore Dependabot alerts) enabled; {len(disabled_repos)} explicitly disabled ({sample}), {unknown_count} with unknown/missing status."
         ]
-        if packages:
-            fail_reasons.append(f"Affected packages include: {sorted(list(packages))[:10]}.")
         recommendations = [
-            "Prioritize remediation of critical Dependabot alerts by upgrading affected packages to their first_patched_version.",
-            "Review and merge outstanding Dependabot security update pull requests for the affected repositories.",
+            "Enable Dependabot alerts (and security updates) by default for new repositories at the organization level, and enable it on the repositories currently reporting 'disabled' or unknown status."
         ]
-
-    result = {
-        "openCriticalDependabotAlertsCount": count,
-        "affectedRepositoryCount": len(repos),
-        "affectedPackageCount": len(packages),
-    }
-
-    input_summary = {
-        "totalRecordsInResponse": len(alerts),
-        "openCriticalCount": count,
-    }
 
     return create_response(
         result=result,
@@ -141,10 +137,6 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
-        metadata={
-            "transformationId": "openCriticalDependabotAlertsCount",
-            "vendor": "GitHub",
-            "category": "devsecops",
-        },
+        input_summary={"totalRepos": total, "enabledRepos": enabled_count, "disabledRepos": len(disabled_repos), "unknownStatusRepos": unknown_count},
+        metadata={"transformationId": "isDependabotAlertsEnabled", "vendor": "GitHub", "category": "devsecops"},
     )

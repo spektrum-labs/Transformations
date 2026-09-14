@@ -70,69 +70,74 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        alerts = data
+        repos = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or []
-        if not isinstance(alerts, list):
-            alerts = []
+        repos = data.get("data") or data.get("repositories") or []
+        if not isinstance(repos, list):
+            repos = []
     else:
-        alerts = []
+        repos = []
 
-    open_critical = []
-    for a in alerts:
-        if not isinstance(a, dict):
+    private_repos = []
+    for r in repos:
+        if not isinstance(r, dict):
             continue
-        state = a.get("state")
-        sev = None
-        sec_vuln = a.get("security_vulnerability")
-        if isinstance(sec_vuln, dict):
-            sev = sec_vuln.get("severity")
-        if state == "open" and sev == "critical":
-            open_critical.append(a)
+        if r.get("archived"):
+            continue
+        if r.get("private"):
+            private_repos.append(r)
 
-    count = len(open_critical)
+    total_private = len(private_repos)
+    enabled_count = 0
+    disabled_repos = []
+    unknown_repos = []
 
-    repos = set()
-    packages = set()
-    for a in open_critical:
-        dep = a.get("dependency")
-        if isinstance(dep, dict):
-            pkg = dep.get("package")
-            if isinstance(pkg, dict) and pkg.get("name"):
-                packages.add(pkg.get("name"))
-        repo = a.get("repository")
-        if isinstance(repo, dict) and repo.get("full_name"):
-            repos.add(repo.get("full_name"))
+    for r in private_repos:
+        sec = r.get("security_and_analysis") or {}
+        ghas = sec.get("advanced_security") or {}
+        status = ghas.get("status")
+        if status == "enabled":
+            enabled_count = enabled_count + 1
+        elif status == "disabled":
+            disabled_repos.append(r.get("full_name") or r.get("name") or "unknown")
+        else:
+            unknown_repos.append(r.get("full_name") or r.get("name") or "unknown")
 
-    sample_numbers = [a.get("number") for a in open_critical[:5] if a.get("number") is not None]
-
-    if count == 0:
-        pass_reasons = [
-            "Queried /orgs/{org}/dependabot/alerts?state=open&severity=critical and found 0 alerts matching state=open and severity=critical among the returned records."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
+    if total_private == 0:
+        is_enabled = False
         pass_reasons = []
         fail_reasons = [
-            f"Found {count} open critical-severity Dependabot alerts across the organization (alert numbers sample: {sample_numbers}).",
+            "No non-archived private repositories were found in the organization's repository list, so GitHub Advanced Security enablement cannot be confirmed."
         ]
-        if packages:
-            fail_reasons.append(f"Affected packages include: {sorted(list(packages))[:10]}.")
         recommendations = [
-            "Prioritize remediation of critical Dependabot alerts by upgrading affected packages to their first_patched_version.",
-            "Review and merge outstanding Dependabot security update pull requests for the affected repositories.",
+            "Verify that the organization has private repositories, and enable GitHub Advanced Security for them."
         ]
+    else:
+        is_enabled = (enabled_count == total_private)
+        if is_enabled:
+            pass_reasons = [
+                f"All {total_private} non-archived private repositories report security_and_analysis.advanced_security.status='enabled' (checked via listOrgRepositories)."
+            ]
+            fail_reasons = []
+            recommendations = []
+        else:
+            pass_reasons = []
+            fail_reasons = [
+                f"{enabled_count} of {total_private} non-archived private repositories have advanced_security.status='enabled'. "
+                f"Repositories without GHAS enabled: {', '.join(disabled_repos[:10]) if disabled_repos else 'see unknown status list'}."
+            ]
+            if unknown_repos:
+                fail_reasons.append(
+                    f"{len(unknown_repos)} private repositories did not report an advanced_security status field: {', '.join(unknown_repos[:10])}."
+                )
+            recommendations = [
+                "Enable GitHub Advanced Security organization-wide (or via a policy/enterprise setting) so all new private repositories inherit code scanning, CodeQL, and expanded secret scanning by default."
+            ]
 
     result = {
-        "openCriticalDependabotAlertsCount": count,
-        "affectedRepositoryCount": len(repos),
-        "affectedPackageCount": len(packages),
-    }
-
-    input_summary = {
-        "totalRecordsInResponse": len(alerts),
-        "openCriticalCount": count,
+        "isAdvancedSecurityEnabled": is_enabled,
+        "totalPrivateRepositories": total_private,
+        "advancedSecurityEnabledCount": enabled_count,
     }
 
     return create_response(
@@ -141,9 +146,15 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={
+            "totalReposSeen": len(repos),
+            "totalPrivateRepositories": total_private,
+            "advancedSecurityEnabledCount": enabled_count,
+            "disabledRepos": disabled_repos[:20],
+            "unknownStatusRepos": unknown_repos[:20],
+        },
         metadata={
-            "transformationId": "openCriticalDependabotAlertsCount",
+            "transformationId": "isAdvancedSecurityEnabled",
             "vendor": "GitHub",
             "category": "devsecops",
         },
