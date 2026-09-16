@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,55 +70,74 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        alerts = data
+        repos = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or data.get("apiResponse") or []
-        if not isinstance(alerts, list):
-            alerts = []
+        repos = data.get("data") or data.get("repositories") or []
+        if not isinstance(repos, list):
+            repos = []
     else:
-        alerts = []
+        repos = []
 
-    open_alerts = [a for a in alerts if isinstance(a, dict) and a.get("state") == "open"]
-    open_count = len(open_alerts)
+    private_repos = []
+    for r in repos:
+        if not isinstance(r, dict):
+            continue
+        if r.get("archived"):
+            continue
+        if r.get("private"):
+            private_repos.append(r)
 
-    secret_types = {}
-    repos_affected = {}
-    for a in open_alerts:
-        st = a.get("secret_type_display_name") or a.get("secret_type") or "unknown"
-        secret_types[st] = secret_types.get(st, 0) + 1
-        repo = a.get("repository")
-        repo_name = None
-        if isinstance(repo, dict):
-            repo_name = repo.get("full_name") or repo.get("name")
-        if not repo_name:
-            url = a.get("url") or ""
-            parts = url.split("/repos/")
-            if len(parts) > 1:
-                repo_name = parts[1].split("/secret-scanning")[0]
-        if repo_name:
-            repos_affected[repo_name] = repos_affected.get(repo_name, 0) + 1
+    total_private = len(private_repos)
+    enabled_count = 0
+    disabled_repos = []
+    unknown_repos = []
 
-    if open_count > 0:
-        top_types = sorted(secret_types.items(), key=lambda kv: kv[1], reverse=True)[:5]
-        type_summary = ", ".join([f"{name}: {cnt}" for name, cnt in top_types])
+    for r in private_repos:
+        sec = r.get("security_and_analysis") or {}
+        ghas = sec.get("advanced_security") or {}
+        status = ghas.get("status")
+        if status == "enabled":
+            enabled_count = enabled_count + 1
+        elif status == "disabled":
+            disabled_repos.append(r.get("full_name") or r.get("name") or "unknown")
+        else:
+            unknown_repos.append(r.get("full_name") or r.get("name") or "unknown")
+
+    if total_private == 0:
+        is_enabled = False
         pass_reasons = []
         fail_reasons = [
-            f"{open_count} open secret scanning alerts found across {len(repos_affected)} repositories. Top secret types: {type_summary}."
+            "No non-archived private repositories were found in the organization's repository list, so GitHub Advanced Security enablement cannot be confirmed."
         ]
         recommendations = [
-            "Rotate and revoke all leaked secrets identified in the open alerts.",
-            "Enable secret scanning push protection to prevent future leaks.",
-            "Review and remediate open alerts in affected repositories, prioritizing publicly leaked secrets.",
+            "Verify that the organization has private repositories, and enable GitHub Advanced Security for them."
         ]
     else:
-        pass_reasons = ["No open secret scanning alerts were found across eligible repositories in the organization."]
-        fail_reasons = []
-        recommendations = []
+        is_enabled = (enabled_count == total_private)
+        if is_enabled:
+            pass_reasons = [
+                f"All {total_private} non-archived private repositories report security_and_analysis.advanced_security.status='enabled' (checked via listOrgRepositories)."
+            ]
+            fail_reasons = []
+            recommendations = []
+        else:
+            pass_reasons = []
+            fail_reasons = [
+                f"{enabled_count} of {total_private} non-archived private repositories have advanced_security.status='enabled'. "
+                f"Repositories without GHAS enabled: {', '.join(disabled_repos[:10]) if disabled_repos else 'see unknown status list'}."
+            ]
+            if unknown_repos:
+                fail_reasons.append(
+                    f"{len(unknown_repos)} private repositories did not report an advanced_security status field: {', '.join(unknown_repos[:10])}."
+                )
+            recommendations = [
+                "Enable GitHub Advanced Security organization-wide (or via a policy/enterprise setting) so all new private repositories inherit code scanning, CodeQL, and expanded secret scanning by default."
+            ]
 
     result = {
-        "openSecretScanningAlertsCount": open_count,
-        "repositoriesAffectedCount": len(repos_affected),
-        "secretTypeBreakdown": secret_types,
+        "isAdvancedSecurityEnabled": is_enabled,
+        "totalPrivateRepositories": total_private,
+        "advancedSecurityEnabledCount": enabled_count,
     }
 
     return create_response(
@@ -129,9 +146,15 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalAlertsInResponse": len(alerts), "openAlertsCounted": open_count},
+        input_summary={
+            "totalReposSeen": len(repos),
+            "totalPrivateRepositories": total_private,
+            "advancedSecurityEnabledCount": enabled_count,
+            "disabledRepos": disabled_repos[:20],
+            "unknownStatusRepos": unknown_repos[:20],
+        },
         metadata={
-            "transformationId": "openSecretScanningAlertsCount",
+            "transformationId": "isAdvancedSecurityEnabled",
             "vendor": "GitHub",
             "category": "devsecops",
         },
