@@ -16,7 +16,7 @@ ADMIN_PORTS = {22, 23, 25, 135, 139, 445, 1433, 1521, 2375, 3306, 3389, 5432, 59
 SECURITY_HEADERS = {"strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options"}
 
 
-def _parse(input):
+def parse_payload(input):
     if isinstance(input, str):
         return json.loads(input)
     if isinstance(input, bytes):
@@ -60,7 +60,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _assets(data):
+def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
@@ -78,7 +78,7 @@ def _assets(data):
     return assets, int(total), stats, partial
 
 
-def _items(data, *keys):
+def list_items(data, *keys):
     """A list endpoint (/sources, /smartfolders, /business/azure-keys) -> its items."""
     if isinstance(data, list):
         return data
@@ -89,7 +89,7 @@ def _items(data, *keys):
     return None
 
 
-def _iso(value):
+def parse_iso_date(value):
     if value in (None, ""):
         return None
     try:
@@ -102,7 +102,7 @@ def _iso(value):
         return None
 
 
-def _listy(asset, key):
+def as_list(asset, key):
     v = asset.get(key)
     if isinstance(v, list):
         return v
@@ -111,15 +111,15 @@ def _listy(asset, key):
     return [v]
 
 
-def _count(assets, predicate, sample_key="bd.original_hostname", limit=25):
+def count_matching(assets, predicate, sample_key="bd.original_hostname", limit=25):
     """Count matching assets and keep a small, non-sensitive sample of hostnames."""
     hits = [a for a in assets if isinstance(a, dict) and predicate(a)]
     return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
 
 
-def _run(input, criteria_key, evaluate, transformation_id):
+def run_criterion(input, criteria_key, evaluate, transformation_id):
     try:
-        data, validation = extract_input(_parse(input))
+        data, validation = extract_input(parse_payload(input))
         if validation.get("status") == "failed":
             return create_response({criteria_key: False}, validation, fail_reasons=["Input validation failed"], transformation_id=transformation_id)
         value, extras, passes, fails, recs, api_errors = evaluate(data)
@@ -135,8 +135,8 @@ WINDOW_DAYS = 7
 
 
 def evaluate(data):
-    assets, total, _stats, _partial = _assets(data)
-    stamps = [d for d in (_iso(a.get("bd.last_metadata_change")) for a in assets if isinstance(a, dict)) if d]
+    assets, total, stats_unused, partial_unused = read_assets(data)
+    stamps = [d for d in (parse_iso_date(a.get("bd.last_metadata_change")) for a in assets if isinstance(a, dict)) if d]
     if not stamps:
         return False, {"assetsScanned": len(assets), "newestChange": None}, [], ["no bd.last_metadata_change on any asset"], ["Check that discovery sources are configured and the inventory is refreshing"], []
     newest = max(stamps)
@@ -148,4 +148,4 @@ def evaluate(data):
 
 
 def transform(input):
-    return _run(input, "isContinuousDiscoveryEnabled", evaluate, "isContinuousDiscoveryEnabled")
+    return run_criterion(input, "isContinuousDiscoveryEnabled", evaluate, "isContinuousDiscoveryEnabled")

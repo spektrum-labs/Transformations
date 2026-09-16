@@ -16,7 +16,7 @@ ADMIN_PORTS = {22, 23, 25, 135, 139, 445, 1433, 1521, 2375, 3306, 3389, 5432, 59
 SECURITY_HEADERS = {"strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options"}
 
 
-def _parse(input):
+def parse_payload(input):
     if isinstance(input, str):
         return json.loads(input)
     if isinstance(input, bytes):
@@ -60,7 +60,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _assets(data):
+def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
@@ -78,7 +78,7 @@ def _assets(data):
     return assets, int(total), stats, partial
 
 
-def _items(data, *keys):
+def list_items(data, *keys):
     """A list endpoint (/sources, /smartfolders, /business/azure-keys) -> its items."""
     if isinstance(data, list):
         return data
@@ -89,7 +89,7 @@ def _items(data, *keys):
     return None
 
 
-def _iso(value):
+def parse_iso_date(value):
     if value in (None, ""):
         return None
     try:
@@ -102,7 +102,7 @@ def _iso(value):
         return None
 
 
-def _listy(asset, key):
+def as_list(asset, key):
     v = asset.get(key)
     if isinstance(v, list):
         return v
@@ -111,15 +111,15 @@ def _listy(asset, key):
     return [v]
 
 
-def _count(assets, predicate, sample_key="bd.original_hostname", limit=25):
+def count_matching(assets, predicate, sample_key="bd.original_hostname", limit=25):
     """Count matching assets and keep a small, non-sensitive sample of hostnames."""
     hits = [a for a in assets if isinstance(a, dict) and predicate(a)]
     return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
 
 
-def _run(input, criteria_key, evaluate, transformation_id):
+def run_criterion(input, criteria_key, evaluate, transformation_id):
     try:
-        data, validation = extract_input(_parse(input))
+        data, validation = extract_input(parse_payload(input))
         if validation.get("status") == "failed":
             return create_response({criteria_key: False}, validation, fail_reasons=["Input validation failed"], transformation_id=transformation_id)
         value, extras, passes, fails, recs, api_errors = evaluate(data)
@@ -131,16 +131,16 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {e}"],
                                transformation_id=transformation_id)
 
-_BUILTIN_PREFIXES = ("bd.", "ports.", "ssl.", "own_body.", "own_header.", "screenshot.",
+BUILTIN_PREFIXES = ("bd.", "ports.", "ssl.", "own_body.", "own_header.", "screenshot.",
                      "wtech.", "wpscan.", "rbls.", "ipgeo.", "domaininfo.", "app_updates.")
 
 
 def evaluate(data):
-    cols = _items(data, "columns", "items", "data")
+    cols = list_items(data, "columns", "items", "data")
     if cols is None:
         return False, {"columnCount": 0}, [], ["/columns returned no readable list"], ["Confirm the API key"], ["column list unreadable"]
     names = [str(c) for c in cols if isinstance(c, (str, int))]
-    custom = [c for c in names if c.startswith("bd.tag_") or not c.startswith(_BUILTIN_PREFIXES) and c not in ("id", "hidden")]
+    custom = [c for c in names if c.startswith("bd.tag_") or not c.startswith(BUILTIN_PREFIXES) and c not in ("id", "hidden")]
     extras = {"columnCount": len(names), "customColumnCount": len(custom), "sampleCustom": custom[:25]}
     if custom:
         return True, extras, [f"{len(custom)} customer-defined asset propert(ies) in use"], [], [], []
@@ -148,4 +148,4 @@ def evaluate(data):
 
 
 def transform(input):
-    return _run(input, "isCustomColumnsConfigured", evaluate, "isCustomColumnsConfigured")
+    return run_criterion(input, "isCustomColumnsConfigured", evaluate, "isCustomColumnsConfigured")

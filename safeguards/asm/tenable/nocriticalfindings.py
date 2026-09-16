@@ -16,7 +16,7 @@ ADMIN_PORTS = {22, 23, 25, 135, 139, 445, 1433, 1521, 2375, 3306, 3389, 5432, 59
 SECURITY_HEADERS = {"strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options"}
 
 
-def _parse(input):
+def parse_payload(input):
     if isinstance(input, str):
         return json.loads(input)
     if isinstance(input, bytes):
@@ -60,7 +60,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _assets(data):
+def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
@@ -78,7 +78,7 @@ def _assets(data):
     return assets, int(total), stats, partial
 
 
-def _items(data, *keys):
+def list_items(data, *keys):
     """A list endpoint (/sources, /smartfolders, /business/azure-keys) -> its items."""
     if isinstance(data, list):
         return data
@@ -89,7 +89,7 @@ def _items(data, *keys):
     return None
 
 
-def _iso(value):
+def parse_iso_date(value):
     if value in (None, ""):
         return None
     try:
@@ -102,7 +102,7 @@ def _iso(value):
         return None
 
 
-def _listy(asset, key):
+def as_list(asset, key):
     v = asset.get(key)
     if isinstance(v, list):
         return v
@@ -111,15 +111,15 @@ def _listy(asset, key):
     return [v]
 
 
-def _count(assets, predicate, sample_key="bd.original_hostname", limit=25):
+def count_matching(assets, predicate, sample_key="bd.original_hostname", limit=25):
     """Count matching assets and keep a small, non-sensitive sample of hostnames."""
     hits = [a for a in assets if isinstance(a, dict) and predicate(a)]
     return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
 
 
-def _run(input, criteria_key, evaluate, transformation_id):
+def run_criterion(input, criteria_key, evaluate, transformation_id):
     try:
-        data, validation = extract_input(_parse(input))
+        data, validation = extract_input(parse_payload(input))
         if validation.get("status") == "failed":
             return create_response({criteria_key: False}, validation, fail_reasons=["Input validation failed"], transformation_id=transformation_id)
         value, extras, passes, fails, recs, api_errors = evaluate(data)
@@ -131,7 +131,7 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {e}"],
                                transformation_id=transformation_id)
 
-def _match(a):
+def matches(a):
     return str(a.get("bd.severity_ranking") or "").lower() == "critical"
 
 
@@ -147,9 +147,9 @@ def evaluate(data):
     not evidence that none exists, so `partial` returns False with the reason, not
     True. A negative over a sample is unprovable, and this key does not assert it.
     """
-    assets, total, _stats, partial = _assets(data)
+    assets, total, stats_unused, partial = read_assets(data)
     if not assets:
-        # `_assets` always returns a list, so an unreadable body arrives here as [] --
+        # `read_assets` always returns a list, so an unreadable body arrives here as [] --
         # not as the non-list this used to guard against. Scanning nothing is not the
         # same as scanning an estate and finding nothing clean, and the difference is
         # the whole claim. Empty is False, whether the body was junk or the inventory
@@ -158,7 +158,7 @@ def evaluate(data):
             ["no assets returned -- the inventory is empty or the response was unreadable"], \
             ["Confirm the API key can read the inventory and that discovery sources are configured"], \
             ["no readable assets in inventory response"]
-    n, sample = _count(assets, _match, 'bd.original_hostname')
+    n, sample = count_matching(assets, matches, 'bd.original_hostname')
     extras = {"count": n, "assetsScanned": len(assets), "inventoryTotal": total, "sample": sample}
     if partial:
         extras["partial"] = True
@@ -171,4 +171,4 @@ def evaluate(data):
 
 
 def transform(input):
-    return _run(input, "noCriticalFindings", evaluate, "noCriticalFindings")
+    return run_criterion(input, "noCriticalFindings", evaluate, "noCriticalFindings")
