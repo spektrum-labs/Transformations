@@ -16,7 +16,7 @@ ADMIN_PORTS = {22, 23, 25, 135, 139, 445, 1433, 1521, 2375, 3306, 3389, 5432, 59
 SECURITY_HEADERS = {"strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options"}
 
 
-def _parse(input):
+def parse_payload(input):
     if isinstance(input, str):
         return json.loads(input)
     if isinstance(input, bytes):
@@ -60,7 +60,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _assets(data):
+def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
@@ -78,7 +78,7 @@ def _assets(data):
     return assets, int(total), stats, partial
 
 
-def _items(data, *keys):
+def list_items(data, *keys):
     """A list endpoint (/sources, /smartfolders, /business/azure-keys) -> its items."""
     if isinstance(data, list):
         return data
@@ -89,7 +89,7 @@ def _items(data, *keys):
     return None
 
 
-def _iso(value):
+def parse_iso_date(value):
     if value in (None, ""):
         return None
     try:
@@ -102,7 +102,7 @@ def _iso(value):
         return None
 
 
-def _listy(asset, key):
+def as_list(asset, key):
     v = asset.get(key)
     if isinstance(v, list):
         return v
@@ -111,15 +111,15 @@ def _listy(asset, key):
     return [v]
 
 
-def _count(assets, predicate, sample_key="bd.original_hostname", limit=25):
+def count_matching(assets, predicate, sample_key="bd.original_hostname", limit=25):
     """Count matching assets and keep a small, non-sensitive sample of hostnames."""
     hits = [a for a in assets if isinstance(a, dict) and predicate(a)]
     return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
 
 
-def _run(input, criteria_key, evaluate, transformation_id):
+def run_criterion(input, criteria_key, evaluate, transformation_id):
     try:
-        data, validation = extract_input(_parse(input))
+        data, validation = extract_input(parse_payload(input))
         if validation.get("status") == "failed":
             return create_response({criteria_key: False}, validation, fail_reasons=["Input validation failed"], transformation_id=transformation_id)
         value, extras, passes, fails, recs, api_errors = evaluate(data)
@@ -132,11 +132,11 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_id=transformation_id)
 
 def evaluate(data):
-    sources = _items(data, "sources", "items", "data")
+    sources = list_items(data, "sources", "items", "data")
     if sources is None:
         return False, {"sourceCount": 0}, [], ["/sources returned no readable list -- key rejected or subscription inactive"], ["Confirm the ASM API key is current and the inventory is licensed"], ["source list unreadable"]
     return True, {"sourceCount": len(sources)}, [f"/sources answered with {len(sources)} source(s): the key is live and the inventory is licensed"], [], [], []
 
 
 def transform(input):
-    return _run(input, "confirmedLicensePurchased", evaluate, "confirmedLicensePurchased")
+    return run_criterion(input, "confirmedLicensePurchased", evaluate, "confirmedLicensePurchased")
