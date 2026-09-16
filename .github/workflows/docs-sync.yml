@@ -21,6 +21,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write # required: claude-code-action exchanges an OIDC token for its GitHub token
 
 concurrency:
   group: docs-sync
@@ -79,6 +80,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Use the workflow's own token so the step does not depend on the Claude GitHub App
+          # being installed on this repo; the bash step below opens the PR with the same token.
+          github_token: ${{ github.token }}
           prompt: |
             Run the /docs-sync skill (defined at .claude/skills/docs-sync/SKILL.md)
             to repair the documentation drift reported below. Follow the skill's
