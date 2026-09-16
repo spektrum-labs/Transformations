@@ -1,8 +1,8 @@
 """
-Transformation: isSavedQueryMonitoringEnabled
-Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getSmartFolders (GET /smartfolders)
-Evaluates: at least one Smart Folder exists: saved inventory queries are monitored
-Reads: /smartfolders
+Transformation: domainExpiringSoonCount
+Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getInventory (POST /inventory, paged)
+Evaluates: registered domains expiring within 30 days -- hijack risk
+Reads: domaininfo.expiresdate
 API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
      (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
 """
@@ -131,16 +131,43 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {e}"],
                                transformation_id=transformation_id)
 
+WINDOW_DAYS = 30
+
+
 def evaluate(data):
-    folders = _items(data, "smartfolders", "smartFolders", "folders", "items", "data")
-    if folders is None:
-        return False, {"smartFolderCount": 0}, [], ["/smartfolders returned no readable list"], ["Confirm the API key"], ["smart folder list unreadable"]
-    names = [str(f.get("name")) for f in folders if isinstance(f, dict) and f.get("name")][:25]
-    extras = {"smartFolderCount": len(folders), "sampleNames": names}
-    if folders:
-        return True, extras, [f"{len(folders)} Smart Folder(s) defined"], [], [], []
-    return False, extras, [], ["no Smart Folders defined"], ["Save the inventory queries you review regularly as Smart Folders"], []
+    assets, total, _stats, partial = _assets(data)
+    now = datetime.now(timezone.utc)
+    soon, lapsed, with_domain, sample = 0, 0, 0, []
+    seen = set()
+    for a in assets:
+        if not isinstance(a, dict):
+            continue
+        ed = _iso(a.get("domaininfo.expiresdate"))
+        if not ed:
+            continue
+        host = a.get("bd.original_hostname") or a.get("id")
+        if host in seen:
+            continue
+        seen.add(host)
+        with_domain += 1
+        days = (ed - now).total_seconds() / 86400
+        if days < 0:
+            lapsed += 1
+        elif days <= WINDOW_DAYS:
+            soon += 1
+            if len(sample) < 25:
+                sample.append({"domain": host, "expires": ed.isoformat(), "daysLeft": round(days, 1)})
+    extras = {"count": soon, "lapsedCount": lapsed, "domainsObserved": with_domain,
+              "assetsScanned": len(assets), "inventoryTotal": total, "windowDays": WINDOW_DAYS, "sample": sample}
+    if partial:
+        extras["partial"] = True
+    if with_domain == 0:
+        return 0, extras, ["no domain registration data on the scanned assets"], [], [], []
+    if soon == 0 and lapsed == 0:
+        return 0, extras, [f"none of {with_domain} observed domain(s) expire within {WINDOW_DAYS} days"], [], [], []
+    fails = [f"{soon} domain(s) expire within {WINDOW_DAYS} days"] + ([f"{lapsed} domain(s) already lapsed"] if lapsed else [])
+    return soon, extras, [], fails, ["Renew and lock the listed domains; a lapsed domain is a hijack waiting to happen"], []
 
 
 def transform(input):
-    return _run(input, "isSavedQueryMonitoringEnabled", evaluate, "isSavedQueryMonitoringEnabled")
+    return _run(input, "domainExpiringSoonCount", evaluate, "domainExpiringSoonCount")

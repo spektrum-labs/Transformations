@@ -1,8 +1,8 @@
 """
-Transformation: isSavedQueryMonitoringEnabled
-Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getSmartFolders (GET /smartfolders)
-Evaluates: at least one Smart Folder exists: saved inventory queries are monitored
-Reads: /smartfolders
+Transformation: assetTriageBacklogCount
+Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getInventory (POST /inventory, paged)
+Evaluates: assets added in the last 30 days still carrying no tag or custom column -- untriaged discovery
+Reads: bd.addedtoportfolio, bd.tags, bd.string_custom_columns, bd.custom_columns
 API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
      (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
 """
@@ -131,16 +131,34 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {e}"],
                                transformation_id=transformation_id)
 
+WINDOW_DAYS = 30
+
+
 def evaluate(data):
-    folders = _items(data, "smartfolders", "smartFolders", "folders", "items", "data")
-    if folders is None:
-        return False, {"smartFolderCount": 0}, [], ["/smartfolders returned no readable list"], ["Confirm the API key"], ["smart folder list unreadable"]
-    names = [str(f.get("name")) for f in folders if isinstance(f, dict) and f.get("name")][:25]
-    extras = {"smartFolderCount": len(folders), "sampleNames": names}
-    if folders:
-        return True, extras, [f"{len(folders)} Smart Folder(s) defined"], [], [], []
-    return False, extras, [], ["no Smart Folders defined"], ["Save the inventory queries you review regularly as Smart Folders"], []
+    assets, total, _stats, partial = _assets(data)
+    now = datetime.now(timezone.utc)
+    recent, untriaged, sample = 0, 0, []
+    for a in assets:
+        if not isinstance(a, dict):
+            continue
+        added = _iso(a.get("bd.addedtoportfolio"))
+        if not added or (now - added).total_seconds() / 86400 > WINDOW_DAYS:
+            continue
+        recent += 1
+        if not (_listy(a, "bd.tags") or _listy(a, "bd.string_custom_columns") or _listy(a, "bd.custom_columns")):
+            untriaged += 1
+            if len(sample) < 25:
+                sample.append(a.get("bd.original_hostname"))
+    extras = {"count": untriaged, "addedInWindow": recent, "assetsScanned": len(assets),
+              "inventoryTotal": total, "windowDays": WINDOW_DAYS, "sample": sample}
+    if partial:
+        extras["partial"] = True
+    if recent == 0:
+        return 0, extras, [f"no assets added in the last {WINDOW_DAYS} days"], [], [], []
+    if untriaged == 0:
+        return 0, extras, [f"all {recent} asset(s) added in the last {WINDOW_DAYS} days have been classified"], [], [], []
+    return untriaged, extras, [], [f"{untriaged} of {recent} assets added in the last {WINDOW_DAYS} days carry no tag or custom column"], ["Triage newly discovered assets: assign an owner and an environment tag"], []
 
 
 def transform(input):
-    return _run(input, "isSavedQueryMonitoringEnabled", evaluate, "isSavedQueryMonitoringEnabled")
+    return _run(input, "assetTriageBacklogCount", evaluate, "assetTriageBacklogCount")
