@@ -136,17 +136,38 @@ def _match(a):
 
 
 def evaluate(data):
+    """`noCriticalFindings` is a claim, not a tally.
+
+    The key asserts "there are no critical findings", so it returns a bool and the
+    bundle grades it `isEquals true`. The count stays in `extras.count`, where it is
+    detail rather than the verdict. Returning the integer here made a clean estate
+    (0) read as false against that operator -- the criterion could never pass.
+
+    A partial scan cannot carry the claim. Seeing no critical asset in 2 of 5000 is
+    not evidence that none exists, so `partial` returns False with the reason, not
+    True. A negative over a sample is unprovable, and this key does not assert it.
+    """
     assets, total, _stats, partial = _assets(data)
-    if not isinstance(assets, list):
-        return 0, {"count": 0}, [], ["inventory response unreadable"], ["Confirm the API key can read the inventory"], ["unreadable inventory response"]
+    if not assets:
+        # `_assets` always returns a list, so an unreadable body arrives here as [] --
+        # not as the non-list this used to guard against. Scanning nothing is not the
+        # same as scanning an estate and finding nothing clean, and the difference is
+        # the whole claim. Empty is False, whether the body was junk or the inventory
+        # is genuinely bare; `isASMEnabled` is the key that reports an empty inventory.
+        return False, {"count": None, "assetsScanned": 0, "inventoryTotal": total}, [], \
+            ["no assets returned -- the inventory is empty or the response was unreadable"], \
+            ["Confirm the API key can read the inventory and that discovery sources are configured"], \
+            ["no readable assets in inventory response"]
     n, sample = _count(assets, _match, 'bd.original_hostname')
     extras = {"count": n, "assetsScanned": len(assets), "inventoryTotal": total, "sample": sample}
     if partial:
         extras["partial"] = True
         extras["note"] = f"scanned {len(assets)} of {total} assets; this count is a lower bound"
-    if n == 0:
-        return 0, extras, [f"no asset(s) ranked critical across {len(assets)} scanned asset(s)"], [], [], []
-    return n, extras, [], [f"{n} asset(s) ranked critical"], ['Remediate or archive the critical-ranked assets in ASM'], []
+    if n:
+        return False, extras, [], [f"{n} asset(s) ranked critical"], ['Remediate or archive the critical-ranked assets in ASM'], []
+    if partial:
+        return False, extras, [], [f"no critical-ranked asset among the {len(assets)} of {total} assets scanned -- too few to claim the estate is clear"], ['Widen the inventory page window so the whole estate is scanned'], []
+    return True, extras, [f"no asset(s) ranked critical across all {len(assets)} asset(s)"], [], [], []
 
 
 def transform(input):
