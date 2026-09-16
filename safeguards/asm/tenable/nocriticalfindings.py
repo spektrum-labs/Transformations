@@ -1,15 +1,19 @@
 """
 Transformation: noCriticalFindings
-Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getCriticalAssets (POST /inventory filter bd.severity_ranking is critical)
-Evaluates: count of assets ranked critical (the response total); true when 0
-API: Tenable ASM v1.0 (https://developer.tenable.com/reference/globalsearch), asm.cloud.tenable.com/api/1.0
+Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getInventory (POST /inventory, paged)
+Evaluates: count of assets ranked critical; true when 0
+Reads: bd.severity_ranking
+API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
+     (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 VENDOR = "Tenable"
 CATEGORY = "Attack Surface Management"
+ADMIN_PORTS = {22, 23, 25, 135, 139, 445, 1433, 1521, 2375, 3306, 3389, 5432, 5900, 5984, 6379, 9200, 11211, 27017}
+SECURITY_HEADERS = {"strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options"}
 
 
 def _parse(input):
@@ -21,7 +25,7 @@ def _parse(input):
 
 
 def extract_input(input_data):
-    """The engine hands `{"data": <api response>, "validation": {...}}`; older callers hand the
+    """The engine hands {"data": <api response>, "validation": {...}}; older callers hand the
     bare response, sometimes under a wrapper key. Returns (response, validation)."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -29,7 +33,7 @@ def extract_input(input_data):
     if isinstance(data, dict):
         for _ in range(3):
             moved = False
-            for key in ("api_response", "response", "result", "apiResponse", "Output"):
+            for key in ("api_response", "response", "result", "apiResponse", "Output", "_response_data"):
                 if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     moved = True
@@ -57,22 +61,25 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def _assets(data):
-    """`POST /inventory` -> {"total", "hiddenCount", "stats", "assets": [...]}. A bare list is
-    tolerated (some proxies unwrap). Never invents a total: when the API omitted it (paging
-    with `after`), the count of returned assets is what we know."""
+    """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
+    pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
+    tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
+    are fewer than the estate, so a count derived from them is a LOWER BOUND and says so."""
     if isinstance(data, list):
-        return data, len(data), {}
+        return data, len(data), {}, False
     if not isinstance(data, dict):
-        return [], None, {}
+        return [], None, {}, False
     assets = data.get("assets") or []
     total = data.get("total")
+    stats = data.get("stats") or {}
+    partial = isinstance(total, int) and total > len(assets)
     if total is None:
         total = len(assets)
-    return assets, int(total), data.get("stats") or {}
+    return assets, int(total), stats, partial
 
 
 def _items(data, *keys):
-    """A list endpoint (`/sources`, `/smartfolders`) -> its items, whether bare or wrapped."""
+    """A list endpoint (/sources, /smartfolders, /business/azure-keys) -> its items."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -87,19 +94,30 @@ def _iso(value):
         return None
     try:
         if isinstance(value, (int, float)):
-            # epoch ms (bd.addedtoportfolio) or s
             v = float(value)
             return datetime.fromtimestamp(v / 1000 if v > 1e11 else v, tz=timezone.utc)
-        s = str(value).replace("Z", "+00:00")
-        d = datetime.fromisoformat(s)
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
 
+def _listy(asset, key):
+    v = asset.get(key)
+    if isinstance(v, list):
+        return v
+    if v in (None, "", False):
+        return []
+    return [v]
+
+
+def _count(assets, predicate, sample_key="bd.original_hostname", limit=25):
+    """Count matching assets and keep a small, non-sensitive sample of hostnames."""
+    hits = [a for a in assets if isinstance(a, dict) and predicate(a)]
+    return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
+
+
 def _run(input, criteria_key, evaluate, transformation_id):
-    """Shared driver: parse, unwrap, evaluate, and wrap in the v1.0 response contract. `evaluate`
-    returns (value, extras, pass_reasons, fail_reasons, recommendations, api_errors)."""
     try:
         data, validation = extract_input(_parse(input))
         if validation.get("status") == "failed":
@@ -113,19 +131,22 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {e}"],
                                transformation_id=transformation_id)
 
-SEVERITY = "critical"
+def _match(a):
+    return str(a.get("bd.severity_ranking") or "").lower() == "critical"
 
 
 def evaluate(data):
-    assets, total, _ = _assets(data)
-    if total is None:
-        return False, {"count": None}, [], ["inventory response unreadable"], ["Confirm the API key has access to this inventory"], ["unreadable inventory response"]
-    hosts = [a.get("bd.original_hostname") for a in assets if isinstance(a, dict) and a.get("bd.original_hostname")][:25]
-    cves = sorted({c for a in assets if isinstance(a, dict) for c in (a.get("ports.cves") or [])})[:50]
-    extras = {"count": total, "sampleHosts": hosts, "sampleCves": cves, "severity": SEVERITY}
-    if total == 0:
-        return True, extras, [f"no assets ranked {SEVERITY}"], [], [], []
-    return False, extras, [], [f"{total} asset(s) ranked {SEVERITY}"], [f"Remediate or archive the {SEVERITY}-ranked assets in ASM"], []
+    assets, total, _stats, partial = _assets(data)
+    if not isinstance(assets, list):
+        return 0, {"count": 0}, [], ["inventory response unreadable"], ["Confirm the API key can read the inventory"], ["unreadable inventory response"]
+    n, sample = _count(assets, _match, 'bd.original_hostname')
+    extras = {"count": n, "assetsScanned": len(assets), "inventoryTotal": total, "sample": sample}
+    if partial:
+        extras["partial"] = True
+        extras["note"] = f"scanned {len(assets)} of {total} assets; this count is a lower bound"
+    if n == 0:
+        return 0, extras, [f"no asset(s) ranked critical across {len(assets)} scanned asset(s)"], [], [], []
+    return n, extras, [], [f"{n} asset(s) ranked critical"], ['Remediate or archive the critical-ranked assets in ASM'], []
 
 
 def transform(input):

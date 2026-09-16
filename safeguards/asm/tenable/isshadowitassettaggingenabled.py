@@ -1,15 +1,19 @@
 """
 Transformation: isShadowITAssetTaggingEnabled
-Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getTaggedAssets (POST /inventory with bd.tags, bd.string_custom_columns, bd.custom_columns)
-Evaluates: tags or custom columns are in use on inventory assets: what discovery finds is being classified
-API: Tenable ASM v1.0 (https://developer.tenable.com/reference/globalsearch), asm.cloud.tenable.com/api/1.0
+Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getInventory (POST /inventory, paged)
+Evaluates: tags or custom columns in use: what discovery finds is being classified
+Reads: bd.tags, bd.string_custom_columns, bd.custom_columns
+API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
+     (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 VENDOR = "Tenable"
 CATEGORY = "Attack Surface Management"
+ADMIN_PORTS = {22, 23, 25, 135, 139, 445, 1433, 1521, 2375, 3306, 3389, 5432, 5900, 5984, 6379, 9200, 11211, 27017}
+SECURITY_HEADERS = {"strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options"}
 
 
 def _parse(input):
@@ -21,7 +25,7 @@ def _parse(input):
 
 
 def extract_input(input_data):
-    """The engine hands `{"data": <api response>, "validation": {...}}`; older callers hand the
+    """The engine hands {"data": <api response>, "validation": {...}}; older callers hand the
     bare response, sometimes under a wrapper key. Returns (response, validation)."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -29,7 +33,7 @@ def extract_input(input_data):
     if isinstance(data, dict):
         for _ in range(3):
             moved = False
-            for key in ("api_response", "response", "result", "apiResponse", "Output"):
+            for key in ("api_response", "response", "result", "apiResponse", "Output", "_response_data"):
                 if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     moved = True
@@ -57,22 +61,25 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def _assets(data):
-    """`POST /inventory` -> {"total", "hiddenCount", "stats", "assets": [...]}. A bare list is
-    tolerated (some proxies unwrap). Never invents a total: when the API omitted it (paging
-    with `after`), the count of returned assets is what we know."""
+    """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
+    pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
+    tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
+    are fewer than the estate, so a count derived from them is a LOWER BOUND and says so."""
     if isinstance(data, list):
-        return data, len(data), {}
+        return data, len(data), {}, False
     if not isinstance(data, dict):
-        return [], None, {}
+        return [], None, {}, False
     assets = data.get("assets") or []
     total = data.get("total")
+    stats = data.get("stats") or {}
+    partial = isinstance(total, int) and total > len(assets)
     if total is None:
         total = len(assets)
-    return assets, int(total), data.get("stats") or {}
+    return assets, int(total), stats, partial
 
 
 def _items(data, *keys):
-    """A list endpoint (`/sources`, `/smartfolders`) -> its items, whether bare or wrapped."""
+    """A list endpoint (/sources, /smartfolders, /business/azure-keys) -> its items."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -87,19 +94,30 @@ def _iso(value):
         return None
     try:
         if isinstance(value, (int, float)):
-            # epoch ms (bd.addedtoportfolio) or s
             v = float(value)
             return datetime.fromtimestamp(v / 1000 if v > 1e11 else v, tz=timezone.utc)
-        s = str(value).replace("Z", "+00:00")
-        d = datetime.fromisoformat(s)
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
 
+def _listy(asset, key):
+    v = asset.get(key)
+    if isinstance(v, list):
+        return v
+    if v in (None, "", False):
+        return []
+    return [v]
+
+
+def _count(assets, predicate, sample_key="bd.original_hostname", limit=25):
+    """Count matching assets and keep a small, non-sensitive sample of hostnames."""
+    hits = [a for a in assets if isinstance(a, dict) and predicate(a)]
+    return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
+
+
 def _run(input, criteria_key, evaluate, transformation_id):
-    """Shared driver: parse, unwrap, evaluate, and wrap in the v1.0 response contract. `evaluate`
-    returns (value, extras, pass_reasons, fail_reasons, recommendations, api_errors)."""
     try:
         data, validation = extract_input(_parse(input))
         if validation.get("status") == "failed":
@@ -114,24 +132,25 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_id=transformation_id)
 
 def evaluate(data):
-    assets, total, _ = _assets(data)
-    tagged = 0
-    tag_ids = set()
+    assets, total, _stats, partial = _assets(data)
+    tagged, tag_ids = 0, set()
     for a in assets:
         if not isinstance(a, dict):
             continue
-        tags = a.get("bd.tags") or []
-        cols = (a.get("bd.string_custom_columns") or []) + (a.get("bd.custom_columns") or [])
+        tags = _listy(a, "bd.tags")
+        cols = _listy(a, "bd.string_custom_columns") + _listy(a, "bd.custom_columns")
         if tags or cols:
             tagged += 1
         for t in tags:
             tag_ids.add(str(t))
-    extras = {"sampledAssets": len(assets), "taggedAssets": tagged, "distinctTags": len(tag_ids)}
+    extras = {"assetsScanned": len(assets), "taggedAssets": tagged, "distinctTags": len(tag_ids), "inventoryTotal": total}
+    if partial:
+        extras["partial"] = True
     if not assets:
-        return False, extras, [], ["no assets in the sample"], ["Confirm the inventory holds assets"], []
+        return False, extras, [], ["no assets in the inventory"], ["Confirm the inventory holds assets"], []
     if tagged > 0:
-        return True, extras, [f"{tagged} of {len(assets)} sampled assets carry tags or custom columns ({len(tag_ids)} distinct tags)"], [], [], []
-    return False, extras, [], ["no sampled asset carries a tag or custom column"], ["Tag discovered assets (owner, environment, shadow-IT) so triage can act on them"], []
+        return True, extras, [f"{tagged} of {len(assets)} scanned assets carry tags or custom columns ({len(tag_ids)} distinct tags)"], [], [], []
+    return False, extras, [], ["no asset carries a tag or custom column"], ["Tag discovered assets (owner, environment, shadow-IT) so triage can act on them"], []
 
 
 def transform(input):

@@ -1,8 +1,8 @@
 """
-Transformation: isSavedQueryMonitoringEnabled
-Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getSmartFolders (GET /smartfolders)
-Evaluates: at least one Smart Folder exists: saved inventory queries are monitored
-Reads: /smartfolders
+Transformation: isWebApplicationFirewallDeployed
+Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getInventory (POST /inventory, paged)
+Evaluates: a WAF or CDN is detected in front of the web estate
+Reads: wtech.Web Application Firewall
 API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
      (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
 """
@@ -132,15 +132,17 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_id=transformation_id)
 
 def evaluate(data):
-    folders = _items(data, "smartfolders", "smartFolders", "folders", "items", "data")
-    if folders is None:
-        return False, {"smartFolderCount": 0}, [], ["/smartfolders returned no readable list"], ["Confirm the API key"], ["smart folder list unreadable"]
-    names = [str(f.get("name")) for f in folders if isinstance(f, dict) and f.get("name")][:25]
-    extras = {"smartFolderCount": len(folders), "sampleNames": names}
-    if folders:
-        return True, extras, [f"{len(folders)} Smart Folder(s) defined"], [], [], []
-    return False, extras, [], ["no Smart Folders defined"], ["Save the inventory queries you review regularly as Smart Folders"], []
+    assets, total, _stats, partial = _assets(data)
+    web = [a for a in assets if isinstance(a, dict) and (_listy(a, "own_header.secnames") or a.get("wtech.has_login") is not None or _listy(a, "ports.ports"))]
+    behind = [a for a in assets if isinstance(a, dict) and _listy(a, "wtech.Web Application Firewall")]
+    vendors = sorted({str(v) for a in behind for v in _listy(a, "wtech.Web Application Firewall")})
+    extras = {"assetsBehindWaf": len(behind), "assetsScanned": len(assets), "wafVendors": vendors, "inventoryTotal": total}
+    if partial:
+        extras["partial"] = True
+    if behind:
+        return True, extras, [f"{len(behind)} asset(s) behind a WAF/CDN ({', '.join(vendors[:5]) or 'unnamed'})"], [], [], []
+    return False, extras, [], ["no WAF or CDN detected in front of any discovered asset"], ["Front internet-facing web assets with a WAF/CDN"], []
 
 
 def transform(input):
-    return _run(input, "isSavedQueryMonitoringEnabled", evaluate, "isSavedQueryMonitoringEnabled")
+    return _run(input, "isWebApplicationFirewallDeployed", evaluate, "isWebApplicationFirewallDeployed")

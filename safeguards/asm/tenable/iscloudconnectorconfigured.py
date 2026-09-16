@@ -1,8 +1,8 @@
 """
-Transformation: isSavedQueryMonitoringEnabled
-Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getSmartFolders (GET /smartfolders)
-Evaluates: at least one Smart Folder exists: saved inventory queries are monitored
-Reads: /smartfolders
+Transformation: isCloudConnectorConfigured
+Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getAzureKeys (GET /business/azure-keys)
+Evaluates: at least one Azure cloud-connector key is registered -- configuration, not inference from assets
+Reads: /business/azure-keys
 API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
      (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
 """
@@ -132,15 +132,15 @@ def _run(input, criteria_key, evaluate, transformation_id):
                                transformation_id=transformation_id)
 
 def evaluate(data):
-    folders = _items(data, "smartfolders", "smartFolders", "folders", "items", "data")
-    if folders is None:
-        return False, {"smartFolderCount": 0}, [], ["/smartfolders returned no readable list"], ["Confirm the API key"], ["smart folder list unreadable"]
-    names = [str(f.get("name")) for f in folders if isinstance(f, dict) and f.get("name")][:25]
-    extras = {"smartFolderCount": len(folders), "sampleNames": names}
-    if folders:
-        return True, extras, [f"{len(folders)} Smart Folder(s) defined"], [], [], []
-    return False, extras, [], ["no Smart Folders defined"], ["Save the inventory queries you review regularly as Smart Folders"], []
+    keys = _items(data, "keys", "azureKeys", "items", "data")
+    if keys is None:
+        return False, {"azureKeyCount": 0}, [], ["/business/azure-keys returned no readable list"], ["Confirm the API key has permission to list cloud connectors"], ["azure key list unreadable"]
+    names = [str(k.get("name")) for k in keys if isinstance(k, dict) and k.get("name")][:25]
+    extras = {"azureKeyCount": len(keys), "keyNames": names}
+    if keys:
+        return True, extras, [f"{len(keys)} Azure cloud-connector key(s) registered"], [], [], []
+    return False, extras, [], ["no cloud-connector keys registered"], ["Register an Azure key so cloud assets are discovered continuously, not only from DNS"], []
 
 
 def transform(input):
-    return _run(input, "isSavedQueryMonitoringEnabled", evaluate, "isSavedQueryMonitoringEnabled")
+    return _run(input, "isCloudConnectorConfigured", evaluate, "isCloudConnectorConfigured")
