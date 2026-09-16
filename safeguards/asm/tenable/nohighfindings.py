@@ -136,17 +136,30 @@ def _match(a):
 
 
 def evaluate(data):
+    """`noHighFindings` is a claim, not a tally. See nocriticalfindings.py.
+
+    Returns a bool for `isEquals true`; the count lives in `extras.count`. A partial
+    scan returns False -- no high-ranked asset among a sample is not evidence that
+    none exists in the estate.
+    """
     assets, total, _stats, partial = _assets(data)
-    if not isinstance(assets, list):
-        return 0, {"count": 0}, [], ["inventory response unreadable"], ["Confirm the API key can read the inventory"], ["unreadable inventory response"]
+    if not assets:
+        # See nocriticalfindings.py: `_assets` returns [] for an unreadable body, so
+        # scanning nothing must not read as a clean estate.
+        return False, {"count": None, "assetsScanned": 0, "inventoryTotal": total}, [], \
+            ["no assets returned -- the inventory is empty or the response was unreadable"], \
+            ["Confirm the API key can read the inventory and that discovery sources are configured"], \
+            ["no readable assets in inventory response"]
     n, sample = _count(assets, _match, 'bd.original_hostname')
     extras = {"count": n, "assetsScanned": len(assets), "inventoryTotal": total, "sample": sample}
     if partial:
         extras["partial"] = True
         extras["note"] = f"scanned {len(assets)} of {total} assets; this count is a lower bound"
-    if n == 0:
-        return 0, extras, [f"no asset(s) ranked high across {len(assets)} scanned asset(s)"], [], [], []
-    return n, extras, [], [f"{n} asset(s) ranked high"], ['Remediate or archive the high-ranked assets in ASM'], []
+    if n:
+        return False, extras, [], [f"{n} asset(s) ranked high"], ['Remediate or archive the high-ranked assets in ASM'], []
+    if partial:
+        return False, extras, [], [f"no high-ranked asset among the {len(assets)} of {total} assets scanned -- too few to claim the estate is clear"], ['Widen the inventory page window so the whole estate is scanned'], []
+    return True, extras, [f"no asset(s) ranked high across all {len(assets)} asset(s)"], [], [], []
 
 
 def transform(input):
