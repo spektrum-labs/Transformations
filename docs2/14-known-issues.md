@@ -1,16 +1,16 @@
 # Known issues
 
-> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 8bf278fb` and production `main @ 9d0262aa` (2026-09-04). Status: draft for engineer review.
+> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ d3bece29` and production `main @ 6c0e6e63` (2026-09-16). Status: draft for engineer review.
 >
 > Cross-service receipts: `TS:` = Token-Service production `main @ b60e209d`; `IS:` = Integration-Service production `main @ c8aa9a4b`. `main:` / `develop:` = this repo's branches.
 
-**In one sentence:** This is the register of what is broken, unreachable, or booby-trapped in this repo today — 16 production files that cannot run (or cannot date-parse) under the sandbox they deploy into, a 102-file case-sensitivity dead zone, a develop branch staging more of both, and the corrections to the repo's own frozen docs — each with receipts, because every one of these failures is silent by design.
+**In one sentence:** This is the register of what is broken, unreachable, or booby-trapped in this repo today — 42 production files that cannot run (or cannot date-parse) under the sandbox they deploy into (26 of them the Tenable ASM vendor merged 2026-09-16), a 114-file case-sensitivity dead zone, a develop branch staging more of both, and the corrections to the repo's own frozen docs — each with receipts, because every one of these failures is silent by design.
 
 ## At a glance
 
-- **16 transform files on production `main` cannot run (or cannot date-parse) under the production sandbox** — 1 hard syntax error (live since 2026-02-06), 7 RestrictedPython compile failures, and 8 files whose only violation is a live `datetime.strptime` call (9 files call `strptime` in total; the 9th is already among the compile failures). Inventory below, re-verified by executing every main file through the exact Token-Service pipeline under RestrictedPython 8.5.
+- **42 transform files on production `main` cannot run (or cannot date-parse) under the production sandbox** — 1 hard syntax error (live since 2026-02-06), 33 RestrictedPython compile failures (7 long-standing, plus **all 26 `asm/tenable/` transforms merged 2026-09-16 via PRs #558–#560**, every one built on underscore-prefixed helpers), and 8 files whose only violation is a live `datetime.strptime` call (9 files call `strptime` in total; the 9th is already among the compile failures). Inventory below, re-verified by executing every main file through the exact Token-Service pipeline under RestrictedPython 8.5.
 - **Every one of these failures is silent — in two different ways.** The syntax/sandbox failures and dead-zone 404s become the error envelope — `requirementSatisfied: False, isEvaluated: False`, a task, never a gap ([02-execution-contract.md](02-execution-contract.md)) — which is why a syntax error survived ~7 months on production. The strptime files never even error: every call site is guarded, so they return **measured wrong answers** — two can never pass, two can falsely *pass* (inventory below).
-- **109 of 774 non-schema files (~14%) are unreachable by the minted default URL** — the [case-sensitivity dead zone](GLOSSARY.md#case-sensitivity-dead-zone): 55 files in the 10 UPPERCASE SRN dirs + 54 mixed-case filenames (the 2026-09-04 Lookout hotfix shipped its 7 transforms entirely inside the dead zone). On develop it grows to 225 of 871 (26%).
+- **114 of 805 non-schema files (~14%) are unreachable by the minted default URL** — the [case-sensitivity dead zone](GLOSSARY.md#case-sensitivity-dead-zone): 55 files in the 10 UPPERCASE SRN dirs + 59 mixed-case filenames (the 2026-09-04 Lookout hotfix shipped its 7 transforms entirely inside the dead zone; the 2026-09-14 GitHub twin PR added 5 more). On develop it grows to 233 of 879 (26%).
 - **Whether any of this bites a live tenant is a DB question this repo cannot answer** — reachability lives in Integration-Service's definitions and criteria mappings, not in the tree.
 - **Develop stages more breakage**: 3 new `mfa/azure` transforms that are sandbox-fatal on arrival, 5 stale pre-hotfix `beyondtrust-pra` copies, 6 stale pre-hotfix `mobile-security/lookout` copies (armed as add/add conflicts), 10 colocated pytest files, and the URL-breaking redcanary rename ([13-release-and-branches.md](13-release-and-branches.md)).
 - **The repo's own docs need corrections**: `CLAUDE.md`'s flagship `_parse_input` pattern is sandbox-fatal if generalized, `CONTRIBUTING.md` understates the sandbox, and both have been frozen since 2026-02-06. Corrections table below.
@@ -33,9 +33,9 @@ flowchart LR
 
 Walkthrough: the two fetch-and-fail classes — files that fail when run and files that are never fetched at all — funnel into the same `isEvaluated: False` outcome, which protects posture integrity but raises no alarm. Two classes *escape* the funnel and are **measured anyway**: the strptime files, whose guarded fallbacks return wrong answers (inventory below), and a wrong return shape, which can open a genuine gap (below).
 
-## Broken on production main: the 16-file inventory
+## Broken on production main: the 42-file inventory
 
-Re-verified 2026-09-04 (at `main @ 9d0262aa` — the 2 commits main gained since the last verification only added the 9 clean Lookout files; none of the 16 broken files changed) by running every one of main's 774 non-schema `.py` files through a verbatim replica of Token-Service's pipeline — the underscore rename, `_validate_transformation_code`, and a real `compile_restricted` under RestrictedPython 8.5 (`TS:src/utils/codeexecutor.py:537-541, :555-617, :723`). Whether each file is *referenced* by a live integration config is an Integration-DB question — but if referenced, classes (a) and (b) yield permanent `isEvaluated: False`.
+Re-verified 2026-09-16 (at `main @ 6c0e6e63` — none of the original 16 broken files changed since `9d0262aa`; the 10 commits main gained added the 5 clean GitHub files, the Okta ENG-560 rewrite, and the 26 broken Tenable ASM files) by running every one of main's 805 non-schema `.py` files through a verbatim replica of Token-Service's pipeline — the underscore rename, `_validate_transformation_code`, and a real `compile_restricted` under RestrictedPython 8.5 (`TS:src/utils/codeexecutor.py:537-541, :555-617, :723`). Whether each file is *referenced* by a live integration config is an Integration-DB question — but if referenced, classes (a) and (b) yield permanent `isEvaluated: False`.
 
 ### (a) Hard syntax error — 1 file
 
@@ -45,7 +45,7 @@ Re-verified 2026-09-04 (at `main @ 9d0262aa` — the 2 commits main gained since
 
 The broken blob was authored in `7b8962e9` (2026-01-26), survived the conflict-resolution commit `3f55acd8` ("resolveconflicts"), and landed on main via the `29716136` staging-to-main merge — the mis-resolution precedent [13-release-and-branches.md](13-release-and-branches.md) warns about. **The fix already exists on develop** (`36052124`, LABS-3080) and was never promoted; this is the one file a develop→main merge would *fix*.
 
-### (b) RestrictedPython compile failures — 7 files
+### (b) RestrictedPython compile failures — 33 files (7 long-standing + 26 Tenable ASM)
 
 | File | Killer | Receipt |
 |---|---|---|
@@ -56,6 +56,10 @@ The broken blob was authored in `7b8962e9` (2026-01-26), survived the conflict-r
 | `main:safeguards/iam/keeper/ispasswordreusedetected.py` | subscript `+=` (`:112`) | |
 | `main:safeguards/iam/keeper/ispasswordstrengthadequate.py` | subscript `+=` — 4 sites (`:139-145`) | |
 | `main:safeguards/siem/netwrix/isincidentworkflowconfigured.py` | subscript `+=` (`:89`) | |
+| `main:safeguards/asm/tenable/*.py` — **all 26 transforms** (`activeintegrationscount` … `vulnerablewordpresscount`) | underscore names — every file defines top-level `_parse` (`:19`), `_assets` (`:63`), `_items` (`:81`), `_iso` (`:92`), `_listy` (`:105`), `_count` (`:114`), `_run` (`:120`); 11 also define `_match` (`:134`) (line numbers identical across the set, e.g. `main:safeguards/asm/tenable/nocriticalfindings.py:19,120`) | merged to main 2026-09-16 (PRs #558–#560, `6c0e6e63`), never on develop; the exact pattern ENG-463 and the BeyondTrust PRA hotfix removed. The vendor README's "51 fixture runs, 0 raised" (`main:safeguards/asm/tenable/README.md`) was measured under full CPython — the sandbox rejects all 26 at compile time |
+
+> [!CAUTION]
+> **The Tenable ASM set is the largest single production breakage in this register and the first to arrive through a reviewed PR** (#559/#560 each show 1 review). Every one of its 26 criteria evaluates to `isEvaluated: False` on every fetch; nothing pages. The fix is mechanical — drop the leading underscore from the seven (eight) helper names — and must land on `main`, because `develop` has no copy of these files ([13-release-and-branches.md](13-release-and-branches.md)).
 
 ### (c) Live `datetime.strptime` callers — 8 files (strptime-only)
 
@@ -86,12 +90,12 @@ The broken blob was authored in `7b8962e9` (2026-01-26), survived the conflict-r
 Five more files grep for `strptime` but only in comments/docstrings warning against it (the cisco-umbrella pair among them, which documents the `_strptime` mechanism at `main:safeguards/networksecurity/cisco-umbrella/iscontinuousdiscoveryenabled.py:96-97`).
 
 > [!NOTE]
-> **Two signature outliers (not broken, just non-standard).** 770 of main's 772 transform modules define exactly `def transform(input):`. The two deviations still execute — Token-Service passes one positional argument — but violate the uniform contract: `main:safeguards/emailsecurity/mimecast/isemailloggingenabled.py:71` (`def transform(input_data):`) and `main:safeguards/epp/crowdstrike/epp_transform.py:70` (`def transform(endpoints_response, debug=False):`). Don't imitate either ([03-writing-a-transform.md](03-writing-a-transform.md)).
+> **Two signature outliers (not broken, just non-standard).** 801 of main's 803 transform modules define exactly `def transform(input):`. The two deviations still execute — Token-Service passes one positional argument — but violate the uniform contract: `main:safeguards/emailsecurity/mimecast/isemailloggingenabled.py:71` (`def transform(input_data):`) and `main:safeguards/epp/crowdstrike/epp_transform.py:70` (`def transform(endpoints_response, debug=False):`). Don't imitate either ([03-writing-a-transform.md](03-writing-a-transform.md)).
 
 ## The case-sensitivity dead zone
 
 > [!CAUTION]
-> **109 of main's 774 non-schema files (~14%) can never be fetched by the default minted URL**, because Integration-Service lowercases both path segments (`IS:src/models/integrator.py:2601`) while raw GitHub paths are case-sensitive (live-verified 2026-09-04: exact-case 200, as-minted 404). The population: **55 files** in the 10 UPPERCASE SRN dirs + **54 mixed-case filenames** (all 16 `encryption/microsoft/`, 14 `networksecurity/dnsfilter/`, 8 `identity-and-access-management/beyondtrust/`, **7 `mobile-security/lookout/` — the entire PR #548 hotfix merged as main HEAD** — 3 `epp/halcyon/`, 3 `iam/duo/`, 2 `epp/ninjaone-endpoint-management/` (both files of the PR #544 hotfix), and 1 `firewall/cato-networks/`). These run only via exact-case DB URLs, or not at all — silently, as `isEvaluated: False`. Renaming a file or directory's case, or adding a camelCase filename for a minted-default vendor, is a production incident that looks like nothing. On develop the dead zone grows to 225 of 871 (26%): 110 of the 128 newest transform modules are mixed-case.
+> **114 of main's 805 non-schema files (~14%) can never be fetched by the default minted URL**, because Integration-Service lowercases both path segments (`IS:src/models/integrator.py:2601`) while raw GitHub paths are case-sensitive (live-verified 2026-09-16: exact-case 200, as-minted 404 — including `devsecops/github/isAdvancedSecurityEnabled.py`). The population: **55 files** in the 10 UPPERCASE SRN dirs + **59 mixed-case filenames** (all 16 `encryption/microsoft/`, 14 `networksecurity/dnsfilter/`, 8 `identity-and-access-management/beyondtrust/`, **7 `mobile-security/lookout/` — the entire PR #548 hotfix** — **5 `devsecops/github/` (the entire ENG-576 PR #556, 2026-09-14)**, 3 `epp/halcyon/`, 3 `iam/duo/`, 2 `epp/ninjaone-endpoint-management/` (both files of the PR #544 hotfix), and 1 `firewall/cato-networks/`). These run only via exact-case DB URLs, or not at all — silently, as `isEvaluated: False`. Renaming a file or directory's case, or adding a camelCase filename for a minted-default vendor, is a production incident that looks like nothing. On develop the dead zone grows to 233 of 879 (26%): 113 of the 135 develop-only transform modules are mixed-case.
 
 Mechanics and the live curl table: [02-execution-contract.md](02-execution-contract.md#the-case-sensitivity-dead-zone). Per-directory census: [04-catalog.md](04-catalog.md). **Open question (stated, not settled):** whether every live method of every dead-zone file has an exact-case DB URL — or whether some minted-default fetches have been quietly 404ing — requires the Integration DB or Token-Service fetch logs.
 
@@ -106,7 +110,7 @@ Everything here ships to production the moment develop is promoted ([13-release-
 
 | Issue | Detail | Receipt |
 |---|---|---|
-| **3 sandbox-fatal new transforms** | `develop:safeguards/mfa/azure/{areadminaccountsseparate,isadminmfaphishingresistant,ismfaenforced}.py` define top-level underscore helpers (`def _as_list` at `ismfaenforced.py:69`, `areadminaccountsseparate.py:102`, `isadminmfaphishingresistant.py:117`) — the exact pattern three fix cycles (ENG-463, BeyondTrust PRA, develop's own PR #480) already removed. They would deploy as permanent `isEvaluated: False`. Main's tree has **zero** top-level `_`-prefixed defs | re-verified empirically under RestrictedPython 8.5 |
+| **3 sandbox-fatal new transforms** | `develop:safeguards/mfa/azure/{areadminaccountsseparate,isadminmfaphishingresistant,ismfaenforced}.py` define top-level underscore helpers (`def _as_list` at `ismfaenforced.py:69`, `areadminaccountsseparate.py:102`, `isadminmfaphishingresistant.py:117`) — the exact pattern three fix cycles (ENG-463, BeyondTrust PRA, develop's own PR #480) already removed. They would deploy as permanent `isEvaluated: False`. Main's tree had **zero** top-level `_`-prefixed defs until the 26 Tenable ASM files landed on 2026-09-16 (class (b) above) | re-verified empirically under RestrictedPython 8.5 |
 | **8 armed add/add conflicts** | `epp/ninjaone-endpoint-management/{isBitLockerRecoveryKeyEscrowed,isEncryptionEnabled}.py` — develop's copies are broken against the real NinjaOne API; main's PR #544 rewrite is production-correct — plus the 6 stale lookout copies below. **Resolving toward develop (or `-X theirs`, or reset/force-push) re-breaks production** | `main:...isBitLockerRecoveryKeyEscrowed.py:72-75`; `develop:...isEncryptionEnabled.py:99,104-105` |
 | **6 stale lookout copies** | develop's `mobile-security/lookout/*` predate main's fleet-count hotfix `382dc385` (PR #548, 2026-09-04): they report the API page length as the fleet size (`develop:safeguards/mobile-security/lookout/isDeviceEncrypted.py:158` emits `"totalDevicesInPage"`; main's copy reads `data.get("count")`, `main:...isDeviceEncrypted.py:123-124`). Files absent at the merge-base → add/add conflicts on promotion, and any develop-based lookout edit starts from the wrong counting logic | [13-release-and-branches.md](13-release-and-branches.md) |
 | **5 stale beyondtrust-pra copies** | develop's `iam/beyondtrust-pra/*` still carry the underscore helpers main removed in `b2e6e623` (2026-09-02). A clean merge keeps main's fix (develop's copies equal the merge-base) — but any develop-based *edit* starts from sandbox-fatal code | [13-release-and-branches.md](13-release-and-branches.md) |
@@ -143,8 +147,8 @@ Owned and receipted in [02-execution-contract.md](02-execution-contract.md); reg
 | P0 | `main:CONTRIBUTING.md:318-361` | four sandbox prohibitions | all four are true, but at least five more fatal restrictions are missing (underscore names, `nonlocal`, `filter()`, the `getattr`/`eval`/`open` call family, dunder access) — two of the missing ones have already broken shipped files |
 | P1 | `main:CONTRIBUTING.md:334` | imports banned "except json, datetime" | the effective allowlist is 8 modules: `json, ast, re, datetime, math, collections, itertools, functools` ([02-execution-contract.md](02-execution-contract.md)) |
 | P1 | `main:CONTRIBUTING.md:413-414` | stdin mode `... local_tester.py transform.py -` | no stdin support exists; `-` fails with `[Errno 2]` (`main:local_tester.py:60-63`); [12-local-development.md](12-local-development.md) |
-| P1 | `main:README.md:91` + `main:safeguards/registry.json` | "the full registry" | 19 entries vs 22 SRN dirs and 27 category trees; nothing machine-reads it; stale since 2026-02-06 ([04-catalog.md](04-catalog.md)) |
-| P2 | `main:README.md:13-26` | SRN-only directory layout | the category/vendor layout is now the majority (610 of 772 transforms) |
+| P1 | `main:README.md:91` + `main:safeguards/registry.json` | "the full registry" | 19 entries vs 22 SRN dirs and 29 category trees; nothing machine-reads it; stale since 2026-02-06 ([04-catalog.md](04-catalog.md)) |
+| P2 | `main:README.md:13-26` | SRN-only directory layout | the category/vendor layout is now the majority (641 of 803 transforms) |
 | P2 | `main:README.md:115` | — | the file ends mid-code-fence (the fence opened at `:113` is never closed); cosmetic but real |
 
 > [!CAUTION]
@@ -152,7 +156,7 @@ Owned and receipted in [02-execution-contract.md](02-execution-contract.md); reg
 
 ## The recommendation: a pre-merge sandbox scan
 
-The single highest-leverage fix for this register: **replicate Token-Service's pipeline — the underscore rename, the Layer-1 AST validation, and a real `compile_restricted` — over every non-schema `.py` in a pre-merge check.** The approach is proven: the verification scripts behind this doc set ran exactly that scan over both branches (re-run 2026-09-04: main 9 of 774 non-schema files fail — the 8 broken transforms above plus never-fetched `common/__init__.py`; develop: 21 of 871) and every finding reproduced against the live Token-Service source. It would have caught the Anthropic, BeyondTrust PRA, commvault, and mfa/azure breakages before they shipped — everything except the `strptime` class (runtime-only) and wrong-shape bugs. `local_tester.py` cannot do this ([12-local-development.md](12-local-development.md)); no CI exists to run it yet ([13-release-and-branches.md](13-release-and-branches.md)).
+The single highest-leverage fix for this register: **replicate Token-Service's pipeline — the underscore rename, the Layer-1 AST validation, and a real `compile_restricted` — over every non-schema `.py` in a pre-merge check.** The approach is proven: the verification scripts behind this doc set ran exactly that scan over both branches (re-run 2026-09-16: main 35 of 805 non-schema files fail — the 34 broken transforms above (8 long-standing + 26 Tenable ASM) plus never-fetched `common/__init__.py`; develop: 26 of 879 — the 7 shared compile failures, 3 `mfa/azure`, 5 stale `beyondtrust-pra`, 10 pytest files, and `common/__init__.py`; the 2026-09-04 figure of 21 had omitted the 5 beyondtrust-pra copies) and every finding reproduced against the live Token-Service source. It would have caught the Anthropic, BeyondTrust PRA, commvault, mfa/azure, and Tenable ASM breakages before they shipped — everything except the `strptime` class (runtime-only) and wrong-shape bugs. `local_tester.py` cannot do this ([12-local-development.md](12-local-development.md)); no CI exists to run it yet ([13-release-and-branches.md](13-release-and-branches.md)).
 
 A casing lint belongs in the same check: flag any new mixed-case filename or uppercase directory as born-unreachable-by-default ([04-catalog.md](04-catalog.md)).
 
@@ -160,11 +164,11 @@ A casing lint belongs in the same check: flag any new mixed-case filename or upp
 
 | What | Where |
 |---|---|
-| The 16 broken files | paths in the inventory above, all `main:safeguards/**` |
+| The 42 broken files | paths in the inventory above, all `main:safeguards/**` (26 of them `main:safeguards/asm/tenable/`) |
 | The sandbox that rejects them | `TS:src/utils/codeexecutor.py:537-541, :555-617, :723-800` — [02-execution-contract.md](02-execution-contract.md) |
 | The minted URL that misses the dead zone | `IS:src/models/integrator.py:2601` — [02-execution-contract.md](02-execution-contract.md) |
 | The develop-staged issues | `develop:safeguards/mfa/azure/`, `develop:safeguards/iam/beyondtrust-pra/`, `develop:safeguards/epp/ninjaone-endpoint-management/`, `develop:safeguards/mdr/red-canary/` — [13-release-and-branches.md](13-release-and-branches.md) |
 | The frozen in-repo docs | `main:README.md`, `main:CLAUDE.md`, `main:CONTRIBUTING.md` (all last touched `3f55acd8`, 2026-02-06) |
 | The wrong-shape bypass | `TS:src/utils/evaluate/evaluate.py:2339-2360` — [02-execution-contract.md](02-execution-contract.md) |
 
-Pinned versions for every receipt above: Transformations `main @ 9d0262aa` / `develop @ 8bf278fb`; Token-Service `main @ b60e209d`; Integration-Service `main @ c8aa9a4b`. Verification methodology is in [README.md](README.md).
+Pinned versions for every receipt above: Transformations `main @ 6c0e6e63` / `develop @ d3bece29`; Token-Service `main @ b60e209d` (its `codeexecutor.py` and `transformation_url.py` are byte-identical through Token-Service `main @ 1531e6e2`, checked 2026-09-16); Integration-Service `main @ c8aa9a4b`. Verification methodology is in [README.md](README.md).

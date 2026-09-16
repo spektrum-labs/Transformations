@@ -1,6 +1,6 @@
 # Glossary
 
-> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ 5c5ccde5` and production `main @ c1d935da` (2026-09-03). Status: draft for engineer review.
+> Part of the [Transformations onboarding docs](README.md). Verified against `develop @ d3bece29` and production `main @ 6c0e6e63` (2026-09-16). Status: draft for engineer review.
 
 **In one sentence:** The terms you will hear in week one on the Transformations repo, each defined in a sentence or two against the actual code, with a pointer to the doc that owns the full story.
 
@@ -57,7 +57,7 @@ Porting `main`'s hotfixes back into `develop` so the staging ground does not reg
 
 ## Case-sensitivity dead zone
 
-The 102 of 767 non-schema files on `main` (~13%) that the [minted URL](#minted-url) can never fetch, because minting lowercases both path segments while `raw.githubusercontent.com` paths are case-sensitive (curl-verified 2026-09-03: exact-case 200, lowercased 404). It comprises the 55 files inside the 10 uppercase [SRN dirs](#srn-dir) plus 47 mixed-case filenames (e.g. `main:safeguards/encryption/microsoft/isAzureADAuthEnabled.py`) — these run only via an [exact-case DB URL](#exact-case-db-url), or not at all, silently.
+The 114 of 805 non-schema files on `main` (~14%) that the [minted URL](#minted-url) can never fetch, because minting lowercases both path segments while `raw.githubusercontent.com` paths are case-sensitive (curl-verified 2026-09-16: exact-case 200, lowercased 404). It comprises the 55 files inside the 10 uppercase [SRN dirs](#srn-dir) plus 59 mixed-case filenames (e.g. `main:safeguards/encryption/microsoft/isAzureADAuthEnabled.py`) — these run only via an [exact-case DB URL](#exact-case-db-url), or not at all, silently.
 
 <details><summary><b>Receipt:</b> live curl results</summary>
 
@@ -68,14 +68,14 @@ The 102 of 767 non-schema files on `main` (~13%) that the [minted URL](#minted-u
 | `encryption/microsoft/isAzureADAuthEnabled.py` (exact case) | 200 |
 | `encryption/microsoft/isazureadauthenabled.py` (as minting would produce) | **404** |
 
-Counts re-derived from `git ls-tree -r origin/main` (never `ls` — see Gotchas): 47 mixed-case non-schema transform basenames, 55 non-schema files under the 10 uppercase UUID dirs.
+Counts re-derived from `git ls-tree -r origin/main` at `6c0e6e63` (never `ls` — see Gotchas): 59 mixed-case non-schema transform basenames, 55 non-schema files under the 10 uppercase UUID dirs.
 </details>
 
 *Owning docs: [04-catalog.md](04-catalog.md), [14-known-issues.md](14-known-issues.md).*
 
 ## Category dir
 
-One of the 27 category directories at `safeguards/`'s top level — every non-UUID dir except `common/` (`epp/`, `iam/`, `emailsecurity/`, …) — each holding vendor subdirectories (98 on `main`) and never a top-level `.py` file. Category paths have three or four segments, so the two-segment [minted URL](#minted-url) never targets them — they are reachable exclusively through [exact-case DB URLs](#exact-case-db-url).
+One of the 29 category directories at `safeguards/`'s top level — every non-UUID dir except `common/` (`epp/`, `iam/`, `emailsecurity/`, …) — each holding vendor subdirectories (101 on `main`) and never a top-level `.py` file. Category paths have three or four segments, so the two-segment [minted URL](#minted-url) never targets them — they are reachable exclusively through [exact-case DB URLs](#exact-case-db-url).
 
 *Owning doc: [04-catalog.md](04-catalog.md).*
 
@@ -219,7 +219,7 @@ The automated onboarding flow that generates new vendor transforms as timestampe
 > The repo is **public**, and that is load-bearing: Token-Service fetches with no Authorization header (token-service docs2; `src/utils/codeexecutor.py:308-309`), so the entire production compliance-evaluation logic is world-readable — and making the repo private would break every evaluation at the next cache miss.
 
 > [!CAUTION]
-> "Develop" and "staging ground" do not mean pre-production — in either direction. No minted URL ever reaches `develop`, but 16 Integration-Service reference configs pin `refs/heads/develop` verbatim, so a develop push is plausibly an instant production deploy for those vendors; and develop is *not* a superset of `main` — 66 files on `main` carry fixes `develop` lacks. For any behavioral claim about production, read `origin/main`; diffing your change against `develop` tells you nothing about what customers experience.
+> "Develop" and "staging ground" do not mean pre-production — in either direction. No minted URL ever reaches `develop`, but 16 Integration-Service reference configs pin `refs/heads/develop` verbatim, so a develop push is plausibly an instant production deploy for those vendors; and develop is *not* a superset of `main` — 100 files on `main` carry content `develop` lacks. For any behavioral claim about production, read `origin/main`; diffing your change against `develop` tells you nothing about what customers experience.
 
 ## Where the code lives
 
