@@ -1,0 +1,31 @@
+# Maps code areas -> the docs2 files that describe them.
+# Used by scripts/docs_drift_check.py (and the /docs-sync skill).
+# In this repo nearly all code is transforms; the map is coarse by design.
+
+01-transformations-overview.md:
+  - safeguards/registry.json
+  - README.md
+
+02-execution-contract.md:
+  - safeguards/*
+
+03-writing-a-transform.md:
+  - safeguards/*
+  - CONTRIBUTING.md
+
+04-catalog.md:
+  - safeguards/*
+  - safeguards/registry.json
+
+12-local-development.md:
+  - local_tester.py
+  - generate_schemas.py
+
+13-release-and-branches.md:
+  - safeguards/*
+
+14-known-issues.md:
+  - safeguards/*
+  - CLAUDE.md
+  - CONTRIBUTING.md
+  - README.md
