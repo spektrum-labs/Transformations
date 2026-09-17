@@ -1,0 +1,12 @@
+{
+  "administration": {
+    "administration": {
+      "admin": {
+        "name": "synthetic-built-in-admin",
+        "one_time_password": {
+          "totp": true
+        }
+      }
+    }
+  }
+}

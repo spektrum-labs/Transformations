@@ -1,11 +1,38 @@
 """Transformation: requiredCoveragePercentage — SentinelOne getAgents
 Coverage percentage of endpoints which Endpoint Security is installed.
 Uses fully-paginated agent list (follow=true, max_pages=null) so len(items)
-equals fleet-wide total — same scope as the active-agent count.
+equals fleet-wide total.
+
+Coverage counts every enrolled agent that is still installed (not uninstalled
+and not decommissioned). It deliberately does NOT gate on isActive: in
+SentinelOne isActive reflects only a recent management-console check-in/online
+session, so it is false for asleep, offline, or roaming endpoints that remain
+fully installed and protected (activeProtection still [edr], mitigationMode
+still protect/detect). Gating coverage on isActive understates protection and
+produced false "low coverage" failures — e.g. UFT reported 265/919 = 28.84%
+while the isEPPConfigured / isEPPEnabled checks found all 919 agents installed
+and in an enforcing mitigation mode.
 """
 
 import json
 from datetime import datetime
+
+
+def coerce_bool(value):
+    """Coerce a SentinelOne boolean-ish field to a real bool.
+
+    The agent payload may carry native booleans or the strings 'true'/'false'
+    depending on the collection path; naive truthiness treats the string
+    'False' as True, so normalize explicitly.
+
+    NOTE: must not be named with a leading underscore — RestrictedPython (the
+    transformation sandbox) rejects all underscore-prefixed identifiers.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    return bool(value)
 
 
 def extract_input(input_data):
@@ -91,33 +118,38 @@ def transform(input):
     # len(items) is the fleet-wide enrolled count — same scope as our per-agent counts.
     total_enrolled = len(items)
 
-    active_count = 0
+    installed_count = 0
     uninstalled_count = 0
     decommissioned_count = 0
+    inactive_installed_count = 0
 
     for agent in items:
         if not isinstance(agent, dict):
             continue
-        is_uninstalled = agent.get("isUninstalled")
-        is_decommissioned = agent.get("isDecommissioned")
-        if is_uninstalled:
+        if coerce_bool(agent.get("isUninstalled")):
             uninstalled_count = uninstalled_count + 1
             continue
-        if is_decommissioned:
+        if coerce_bool(agent.get("isDecommissioned")):
             decommissioned_count = decommissioned_count + 1
             continue
-        # isActive may be absent in truncated stubs — treat missing as True
-        # since presence in the enrolled list implies the agent is installed.
+        # Enrolled and neither uninstalled nor decommissioned => Endpoint
+        # Security IS installed on this endpoint, which is what this metric
+        # measures. Do NOT gate on isActive (see module docstring): it only
+        # tracks a recent console check-in and flips to false for offline but
+        # still-protected endpoints.
+        installed_count = installed_count + 1
         is_active = agent.get("isActive")
-        if is_active is None or is_active:
-            active_count = active_count + 1
+        if is_active is not None and not coerce_bool(is_active):
+            inactive_installed_count = inactive_installed_count + 1
+
+    covered_count = installed_count
 
     if total_enrolled > 0:
-        coverage_pct = round((active_count / total_enrolled) * 100, 2)
+        coverage_pct = round((covered_count / total_enrolled) * 100, 2)
     else:
         coverage_pct = 0.0
 
-    not_covered = total_enrolled - active_count
+    not_covered = total_enrolled - covered_count
 
     pass_reasons = []
     fail_reasons = []
@@ -133,36 +165,45 @@ def transform(input):
         )
     elif coverage_pct >= 100.0:
         pass_reasons.append(
-            f"All {total_enrolled} enrolled endpoints have the SentinelOne agent active and "
-            f"installed (isActive=true, isUninstalled=false, isDecommissioned=false), "
-            f"yielding 100% Endpoint Security coverage."
+            f"All {total_enrolled} enrolled endpoints have the SentinelOne agent installed "
+            f"(isUninstalled=false, isDecommissioned=false), yielding 100% Endpoint Security coverage."
         )
     else:
         fail_reasons.append(
-            f"{active_count} of {total_enrolled} enrolled endpoints have an active "
-            f"SentinelOne agent ({coverage_pct}% coverage). "
-            f"{uninstalled_count} are uninstalled and {decommissioned_count} are decommissioned; "
-            f"{not_covered} total endpoints lack active EPP protection."
+            f"{covered_count} of {total_enrolled} enrolled endpoints have the SentinelOne agent "
+            f"installed ({coverage_pct}% coverage); {uninstalled_count} are uninstalled and "
+            f"{decommissioned_count} are decommissioned, leaving {not_covered} endpoint(s) without "
+            f"Endpoint Security installed."
         )
         recommendations.append(
-            f"Investigate the {not_covered} endpoints that are inactive, uninstalled, or "
-            f"decommissioned and redeploy the SentinelOne agent to restore full coverage."
+            f"Redeploy the SentinelOne agent to the {not_covered} endpoint(s) that are uninstalled "
+            f"or decommissioned to restore full coverage."
         )
 
     additional_findings = []
     if uninstalled_count > 0:
         additional_findings.append(
-            f"{uninstalled_count} agent(s) have isUninstalled=true and are excluded from the active count."
+            f"{uninstalled_count} agent(s) have isUninstalled=true and are excluded from the coverage count."
         )
     if decommissioned_count > 0:
         additional_findings.append(
-            f"{decommissioned_count} agent(s) have isDecommissioned=true and are excluded from the active count."
+            f"{decommissioned_count} agent(s) have isDecommissioned=true and are excluded from the coverage count."
+        )
+    if inactive_installed_count > 0:
+        additional_findings.append(
+            f"{inactive_installed_count} installed agent(s) have isActive=false (no recent console "
+            f"check-in). They remain installed and are counted as covered, but are worth reviewing — "
+            f"investigate any that have not reported for an extended period as they may be stale records."
         )
 
     return create_response(
         result={
             "requiredCoveragePercentage": coverage_pct,
-            "activeAgents": active_count,
+            "installedAgents": covered_count,
+            # activeAgents retained for backward compatibility; now equals the
+            # installed/covered count (no longer gated on isActive).
+            "activeAgents": covered_count,
+            "inactiveAgents": inactive_installed_count,
             "totalEnrolledAgents": total_enrolled,
             "uninstalledAgents": uninstalled_count,
             "decommissionedAgents": decommissioned_count,
@@ -174,7 +215,9 @@ def transform(input):
         additional_findings=additional_findings,
         input_summary={
             "totalEnrolledAgents": total_enrolled,
-            "activeAgents": active_count,
+            "installedAgents": covered_count,
+            "activeAgents": covered_count,
+            "inactiveAgents": inactive_installed_count,
             "uninstalledAgents": uninstalled_count,
             "decommissionedAgents": decommissioned_count,
             "coveragePercentage": coverage_pct,

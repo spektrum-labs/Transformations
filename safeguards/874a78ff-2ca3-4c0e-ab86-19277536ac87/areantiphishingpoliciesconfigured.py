@@ -66,38 +66,6 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
-    criteriaKey = "areAntiPhishingPoliciesConfigured"
-
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        # Check for PowerShell/API error
-        if 'PSError' in data:
-            raw_error = data.get('PSError', '')
-            api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
-
-            return create_response(
-                result={criteriaKey: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=["Could not retrieve anti-phishing policies from Microsoft 365"],
-                recommendations=[recommendation]
-            )
-
-
 def parse_api_error(raw_error: str, source: str = None) -> tuple:
     """Parse raw API error into clean message with source."""
     raw_lower = raw_error.lower() if raw_error else ''
@@ -128,6 +96,38 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
+
+
+def transform(input):
+    criteriaKey = "areAntiPhishingPoliciesConfigured"
+
+    try:
+        if isinstance(input, str):
+            input = json.loads(input)
+        elif isinstance(input, bytes):
+            input = json.loads(input.decode("utf-8"))
+
+        data, validation = extract_input(input)
+
+        if validation.get("status") == "failed":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
+
+        # Check for PowerShell/API error
+        if 'PSError' in data:
+            raw_error = data.get('PSError', '')
+            api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
+
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_errors=[api_error],
+                fail_reasons=["Could not retrieve anti-phishing policies from Microsoft 365"],
+                recommendations=[recommendation]
+            )
 
         pass_reasons = []
         fail_reasons = []
