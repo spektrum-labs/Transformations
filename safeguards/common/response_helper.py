@@ -234,3 +234,5 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             "metadata": response_metadata
         }
     }
+
+# docs-drift smoke test: harmless comment touching a file docs2 cites (2026-09-21)
