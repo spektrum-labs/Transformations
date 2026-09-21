@@ -31,12 +31,7 @@ jobs:
           REPORT=$(python3 scripts/docs_drift_check.py --base "$BASE")
           DRIFT=$?
           set -e
-          {
-            echo 'report<<EOF'
-            echo "$REPORT"
-            echo 'EOF'
-            echo "drift=$DRIFT"
-          } >> "$GITHUB_OUTPUT"
+          # Full report goes to the job summary (1 MB limit).
           {
             echo '## docs2 drift report'
             echo
@@ -44,6 +39,23 @@ jobs:
             echo "$REPORT"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # PR comment gets a compact version: GitHub rejects comment bodies over
+          # 65,536 characters (a promotion PR touching hundreds of files produced a
+          # 1,500-line report and the post failed). De-duplicate repeated lines
+          # within each doc's section, then cap the line count.
+          COMPACT=$(printf '%s\n' "$REPORT" | awk '/^## /{delete seen} !seen[$0]++')
+          TOTAL=$(printf '%s\n' "$COMPACT" | wc -l | tr -d ' ')
+          MAX=200
+          if [ "$TOTAL" -gt "$MAX" ]; then
+            COMPACT="$(printf '%s\n' "$COMPACT" | head -n "$MAX")
+          ... truncated: $TOTAL lines after de-duplication. Full report: this run's job summary."
+          fi
+          {
+            echo 'report<<EOF'
+            echo "$COMPACT"
+            echo 'EOF'
+            echo "drift=$DRIFT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upsert PR comment when drift found
         if: steps.drift.outputs.drift == '1'
