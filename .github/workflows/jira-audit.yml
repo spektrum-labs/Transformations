@@ -1,0 +1,261 @@
+name: Claude Audit to Jira
+
+# ---------------------------------------------------------------------------
+# On-demand codebase audit that files ENG tickets.
+#
+# Design: "AI finds, script files."
+#   Step 1 - Claude Code audits the code and writes findings to
+#            $RUNNER_TEMP/findings.json (outside the checkout, so a committed
+#            file can never be consumed). It has read/write file tools ONLY -
+#            no network, no Jira access.
+#   Step 2 - A plain script validates findings.json and files one ENG ticket
+#            per finding via the Jira REST API. Only this auditable script
+#            touches the Jira token. It runs only when the audit step
+#            succeeded, and refuses to file if the dedupe search fails.
+#
+# Classification (done by Claude per finding):
+#   Bug  = broken or vulnerable right now (injection, hardcoded secret, logic error)
+#   Task = should be done, nothing broken (missing timeouts, absent tests, refactor)
+#
+# Ticket shape (repo-wide model):
+#   - Each finding files as a Bug or Task under the audit epic named in the
+#     AUDIT_EPIC_KEY repo variable (validated against the project before use).
+#   - Labels: claude-audit, severity-*, fp-* (stable fingerprint of
+#     file+category), repo-* (which repo it came from - all repos share the
+#     ENG project, so dedupe must be repo-scoped).
+#   - Dedupe: by fingerprint, not title (AI titles drift between runs).
+#     A ticket closed with the "wontfix" label is never refiled.
+#   - Severity gate: only findings at or above MIN_SEVERITY (default high)
+#     file tickets; the rest are listed in the run summary only.
+#   - PR-specific findings are NOT this workflow's job - the code review
+#     workflow files those as Bugs linked to the story.
+#
+# Trigger: manual (Actions tab > this workflow > Run workflow). Once trusted,
+# add a schedule, e.g.:
+#   schedule:
+#     - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+#
+# Required secrets: ANTHROPIC_API_KEY, JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN
+# Repo variable: AUDIT_EPIC_KEY (the epic all findings file under)
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Path to audit (default: whole repo)"
+        required: false
+        default: "."
+      min_severity:
+        description: "Lowest severity that files a ticket"
+        required: false
+        default: "high"
+        type: choice
+        options: [critical, high, medium, low]
+
+concurrency:
+  group: jira-audit-${{ github.repository }}
+  # No cancel-in-progress: concurrent dispatches queue instead of racing dedupe.
+
+permissions:
+  contents: read
+  id-token: write   # OIDC for the Claude GitHub App
+
+env:
+  JIRA_PROJECT_KEY: "ENG"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Claude Code audit (writes findings.json, no network access)
+        id: audit
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Audit the code under "${{ github.event.inputs.scope || '.' }}" in this
+            repository. Follow CLAUDE.md conventions if present. Look for, in
+            priority order:
+            1. Security vulnerabilities (injection, auth gaps, SSRF, path
+               traversal, unsafe handling of untrusted input).
+            2. Hardcoded secrets/credentials; secrets or PII in logs or URLs.
+            3. Correctness bugs (logic errors, unhandled edge cases, swallowed
+               exceptions, race conditions).
+            4. Reliability gaps (missing timeouts, resource leaks, unbounded loops).
+
+            Write your findings to the file ${{ runner.temp }}/findings.json:
+            a JSON array where each element has exactly these fields:
+              "title":     one line, max 100 chars, specific ("SQL injection in
+                           get_user_orders via string-concatenated query")
+              "type":      "Bug" if something is broken or vulnerable right now,
+                           "Task" if it is needed work but nothing is broken
+              "severity":  "critical" | "high" | "medium" | "low"
+              "category":  exactly one of: "injection", "auth", "secrets", "logic",
+                           "error-handling", "race", "resource-leak", "timeout", "other"
+              "file":      relative path
+              "line":      integer or null
+              "description": what is wrong and why it matters, 2-4 sentences
+              "recommendation": the concrete fix, 1-3 sentences
+            The (file, category) pair identifies a finding across audit runs -
+            keep both stable for the same underlying issue.
+
+            Only report findings you are confident about - no style nits, no
+            speculation. Cap at the 25 most important findings. If there are no
+            findings, write an empty JSON array []. Write ONLY valid JSON to
+            that file (no markdown fences). Do not write any other file.
+          claude_args: |
+            --max-turns 50
+            --allowedTools "Read,Glob,Grep,Write"
+
+      # Runs only when the audit step SUCCEEDED (default success() gating).
+      - name: File ENG tickets from findings
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          AUDIT_EPIC_KEY: ${{ vars.AUDIT_EPIC_KEY }}
+          MIN_SEVERITY: ${{ github.event.inputs.min_severity || 'high' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          FINDINGS="$RUNNER_TEMP/findings.json"
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+
+          if [ ! -f "$FINDINGS" ]; then
+            echo "::warning::findings.json was not produced - check the audit step log."
+            exit 0
+          fi
+          jq -e 'type == "array" and length <= 25 and all(.[];
+                   (.title | type == "string" and length > 0 and length <= 200)
+                   and (.severity | IN("critical","high","medium","low"))
+                   and (.file | type == "string" and length > 0)
+                   and (.category | type == "string")
+                   and (.type | type == "string")
+                   and (.description | type == "string")
+                   and (.recommendation | type == "string")
+                   and ((.line == null) or (.line | type == "number")))' "$FINDINGS" >/dev/null \
+            || { echo "::error::findings.json failed schema validation - refusing to file."; exit 1; }
+          COUNT=$(jq 'length' "$FINDINGS")
+          echo "Audit produced $COUNT finding(s)."
+          [ "$COUNT" -eq 0 ] && exit 0
+
+          CURL_GET=(curl -sf --connect-timeout 5 --max-time 30 --retry 3 --retry-delay 2 -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN")
+          CURL_POST=(curl -sf --connect-timeout 5 --max-time 30 -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN")
+
+          "${CURL_GET[@]}" "$JIRA_BASE_URL/rest/api/3/myself" >/dev/null \
+            || { echo "::error::JIRA auth preflight failed - token expired or revoked?"; exit 1; }
+
+          # Validate the epic once, up front: a wrong value (e.g. copied from
+          # another repo) must degrade to "file ungrouped", not fail every create.
+          EPIC=""
+          if [ -n "${AUDIT_EPIC_KEY:-}" ]; then
+            EPIC_PROJECT=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/api/3/issue/$AUDIT_EPIC_KEY?fields=project,issuetype" \
+              | jq -r 'select(.fields.issuetype.name == "Epic") | .fields.project.key // empty' || true)
+            if [ "$EPIC_PROJECT" = "$JIRA_PROJECT_KEY" ]; then
+              EPIC="$AUDIT_EPIC_KEY"
+            else
+              echo "::warning::AUDIT_EPIC_KEY '$AUDIT_EPIC_KEY' is not an Epic in $JIRA_PROJECT_KEY (or could not be verified) - filing ungrouped."
+            fi
+          else
+            echo "::warning::AUDIT_EPIC_KEY repo variable not set - findings will file ungrouped."
+          fi
+
+          fingerprint () {  # $1=file $2=category -> fp-<12 hex>, one per line
+            printf 'fp-%s\n' "$(printf '%s|%s' "$1" "$2" | sha1sum | cut -c1-12)"
+          }
+          sev_rank () { case "$1" in critical) echo 4;; high) echo 3;; medium) echo 2;; *) echo 1;; esac; }
+          MIN_RANK=$(sev_rank "$MIN_SEVERITY")
+
+          # Existing audit tickets for THIS repo: open ones (dedupe) plus closed
+          # wontfix ones (suppression - a triage decision is never refiled over).
+          # Fail CLOSED: no baseline, no filing. Paginated.
+          JQL="project = $JIRA_PROJECT_KEY AND labels = claude-audit AND labels = \"repo-$REPO_NAME\" AND (statusCategory != Done OR labels = wontfix)"
+          TICKETS="[]"; TOKEN=""; PAGES=0
+          while :; do
+            PAGES=$((PAGES+1))
+            [ "$PAGES" -gt 20 ] && { echo "::error::JIRA search pagination exceeded 20 pages - refusing to file on a possibly-truncated baseline."; exit 1; }
+            PAGE=$("${CURL_GET[@]}" -G "$JIRA_BASE_URL/rest/api/3/search/jql" \
+              --data-urlencode "jql=$JQL" \
+              --data-urlencode 'fields=summary,labels' \
+              --data-urlencode 'maxResults=100' \
+              ${TOKEN:+--data-urlencode "nextPageToken=$TOKEN"}) \
+              || { echo "::error::JIRA search failed - refusing to file without a dedupe baseline."; exit 1; }
+            # A 200 without "issues" is a legitimate empty result on this
+            # endpoint (first run in a fresh repo); only an error body is bad.
+            echo "$PAGE" | jq -e 'type == "object" and (has("errorMessages") | not)' >/dev/null \
+              || { echo "::error::JIRA search returned an unexpected shape."; exit 1; }
+            TICKETS=$(jq -c --argjson p "$(echo "$PAGE" | jq -c '.issues // []')" '. + $p' <<<"$TICKETS")
+            TOKEN=$(echo "$PAGE" | jq -r '.nextPageToken // empty')
+            [ -z "$TOKEN" ] && break
+          done
+          EXISTING_FPS=$(echo "$TICKETS" | jq -r '.[].fields.labels[] | select(startswith("fp-"))')
+
+          CREATED=0; SKIPPED=0; BELOW=0
+          {
+            echo "## Claude audit - $COUNT finding(s), filing threshold: $MIN_SEVERITY+"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while read -r F; do
+            [ -z "$F" ] && continue
+            TITLE=$(echo "$F" | jq -r '.title')
+            TYPE=$(echo "$F" | jq -r 'if .type == "Bug" then "Bug" else "Task" end')
+            SEV=$(echo "$F" | jq -r '.severity')
+            FILE=$(echo "$F" | jq -r '.file')
+            CAT=$(echo "$F" | jq -r '.category')
+            FP=$(fingerprint "$FILE" "$CAT")
+            SUMMARY="[$SEV] $TITLE"
+
+            if [ "$(sev_rank "$SEV")" -lt "$MIN_RANK" ]; then
+              echo "- BELOW THRESHOLD (not filed): $SUMMARY (\`$FILE\`)" >> "$GITHUB_STEP_SUMMARY"
+              BELOW=$((BELOW+1)); continue
+            fi
+            if echo "$EXISTING_FPS" | grep -qx "$FP"; then
+              echo "Skip (already tracked or wontfix): $SUMMARY"; SKIPPED=$((SKIPPED+1)); continue
+            fi
+
+            PAYLOAD=$(echo "$F" | jq -c --arg summary "$SUMMARY" --arg type "$TYPE" \
+              --arg sev "$SEV" --arg fp "$FP" --arg repo "repo-$REPO_NAME" \
+              --arg run "$RUN_URL" --arg epic "$EPIC" --arg project "$JIRA_PROJECT_KEY" '
+              {
+                fields: ({
+                  project: {key: $project},
+                  issuetype: {name: $type},
+                  summary: $summary,
+                  labels: ["claude-audit", ("severity-" + $sev), $fp, $repo],
+                  description: {
+                    type: "doc", version: 1,
+                    content: [
+                      {type: "paragraph", content: [{type: "text", text: ("Location: " + .file + (if .line then ":" + (.line|tostring) else "" end) + "  |  Category: " + .category)}]},
+                      {type: "paragraph", content: [{type: "text", text: .description}]},
+                      {type: "paragraph", content: [{type: "text", text: ("Recommendation: " + .recommendation)}]},
+                      {type: "paragraph", content: [{type: "text", text: ("Filed by Claude audit run: " + $run)}]}
+                    ]
+                  }
+                } + (if $epic != "" then {parent: {key: $epic}} else {} end))
+              }') || { echo "::warning::Could not build payload for: $SUMMARY - skipping it."; continue; }
+
+            KEY=$("${CURL_POST[@]}" -X POST -H "Content-Type: application/json" \
+              -d "$PAYLOAD" "$JIRA_BASE_URL/rest/api/3/issue" | jq -r '.key // empty' || true)
+            if [ -z "$KEY" ]; then
+              echo "::warning::Create failed for: $SUMMARY - continuing with remaining findings."
+              continue
+            fi
+            echo "Created $KEY ($TYPE): $SUMMARY"
+            echo "- Filed $KEY: $SUMMARY (\`$FILE\`)" >> "$GITHUB_STEP_SUMMARY"
+            CREATED=$((CREATED+1))
+            # Same-run dedupe: a second finding with this fingerprint must not
+            # file a second ticket.
+            EXISTING_FPS=$(printf '%s\n%s' "$EXISTING_FPS" "$FP")
+          done < <(jq -c '.[]' "$FINDINGS")
+
+          echo "Done: $CREATED created, $SKIPPED skipped as duplicates/wontfix, $BELOW below threshold."
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**$CREATED created, $SKIPPED already tracked, $BELOW below threshold.**" >> "$GITHUB_STEP_SUMMARY"
