@@ -1,0 +1,215 @@
+name: Jira Transition
+
+# ---------------------------------------------------------------------------
+# Moves ENG cards based on code events. Agreed mapping:
+#   PR opened  (from an ENG-### branch)         -> "In Development"
+#   PR merged into develop                      -> "Ready for QA"
+#   PR merged into staging                      -> "In Stage (Demo)"
+#   PR merged into main                         -> "Merged/Deployed"
+# Human-judgment lanes (QA Complete, Ready to Deploy) are never touched.
+#
+# Ticket keys come from the head branch name. Promotion PRs (into staging/main)
+# have no key in the branch, so their keys are harvested from the PR's commit
+# messages instead - every ticket in the batch moves, not just one.
+#
+# Safety behavior:
+#   - Ticket labeled "on-hold" -> never moved. If the label can't even be
+#     READ, the ticket is skipped (fail closed), never moved on unknown state.
+#   - Other open PRs referencing the same ticket -> merge transitions skipped.
+#   - Target status not reachable from the ticket's current column -> warn,
+#     skip (a manually parked card wins; board state never fails the run).
+#   - An actual JIRA HTTP error, by contrast, FAILS the run (red, re-runnable)
+#     instead of silently dropping the move - merge events never re-fire.
+#
+# Porting to another repo: change INTEGRATION_BRANCH / STAGING_BRANCH and the
+# `branches:` trigger list. JIRA_PROJECT_KEY and the status names match the
+# ENG board and normally stay as-is.
+#
+# Required secrets: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN
+# ---------------------------------------------------------------------------
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed]
+    branches: [develop, staging, main]
+
+concurrency:
+  group: jira-transition-${{ github.repository }}-${{ github.event.pull_request.number }}
+  # No cancel-in-progress: events for the same PR queue and serialize.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  JIRA_PROJECT_KEY: "ENG"
+  INTEGRATION_BRANCH: "develop"
+  STAGING_BRANCH: "staging"
+  STATUS_PR_OPEN: "In Development"
+  STATUS_MERGED_INTEGRATION: "Ready for QA"
+  STATUS_MERGED_STAGING: "In Stage (Demo)"
+  STATUS_MERGED_MAIN: "Merged/Deployed"
+
+jobs:
+  transition:
+    # changeset-release/* = the changesets bot's "Version Packages" PRs; their
+    # squash commits can quote CHANGELOG text with ticket keys - never harvest those.
+    if: github.event.pull_request.draft == false && !startsWith(github.event.pull_request.head.ref, 'changeset-release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Transition linked tickets
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          EVENT_ACTION: ${{ github.event.action }}
+          GH_TOKEN: ${{ github.token }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          CURL_GET=(curl -sf --connect-timeout 5 --max-time 30 --retry 3 --retry-delay 2 -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN")
+          CURL_POST=(curl -sf --connect-timeout 5 --max-time 30 -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN")
+          HTTP_FAILED=0   # any real JIRA error -> run ends red (re-runnable)
+
+          extract_keys () {  # anchored + case-insensitive; echoes UPPERCASE keys
+            grep -oiE "(^|[^A-Za-z0-9])${JIRA_PROJECT_KEY}-[0-9]+" \
+              | grep -oiE "${JIRA_PROJECT_KEY}-[0-9]+" \
+              | tr '[:lower:]' '[:upper:]' | sort -u || true
+          }
+
+          # --- Decide the target status --------------------------------------
+          TARGET=""
+          if [ "$EVENT_ACTION" != "closed" ]; then
+            # Opened/reopened/ready -> move ONLY when targeting the integration
+            # branch. Opening a promotion PR must NOT drag cards backward.
+            [ "$BASE_BRANCH" = "$INTEGRATION_BRANCH" ] && TARGET="$STATUS_PR_OPEN"
+          elif [ "$MERGED" = "true" ]; then
+            case "$BASE_BRANCH" in
+              "$INTEGRATION_BRANCH") TARGET="$STATUS_MERGED_INTEGRATION" ;;
+              "$STAGING_BRANCH")     TARGET="$STATUS_MERGED_STAGING" ;;
+              main)                  TARGET="$STATUS_MERGED_MAIN" ;;
+            esac
+          fi
+          # closed-without-merge -> TARGET stays empty -> nothing moves
+          if [ -z "$TARGET" ]; then echo "No transition for this event - nothing to do."; exit 0; fi
+
+          # --- Collect ticket keys -------------------------------------------
+          # Branch path: FIRST key as it appears in the branch name (unsorted).
+          KEYS=$(printf '%s' "$HEAD_BRANCH" \
+            | grep -oiE "(^|[^A-Za-z0-9])${JIRA_PROJECT_KEY}-[0-9]+" \
+            | grep -oiE "${JIRA_PROJECT_KEY}-[0-9]+" \
+            | tr '[:lower:]' '[:upper:]' | head -n1 || true)
+          if [ -z "$KEYS" ] && [ "$EVENT_ACTION" = "closed" ] && [ "$MERGED" = "true" ] \
+             && { [ "$BASE_BRANCH" = "$STAGING_BRANCH" ] || [ "$BASE_BRANCH" = "main" ]; }; then
+            # Promotion merge: harvest every ticket in the batch from commits.
+            # Paginated (large batches), and a GitHub failure FAILS the run -
+            # merge events never re-fire, so a silent no-op here loses moves.
+            COMMIT_TEXT=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" \
+              --jq '.[].commit.message') \
+              || { echo "::error::Could not read PR commits for the promotion merge - re-run this job when GitHub is healthy."; exit 1; }
+            KEYS=$(printf '%s' "$COMMIT_TEXT" | extract_keys)
+            [ -n "$KEYS" ] && echo "Promotion merge: harvested $(echo "$KEYS" | grep -c .) ticket(s) from commit messages."
+          fi
+          if [ -z "$KEYS" ]; then
+            echo "No $JIRA_PROJECT_KEY key in branch '$HEAD_BRANCH' (or commits) - nothing to do."
+            exit 0
+          fi
+
+          PROCESSED=""
+          for KEY in $KEYS; do
+            echo "--- $KEY ---"
+
+            # Subtask -> parent story (the story is the unit that moves).
+            # 404 (typo'd/deleted key in free commit text) = warn and skip;
+            # only real HTTP/network errors mark the run for failure.
+            ISSUE_BODY="$RUNNER_TEMP/issue-$KEY.json"
+            CODE=$(curl -s --connect-timeout 5 --max-time 30 --retry 3 --retry-delay 2 \
+              -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" -o "$ISSUE_BODY" -w '%{http_code}' \
+              "$JIRA_BASE_URL/rest/api/3/issue/$KEY?fields=issuetype,parent" || echo "000")
+            if [ "$CODE" = "404" ]; then
+              echo "::warning::$KEY does not exist in JIRA (typo or deleted) - skipping it."
+              continue
+            fi
+            if [ "$CODE" != "200" ]; then
+              echo "::warning::Could not read $KEY (HTTP $CODE) - skipping it."
+              HTTP_FAILED=1
+              continue
+            fi
+            INFO=$(cat "$ISSUE_BODY")
+            if [ "$(echo "$INFO" | jq -r '.fields.issuetype.subtask')" = "true" ]; then
+              PARENT=$(echo "$INFO" | jq -r '.fields.parent.key // empty')
+              if [ -n "$PARENT" ]; then
+                echo "$KEY is a subtask - moving its parent story $PARENT instead."
+                KEY="$PARENT"
+              fi
+            fi
+
+            # Several subtasks of one parent in a batch -> process the parent once.
+            if echo "$PROCESSED" | grep -qx "$KEY"; then
+              echo "$KEY already handled in this run - skipping duplicate."
+              continue
+            fi
+            PROCESSED=$(printf '%s\n%s' "$PROCESSED" "$KEY")
+
+            # on-hold label: FAIL CLOSED. A card we can't inspect is never moved.
+            LABELS=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/api/3/issue/$KEY?fields=labels" \
+              | jq -r '.fields.labels[]?' || echo "__FETCH_FAILED__")
+            if echo "$LABELS" | grep -qx "__FETCH_FAILED__"; then
+              echo "::warning::Could not read labels for $KEY - treating as on-hold, not moving."
+              HTTP_FAILED=1
+              continue
+            fi
+            if echo "$LABELS" | grep -qx "on-hold"; then
+              echo "$KEY is labeled on-hold - leaving the card where it is."
+              continue
+            fi
+
+            # Merge moves only: skip if other open PRs still reference this ticket.
+            # FAIL CLOSED: if we can't list PRs, don't move the card on unknown state.
+            if [ "$EVENT_ACTION" = "closed" ]; then
+              if ! OPEN=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                --json number,headRefName \
+                --jq "[.[] | select(.headRefName | test(\"(^|[^A-Za-z0-9])${KEY}([^0-9]|\$)\"; \"i\")) | select(.number != $PR_NUMBER)] | length"); then
+                echo "::warning::Could not list open PRs - not moving $KEY on unknown state."
+                HTTP_FAILED=1
+                continue
+              fi
+              if [ "$OPEN" -gt 0 ]; then
+                echo "$OPEN other open PR(s) reference $KEY - not moving the card yet."
+                continue
+              fi
+            fi
+
+            # Transition: match the DESTINATION STATUS (.to.name), never the
+            # transition's own name - they differ on some boards.
+            RESP=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions") \
+              || { echo "::warning::Could not read transitions for $KEY."; HTTP_FAILED=1; continue; }
+            TID=$(echo "$RESP" | jq -r --arg n "$TARGET" 'first(.transitions[] | select(.to.name == $n)) | .id // empty')
+            if [ -z "$TID" ]; then
+              echo "::warning::'$TARGET' is not reachable for $KEY from its current column - leaving it alone."
+              continue
+            fi
+            "${CURL_POST[@]}" -X POST -H "Content-Type: application/json" \
+              -d "{\"transition\": {\"id\": \"$TID\"}}" \
+              "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions" \
+              && echo "Moved $KEY to '$TARGET'." \
+              || { echo "::warning::Transition POST failed for $KEY."; HTTP_FAILED=1; continue; }
+
+            # Comment the PR link on the ticket (merges only).
+            if [ "$EVENT_ACTION" = "closed" ] && [ "$MERGED" = "true" ]; then
+              "${CURL_POST[@]}" -X POST -H "Content-Type: application/json" \
+                -d "{\"body\": {\"type\": \"doc\", \"version\": 1, \"content\": [{\"type\": \"paragraph\", \"content\": [{\"type\": \"text\", \"text\": \"PR #$PR_NUMBER merged into $BASE_BRANCH: \"}, {\"type\": \"text\", \"text\": \"$PR_URL\", \"marks\": [{\"type\": \"link\", \"attrs\": {\"href\": \"$PR_URL\"}}]}]}]}}" \
+                "$JIRA_BASE_URL/rest/api/3/issue/$KEY/comment" >/dev/null \
+                || echo "::warning::Could not comment on $KEY."
+            fi
+          done
+
+          if [ "$HTTP_FAILED" -ne 0 ]; then
+            echo "::error::One or more JIRA calls failed - re-run this job once JIRA is healthy (merge events do not re-fire on their own)."
+            exit 1
+          fi
