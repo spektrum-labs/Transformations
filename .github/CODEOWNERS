@@ -1,0 +1,3 @@
+# Code owners are auto-requested for review on every PR; the develop/staging rules
+# require one approval from this list. Keep in sync with the other platform repos.
+* @devilfishdev @simon-spektrum @tijaz-dev @KaitDiLorenzo @ypiao2 @thieshanthan-spektrum
