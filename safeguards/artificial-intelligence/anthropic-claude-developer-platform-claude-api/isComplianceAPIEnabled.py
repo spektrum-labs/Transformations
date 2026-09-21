@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -12,11 +11,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -69,66 +67,46 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    has_data_key = "data" in data
-    items = data.get("data") if isinstance(data.get("data"), list) else []
-    has_more = data.get("has_more")
-    first_id = data.get("first_id")
-    last_id = data.get("last_id")
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("data") or []
+    else:
+        items = []
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    if not isinstance(items, list):
+        items = []
 
-    # A successful 200 response from the Compliance Activities endpoint
-    # containing the paginated envelope keys (data/has_more) is direct
-    # evidence the Compliance API is enabled for this org. A 403/404
-    # (which surfaces upstream as an empty/error response with no
-    # envelope keys) indicates it is not enabled.
-    envelope_present = has_data_key and ("has_more" in data or "first_id" in data or "last_id" in data)
-
-    is_enabled = bool(envelope_present)
-
-    accessed_events = [
-        i for i in items
-        if isinstance(i, dict) and i.get("type") == "compliance_api_accessed"
+    record_count = len(items)
+    compliance_access_events = [
+        r for r in items
+        if isinstance(r, dict) and r.get("type") == "compliance_api_accessed"
     ]
+    compliance_event_count = len(compliance_access_events)
+
+    is_enabled = record_count > 0
 
     if is_enabled:
-        sample_count = len(items)
-        pass_reasons.append(
-            f"GET /v1/compliance/activities returned HTTP 200 with a valid paginated envelope "
-            f"(data list of {sample_count} sampled activity records, has_more={has_more}), "
-            f"confirming the Compliance API is enabled and accessible for this organization."
-        )
-        if accessed_events:
-            pass_reasons.append(
-                f"Found {len(accessed_events)} 'compliance_api_accessed' activity record(s) in the "
-                f"sample, direct evidence of live programmatic access to the activity feed."
-            )
+        pass_reasons = [
+            f"Compliance API Activity Feed (/v1/compliance/activities) returned HTTP 200 with {record_count} activity records, including {compliance_event_count} 'compliance_api_accessed' events, confirming the org's Admin API key carries the read:compliance_activities scope and the Compliance API is enabled."
+        ]
+        fail_reasons = []
+        recommendations = []
     else:
-        fail_reasons.append(
-            "GET /v1/compliance/activities did not return a valid data/has_more envelope, "
-            "consistent with the Compliance API not being enabled for the parent organization "
-            "(the endpoint 404s/403s when the settings/activities endpoints are not yet enabled)."
-        )
-        recommendations.append(
-            "Enable the Compliance API for the organization in the Anthropic Console and provision "
-            "a Compliance Access Key (or Admin API Key) with read:compliance_activities scope."
-        )
+        pass_reasons = []
+        fail_reasons = [
+            "The Compliance Activity Feed (/v1/compliance/activities) returned zero records for this organization, providing no evidence that the Compliance API is enabled."
+        ]
+        recommendations = [
+            "Enable the Compliance API for this organization and ensure the Admin API key has the read:compliance_activities scope."
+        ]
 
     result = {
         "isComplianceAPIEnabled": is_enabled,
-        "sampledActivityCount": len(items),
-        "hasMore": bool(has_more) if has_more is not None else False,
-    }
-
-    input_summary = {
-        "hasDataKey": has_data_key,
-        "itemCount": len(items),
-        "firstId": first_id,
-        "lastId": last_id,
+        "totalActivityRecords": record_count,
+        "complianceApiAccessedEvents": compliance_event_count,
     }
 
     return create_response(
@@ -137,10 +115,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalActivityRecords": record_count, "complianceApiAccessedEvents": compliance_event_count},
         metadata={
             "transformationId": "isComplianceAPIEnabled",
             "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "artificial-intelligence",
+            "category": "Artificial Intelligence",
         },
     )
