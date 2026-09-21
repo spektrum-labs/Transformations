@@ -1,0 +1,81 @@
+# Reports documentation drift on every PR: which docs2/ files cite code this
+# PR changes (or own its territory per docs2/.docmap.yml). Report-only — it
+# never fails the build. The report lands in two places: the job's step
+# summary, and (when drift is found) a sticky comment on the PR itself so it
+# cannot be missed.
+# To fix reported drift: run the /docs-sync Claude Code skill on the branch,
+# or wait for the scheduled docs-sync workflow to open a repair PR.
+name: docs-drift
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  drift-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Docs drift report (vs merge-base)
+        id: drift
+        run: |
+          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          set +e
+          REPORT=$(python3 scripts/docs_drift_check.py --base "$BASE")
+          DRIFT=$?
+          set -e
+          {
+            echo 'report<<EOF'
+            echo "$REPORT"
+            echo 'EOF'
+            echo "drift=$DRIFT"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '## docs2 drift report'
+            echo
+            echo '```'
+            echo "$REPORT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert PR comment when drift found
+        if: steps.drift.outputs.drift == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT: ${{ steps.drift.outputs.report }}
+        run: |
+          MARKER='<!-- docs-drift-report -->'
+          BODY="$MARKER
+          ### 📚 Docs drift detected
+
+          This PR changes code that \`docs2/\` documents. The affected docs cite the changed files (or own their territory per \`docs2/.docmap.yml\`):
+
+          \`\`\`
+          $REPORT
+          \`\`\`
+
+          **To fix:** run the \`/docs-sync\` Claude Code skill on this branch (see \`.claude/skills/docs-sync/\`), or leave it for the scheduled docs-sync job to repair after merge. Merging with known drift is allowed — this check never blocks."
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -f body="$BODY" >/dev/null
+          else
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$BODY" >/dev/null
+          fi
+
+      - name: Remove stale drift comment when clean
+        if: steps.drift.outputs.drift == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKER='<!-- docs-drift-report -->'
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+          [ -n "$EXISTING" ] && gh api -X DELETE "repos/${{ github.repository }}/issues/comments/$EXISTING" >/dev/null || true
