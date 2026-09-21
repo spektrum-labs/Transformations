@@ -70,43 +70,72 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        items = data
+        keys = data
     elif isinstance(data, dict):
-        items = data.get("data") or []
+        keys = data.get("data") or []
     else:
-        items = []
+        keys = []
 
-    if not isinstance(items, list):
-        items = []
+    if not isinstance(keys, list):
+        keys = []
 
-    record_count = len(items)
-    compliance_access_events = [
-        r for r in items
-        if isinstance(r, dict) and r.get("type") == "compliance_api_accessed"
-    ]
-    compliance_event_count = len(compliance_access_events)
+    active_keys = [k for k in keys if isinstance(k, dict) and k.get("status") == "active"]
+    total_active = len(active_keys)
 
-    is_enabled = record_count > 0
+    org_scoped_active = []
+    workspace_scoped_active = []
+    unknown_scoped_active = []
 
-    if is_enabled:
+    for k in active_keys:
+        scope = k.get("scope") or {}
+        scope_type = scope.get("type") if isinstance(scope, dict) else None
+        if scope_type == "organization":
+            org_scoped_active.append(k)
+        elif scope_type == "workspace":
+            workspace_scoped_active.append(k)
+        else:
+            unknown_scoped_active.append(k)
+
+    org_count = len(org_scoped_active)
+    workspace_count = len(workspace_scoped_active)
+    unknown_count = len(unknown_scoped_active)
+
+    enforced = total_active > 0 and org_count == 0
+
+    org_names = [k.get("name") or k.get("id") or "unknown" for k in org_scoped_active]
+
+    if total_active == 0:
+        fail_reasons = ["No active API keys were found in the response, so scoped-access enforcement cannot be confirmed."]
+        pass_reasons = []
+        recommendations = ["Ensure the Admin API key has access to list API keys and that active keys exist."]
+    elif enforced:
         pass_reasons = [
-            f"Compliance API Activity Feed (/v1/compliance/activities) returned HTTP 200 with {record_count} activity records, including {compliance_event_count} 'compliance_api_accessed' events, confirming the org's Admin API key carries the read:compliance_activities scope and the Compliance API is enabled."
+            f"All {total_active} active API keys carry scope.type='workspace' ({workspace_count} of {total_active}); no organization-wide scoped active key was found."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            "The Compliance Activity Feed (/v1/compliance/activities) returned zero records for this organization, providing no evidence that the Compliance API is enabled."
+            f"{org_count} of {total_active} active API keys have scope.type='organization' (org-wide access), e.g. {', '.join(org_names[:5])}. This grants blast radius beyond a single workspace."
         ]
         recommendations = [
-            "Enable the Compliance API for this organization and ensure the Admin API key has the read:compliance_activities scope."
+            "Reissue organization-scoped API keys as workspace-scoped keys (scope.type='workspace') to limit the blast radius of a leaked key."
         ]
 
     result = {
-        "isComplianceAPIEnabled": is_enabled,
-        "totalActivityRecords": record_count,
-        "complianceApiAccessedEvents": compliance_event_count,
+        "isPermissionGroupScopedAPIAccessEnforced": enforced,
+        "totalActiveApiKeys": total_active,
+        "organizationScopedActiveApiKeys": org_count,
+        "workspaceScopedActiveApiKeys": workspace_count,
+        "unknownScopedActiveApiKeys": unknown_count,
+    }
+
+    input_summary = {
+        "totalKeysInResponse": len(keys),
+        "totalActiveApiKeys": total_active,
+        "organizationScopedActiveApiKeys": org_count,
+        "workspaceScopedActiveApiKeys": workspace_count,
     }
 
     return create_response(
@@ -115,10 +144,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalActivityRecords": record_count, "complianceApiAccessedEvents": compliance_event_count},
+        input_summary=input_summary,
         metadata={
-            "transformationId": "isComplianceAPIEnabled",
-            "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "Artificial Intelligence",
+            "transformationId": "isPermissionGroupScopedAPIAccessEnforced",
+            "vendor": "Anthropic",
+            "category": "artificial-intelligence",
         },
     )

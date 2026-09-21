@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -70,44 +72,48 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        items = data
+        keys = data
     elif isinstance(data, dict):
-        items = data.get("data") or []
+        keys = data.get("data") or []
     else:
-        items = []
+        keys = []
 
-    if not isinstance(items, list):
-        items = []
+    if not isinstance(keys, list):
+        keys = []
 
-    record_count = len(items)
-    compliance_access_events = [
-        r for r in items
-        if isinstance(r, dict) and r.get("type") == "compliance_api_accessed"
-    ]
-    compliance_event_count = len(compliance_access_events)
+    total_keys = len(keys)
+    active_keys = [k for k in keys if isinstance(k, dict) and k.get("status") == "active"]
+    non_expiring_active = [k for k in active_keys if k.get("expires_at") is None]
+    non_expiring_all = [k for k in keys if isinstance(k, dict) and k.get("expires_at") is None]
 
-    is_enabled = record_count > 0
+    count = len(non_expiring_active)
+    non_expiring_names = [k.get("name") or k.get("id") or "unknown" for k in non_expiring_active]
 
-    if is_enabled:
+    result = {
+        "nonExpiringAdminApiKeysCount": count,
+        "totalApiKeys": total_keys,
+        "totalActiveApiKeys": len(active_keys),
+        "totalNonExpiringKeysIncludingArchived": len(non_expiring_all),
+    }
+
+    if total_keys == 0:
+        fail_reasons = ["No organization API keys were returned by listApiKeys; cannot determine non-expiring key count from an empty fleet."]
+        pass_reasons = []
+        recommendations = ["Confirm the Admin API key has permission to list organization API keys and that the organization actually has keys provisioned."]
+    elif count > 0:
+        pass_reasons = []
+        fail_reasons = [
+            f"{count} of {len(active_keys)} active organization API keys have a null expires_at (never expire): {', '.join(non_expiring_names)}."
+        ]
+        recommendations = [
+            "Set an explicit expiration on the listed organization API keys that currently never expire, and rotate them regularly.",
+        ]
+    else:
         pass_reasons = [
-            f"Compliance API Activity Feed (/v1/compliance/activities) returned HTTP 200 with {record_count} activity records, including {compliance_event_count} 'compliance_api_accessed' events, confirming the org's Admin API key carries the read:compliance_activities scope and the Compliance API is enabled."
+            f"All {len(active_keys)} active organization API keys (out of {total_keys} total keys) have a non-null expires_at."
         ]
         fail_reasons = []
         recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            "The Compliance Activity Feed (/v1/compliance/activities) returned zero records for this organization, providing no evidence that the Compliance API is enabled."
-        ]
-        recommendations = [
-            "Enable the Compliance API for this organization and ensure the Admin API key has the read:compliance_activities scope."
-        ]
-
-    result = {
-        "isComplianceAPIEnabled": is_enabled,
-        "totalActivityRecords": record_count,
-        "complianceApiAccessedEvents": compliance_event_count,
-    }
 
     return create_response(
         result=result,
@@ -115,10 +121,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalActivityRecords": record_count, "complianceApiAccessedEvents": compliance_event_count},
-        metadata={
-            "transformationId": "isComplianceAPIEnabled",
-            "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "Artificial Intelligence",
+        input_summary={
+            "totalApiKeys": total_keys,
+            "totalActiveApiKeys": len(active_keys),
+            "nonExpiringActiveApiKeys": count,
         },
+        metadata={"transformationId": "nonExpiringAdminApiKeysCount", "vendor": "Anthropic", "category": "artificial-intelligence"},
     )

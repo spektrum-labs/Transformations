@@ -1,8 +1,10 @@
+
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +30,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -79,34 +82,62 @@ def transform(input):
     if not isinstance(items, list):
         items = []
 
-    record_count = len(items)
-    compliance_access_events = [
-        r for r in items
-        if isinstance(r, dict) and r.get("type") == "compliance_api_accessed"
-    ]
-    compliance_event_count = len(compliance_access_events)
+    total_events = len(items)
 
-    is_enabled = record_count > 0
+    security_relevant_types = set()
+    admin_action_count = 0
+    login_or_access_count = 0
+    distinct_actor_types = set()
+
+    for ev in items:
+        if not isinstance(ev, dict):
+            continue
+        ev_type = ev.get("type") or ""
+        if ev_type:
+            security_relevant_types.add(ev_type)
+        actor = ev.get("actor") or {}
+        if isinstance(actor, dict):
+            actor_type = actor.get("type") or ""
+            if actor_type:
+                distinct_actor_types.add(actor_type)
+        if "invite" in ev_type or "role" in ev_type or "key" in ev_type or "member" in ev_type or "org_" in ev_type:
+            admin_action_count = admin_action_count + 1
+        if "accessed" in ev_type or "login" in ev_type or "signed_in" in ev_type:
+            login_or_access_count = login_or_access_count + 1
+
+    is_enabled = total_events > 0
+
+    input_summary = {
+        "totalActivityEvents": total_events,
+        "distinctEventTypes": len(security_relevant_types),
+        "adminActionEvents": admin_action_count,
+        "accessEvents": login_or_access_count,
+        "distinctActorTypes": len(distinct_actor_types),
+    }
 
     if is_enabled:
+        sample_types = list(security_relevant_types)[:5]
         pass_reasons = [
-            f"Compliance API Activity Feed (/v1/compliance/activities) returned HTTP 200 with {record_count} activity records, including {compliance_event_count} 'compliance_api_accessed' events, confirming the org's Admin API key carries the read:compliance_activities scope and the Compliance API is enabled."
+            f"Compliance API activity feed (/v1/compliance/activities) returned {total_events} audit events for the organization.",
+            f"Observed {len(security_relevant_types)} distinct event types including: {', '.join(sample_types)}.",
+            f"{admin_action_count} events reflect administrative actions (invites, roles, keys, org membership) and {login_or_access_count} reflect API/compliance access events.",
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            "The Compliance Activity Feed (/v1/compliance/activities) returned zero records for this organization, providing no evidence that the Compliance API is enabled."
+            "The Compliance API activity feed returned zero events, so no audit trail of logins or administrative actions is currently observable for this organization.",
         ]
         recommendations = [
-            "Enable the Compliance API for this organization and ensure the Admin API key has the read:compliance_activities scope."
+            "Verify the Admin API key has the read:compliance_activities scope and that compliance activity logging is enabled for the organization, then confirm events populate over time.",
         ]
 
     result = {
-        "isComplianceAPIEnabled": is_enabled,
-        "totalActivityRecords": record_count,
-        "complianceApiAccessedEvents": compliance_event_count,
+        "isActivityAuditTrailEnabled": is_enabled,
+        "totalActivityEvents": total_events,
+        "adminActionEvents": admin_action_count,
+        "accessEvents": login_or_access_count,
     }
 
     return create_response(
@@ -115,9 +146,9 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalActivityRecords": record_count, "complianceApiAccessedEvents": compliance_event_count},
+        input_summary=input_summary,
         metadata={
-            "transformationId": "isComplianceAPIEnabled",
+            "transformationId": "isActivityAuditTrailEnabled",
             "vendor": "Anthropic Claude Developer Platform Claude API",
             "category": "Artificial Intelligence",
         },

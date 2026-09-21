@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -73,40 +75,61 @@ def transform(input):
         items = data
     elif isinstance(data, dict):
         items = data.get("data") or []
+        if not isinstance(items, list):
+            items = []
     else:
         items = []
 
-    if not isinstance(items, list):
-        items = []
+    total_activities = len(items)
 
-    record_count = len(items)
-    compliance_access_events = [
-        r for r in items
-        if isinstance(r, dict) and r.get("type") == "compliance_api_accessed"
-    ]
-    compliance_event_count = len(compliance_access_events)
+    explicit_enabled_flag = False
+    explicit_logging_flag = False
+    compliance_accessed_count = 0
+    explicit_evidence_record_id = None
 
-    is_enabled = record_count > 0
+    for rec in items:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("compliance_api_enabled") is True:
+            explicit_enabled_flag = True
+            explicit_evidence_record_id = rec.get("id")
+        if rec.get("compliance_api_logging_enabled") is True:
+            explicit_logging_flag = True
+        if rec.get("type") == "compliance_api_accessed" and rec.get("status_code") == 200:
+            compliance_accessed_count = compliance_accessed_count + 1
 
-    if is_enabled:
-        pass_reasons = [
-            f"Compliance API Activity Feed (/v1/compliance/activities) returned HTTP 200 with {record_count} activity records, including {compliance_event_count} 'compliance_api_accessed' events, confirming the org's Admin API key carries the read:compliance_activities scope and the Compliance API is enabled."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            "The Compliance Activity Feed (/v1/compliance/activities) returned zero records for this organization, providing no evidence that the Compliance API is enabled."
-        ]
-        recommendations = [
-            "Enable the Compliance API for this organization and ensure the Admin API key has the read:compliance_activities scope."
-        ]
+    is_enabled = explicit_enabled_flag or (compliance_accessed_count > 0)
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if explicit_enabled_flag:
+        pass_reasons.append(
+            "Compliance activity record %s carries compliance_api_enabled=true, confirming the Enterprise Compliance API entitlement is active." % explicit_evidence_record_id
+        )
+    if explicit_logging_flag:
+        pass_reasons.append(
+            "At least one activity record carries compliance_api_logging_enabled=true, indicating compliance logging/export is configured."
+        )
+    if compliance_accessed_count > 0:
+        pass_reasons.append(
+            "%d of %d activity records have type=compliance_api_accessed with status_code=200, showing the Compliance API Activity Feed (the export/audit mechanism) was successfully polled by an admin API key." % (compliance_accessed_count, total_activities)
+        )
+
+    if not is_enabled:
+        fail_reasons.append(
+            "No activity record carried compliance_api_enabled=true, no compliance_api_logging_enabled flag was seen, and no compliance_api_accessed events (status_code=200) were found among %d activity records." % total_activities
+        )
+        recommendations.append(
+            "Enable the Enterprise Compliance API entitlement for this organization and confirm an admin API key with read:compliance_activities scope can successfully poll /v1/compliance/activities."
+        )
 
     result = {
-        "isComplianceAPIEnabled": is_enabled,
-        "totalActivityRecords": record_count,
-        "complianceApiAccessedEvents": compliance_event_count,
+        "isComplianceExportEnabled": is_enabled,
+        "totalActivitiesEvaluated": total_activities,
+        "complianceApiAccessedEventCount": compliance_accessed_count,
+        "explicitComplianceApiEnabledFlagFound": explicit_enabled_flag,
     }
 
     return create_response(
@@ -115,10 +138,13 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalActivityRecords": record_count, "complianceApiAccessedEvents": compliance_event_count},
+        input_summary={
+            "totalActivities": total_activities,
+            "complianceApiAccessedCount": compliance_accessed_count,
+        },
         metadata={
-            "transformationId": "isComplianceAPIEnabled",
+            "transformationId": "isComplianceExportEnabled",
             "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "Artificial Intelligence",
+            "category": "artificial-intelligence",
         },
     )

@@ -1,3 +1,4 @@
+"""Transformation: isRBACEnforced"""
 import json
 from datetime import datetime
 
@@ -70,55 +71,65 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        items = data
+        users = data
     elif isinstance(data, dict):
-        items = data.get("data") or []
+        users = data.get("data") or []
+        if not isinstance(users, list):
+            users = []
     else:
-        items = []
+        users = []
 
-    if not isinstance(items, list):
-        items = []
+    role_counts = {}
+    total_users = 0
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        total_users = total_users + 1
+        role = u.get("role") or "unknown"
+        role_counts[role] = role_counts.get(role, 0) + 1
 
-    record_count = len(items)
-    compliance_access_events = [
-        r for r in items
-        if isinstance(r, dict) and r.get("type") == "compliance_api_accessed"
-    ]
-    compliance_event_count = len(compliance_access_events)
+    distinct_roles = list(role_counts.keys())
+    num_distinct_roles = len(distinct_roles)
 
-    is_enabled = record_count > 0
+    # RBAC is considered enforced when members are assigned differentiated
+    # roles (more than one distinct role value present among org members),
+    # rather than every member defaulting to a single flat privilege level.
+    # This is derived purely from the observed role distribution, including
+    # the case of zero/one members returning naturally-false results.
+    is_enforced = num_distinct_roles > 1
 
-    if is_enabled:
+    role_summary = ", ".join([f"{role}={count}" for role, count in role_counts.items()])
+
+    if total_users == 0:
+        pass_reasons = []
+        fail_reasons = ["listOrganizationUsers returned zero members, so no role field values were available to assess differentiation."]
+        recommendations = ["Verify the Admin API key has permission to list organization users, or confirm the organization has members."]
+    elif is_enforced:
         pass_reasons = [
-            f"Compliance API Activity Feed (/v1/compliance/activities) returned HTTP 200 with {record_count} activity records, including {compliance_event_count} 'compliance_api_accessed' events, confirming the org's Admin API key carries the read:compliance_activities scope and the Compliance API is enabled."
+            f"Organization has {total_users} members across {num_distinct_roles} distinct roles ({role_summary}), showing differentiated privilege levels rather than a single flat role."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            "The Compliance Activity Feed (/v1/compliance/activities) returned zero records for this organization, providing no evidence that the Compliance API is enabled."
+            f"All {total_users} organization members share a single role ({role_summary}). No role differentiation was found among {', '.join(distinct_roles) if distinct_roles else 'members'}."
         ]
         recommendations = [
-            "Enable the Compliance API for this organization and ensure the Admin API key has the read:compliance_activities scope."
+            "Assign differentiated roles (owner, admin, developer, billing, user, claude_code_user) or custom roles to organization members instead of a single flat privilege level."
         ]
 
-    result = {
-        "isComplianceAPIEnabled": is_enabled,
-        "totalActivityRecords": record_count,
-        "complianceApiAccessedEvents": compliance_event_count,
-    }
-
     return create_response(
-        result=result,
+        result={
+            "isRBACEnforced": is_enforced,
+            "totalUsers": total_users,
+            "distinctRoleCount": num_distinct_roles,
+            "roleBreakdown": role_counts,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalActivityRecords": record_count, "complianceApiAccessedEvents": compliance_event_count},
-        metadata={
-            "transformationId": "isComplianceAPIEnabled",
-            "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "Artificial Intelligence",
-        },
+        input_summary={"totalUsers": total_users, "distinctRoles": distinct_roles},
+        metadata={"transformationId": "isRBACEnforced", "vendor": "Anthropic", "category": "artificial-intelligence"},
     )
