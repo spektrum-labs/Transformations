@@ -160,12 +160,26 @@ jobs:
             fi
             PROCESSED=$(printf '%s\n%s' "$PROCESSED" "$KEY")
 
-            # on-hold label: FAIL CLOSED. A card we can't inspect is never moved.
-            LABELS=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/api/3/issue/$KEY?fields=labels" \
-              | jq -r '.fields.labels[]?' || echo "__FETCH_FAILED__")
-            if echo "$LABELS" | grep -qx "__FETCH_FAILED__"; then
-              echo "::warning::Could not read labels for $KEY - treating as on-hold, not moving."
+            # on-hold label + current status: FAIL CLOSED. A card we can't
+            # inspect is never moved.
+            META=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/api/3/issue/$KEY?fields=labels,status") || META=""
+            if [ -z "$META" ]; then
+              echo "::warning::Could not read $KEY - treating as on-hold, not moving."
               HTTP_FAILED=1
+              continue
+            fi
+            LABELS=$(echo "$META" | jq -r '.fields.labels[]?')
+            CUR_STATUS=$(echo "$META" | jq -r '.fields.status.name // empty')
+            CUR_CATEGORY=$(echo "$META" | jq -r '.fields.status.statusCategory.key // empty')
+            if [ "$CUR_STATUS" = "$TARGET" ]; then
+              echo "$KEY is already in '$TARGET' - nothing to do."
+              continue
+            fi
+            # Never reopen a finished card. Promotion PRs harvest every key in
+            # their commits, including tickets shipped long ago; those must not
+            # be dragged back to In Stage (Demo).
+            if [ "$CUR_CATEGORY" = "done" ]; then
+              echo "$KEY is already done ('$CUR_STATUS') - never moving a finished card backwards."
               continue
             fi
             if echo "$LABELS" | grep -qx "on-hold"; then
