@@ -45,11 +45,47 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        result = bool(data)
+        # `bool(data)` asked whether a response arrived, not what it said, so any
+        # non-empty body -- including an auth-error envelope or a body reporting zero
+        # assignments -- satisfied this criterion and no input could make it false.
+        # Resolved from `total_records` (the field this criterion is documented against)
+        # now; see _has_training_assignments below.
+        result = _has_training_assignments(data)
         return {"isTrainingEnabled": result}
 
     except Exception as e:
         return {"isTrainingEnabled": False, "error": str(e)}
+
+
+def _has_training_assignments(data):
+    """True only when the payload POSITIVELY evidences `total_records > 0`.
+
+    Deliberately conservative: an unreadable/empty/error body, or a body naming
+    `total_records` as zero or absent, is False. A non-empty population of assignment
+    records under a recognised key is also accepted as evidence. Anything unrecognised
+    is False -- never True by default.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    containers = [data]
+    for nest_key in ("data", "result", "results", "response"):
+        nested = data.get(nest_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    for container in containers:
+        if "total_records" in container:
+            try:
+                return int(container["total_records"]) > 0
+            except (TypeError, ValueError):
+                return False
+    for key in ("users", "assignments", "trainings", "training_assignments"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return True
+    return False
 
 
 def transform(input):

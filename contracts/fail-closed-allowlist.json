@@ -2,7 +2,7 @@
   "contract": "fail-closed",
   "why": "no transformation may assert a satisfaction-style criterion true from a body that proves nothing; this list may only shrink",
   "generated_by": "tools/check_fail_closed.py --emit-allowlist",
-  "count": 27,
+  "count": 23,
   "instances": [
     "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/confirmedlicensepurchased.py",
     "safeguards/backups/crashplan/isbackuploggingenabled.py",
@@ -24,10 +24,6 @@
     "safeguards/siem/blumira/detection_rules_transform.py",
     "safeguards/siem/blumira/license_transform.py",
     "safeguards/training/huntress/confirmedlicensepurchased.py",
-    "safeguards/training/proofpoint-sat/iscompletionrateacceptable.py",
-    "safeguards/training/proofpoint-sat/isphishingsimulationenabled.py",
-    "safeguards/training/proofpoint-sat/isreportingenabled.py",
-    "safeguards/training/proofpoint-sat/istrainingenabled.py",
     "safeguards/vulnerabilitymgmt/kaseya/confirmedlicensepurchased.py",
     "safeguards/vulnerabilitymgmt/ninjaone/confirmedlicensepurchased.py",
     "safeguards/vulnerabilitymgmt/tenable/iscriticalvulncount.py"
