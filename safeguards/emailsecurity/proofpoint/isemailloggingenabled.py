@@ -3,8 +3,7 @@ def transform(input):
     Ensure email security logs are integrated with SIEM
 
     Parameters:
-        input (dict): The JSON data containing proofpoint API response
-
+        input (dict): The JSON data containing the vendor's email-security API response
     Returns:
         dict: A dictionary with the isEmailLoggingEnabled evaluation result
     """

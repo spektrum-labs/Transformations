@@ -3,8 +3,7 @@ def transform(input):
     Validate proper provisioning and deprovisioning processes exist
 
     Parameters:
-        input (dict): The JSON data containing ping_identity API response
-
+        input (dict): The JSON data containing the vendor's IAM API response
     Returns:
         dict: A dictionary with the isLifeCycleManagementEnabled evaluation result
     """

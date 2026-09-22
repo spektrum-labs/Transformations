@@ -3,8 +3,7 @@ def transform(input):
     Validate RBAC is properly implemented
 
     Parameters:
-        input (dict): The JSON data containing strata API response
-
+        input (dict): The JSON data containing the vendor's IAM API response
     Returns:
         dict: A dictionary with the isRBACImplemented evaluation result
     """

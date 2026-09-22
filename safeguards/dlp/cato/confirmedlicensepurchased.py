@@ -3,8 +3,7 @@ def transform(input):
     Ensures a valid response is returned, returns the licensePurchased field value from the response.
 
     Parameters:
-        input (dict): The JSON data containing Cato Networks API response
-
+        input (dict): The JSON data containing Cato Networks licensing API response
     Returns:
         dict: A dictionary with the confirmedLicensePurchased evaluation result
     """
