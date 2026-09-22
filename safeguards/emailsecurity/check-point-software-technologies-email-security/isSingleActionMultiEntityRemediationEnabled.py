@@ -84,6 +84,7 @@ def transform(input):
     fail_reasons = []
     recommendations = []
     api_errors = []
+    additional_findings = []
     result_value = False
 
     if not data:
@@ -96,26 +97,32 @@ def transform(input):
         )
         api_errors.append("Empty response from actionOnEvent")
     elif is_error and status_code == 401:
-        # Documented API contract: POST /action/event accepts an eventIds array
-        # (multiple entities) combined with a single eventActionName applied to
-        # all of them in one call. This is a structural property of the endpoint
-        # request schema per the Check Point Action API reference, independent
-        # of the specific tenant's data. The live probe failed authentication so
-        # we cannot see a live taskId, but the endpoint contract itself is
-        # confirmed via the documented request/response schema
-        # (eventIds[] -> single eventActionName -> single taskId).
-        result_value = True
-        pass_reasons.append(
-            "Check Point Action API POST /app/hec-api/v1.0/action/event accepts a request body with an "
-            "'eventIds' array and a single 'eventActionName' (e.g. quarantine, dismiss, restore) applied "
-            "to every listed event in one call, returning a single taskId for the batch. The live probe "
-            "returned HTTP 401 (errorType='authentication', statusCode=401) so no live taskId could be "
-            "captured, but the bulk single-action/multi-entity capability is a documented, static property "
-            "of this endpoint's request schema."
+        # A DOCUMENTED CAPABILITY IS NOT A MEASURED POSTURE, and this branch used to set
+        # `result_value = True` here -- asserting the criterion satisfied BECAUSE the call
+        # failed authentication. The reasoning it gave is sound as far as it goes: POST
+        # /action/event does accept an `eventIds` array with a single `eventActionName`,
+        # and that is a static property of the endpoint's request schema rather than of
+        # the tenant. But the criterion is asked of the CUSTOMER'S estate, and a 401 means
+        # nothing about that estate was read. Reporting a control satisfied from a rejected
+        # credential is the defect this repo's fail-closed contract exists to stop, and it
+        # is the reason the contract's no-evidence battery now carries an auth failure that
+        # CARRIES A STATUS CODE: without `statusCode` in the probe body this branch was
+        # never reached, and the file passed the gate while doing exactly this.
+        #
+        # The endpoint-contract note is kept, as a finding rather than a pass reason.
+        fail_reasons.append(
+            "actionOnEvent returned HTTP 401 (errorType='authentication'), so no live taskId could be "
+            "captured and bulk remediation could not be confirmed for this tenant."
         )
         recommendations.append(
             "Refresh the clientId/accessKey credentials so a live actionOnEvent call can confirm a taskId "
             "is returned for a multi-eventIds request."
+        )
+        additional_findings.append(
+            "Check Point Action API POST /app/hec-api/v1.0/action/event is documented to accept an "
+            "'eventIds' array with a single 'eventActionName' applied to every listed event in one call, "
+            "returning a single taskId for the batch. That is a property of the endpoint's request schema, "
+            "not evidence about this tenant, so it does not satisfy the criterion on its own."
         )
         api_errors.append(f"actionOnEvent authentication failed: statusCode={status_code}, errorType={error_type}")
     elif is_error:
@@ -162,6 +169,7 @@ def transform(input):
             "statusCode": status_code,
         },
         api_errors=api_errors,
+        additional_findings=additional_findings,
         metadata={
             "transformationId": "isSingleActionMultiEntityRemediationEnabled",
             "vendor": "Check Point Software Technologies Email Security",

@@ -106,6 +106,20 @@ NO_EVIDENCE = {
     # so the gate closes at 0 and the allowlist does not grow to accommodate it.
     "unrelated_json": {"hello": "world"},
     "unrelated_nested": {"foo": {"bar": [1, 2, 3]}},
+    # AN AUTH FAILURE THAT CARRIES A STATUS CODE, and its absence was a second hole in
+    # this battery. `auth_error` above is an Anthropic-style envelope with no HTTP status,
+    # so a transform branching on `status_code == 401` never reached that branch under any
+    # probe and passed the gate while it was there. Measured 2026-09-22 across all 937
+    # walked files with these four added: exactly ONE was reaching for a status code and
+    # asserting the control from it -- check-point's
+    # isSingleActionMultiEntityRemediationEnabled, which set the criterion true BECAUSE the
+    # call returned 401, on the grounds that the endpoint's request schema documents the
+    # capability. Fixed in the same commit rather than allowlisted. Both spellings and the
+    # nested form are carried because all three appear in this tree's error handling.
+    "auth_401": {"statusCode": 401, "error": "Unauthorized"},
+    "auth_401_snake": {"status_code": 401, "error": "Unauthorized"},
+    "auth_401_nested": {"error": {"statusCode": 401, "message": "Unauthorized"}},
+    "auth_403": {"statusCode": 403, "error": "Forbidden"},
 }
 
 
@@ -142,6 +156,41 @@ def _candidate_files() -> list[pathlib.Path]:
 
 def transform_files() -> list[pathlib.Path]:
     return [p for p in _candidate_files() if not TEST_MODULE.match(p.name)]
+
+
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
+DOC_REGION = re.compile(
+    r"<!-- BEGIN no-evidence-battery.*?-->(.*?)<!-- END no-evidence-battery -->",
+    re.DOTALL,
+)
+DOC_PROBE = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|", re.MULTILINE)
+
+
+def doc_battery_drift() -> list[str]:
+    """Ways CONTRIBUTING.md's documented battery disagrees with the enforced one.
+
+    CONTRIBUTING.md is the page that says "copy these helper functions", and it is
+    where the shape of 173 files in this tree came from. It now also states the
+    fail-closed rule and lists this battery. A documented contract that silently
+    diverges from the enforced one is the same defect the rule is about -- and this
+    battery has grown three times in two days, so it will drift.
+
+    Absent file or absent region is not drift: a checkout without the page, or a
+    fixture tree, is not a contradiction. Disagreeing content is.
+    """
+    if not CONTRIBUTING.is_file():
+        return []
+    region = DOC_REGION.search(CONTRIBUTING.read_text(encoding="utf-8", errors="replace"))
+    if region is None:
+        return []
+    documented = {m for m in DOC_PROBE.findall(region.group(1)) if m != "probe"}
+    enforced = set(NO_EVIDENCE)
+    out = []
+    for name in sorted(enforced - documented):
+        out.append(f"probe `{name}` is enforced but not listed in CONTRIBUTING.md")
+    for name in sorted(documented - enforced):
+        out.append(f"CONTRIBUTING.md lists probe `{name}`, which this contract does not carry")
+    return out
 
 
 def smuggled_transforms() -> list[str]:
@@ -351,6 +400,14 @@ def main() -> int:
         out = emit_allowlist()
         print(f"wrote {ALLOWLIST.relative_to(ROOT)}: {out['count']} instance(s)")
         return 0
+
+    drift = doc_battery_drift()
+    if drift:
+        print("✗ the battery CONTRIBUTING.md documents is not the battery this contract "
+              "enforces:")
+        for line in drift:
+            print(f"  {line}")
+        return 1
 
     smuggled = smuggled_transforms()
     if smuggled:
