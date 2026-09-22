@@ -57,9 +57,12 @@ ALLOWLIST = ROOT / "contracts" / "discriminates-allowlist.json"
 
 sys.path.insert(0, str(ROOT / "tools"))
 try:
-    from check_fail_closed import INVERTED, SATISFACTION  # one definition, not two
+    # one definition, not two -- the file set as well as the key rules, so a pytest
+    # module excluded there cannot reappear as a transform here
+    from check_fail_closed import INVERTED, SATISFACTION, TEST_MODULE
 except ImportError:  # pragma: no cover - only when run from an odd cwd
     import re
+    TEST_MODULE = re.compile(r"^(test_.*|conftest)\.py$")
     SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
     INVERTED = frozenset()
 
@@ -105,7 +108,9 @@ def satisfaction_true(response) -> frozenset[str]:
 def transform_files() -> list[pathlib.Path]:
     return sorted(
         p for p in SAFEGUARDS.rglob("*.py")
-        if "schemas" not in p.parts and p.name != "__init__.py"
+        if "schemas" not in p.parts
+        and p.name != "__init__.py"
+        and not TEST_MODULE.match(p.name)
     )
 
 

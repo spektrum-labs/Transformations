@@ -68,6 +68,16 @@ INVERTED = frozenset({
     "isLegacyAuthAllowed",
     "isLocalLoginAllowed",
     "isPublicSharingAllowed",
+    # SonicWall service accounts: True means A GAP WAS FOUND. Established from the
+    # transform's own output rather than from the key name -- True is returned only
+    # alongside failReasons ("Required service-account evidence was not collected"),
+    # False only alongside passReasons ("No configured MFA gap was identified..."),
+    # and the vendor's own suite tabulates True as the SAFE value for a partial
+    # envelope while tabulating False for its four normal-polarity siblings
+    # (safeguards/firewall/sonicwall/test_haslocalaccountinventoryvisibility.py:99).
+    # Forcing this key False on no evidence would report "no MFA gap" from a body
+    # that proves nothing -- the opposite of fail-closed.
+    "hasIdentifiedServiceAccountsMFAGap",
 })
 
 #: bodies that contain no evidence about any estate
@@ -109,11 +119,48 @@ def satisfaction_keys_true(response) -> list[str]:
     )
 
 
-def transform_files() -> list[pathlib.Path]:
+#: a pytest module: never something the evaluator loads as a transform
+TEST_MODULE = re.compile(r"^(test_.*|conftest)\.py$")
+DEF_TRANSFORM = re.compile(r"^def\s+transform\s*\(", re.MULTILINE)
+
+
+def _candidate_files() -> list[pathlib.Path]:
     return sorted(
         p for p in SAFEGUARDS.rglob("*.py")
         if "schemas" not in p.parts and p.name != "__init__.py"
     )
+
+
+def transform_files() -> list[pathlib.Path]:
+    return [p for p in _candidate_files() if not TEST_MODULE.match(p.name)]
+
+
+def smuggled_transforms() -> list[str]:
+    """Excluded pytest modules that nonetheless define a top-level `transform`.
+
+    UNLOADABLE is FATAL in this checker on purpose: a transform that cannot be
+    imported standalone cannot run under RestrictedPython in Token-Service either,
+    so "I could not judge this" must never pass for "clean". That made the five
+    safeguards/firewall/sonicwall/test_*.py files fatal -- not because they are
+    broken (`pytest -q` there is 26 passed) but because importlib does not put a
+    file's own directory on sys.path the way pytest does, so their `import conftest`
+    raised, while conftest.py is present.
+
+    The fix is NOT to put each file's directory on sys.path during the load. That
+    would make a sibling import succeed here and still fail in the pipeline, hiding
+    exactly the defect the UNLOADABLE category exists to catch. A pytest module is
+    instead excluded by name -- and because a name-based exclusion could in principle
+    drop something judgeable, this reads the SOURCE of every excluded file and the
+    run fails if any of them defines a transform. Measured 2026-09-22: 5 excluded,
+    0 smuggled, and the finding count is unchanged by the exclusion.
+    """
+    out = []
+    for p in _candidate_files():
+        if not TEST_MODULE.match(p.name):
+            continue
+        if DEF_TRANSFORM.search(p.read_text(encoding="utf-8", errors="replace")):
+            out.append(str(p.relative_to(ROOT)))
+    return sorted(out)
 
 
 def census(files=None) -> dict:
@@ -195,11 +242,31 @@ def self_test() -> int:
             "def transform(input):\n"
             "    return {'localLoginAllowed': True}\n"
         )
+        # a genuine pytest module: imports a sibling the way the sonicwall suite does,
+        # defines no transform, and must be excluded rather than reported UNLOADABLE
+        (d / "conftest.py").write_text("HELPER = 1\n")
+        test_mod = d / "test_something.py"
+        test_mod.write_text(
+            "import conftest\n"
+            "def transformation():\n"
+            "    return conftest.HELPER\n"
+        )
+        # a pytest-named file that DOES define a transform: the exclusion must not
+        # silently swallow it
+        smuggler = d / "test_smuggled.py"
+        smuggler.write_text(
+            "def transform(input):\n"
+            "    return {'isSmuggled': True}\n"
+        )
         global SAFEGUARDS, ROOT
         saved_s, saved_r = SAFEGUARDS, ROOT
         SAFEGUARDS, ROOT = d, d
         try:
-            found = census()["findings"]
+            result = census()
+            found = result["findings"]
+            walked = {p.name for p in transform_files()}
+            unloadable = result["unloadable"]
+            smuggled = smuggled_transforms()
         finally:
             SAFEGUARDS, ROOT = saved_s, saved_r
         if "isplanteddefect.py" not in found:
@@ -208,6 +275,20 @@ def self_test() -> int:
             failures.append("a clean fail-closed transform was wrongly flagged")
         if "isinvertedkey.py" in found:
             failures.append("an INVERTED key (true == insecure) was wrongly flagged")
+        if "test_something.py" in walked or "conftest.py" in walked:
+            failures.append("a pytest module was walked as a transform")
+        if unloadable:
+            failures.append(
+                "a pytest module importing a present sibling was reported UNLOADABLE: "
+                + ", ".join(sorted(unloadable))
+            )
+        if "isplanteddefect.py" not in walked:
+            failures.append("the pytest exclusion also dropped a real transform")
+        if smuggled != ["test_smuggled.py"]:
+            failures.append(
+                "a file excluded as a pytest module that DEFINES a transform was not "
+                f"caught; smuggled_transforms() returned {smuggled!r}"
+            )
     for f in failures:
         print(f"  self-test FAIL: {f}")
     print("self-test ok" if not failures else f"self-test FAILED ({len(failures)})")
@@ -226,6 +307,14 @@ def main() -> int:
         out = emit_allowlist()
         print(f"wrote {ALLOWLIST.relative_to(ROOT)}: {out['count']} instance(s)")
         return 0
+
+    smuggled = smuggled_transforms()
+    if smuggled:
+        print("✗ a file excluded as a pytest module defines a transform, so the "
+              "name-based exclusion is dropping something this gate must judge:")
+        for rel in smuggled:
+            print(f"  {rel}")
+        return 1
 
     result = census()
     findings, unloadable = result["findings"], result["unloadable"]
