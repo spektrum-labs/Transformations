@@ -103,19 +103,43 @@ def transform(input):
             },
         )
 
-    response_envelope = data.get("responseEnvelope") or {}
-    response_data = data.get("responseData")
-    if not isinstance(response_data, list):
-        response_data = []
+    raw_response_envelope = data.get("responseEnvelope")
+    raw_response_data = data.get("responseData")
+    response_envelope = raw_response_envelope if isinstance(raw_response_envelope, dict) else {}
+    response_data = raw_response_data if isinstance(raw_response_data, list) else []
     total_records = response_envelope.get("totalRecordsNumber")
     if not isinstance(total_records, int):
         total_records = len(response_data)
 
-    # Reaching this endpoint successfully (no auth/API error) for the
-    # ppat_sender_name (anti-impersonation) exception_type confirms the
-    # imposter-email / anti-phishing verdict engine is provisioned and
-    # configurable for this tenant.
-    enabled = True
+    # EVIDENCE REQUIRED: a recognised Check Point HEC envelope must actually be present.
+    # `enabled` used to be hardcoded True on the reasoning that "reaching this endpoint
+    # successfully confirms the tool is provisioned" -- but a body that never reached the
+    # endpoint at all looks identical: {}, "{}", null and an unrelated payload such as
+    # {"hello": "world"} carry no `error` key either, and all four reported imposter-email
+    # detection as enabled. The getAntiMalwareExceptions (exception_type=ppat_sender_name)
+    # response must carry a responseData list or a responseEnvelope object.
+    enabled = isinstance(raw_response_data, list) or isinstance(raw_response_envelope, dict)
+
+    if not enabled:
+        return create_response(
+            result={
+                "isImposterEmailDetectionEnabled": False,
+                "imposterExceptionCount": 0,
+            },
+            validation=validation,
+            fail_reasons=[
+                "The payload carried neither a responseData list nor a responseEnvelope object, so it is not a recognisable ppat_sender_name exceptions response and anti-impersonation (imposter email) detection could not be confirmed."
+            ],
+            recommendations=[
+                "Confirm the integration is calling sectool-exceptions/checkpoint2/exceptions/ppat_sender_name and that the credentials return the documented responseEnvelope/responseData payload, then re-run this check."
+            ],
+            input_summary={"hasRecognizedEnvelope": False},
+            metadata={
+                "transformationId": "isImposterEmailDetectionEnabled",
+                "vendor": "Check Point Software Technologies Email Security",
+                "category": "emailsecurity",
+            },
+        )
 
     result = {
         "isImposterEmailDetectionEnabled": enabled,
