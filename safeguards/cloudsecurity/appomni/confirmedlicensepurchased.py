@@ -69,9 +69,17 @@ def transform(input):
             candidate = data.get("results", data.get("data", data.get("items", None)))
             if isinstance(candidate, list):
                 services = [item for item in candidate if isinstance(item, dict)]
-            else:
-                # Single service object — wrap as list
+            elif any(key in data for key in (
+                "service_type", "integration_connected", "detection_ingest_enabled", "is_archived"
+            )):
+                # A single service object (not a paginated wrapper) carries these
+                # fields directly — wrap as a one-item list.
                 services = [data]
+            # Anything else (an empty object, an auth-error envelope, an unrecognised
+            # shape with no results/data/items list and none of the single-service
+            # fields) is not evidence of a provisioned service. The old `else: services
+            # = [data]` wrapped ANY such body as "one service," so {} and an
+            # auth-error envelope both confirmed a license.
 
         total = len(services)
 

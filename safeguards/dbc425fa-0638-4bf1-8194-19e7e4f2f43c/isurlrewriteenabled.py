@@ -1,13 +1,27 @@
 """
 Transformation: isURLRewriteEnabled
-Vendor: Email Security Provider
+Vendor: Google Workspace
 Category: Email Security
 
-Evaluates if URL rewrite is enabled for safe link protection.
+Evaluates whether Gmail checks links before delivery.
+
+Google Workspace has no literal "URL rewrite" the way a mail gateway does. The
+equivalent control is the Gmail "Links and external images" safety policy, which
+scans links behind shorteners and warns on untrusted links. It is exposed by the
+Cloud Identity Policy API as settings/gmail.links_and_external_images.
+
+Previously this transform read a top-level "urlRewrite" field from the mail-server
+DNS tool, which never returns one, so the criterion was false for every customer.
 """
 
 import json
 from datetime import datetime
+
+SETTING_TYPE = "gmail.links_and_external_images"
+
+# Fields that constitute "URLs are checked before delivery". External image
+# scanning is deliberately excluded: it governs images, not links.
+REQUIRED_FIELDS = ["enableShortenerScanning", "enableAggressiveWarningsOnUntrustedLinks"]
 
 
 def extract_input(input_data):
@@ -59,7 +73,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isURLRewriteEnabled",
-                "vendor": "Email Security Provider",
+                "vendor": "Google Workspace",
                 "category": "Email Security"
             }
         }
@@ -87,25 +101,89 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        additional_findings = []
 
-        is_url_rewrite_enabled = False
+        policies = []
+        if isinstance(data, dict):
+            policies = data.get("policies", [])
+        elif isinstance(data, list):
+            # Token-Service can hand list-shaped API data straight through
+            policies = data
 
-        if isinstance(data, dict) and 'urlRewrite' in data:
-            is_url_rewrite_enabled = bool(data['urlRewrite'])
+        # Collect every link-protection policy. Google returns one per org unit,
+        # so the tenant is only covered if all of them have link checking on.
+        link_policies = []
+        for policy in policies:
+            if not isinstance(policy, dict):
+                continue
+            setting = policy.get("setting", {})
+            if not isinstance(setting, dict):
+                continue
+            if str(setting.get("type", "")).endswith(SETTING_TYPE):
+                value = setting.get("value", {})
+                link_policies.append({
+                    "orgUnit": policy.get("policyQuery", {}).get("orgUnit", "unknown"),
+                    "value": value if isinstance(value, dict) else {}
+                })
+
+        enabled_count = 0
+        disabled_fields = []
+
+        for entry in link_policies:
+            value = entry["value"]
+            entry_enabled = True
+            for field in REQUIRED_FIELDS:
+                if not bool(value.get(field, False)):
+                    entry_enabled = False
+                    if field not in disabled_fields:
+                        disabled_fields.append(field)
+            if entry_enabled:
+                enabled_count += 1
+            additional_findings.append({
+                "metric": entry["orgUnit"],
+                "value": entry_enabled,
+                "reason": "Link checking enabled" if entry_enabled else "Link checking not fully enabled"
+            })
+
+        is_url_rewrite_enabled = len(link_policies) > 0 and enabled_count == len(link_policies)
 
         if is_url_rewrite_enabled:
-            pass_reasons.append("URL rewrite is enabled for safe link protection")
+            pass_reasons.append(
+                "Gmail link protection enabled across all %d org unit policies" % len(link_policies)
+            )
+        elif len(link_policies) == 0:
+            fail_reasons.append(
+                "No %s policy returned; cannot confirm links are checked before delivery" % SETTING_TYPE
+            )
+            recommendations.append(
+                "Verify the Cloud Identity Policy API returns Gmail safety policies for this tenant"
+            )
         else:
-            fail_reasons.append("URL rewriting/Safe Links not enabled")
-            recommendations.append("Enable URL rewrite to protect users from malicious links")
+            fail_reasons.append(
+                "Link checking not enabled on %d of %d org unit policies (missing: %s)"
+                % (len(link_policies) - enabled_count, len(link_policies), ", ".join(disabled_fields))
+            )
+            recommendations.append(
+                "In Admin console > Apps > Google Workspace > Gmail > Safety > Links and external "
+                "images, enable shortener scanning and aggressive warnings on untrusted links"
+            )
 
         return create_response(
-            result={criteriaKey: is_url_rewrite_enabled},
+            result={
+                criteriaKey: is_url_rewrite_enabled,
+                "linkPolicyCount": len(link_policies),
+                "enabledPolicyCount": enabled_count
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"urlRewriteEnabled": is_url_rewrite_enabled}
+            additional_findings=additional_findings,
+            input_summary={
+                "totalPolicies": len(policies),
+                "linkPolicies": len(link_policies),
+                "enabledPolicies": enabled_count
+            }
         )
 
     except Exception as e:

@@ -39,9 +39,11 @@ def transform(input):
         data = data.get("result", data)
         data = data.get("apiResponse", data)
 
-        default_value = True if data is not None else False
-
-        license_purchased = data.get('licensePurchased', default_value)
+        # `default_value = True if data is not None else False` asked whether a
+        # response arrived, not what it said, so any parseable dict -- including {} and
+        # an auth-error envelope -- defaulted `licensePurchased` to True before any of
+        # the fallback signals below even ran. Never default True now.
+        license_purchased = bool(data.get('licensePurchased', False)) if isinstance(data, dict) else False
 
         if not license_purchased:
             # Check for license status indicators

@@ -94,13 +94,24 @@ def transform(input):
         log_count = 0
 
         if isinstance(data, dict):
-            # Cloudflare investigate endpoint returns email events
-            messages = data.get('result', data.get('results', data.get('messages', [])))
+            # Cloudflare investigate endpoint returns email events. The old chained
+            # `.get(..., .get(..., []))` defaulted to an empty LIST when none of the
+            # three keys were present, and `isinstance([], list)` is True -- so the
+            # fallback itself satisfied "the investigate endpoint returns data" and every
+            # unrecognised body, including {} and an auth-error envelope, reported
+            # logging as enabled. Each key must actually be present now.
+            messages = data.get('result')
+            if messages is None:
+                messages = data.get('results')
+            if messages is None:
+                messages = data.get('messages')
             result_info = data.get('result_info', {})
 
             if isinstance(messages, list):
                 log_count = len(messages)
-                # If the investigate endpoint returns data, logging is active
+                # A messages array being present at all -- even empty, meaning nothing
+                # was captured today -- is a genuine response from this endpoint, unlike
+                # a body with none of the three keys.
                 logging_enabled = True
             elif isinstance(result_info, dict) and 'total_count' in result_info:
                 log_count = result_info.get('total_count', 0)

@@ -63,6 +63,8 @@ def evaluate(data):
                 if status == "active" and has_valid_paps:
                     result = True
                     break
+
+        return {"isJITAccessEnabled": result}
     except Exception as e:
         return {"isJITAccessEnabled": False, "error": str(e)}
 

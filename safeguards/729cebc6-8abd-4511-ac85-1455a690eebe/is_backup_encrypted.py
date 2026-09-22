@@ -88,12 +88,37 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
+        # "UNLESS WE FIND EVIDENCE OTHERWISE" REQUIRES HAVING LOOKED. The default was True
+        # and the only thing that could lower it was a `totalRecords` key -- itself guarded
+        # by isinstance(data, dict) -- so a null body, a non-dict body, an error envelope
+        # and any response without that one key all reported "All backups are encrypted at
+        # rest". Measured 2026-09-21: transform(None) returned isBackupEncrypted true.
+        # There is no evidence otherwise when there is no evidence at all.
+        error_keys = ("error", "errors", "errorMessage", "errorType", "fault")
+        if (not isinstance(data, dict) or not data
+                or any(data.get(k) for k in error_keys)
+                or 'totalRecords' not in data):
+            return create_response(
+                result={"isBackupEncrypted": False},
+                validation=validation,
+                fail_reasons=[
+                    "The backup service returned nothing this transform could read "
+                    "(absent body, an error response, or no record count), so encryption "
+                    "at rest was not verified. This is the absence of a reading, not a "
+                    "finding that backups are unencrypted."
+                ],
+                recommendations=[
+                    "Confirm the credential is valid and the backup listing returned a "
+                    "2xx body carrying totalRecords before reading this criterion."
+                ],
+                input_summary={"recordCountPresent": False}
+            )
+
         # Default to True (encrypted) unless we find evidence otherwise
         all_encrypted = True
 
-        if isinstance(data, dict) and 'totalRecords' in data:
-            if data['totalRecords'] < 1:
-                all_encrypted = False
+        if data['totalRecords'] < 1:
+            all_encrypted = False
 
         if all_encrypted:
             pass_reasons.append("All backups are encrypted at rest")

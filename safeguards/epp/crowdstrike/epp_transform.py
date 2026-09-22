@@ -87,7 +87,24 @@ def transform(endpoints_response, debug=False):
         fail_reasons = []
         recommendations = []
 
-        isEPPConfigured = data.get("isEPPConfigured", True) if isinstance(data, dict) else True
+        # A DEFAULT OF True ON BOTH BRANCHES MEANT NOTHING COULD DISCONFIRM THIS. The line
+        # read `data.get("isEPPConfigured", True) if isinstance(data, dict) else True`, so a
+        # body missing the key reported endpoint protection CONFIGURED, and a body that was
+        # not a dict at all -- null, a bare string, an unparsed response -- did too, via the
+        # else. Measured 2026-09-21: transform(None) returned isEPPConfigured true across
+        # all six copies of this file. The key is absent from every real vendor payload
+        # this transform handles; it is a passthrough for a caller-supplied hint, and its
+        # absence is the normal case, which made True the answer almost every time.
+        #
+        # Absence of the hint is now resolved from what WAS read: endpoint protection is
+        # configured if any coverage was actually observed. An unreadable body observes
+        # nothing and is False.
+        if not isinstance(data, dict) or not data:
+            isEPPConfigured = False
+        elif "isEPPConfigured" in data:
+            isEPPConfigured = bool(data.get("isEPPConfigured"))
+        else:
+            isEPPConfigured = _epp_coverage_observed(data)
 
         # Handle different possible response structures from CrowdStrike API
         devices = []
@@ -235,6 +252,15 @@ def transform(endpoints_response, debug=False):
         coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
+        # Alerting is active whenever at least one endpoint is actively protected
+        # (sensor + prevention policy) or covered by MDR, since those devices
+        # generate and forward detections/alerts. Server- or MDR-only fleets must
+        # still count, so this is not gated on Endpoint Protection alone.
+        coverage_scores["isAlertingEnabled"] = (
+            coverage_scores["Endpoint Protection"] > 0
+            or coverage_scores["Server Protection"] > 0
+            or coverage_scores["MDR"] > 0
+        )
         coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
         coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
         coverage_scores["isEPPConfigured"] = isEPPConfigured
@@ -250,6 +276,11 @@ def transform(endpoints_response, debug=False):
 
         if coverage_scores["isMDREnabled"]:
             pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
+
+        if coverage_scores["isAlertingEnabled"]:
+            pass_reasons.append("Alerting enabled: protected endpoints/servers/MDR generate detections")
+        else:
+            fail_reasons.append("Alerting not enabled: no protected endpoint, server, or MDR coverage detected")
 
         return create_response(
             result=coverage_scores,
@@ -272,3 +303,27 @@ def transform(endpoints_response, debug=False):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def _epp_coverage_observed(data):
+    """True when the payload actually evidences endpoint protection on something.
+
+    Deliberately narrow: it looks for a non-empty population of devices/agents/hosts, or
+    an explicit enabled/installed flag. An error envelope carries none of these, so it
+    resolves False rather than inheriting the old optimistic default.
+    """
+    if not isinstance(data, dict):
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    for key in ("devices", "agents", "hosts", "endpoints", "resources", "items", "data"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    for key in ("isEnabled", "enabled", "installed", "protectionEnabled", "eppEnabled"):
+        if data.get(key) is True:
+            return True
+    return False

@@ -3,8 +3,7 @@ def transform(input):
     Validates that CVE and threat intelligence templates are active
 
     Parameters:
-        input (dict): The JSON data containing projectdiscovery API response
-
+        input (dict): The JSON data containing the vendor's ASM API response
     Returns:
         dict: A dictionary with the isThreatIntelIntegrated evaluation result
     """

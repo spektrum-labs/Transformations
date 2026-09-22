@@ -3,8 +3,7 @@ def transform(input):
     Ensure that DMARC, DKIM and SPF records are set up properly
 
     Parameters:
-        input (dict): The JSON data containing checkpoint API response
-
+        input (dict): The JSON data containing the vendor's email-security API response
     Returns:
         dict: A dictionary with the isDNSConfigured evaluation result
     """

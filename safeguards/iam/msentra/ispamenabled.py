@@ -3,8 +3,7 @@ def transform(input):
     Validate that privileged accounts are managed securely
 
     Parameters:
-        input (dict): The JSON data containing msentra API response
-
+        input (dict): The JSON data containing the vendor's IAM API response
     Returns:
         dict: A dictionary with the isPAMEnabled evaluation result
     """

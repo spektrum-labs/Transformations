@@ -45,11 +45,56 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        result = bool(data)
+        # `bool(data)` asked whether a response arrived, not what it said, so any
+        # non-empty body -- including one with zero campaigns -- satisfied this
+        # criterion and no input could make it false. Resolved from whether a campaign
+        # was actually launched now; see _phishing_simulation_launched below.
+        result = _phishing_simulation_launched(data)
         return {"isPhishingSimulationEnabled": result}
 
     except Exception as e:
         return {"isPhishingSimulationEnabled": False, "error": str(e)}
+
+
+def _phishing_simulation_launched(data):
+    """True only when the payload POSITIVELY evidences a launched phishing campaign.
+
+    Deliberately conservative: an unreadable/empty/error body, an empty campaign list,
+    or a campaign list with no launched/sent campaign is False. Anything unrecognised
+    is False -- never True by default.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    containers = [data]
+    for nest_key in ("data", "result", "results", "response"):
+        nested = data.get(nest_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    campaigns = None
+    for container in containers:
+        for key in ("campaigns", "phishing_campaigns", "phishingCampaigns"):
+            value = container.get(key)
+            if isinstance(value, list):
+                campaigns = value
+                break
+        if campaigns is not None:
+            break
+    if not campaigns:
+        return False
+    launched_statuses = ("launched", "active", "completed", "in_progress", "sent")
+    for campaign in campaigns:
+        if not isinstance(campaign, dict):
+            continue
+        status = str(campaign.get("status", campaign.get("campaign_status", ""))).strip().lower()
+        if status in launched_statuses:
+            return True
+        launched_count = campaign.get("launched_count") or campaign.get("sent_count")
+        if isinstance(launched_count, (int, float)) and launched_count > 0:
+            return True
+    return False
 
 
 def transform(input):

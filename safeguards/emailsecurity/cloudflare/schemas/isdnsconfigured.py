@@ -45,6 +45,11 @@ class IsdnsconfiguredInput(BaseModel):
     via the Spektrum DNS check tool or Cloudflare zones DNS endpoint.
     """
 
+    # The shared DNS helper uses uppercase keys. Lowercase fields remain for
+    # compatibility with the original Cloudflare transformation contract.
+    SPF: Optional[Any] = None
+    DKIM: Optional[Any] = None
+    DMARC: Optional[Any] = None
     spf: Optional[Any] = None
     dkim: Optional[Any] = None
     dmarc: Optional[Any] = None

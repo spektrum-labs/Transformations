@@ -43,51 +43,70 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-RECORDING_ON_VALUES = ("allowed", "enabled", "yes", "true", "1")
+TRUE_VALUES = ("true", "yes", "1", "enabled", "allowed")
 
 
-def _recording_enabled(val):
+def is_true(val):
     if isinstance(val, bool):
         return val
     if isinstance(val, (int, float)):
         return val > 0
     if isinstance(val, str):
-        return val.lower() in RECORDING_ON_VALUES
+        return val.lower() in TRUE_VALUES
     return False
 
-
 def evaluate(data):
+    """Recording is exposed as JumpPolicy.recordings_disabled - an INVERTED flag.
+
+    Source: GET /api/config/v1/jump-policy -> JumpPolicy
+    Field:  recordings_disabled (bool). Per BeyondTrust: "If true, sessions will not be
+            recorded even if recordings are enabled on the Configuration > Options page."
+            So recording is ON for a policy when this is absent/false.
+    GET /session-policy carries no recording field at all and cannot answer this.
+    """
     try:
         if data is None:
-            return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0, "totalPolicies": 0, "reason": "Null response"}
+            return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0,
+                    "totalPolicies": 0, "reason": "Null response"}
 
-        # Error dict
         if isinstance(data, dict):
             error_msg = str(data.get("error", data.get("message", ""))).lower()
-            if error_msg and any(k in error_msg for k in ("unauthorized", "forbidden", "access denied")):
-                return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0, "totalPolicies": 0, "reason": error_msg}
-            policies = data.get("session_policies", data.get("items", data.get("results", [])))
+            if error_msg and any(k in error_msg for k in ("unauthorized", "forbidden", "access denied", "not found")):
+                return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0,
+                        "totalPolicies": 0, "reason": error_msg}
+            policies = data.get("jump_policies", data.get("items", data.get("results", [])))
+            if isinstance(policies, dict):
+                policies = [policies]
         elif isinstance(data, list):
             policies = data
         else:
-            return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0, "totalPolicies": 0, "reason": "Unexpected type"}
+            return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0,
+                    "totalPolicies": 0, "reason": "Unexpected type"}
 
         total = len(policies)
+        if total == 0:
+            return {"isSessionMonitoringEnabled": False, "recordingPolicyCount": 0,
+                    "totalPolicies": 0, "reason": "No jump policies found"}
+
         recording_count = 0
+        suppressed = 0
         for policy in policies:
             if not isinstance(policy, dict):
                 continue
-            if _recording_enabled(policy.get("session_recording")):
+            if is_true(policy.get("recordings_disabled")):
+                suppressed += 1
+            else:
                 recording_count += 1
 
+        # Every policy must leave recording enabled, otherwise there is a blind spot.
         return {
-            "isSessionMonitoringEnabled": recording_count > 0,
+            "isSessionMonitoringEnabled": total > 0 and suppressed == 0,
             "recordingPolicyCount": recording_count,
+            "policiesSuppressingRecording": suppressed,
             "totalPolicies": total
         }
     except Exception as e:
         return {"isSessionMonitoringEnabled": False, "error": str(e)}
-
 
 def transform(input):
     criteriaKey = "isSessionMonitoringEnabled"

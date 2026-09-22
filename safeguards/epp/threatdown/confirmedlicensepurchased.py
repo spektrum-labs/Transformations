@@ -43,41 +43,66 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Check if ThreatDown account is active with a valid subscription."""
-    try:
-        # The /nebula/v1/account endpoint returns account info
-        account_name = data.get("name", data.get("accountName", ""))
-        account_id = data.get("id", data.get("accountId", data.get("account_id", "")))
+    """Confirm an active ThreatDown licence from GET /nebula/v1/account.
 
-        # Check account status
-        status = data.get("status", data.get("state", data.get("accountStatus", "")))
-        if isinstance(status, bool):
-            is_active = status
-        else:
-            is_active = str(status).lower() in ("active", "enabled", "true", "1", "current")
+    Real shape: the account object carries product_license_info[], each entry with
+    license_status, licensed_seats, license_expires_at, combo_code and
+    license_term_type. There is no top-level status/subscription/plan field.
+    """
+    licenses = data.get("product_license_info") or []
+    if not isinstance(licenses, list):
+        licenses = []
 
-        # Check subscription/license info if available
-        subscription = data.get("subscription", data.get("license", {}))
-        if isinstance(subscription, dict):
-            sub_status = subscription.get("status", subscription.get("state", ""))
-            if sub_status:
-                is_active = is_active or str(sub_status).lower() in ("active", "enabled", "true", "current")
-            plan = subscription.get("plan", subscription.get("tier", subscription.get("type", "")))
-        else:
-            plan = ""
+    now = datetime.utcnow()
+    active = []
+    seats = 0
+    products = []
+    expiries = []
+    term_types = []
 
-        # Fallback: if we got any account data back, consider it confirmed
-        if not is_active and (account_name or account_id):
-            is_active = True
+    for lic in licenses:
+        if not isinstance(lic, dict):
+            continue
+        if str(lic.get("license_status", "")).strip().lower() != "active":
+            continue
 
-        return {
-            "confirmedLicensePurchased": is_active,
-            "accountName": account_name,
-            "accountId": str(account_id),
-            "plan": str(plan)
-        }
-    except Exception as e:
-        return {"confirmedLicensePurchased": False, "error": str(e)}
+        expires_raw = lic.get("license_expires_at")
+        if expires_raw:
+            try:
+                expires_at = datetime.strptime(str(expires_raw)[:19], "%Y-%m-%dT%H:%M:%S")
+                if expires_at < now:
+                    continue
+                expiries.append(str(expires_raw)[:10])
+            except Exception:
+                pass
+
+        active.append(lic)
+
+        try:
+            seats = seats + int(lic.get("licensed_seats") or 0)
+        except Exception:
+            pass
+
+        combo = lic.get("combo_code")
+        if combo:
+            products.append(str(combo))
+        term = lic.get("license_term_type")
+        if term:
+            term_types.append(str(term).lower())
+
+    result = {
+        "confirmedLicensePurchased": len(active) > 0,
+        "accountName": data.get("name", ""),
+        "activeLicenseCount": len(active),
+        "licensedSeats": seats,
+        "licenseProducts": sorted(set(products)),
+        "earliestExpiry": min(expiries) if expiries else "",
+    }
+    if term_types:
+        # Surfaced so not-for-resale / demo tenants are visible rather than silently
+        # counted as production coverage.
+        result["licenseTermTypes"] = sorted(set(term_types))
+    return result
 
 
 def transform(input):
@@ -109,8 +134,12 @@ def transform(input):
             pass_reasons.append("ThreatDown account is active with a valid subscription")
             if extra_fields.get("accountName"):
                 pass_reasons.append(f"Account: {extra_fields['accountName']}")
-            if extra_fields.get("plan"):
-                pass_reasons.append(f"Plan: {extra_fields['plan']}")
+            if extra_fields.get("licensedSeats"):
+                pass_reasons.append(f"Licensed seats: {extra_fields['licensedSeats']}")
+            if extra_fields.get("licenseProducts"):
+                pass_reasons.append("Products: " + ", ".join(extra_fields["licenseProducts"]))
+            if extra_fields.get("licenseTermTypes"):
+                pass_reasons.append("Licence term type(s): " + ", ".join(extra_fields["licenseTermTypes"]))
         else:
             fail_reasons.append("No active ThreatDown account or subscription found")
             recommendations.append("Verify ThreatDown Nebula account status and subscription in the admin console")

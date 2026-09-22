@@ -88,7 +88,23 @@ def transform(input):
         recommendations = []
 
         # Initialize configuration status
-        isBackupConfigured = data.get("isBackupConfigured", True) if isinstance(data, dict) else True
+        # SAME DEFAULT-TRUE-ON-BOTH-BRANCHES AS THE SIX epp_transform COPIES: a dict
+        # missing the key reported backups CONFIGURED via the get() default, and a non-dict
+        # body -- null, a bare string, an unparsed response -- reported the same via the
+        # else. Measured 2026-09-21: transform(None) returned isBackupConfigured true. The
+        # key is a caller-supplied hint absent from real Datto payloads, so True was the
+        # answer nearly every time. Absence is now resolved from what was read: backups are
+        # configured if a device population actually came back.
+        if not isinstance(data, dict) or not data or any(
+                data.get(k) for k in ("error", "errors", "errorMessage", "errorType", "fault")):
+            isBackupConfigured = False
+        elif "isBackupConfigured" in data:
+            isBackupConfigured = bool(data.get("isBackupConfigured"))
+        else:
+            isBackupConfigured = any(
+                isinstance(data.get(k), list) and data.get(k)
+                for k in ("items", "devices", "agents", "assets")
+            )
 
         # Datto may use "items", "devices", or "agents" for the list
         devices = []

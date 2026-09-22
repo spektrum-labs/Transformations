@@ -124,6 +124,12 @@ def transform(input):
         if isinstance(ok_flag, bool) and ok_flag is True:
             api_responded_ok = True
 
+        # The old final fallback -- "elif isinstance(data, dict) and len(data) > 0:
+        # license_purchased = True" -- treated ANY non-empty dict as proof the
+        # subscription was active, so an auth-error envelope or an unrecognised body
+        # with any key at all satisfied the criterion. There is no such fallback now:
+        # the response must actually contain audit events, a positive total, or an
+        # explicit success/ok acknowledgement.
         if event_count > 0:
             license_purchased = True
             license_details["auditEventCount"] = event_count
@@ -136,10 +142,6 @@ def transform(input):
             license_purchased = True
             license_details["responseStatus"] = status_value if status_value else "ok"
             license_details["evidence"] = "api_acknowledged_request"
-        elif isinstance(data, dict) and len(data) > 0:
-            license_purchased = True
-            license_details["responseKeys"] = list(data.keys())
-            license_details["evidence"] = "non_empty_response_body"
 
         if license_purchased:
             pass_reasons.append(

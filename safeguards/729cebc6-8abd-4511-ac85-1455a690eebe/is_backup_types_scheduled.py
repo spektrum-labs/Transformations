@@ -1,9 +1,13 @@
 """
 Transformation: isBackupTypesScheduled
-Vendor: Azure
+Vendor: Azure Recovery Services / Azure Data Protection
 Category: Backup / Data Protection
 
-Checks if all backup types are on a defined schedule.
+Checks that backup policies across all Azure Recovery Services vaults and
+Backup vaults have schedules configured with protected items assigned.
+
+Data source: Azure Resource Graph query (getBackupSchedules) returning all
+backup policies with scheduleType, protectedItemsCount, and schedule details.
 """
 
 import json

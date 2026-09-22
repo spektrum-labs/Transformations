@@ -75,6 +75,21 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def looks_like_jsonapi_record(item):
+    """True only for something shaped like a JSON:API resource object.
+
+    The bare-dict fallback below used to return ``[data]`` for ANY dict, so ``{}``,
+    an auth-error envelope and an unrelated payload each counted as one record and
+    the criterion -- ``total > 0`` -- came back true for a body that named nothing.
+    A real record carries an ``attributes`` block, or both a ``type`` and an ``id``.
+    """
+    if not isinstance(item, dict):
+        return False
+    if isinstance(item.get('attributes'), dict):
+        return True
+    return 'type' in item and 'id' in item
+
+
 def pull_jsonapi_items(data):
     """Pull a list of JSON:API items from raw envelope, preprocessed list, or single record."""
     if isinstance(data, list):
@@ -84,7 +99,8 @@ def pull_jsonapi_items(data):
             return data['data']
         if isinstance(data.get('data'), dict):
             return [data['data']]
-        return [data]
+        if looks_like_jsonapi_record(data):
+            return [data]
     return []
 
 
