@@ -100,17 +100,45 @@ def transform(input):
             },
         )
 
-    response_data = data.get("responseData")
-    if not isinstance(response_data, list):
-        response_data = []
-    response_envelope = data.get("responseEnvelope")
-    if not isinstance(response_envelope, dict):
-        response_envelope = {}
+    raw_response_data = data.get("responseData")
+    raw_response_envelope = data.get("responseEnvelope")
+    response_data = raw_response_data if isinstance(raw_response_data, list) else []
+    response_envelope = raw_response_envelope if isinstance(raw_response_envelope, dict) else {}
+
+    # EVIDENCE REQUIRED: a recognised Check Point HEC envelope must actually be present.
+    # The previous code jumped straight to `isClickTimeURLRewriteEnabled: True` for any
+    # non-error body, so {}, "{}", null and an unrelated payload such as
+    # {"hello": "world"} all reported Click-Time URL Rewrite as active. Absence of an
+    # error is not the presence of the feature; the getClickTimeProtectionExceptions
+    # response must carry a responseData list or a responseEnvelope object (the shape
+    # documented for this vendor's /sectools/click_time_protection/exceptions endpoint).
+    has_recognized_envelope = isinstance(raw_response_data, list) or isinstance(raw_response_envelope, dict)
 
     exception_count = len(response_data)
     total_records = response_envelope.get("totalRecordsNumber")
     if not isinstance(total_records, int):
         total_records = exception_count
+
+    if not has_recognized_envelope:
+        return create_response(
+            result={
+                "isClickTimeURLRewriteEnabled": False,
+                "exceptionCount": 0,
+            },
+            validation=validation,
+            fail_reasons=[
+                "The payload carried neither a responseData list nor a responseEnvelope object, so it is not a recognisable Click-Time Protection exceptions response and Click-Time URL Rewrite could not be confirmed."
+            ],
+            recommendations=[
+                "Confirm the integration is calling /sectools/click_time_protection/exceptions and that the credentials return the documented responseEnvelope/responseData payload, then re-run this check."
+            ],
+            input_summary={"hasRecognizedEnvelope": False},
+            metadata={
+                "transformationId": "isClickTimeURLRewriteEnabled",
+                "vendor": "Check Point Software Technologies Email Security",
+                "category": "Email Security",
+            },
+        )
 
     result = {
         "isClickTimeURLRewriteEnabled": True,
