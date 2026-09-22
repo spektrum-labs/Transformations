@@ -58,7 +58,15 @@ def transform(input):
             status = int(data.get("statusCode") or data.get("status_code") or 0) if isinstance(data, dict) else 0
         except (TypeError, ValueError):
             status = 0
-        if not isinstance(data, dict) or not data or looks_like_error or status >= 400:
+        # A NON-EMPTY DICT IS NOT A CRASHPLAN SETTINGS RESPONSE. Requiring only
+        # non-emptiness let any unrelated payload through to the vendor default:
+        # measured 2026-09-22, {"hello": "world"} reported isBackupEncrypted TRUE. The
+        # body must name at least one setting this transform actually reads, or there is
+        # nothing here about this tenant's encryption to read.
+        known_keys = ("archiveKeyRule", "encryptionEnabled", "securityKeyLocked",
+                      "securityKeyType", "orgSecurityInfo")
+        names_a_setting = any(k in data for k in known_keys) if isinstance(data, dict) else False
+        if not isinstance(data, dict) or not data or looks_like_error or status >= 400 or not names_a_setting:
             return {
                 "isBackupEncrypted": False,
                 "encryptionManaged": False,
