@@ -21,12 +21,18 @@ def transform(input):
         remediated_count = 0
         blocked_count = 0
         
-        # Get security events from response
-        security_events = input.get('securityEvents', input.get('responseData', []))
+        # `input.get('securityEvents', input.get('responseData', []))` defaulted to an
+        # empty LIST when neither key was present, and `isinstance([], list)` is True --
+        # so the fallback itself satisfied "we can access security events" and every
+        # unrecognised body, including {} and an auth-error envelope, reported
+        # anti-phishing as enabled. The key must actually be present now.
+        security_events = input.get('securityEvents', input.get('responseData'))
         if isinstance(security_events, list):
-            # Platform is monitoring if we can access security events
+            # A security-events array being present at all -- even empty, meaning the
+            # platform is monitoring and found nothing today -- is a genuine response
+            # from this endpoint, unlike a body with neither key.
             isAntiPhishingEnabled = True
-            
+
             # Count phishing-related events
             phishing_keywords = ['phishing', 'credential', 'spear', 'whaling', 'bec', 
                                'impersonation', 'social engineering', 'spoofing']

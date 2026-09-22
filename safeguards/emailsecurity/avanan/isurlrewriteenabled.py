@@ -22,9 +22,14 @@ def transform(input):
         if input.get('isURLRewriteEnabled') or input.get('urlProtectionEnabled'):
             isURLRewriteEnabled = True
         
-        # Avanan scans URLs as part of threat detection
-        # If security events are accessible, URL scanning is active
-        security_events = input.get('securityEvents', input.get('responseData', []))
+        # `input.get('securityEvents', input.get('responseData', []))` defaulted to an
+        # empty LIST when neither key was present, and `isinstance([], list)` is True --
+        # so the fallback itself satisfied "security events are accessible" and every
+        # unrecognised body, including {} and an auth-error envelope, reported URL
+        # rewrite protection as enabled. The key must actually be present now.
+        # Avanan scans URLs as part of threat detection: if a security-events array is
+        # present at all (even empty), URL scanning is active.
+        security_events = input.get('securityEvents', input.get('responseData'))
         if isinstance(security_events, list):
             isURLRewriteEnabled = True  # Platform is monitoring
 
