@@ -3,7 +3,7 @@
   "why": "a satisfaction-style criterion must have some input that makes it false; this list may only shrink",
   "generated_by": "tools/check_discriminates.py --emit-allowlist",
   "how_to_exempt": "a control the vendor's product does not permit disabling is legitimately always true. Record it here WITH A REASON, adjudicated by whoever owns the vendor relationship.",
-  "count": 12,
+  "count": 9,
   "instances": [
     "safeguards/backups/crashplan/isbackupencrypted.py",
     "safeguards/backups/crashplan/isbackuploggingenabled.py",
@@ -11,9 +11,6 @@
     "safeguards/cloudsecurity/redcanary/confirmedlicensepurchased.py",
     "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isadminmfaphishingresistant.py",
     "safeguards/iam/britive/iszerostandingprivilegesenabled.py",
-    "safeguards/siem/blumira/alerting_transform.py",
-    "safeguards/siem/blumira/detection_rules_transform.py",
-    "safeguards/siem/blumira/license_transform.py",
     "safeguards/vulnerabilitymgmt/kaseya/confirmedlicensepurchased.py",
     "safeguards/vulnerabilitymgmt/ninjaone/confirmedlicensepurchased.py",
     "safeguards/vulnerabilitymgmt/tenable/iscriticalvulncount.py"
