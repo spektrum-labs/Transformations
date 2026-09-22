@@ -59,10 +59,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 try:
     # one definition, not two -- the file set as well as the key rules, so a pytest
     # module excluded there cannot reappear as a transform here
-    from check_fail_closed import INVERTED, SATISFACTION, TEST_MODULE
+    from check_fail_closed import INVERTED, MIN_JUDGED_TRANSFORMS, SATISFACTION, TEST_MODULE
 except ImportError:  # pragma: no cover - only when run from an odd cwd
     import re
     TEST_MODULE = re.compile(r"^(test_.*|conftest)\.py$")
+    MIN_JUDGED_TRANSFORMS = 400
     SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
     INVERTED = frozenset()
 
@@ -117,6 +118,7 @@ def transform_files() -> list[pathlib.Path]:
 def census(files=None) -> dict:
     warnings.filterwarnings("ignore")
     findings: dict[str, list[str]] = {}
+    judged = 0
     files = files if files is not None else transform_files()
     for i, path in enumerate(files):
         rel = str(path.relative_to(ROOT))
@@ -129,6 +131,7 @@ def census(files=None) -> dict:
             continue  # unloadable is check_fail_closed's finding, not this one
         if not callable(getattr(module, "transform", None)):
             continue
+        judged += 1
 
         def run(body):
             try:
@@ -151,7 +154,7 @@ def census(files=None) -> dict:
             never_false &= got
         if understood and never_false:
             findings[rel] = sorted(never_false)
-    return {"findings": findings, "examined": len(files)}
+    return {"findings": findings, "examined": len(files), "judged": judged}
 
 
 def load_allowlist() -> dict:
@@ -224,13 +227,24 @@ def main() -> int:
         return 0
 
     result = census()
+    # A clean tree and a tree this checker has stopped reading both print zero findings.
+    # Same floor, same reason, same one definition as check_fail_closed.
+    if result["judged"] < MIN_JUDGED_TRANSFORMS:
+        print(
+            f"✗ REFUSING TO REPORT: only {result['judged']} file(s) with a callable "
+            f"transform were found under {SAFEGUARDS}, below the floor of "
+            f"{MIN_JUDGED_TRANSFORMS}. A collapsed walk is refused rather than reported "
+            "as a pass."
+        )
+        return 1
     findings = result["findings"]
     allowed = set(load_allowlist().get("instances", []))
     new = sorted(set(findings) - allowed)
     stale = sorted(allowed - set(findings))
 
-    print(f"{result['examined']} transform file(s) examined; {len(findings)} carry a "
-          f"criterion with no reachable false ({len(new)} outside the allowlist)")
+    print(f"{result['examined']} transform file(s) examined, {result['judged']} judged; "
+          f"{len(findings)} carry a criterion with no reachable false "
+          f"({len(new)} outside the allowlist)")
     if stale:
         print(f"\nSTALE allowlist entries ({len(stale)}) -- now discriminate; remove to let "
               f"the ratchet shrink:")
