@@ -228,9 +228,20 @@ def transform(input):
         )
 
     except Exception as e:
+        # THE THREE SUB-CRITERIA MUST NOT SURVIVE THE EXCEPTION AS True. auto_enc, man_enc
+        # and ebs_enc are initialised True ABOVE the try and are only ever lowered by
+        # finding an unencrypted snapshot. An exception raised before that scan -- which is
+        # what a null or non-dict body produces, at the first data.get() -- left all three
+        # at their initial value, so this handler reported isBackupEncrypted false while
+        # simultaneously reporting isAutoBackupEncrypted, isManualBackupEncrypted and
+        # isEbsBackupEncrypted TRUE. Measured 2026-09-21: transform(None) asserted all
+        # three. Nothing was scanned, so none of the three has an answer.
         return create_response(
-            result={"isBackupEncrypted": False, "isAutoBackupEncrypted": auto_enc, "isManualBackupEncrypted": man_enc, "isEbsBackupEncrypted": ebs_enc},
+            result={"isBackupEncrypted": False, "isAutoBackupEncrypted": False,
+                    "isManualBackupEncrypted": False, "isEbsBackupEncrypted": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[f"Transformation error: {str(e)}",
+                          "No snapshot was scanned, so encryption could not be verified "
+                          "for automated backups, manual snapshots or EBS snapshots."]
         )
