@@ -46,3 +46,13 @@ jobs:
       # longer reproduce are reported STALE so the ratchet keeps moving.
       - name: No transform may answer from a body that proves nothing
         run: python tools/check_fail_closed.py
+
+      # The second contract, and a genuinely different question. A transform hard-wired
+      # to `true` passes the gate above, because it answers the same way from
+      # everything; only this one asks whether ANY input makes it say no. Its self-test
+      # runs first for the same reason as the other's.
+      - name: Discrimination checker self-test
+        run: python tools/check_discriminates.py --self-test
+
+      - name: No criterion may be incapable of reporting a failure
+        run: python tools/check_discriminates.py
