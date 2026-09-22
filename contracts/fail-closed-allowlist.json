@@ -2,19 +2,6 @@
   "contract": "fail-closed",
   "why": "no transformation may assert a satisfaction-style criterion true from a body that proves nothing; this list may only shrink",
   "generated_by": "tools/check_fail_closed.py --emit-allowlist",
-  "count": 12,
-  "instances": [
-    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/confirmedlicensepurchased.py",
-    "safeguards/backups/veeam/confirmedlicensepurchased.py",
-    "safeguards/cloudsecurity/appomni/confirmedlicensepurchased.py",
-    "safeguards/encryption/microsoft/isAzurePolicyCompliant.py",
-    "safeguards/encryption/microsoft/isSoftDeleteEnabled.py",
-    "safeguards/epp/crowdstrike/iseppconfigured.py",
-    "safeguards/epp/synqly/iseppmisconfigured.py",
-    "safeguards/grc/zengrc/areissuestracked.py",
-    "safeguards/iam/keeper/isdormantaccountsdisabled.py",
-    "safeguards/iam/microsoft/isidentityprotectionenabled.py",
-    "safeguards/iam/saviynt/confirmedlicensepurchased.py",
-    "safeguards/training/huntress/confirmedlicensepurchased.py"
-  ]
+  "count": 0,
+  "instances": []
 }

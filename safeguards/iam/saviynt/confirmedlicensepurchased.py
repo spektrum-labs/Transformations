@@ -34,9 +34,10 @@ def transform(input):
                 license_active = bool(input['licensePurchased'])
             elif 'licenseActive' in input:
                 license_active = bool(input['licenseActive'])
-            else:
-                # If we got a valid response, assume license is active
-                license_active = True
+            # The old final branch -- "else: license_active = True" -- treated ANY
+            # non-None response as proof the license was active, so an empty dict {}
+            # and an auth-error envelope both satisfied the criterion. Removed: the
+            # response must actually name a status or license indicator above.
 
         return {
             criteria_key: license_active,

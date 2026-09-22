@@ -113,10 +113,11 @@ def transform(input):
             elif 'active' in data or 'enabled' in data:
                 license_purchased = bool(data.get('active', data.get('enabled', False)))
                 license_details['status'] = 'active' if license_purchased else 'inactive'
-            # Non-empty valid response indicates active account
-            elif len(data) > 0:
-                license_purchased = True
-                license_details['responseKeys'] = list(data.keys())
+            # The old final fallback -- "elif len(data) > 0: license_purchased = True" --
+            # treated ANY non-empty dict as proof the subscription was active, so an
+            # auth-error envelope or an unrecognised body with any key at all satisfied
+            # the criterion. Removed: the response must actually name an organization or
+            # subscription indicator above.
 
         elif isinstance(data, list):
             if len(data) > 0:
