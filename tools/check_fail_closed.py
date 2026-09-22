@@ -1,0 +1,251 @@
+"""INVARIANT: no transformation asserts a control is satisfied from a body that proves nothing.
+
+THE RULE. Every `transform()` in safeguards/ is handed four inputs that contain no evidence
+about any customer's estate -- an empty object, an authentication-error envelope, a body
+that is null, and the string "{}" -- and no SATISFACTION-STYLE criterion it returns may be
+`true` for any of them.
+
+"Satisfaction-style" means a key whose `true` asserts the control IS in place
+(`confirmedLicensePurchased`, `isBackupEncrypted`, `isMFAEnforcedForUsers`, ...). Keys whose
+`true` denotes the INSECURE condition are the opposite case: for those, `true` on unknown
+input is the safe direction, so they are listed in INVERTED and exempted. Getting that
+backwards would turn a correct fail-closed transform into a finding, so the list is
+explicit rather than inferred from the name.
+
+WHY THIS EXISTS. Measured 2026-09-21 across 802 loadable transforms: 120 asserted a
+satisfaction-style criterion true for an empty or error body, and 18 did so for `null`.
+The mechanism is almost always the same shape --
+
+    default_value = data is not None          # "we got something, so the control holds"
+    value = data.get('someKey', default_value)
+
+-- or an `except` branch that returns True with a note. The effect is that a rejected
+credential, an empty response and an unrecognised payload are all reported as a satisfied
+control. A read that failed is not a control that passed.
+
+BOTH FORMS OF INPUT ARE TESTED, and that is not redundant. Many transforms did not decode a
+JSON string at all, so a str body fell through every shape test and was read as an empty
+object -- which means a sweep that passed only strings UNDERCOUNTED this population by 8.
+The dict and string cases catch different bugs; keep both.
+
+THE RATCHET. The known population lives in contracts/fail-closed-allowlist.json and MAY
+ONLY SHRINK. A file on the list is reported and does not fail the run; a file not on the
+list does. Adding to it requires editing a committed artefact, which a diff review sees.
+An allowlist entry that no longer reproduces is reported as STALE and should be removed --
+the checker will not remove it silently, because a list that edits itself is not a ratchet.
+
+Usage:
+    python tools/check_fail_closed.py                 # judge the tree against the allowlist
+    python tools/check_fail_closed.py --emit-allowlist  # regenerate from the live tree
+    python tools/check_fail_closed.py --self-test     # prove the checker catches a planted defect
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import importlib.util
+import io
+import json
+import pathlib
+import re
+import sys
+import warnings
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SAFEGUARDS = ROOT / "safeguards"
+ALLOWLIST = ROOT / "contracts" / "fail-closed-allowlist.json"
+
+#: a key whose True asserts the control IS in place
+SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
+
+#: keys whose True denotes the INSECURE condition -- True on unknown input is fail-CLOSED
+#: for these, so they are never a finding. Named explicitly: inferring this from the key
+#: name is exactly the mistake that would turn a correct transform into a defect.
+INVERTED = frozenset({
+    "localLoginAllowed",
+    "isPublicStorageBucketExposed",
+    "isAnonymousAccessAllowed",
+    "isLegacyAuthAllowed",
+    "isLocalLoginAllowed",
+    "isPublicSharingAllowed",
+})
+
+#: bodies that contain no evidence about any estate
+NO_EVIDENCE = {
+    "empty_dict": {},
+    "auth_error": {"error": {"type": "authentication_error", "message": "invalid credentials"}},
+    "null": None,
+    "empty_string": "{}",
+}
+
+
+def satisfaction_keys_true(response) -> list[str]:
+    """Satisfaction-style keys this response asserts True.
+
+    Transforms use two envelopes: the 5-section shape with `transformedResponse`, and a
+    flat dict of criteria. Read both -- crashplan/isbackupencrypted.py returns the flat
+    form, and a reader that only understood the envelope scored it clean while it was
+    reporting encrypted backups from a parse failure.
+    """
+    if not isinstance(response, dict):
+        return []
+    inner = response.get("transformedResponse", response)
+    if not isinstance(inner, dict):
+        return []
+    return sorted(
+        k for k, v in inner.items()
+        if v is True and SATISFACTION.match(k) and k not in INVERTED
+    )
+
+
+def transform_files() -> list[pathlib.Path]:
+    return sorted(
+        p for p in SAFEGUARDS.rglob("*.py")
+        if "schemas" not in p.parts and p.name != "__init__.py"
+    )
+
+
+def census(files=None) -> dict:
+    """{rel_path: {case: [keys]}} for every file that asserts something from nothing."""
+    warnings.filterwarnings("ignore")
+    findings: dict[str, dict[str, list[str]]] = {}
+    unloadable: dict[str, str] = {}
+    files = files if files is not None else transform_files()
+    for i, path in enumerate(files):
+        rel = str(path.relative_to(ROOT))
+        try:
+            spec = importlib.util.spec_from_file_location(f"_fc_{i}", path)
+            module = importlib.util.module_from_spec(spec)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                spec.loader.exec_module(module)
+        except Exception as exc:
+            unloadable[rel] = f"{type(exc).__name__}: {exc}"
+            continue
+        if not callable(getattr(module, "transform", None)):
+            continue
+        per_case: dict[str, list[str]] = {}
+        for case, body in NO_EVIDENCE.items():
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    result = module.transform(body)
+            except Exception:
+                # raising is fail-closed: the pipeline records a transformation error
+                continue
+            keys = satisfaction_keys_true(result)
+            if keys:
+                per_case[case] = keys
+        if per_case:
+            findings[rel] = per_case
+    return {"findings": findings, "unloadable": unloadable, "examined": len(files)}
+
+
+def load_allowlist() -> dict:
+    if not ALLOWLIST.is_file():
+        return {"instances": [], "entries": {}}
+    return json.loads(ALLOWLIST.read_text())
+
+
+def emit_allowlist() -> dict:
+    result = census()
+    instances = sorted(result["findings"])
+    out = {
+        "contract": "fail-closed",
+        "why": "no transformation may assert a satisfaction-style criterion true from a "
+               "body that proves nothing; this list may only shrink",
+        "generated_by": "tools/check_fail_closed.py --emit-allowlist",
+        "count": len(instances),
+        "instances": instances,
+    }
+    ALLOWLIST.parent.mkdir(parents=True, exist_ok=True)
+    ALLOWLIST.write_text(json.dumps(out, indent=2) + "\n")
+    return out
+
+
+def self_test() -> int:
+    """Plant a transform with the exact defect and prove the checker names it."""
+    import tempfile
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        d = pathlib.Path(tmp)
+        planted = d / "isplanteddefect.py"
+        planted.write_text(
+            "def transform(input):\n"
+            "    data = input if isinstance(input, dict) else {}\n"
+            "    return {'isPlantedDefect': data.get('x', data is not None)}\n"
+        )
+        clean = d / "iscleancontrol.py"
+        clean.write_text(
+            "def transform(input):\n"
+            "    data = input if isinstance(input, dict) else {}\n"
+            "    return {'isCleanControl': bool(data.get('x'))}\n"
+        )
+        inverted = d / "isinvertedkey.py"
+        inverted.write_text(
+            "def transform(input):\n"
+            "    return {'localLoginAllowed': True}\n"
+        )
+        global SAFEGUARDS, ROOT
+        saved_s, saved_r = SAFEGUARDS, ROOT
+        SAFEGUARDS, ROOT = d, d
+        try:
+            found = census()["findings"]
+        finally:
+            SAFEGUARDS, ROOT = saved_s, saved_r
+        if "isplanteddefect.py" not in found:
+            failures.append("a planted `data is not None` default was NOT caught")
+        if "iscleancontrol.py" in found:
+            failures.append("a clean fail-closed transform was wrongly flagged")
+        if "isinvertedkey.py" in found:
+            failures.append("an INVERTED key (true == insecure) was wrongly flagged")
+    for f in failures:
+        print(f"  self-test FAIL: {f}")
+    print("self-test ok" if not failures else f"self-test FAILED ({len(failures)})")
+    return 1 if failures else 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--emit-allowlist", action="store_true")
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
+    if args.emit_allowlist:
+        out = emit_allowlist()
+        print(f"wrote {ALLOWLIST.relative_to(ROOT)}: {out['count']} instance(s)")
+        return 0
+
+    result = census()
+    findings, unloadable = result["findings"], result["unloadable"]
+    allowed = set(load_allowlist().get("instances", []))
+    new = sorted(set(findings) - allowed)
+    stale = sorted(allowed - set(findings))
+
+    print(f"{result['examined']} transform file(s) examined; "
+          f"{len(findings)} assert a satisfaction-style criterion true from a body that "
+          f"proves nothing ({len(new)} outside the allowlist)")
+    if unloadable:
+        print(f"\nUNLOADABLE ({len(unloadable)}) -- cannot be judged, and cannot run in the pipeline either:")
+        for rel, why in sorted(unloadable.items()):
+            print(f"  {rel}: {why}")
+    if stale:
+        print(f"\nSTALE allowlist entries ({len(stale)}) -- no longer reproduce; "
+              f"remove to let the ratchet shrink:")
+        for rel in stale:
+            print(f"  {rel}")
+    if new:
+        print(f"\n✗ {len(new)} transform(s) not on the allowlist assert a control from nothing:")
+        for rel in new:
+            cases = findings[rel]
+            detail = "; ".join(f"{c}->{','.join(ks)}" for c, ks in sorted(cases.items()))
+            print(f"  {rel}: {detail}")
+        return 1
+    if unloadable:
+        return 1
+    print("\n✓ no unallowlisted transform asserts a control from a body that proves nothing")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

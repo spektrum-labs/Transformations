@@ -103,6 +103,32 @@ def transform(input):
         # Handle list input (users array)
         users_list = data if isinstance(data, list) else []
 
+        # NO USER LIST MEANS NOTHING WAS MEASURED, NOT THAT EVERYONE IS ENROLLED.
+        # `is_mfa_enforced` is initialised True and only a user with is_enrolled false and
+        # status active ever flips it, so an absent, empty or non-list body left the
+        # optimistic initial value untouched and reported "MFA policy configured (no users
+        # currently enrolled)". Measured 2026-09-21: transform(None) returned
+        # isMFAEnforcedForUsers true. "Every active user is enrolled" is a statement about
+        # a roster that was READ; with no roster there is no such statement to make, and
+        # an unenrolled user is exactly what an unread roster hides.
+        if not isinstance(data, list):
+            return create_response(
+                result={"isMFAEnforcedForUsers": False, "totalUsers": total_users,
+                        "mfaEnrolledUsers": 0, "offendingUsers": []},
+                validation=validation,
+                fail_reasons=[
+                    "No user list was returned (the body was absent, empty, an error "
+                    "response, or not an array), so MFA enrolment could not be measured "
+                    "for any user. This is not a finding that MFA is unenforced -- it is "
+                    "the absence of a reading, and it must not be recorded as enforcement."
+                ],
+                recommendations=[
+                    "Confirm the identity provider credential is valid and the user list "
+                    "call returned a 2xx array before reading this criterion."
+                ],
+                input_summary={"userListReturned": False}
+            )
+
         for user in users_list:
             if 'is_enrolled' in user:
                 if str(user['is_enrolled']).lower() == "true":

@@ -98,37 +98,6 @@ def transform(input):
             )
 
 
-def parse_api_error(raw_error: str, source: str = None) -> tuple:
-    """Parse raw API error into clean message with source."""
-    raw_lower = raw_error.lower() if raw_error else ''
-    src = source or "external service"
-
-    if '401' in raw_error:
-        return (f"Could not connect to {src}: Authentication failed (HTTP 401)",
-                f"Verify {src} credentials and permissions are valid")
-    elif '403' in raw_error:
-        return (f"Could not connect to {src}: Access denied (HTTP 403)",
-                f"Verify the integration has required {src} permissions")
-    elif '404' in raw_error:
-        return (f"Could not connect to {src}: Resource not found (HTTP 404)",
-                f"Verify the {src} resource and configuration exist")
-    elif '429' in raw_error:
-        return (f"Could not connect to {src}: Rate limited (HTTP 429)",
-                "Retry the request after waiting")
-    elif '500' in raw_error or '502' in raw_error or '503' in raw_error:
-        return (f"Could not connect to {src}: Service unavailable (HTTP 5xx)",
-                f"{src} may be temporarily unavailable, retry later")
-    elif 'timeout' in raw_lower:
-        return (f"Could not connect to {src}: Request timed out",
-                "Check network connectivity and retry")
-    elif 'connection' in raw_lower:
-        return (f"Could not connect to {src}: Connection failed",
-                "Check network connectivity and firewall settings")
-    else:
-        clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
-        return (f"Could not connect to {src}: {clean}",
-                f"Check {src} credentials and configuration")
-
         pass_reasons = []
         fail_reasons = []
         recommendations = []
@@ -183,3 +152,35 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def parse_api_error(raw_error: str, source: str = None) -> tuple:
+    """Parse raw API error into clean message with source."""
+    raw_lower = raw_error.lower() if raw_error else ''
+    src = source or "external service"
+
+    if '401' in raw_error:
+        return (f"Could not connect to {src}: Authentication failed (HTTP 401)",
+                f"Verify {src} credentials and permissions are valid")
+    elif '403' in raw_error:
+        return (f"Could not connect to {src}: Access denied (HTTP 403)",
+                f"Verify the integration has required {src} permissions")
+    elif '404' in raw_error:
+        return (f"Could not connect to {src}: Resource not found (HTTP 404)",
+                f"Verify the {src} resource and configuration exist")
+    elif '429' in raw_error:
+        return (f"Could not connect to {src}: Rate limited (HTTP 429)",
+                "Retry the request after waiting")
+    elif '500' in raw_error or '502' in raw_error or '503' in raw_error:
+        return (f"Could not connect to {src}: Service unavailable (HTTP 5xx)",
+                f"{src} may be temporarily unavailable, retry later")
+    elif 'timeout' in raw_lower:
+        return (f"Could not connect to {src}: Request timed out",
+                "Check network connectivity and retry")
+    elif 'connection' in raw_lower:
+        return (f"Could not connect to {src}: Connection failed",
+                "Check network connectivity and firewall settings")
+    else:
+        clean = raw_error[:80] + "..." if len(raw_error) > 80 else raw_error
+        return (f"Could not connect to {src}: {clean}",
+                f"Check {src} credentials and configuration")
