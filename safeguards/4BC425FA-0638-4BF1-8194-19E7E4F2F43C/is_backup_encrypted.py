@@ -94,6 +94,35 @@ def transform(input):
         db_manual_snapshots = data.get("dbManualSnapshots", {})
         volume_snapshots = data.get("volumeSnapshots", {})
 
+        # A BODY CARRYING NONE OF THE THREE SECTIONS WAS SCANNED ZERO TIMES. Unlike a null
+        # body -- which raises and is handled below -- {} and an error envelope parse
+        # cleanly, so every snapshot list came back empty, no flag was ever lowered, and
+        # all four criteria reported ENCRYPTED. "No unencrypted snapshot was found" is only
+        # a finding when snapshots were looked at; here nothing was.
+        error_keys = ("error", "errors", "errorMessage", "errorType", "fault")
+        sections_present = any(
+            isinstance(data.get(k), (dict, list)) and data.get(k)
+            for k in ("dbBackups", "dbManualSnapshots", "volumeSnapshots")
+        )
+        if not data or any(data.get(k) for k in error_keys) or not sections_present:
+            return create_response(
+                result={"isBackupEncrypted": False, "isAutoBackupEncrypted": False,
+                        "isManualBackupEncrypted": False, "isEbsBackupEncrypted": False},
+                validation=validation,
+                fail_reasons=[
+                    "The response carried none of dbBackups, dbManualSnapshots or "
+                    "volumeSnapshots (empty body, an error response, or an unrecognised "
+                    "shape), so no snapshot was scanned and encryption could not be "
+                    "verified. This is the absence of a reading, not a finding that "
+                    "backups are unencrypted."
+                ],
+                recommendations=[
+                    "Confirm the AWS credential is valid and that the describe calls "
+                    "returned 2xx bodies before reading this criterion."
+                ],
+                input_summary={"snapshotSectionsPresent": False}
+            )
+
         def listify(container, key=None):
             if key and isinstance(container, dict) and key in container:
                 entry = container[key]
