@@ -37,6 +37,14 @@ on:
   pull_request:
     branches: [develop, staging, main]
     types: [opened, synchronize, reopened, ready_for_review]
+    # Docs-only PRs (including the ones the docs-sync workflow opens) carry
+    # nothing a security/correctness reviewer can act on, and a 17-file docs
+    # diff exhausted the turn budget on its first live run. Skip them.
+    paths-ignore:
+      - "docs2/**"
+      - "**/*.md"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
 
 concurrency:
   group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
@@ -113,7 +121,7 @@ jobs:
             Do NOT write any file other than ${{ runner.temp }}/review-findings.json.
             Do NOT approve or request changes.
           claude_args: |
-            --max-turns 30
+            --max-turns 50
             --allowedTools "Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
 
       # Runs only when the review step SUCCEEDED (default success() gating - do
