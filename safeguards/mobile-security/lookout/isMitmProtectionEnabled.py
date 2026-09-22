@@ -75,7 +75,9 @@ def transform(input):
     if not isinstance(devices, list):
         devices = []
 
-    total_devices = len(devices)
+    reported_count_field = data.get("count")
+    total_devices = reported_count_field if isinstance(reported_count_field, int) else len(devices)
+    sampled_devices = len(devices)
     activated_devices = [
         d for d in devices
         if isinstance(d, dict) and d.get("activation_status") == "ACTIVATED"
@@ -127,6 +129,7 @@ def transform(input):
     result = {
         "isMitmProtectionEnabled": is_enabled,
         "totalDevices": total_devices,
+        "sampledDevices": sampled_devices,
         "activatedDevices": activated_count,
         "protectedDevices": protected_count,
     }

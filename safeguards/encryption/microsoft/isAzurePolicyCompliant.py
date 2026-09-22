@@ -43,8 +43,17 @@ def transform(input):
         data = data.get("apiResponse", data)
         data = data.get("data", data)
 
-        # Get list of non-compliant policy states
+        # `data.get("value", [])` defaulted to an empty LIST when the key was absent,
+        # and zero non-compliant states then read as "compliant" -- so an empty object,
+        # an auth-error envelope and any unrecognised body all reported compliance. The
+        # `value` key must actually be present now: that is what the policyStates query
+        # always returns for a real response, even an empty array.
+        if not isinstance(data, dict) or "value" not in data:
+            return {"isAzurePolicyCompliant": False, "error": "No policy compliance data returned"}
+
         non_compliant_states = data.get("value", [])
+        if not isinstance(non_compliant_states, list):
+            return {"isAzurePolicyCompliant": False, "error": "Unexpected 'value' shape"}
 
         # Also check @odata.count if present
         odata_count = data.get("@odata.count", None)

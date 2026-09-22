@@ -1,10 +1,9 @@
 def transform(input):
     """
-    Vulnerabilities are assessed based on exploitability and impact
+    Vulnerabilities are categorized by severity and exploitability
 
     Parameters:
-        input (dict): The JSON data containing rapid7insightvm API response
-
+        input (dict): The JSON data containing the vendor's ASM API response
     Returns:
         dict: A dictionary with the isRiskPrioritizationTrue evaluation result
     """

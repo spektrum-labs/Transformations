@@ -3,8 +3,7 @@ def transform(input):
     Validate that MFA is enforced for all users and what authTypesAllowed
 
     Parameters:
-        input (dict): The JSON data containing cyberark API response
-
+        input (dict): The JSON data containing the vendor's IAM API response
     Returns:
         dict: A dictionary with the isStrongAuthRequired evaluation result
     """

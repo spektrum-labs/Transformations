@@ -96,6 +96,28 @@ def transform(input):
             data.get("data", {}).get("rows", [])
         ) if isinstance(data, dict) else []
 
+        # A NON-DICT BODY REACHES NO GUARD BELOW. `all_encrypted` is initialised True, and
+        # when `data` is not a dict the device loop does not run AND the global-setting
+        # branch is skipped (it is itself guarded by isinstance(data, dict)) -- so the
+        # optimistic initial value survived untouched all the way to the verdict. That is
+        # how transform(None) reported "All Datto BCDR backups are encrypted (AES-256)".
+        if not isinstance(data, dict):
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=[
+                    "Datto returned nothing this transform could read (the body was "
+                    "absent or not an object), so encryption was not verified for this "
+                    "estate. Datto BCDR does encrypt by default, but that is a product "
+                    "fact and not a reading of this customer's devices."
+                ],
+                recommendations=[
+                    "Confirm the Datto credential is valid and the device list call "
+                    "returned a 2xx body before reading this criterion."
+                ],
+                input_summary={"bodyReadable": False},
+            )
+
         # Datto BCDR uses AES-256 encryption by default
         all_encrypted = True
         has_devices = False
@@ -123,6 +145,38 @@ def transform(input):
 
         # If no devices, check global encryption setting
         if not has_devices and isinstance(data, dict):
+            # A BODY THAT NAMED NEITHER A DEVICE NOR A SETTING IS NOT A READING OF THIS
+            # ESTATE. With no devices, this used to fall through to
+            # data.get("encryptionEnabled", data.get("encryption", True)) -- a default of
+            # True -- so {}, an error envelope and an unparsed body all reported "All
+            # Datto BCDR backups are encrypted (AES-256)". Measured 2026-09-21:
+            # transform(None) returned isBackupEncrypted true. Datto does encrypt by
+            # default, and that supports "devices were listed and none had encryption
+            # off"; it says nothing about a call that returned no devices and no setting.
+            error_keys = ("error", "errors", "errorMessage", "errorType", "fault")
+            looks_like_error = any(data.get(k) for k in error_keys)
+            try:
+                status = int(data.get("statusCode") or data.get("status_code") or 0)
+            except (TypeError, ValueError):
+                status = 0
+            has_global = ("encryptionEnabled" in data) or ("encryption" in data)
+            if not data or looks_like_error or status >= 400 or not has_global:
+                return create_response(
+                    result={criteriaKey: False},
+                    validation=validation,
+                    fail_reasons=[
+                        "Datto returned no devices and no global encryption setting "
+                        "(empty body, an error response, or an unrecognised shape), so "
+                        "encryption was not verified for this estate. Datto BCDR does "
+                        "encrypt by default, but that is a product fact and not a reading "
+                        "of this customer's devices."
+                    ],
+                    recommendations=[
+                        "Confirm the Datto credential is valid and the device list call "
+                        "returned a 2xx before reading this criterion."
+                    ],
+                    input_summary={"devicesReturned": 0, "globalSettingPresent": False},
+                )
             global_encryption = data.get("encryptionEnabled", data.get("encryption", True))
             all_encrypted = bool(global_encryption)
 

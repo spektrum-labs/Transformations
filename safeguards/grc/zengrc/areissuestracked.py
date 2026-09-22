@@ -46,7 +46,26 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Check if issues are tracked with owners, due dates, and remediation status."""
     try:
-        issues = data.get("data", data.get("issues", data.get("results", [])))
+        # `data.get("data", data.get("issues", data.get("results", [])))` defaulted to
+        # an empty LIST when none of the three keys were present, and zero issues then
+        # read as "tracked" via the `total_issues == 0` vacuous-truth branch below -- so
+        # an empty object, an auth-error envelope and any unrecognised body all reported
+        # issues as tracked. A recognised key must actually be present now.
+        issues = data.get("data") if isinstance(data, dict) else None
+        if issues is None and isinstance(data, dict):
+            issues = data.get("issues")
+        if issues is None and isinstance(data, dict):
+            issues = data.get("results")
+        if issues is None:
+            return {
+                "areIssuesTracked": False,
+                "totalIssues": 0,
+                "openIssues": 0,
+                "remediatedIssues": 0,
+                "issuesWithOwners": 0,
+                "issuesWithDueDates": 0,
+                "error": "No issues data returned",
+            }
         if not isinstance(issues, list):
             issues = [issues] if issues else []
 

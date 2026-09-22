@@ -3,7 +3,7 @@ def transform(input):
     Ensures a valid response is returned, returns the licensePurchased field value from the response.
 
     Parameters:
-        input (dict): The JSON data containing Microsoft Global Secure Access API response
+        input (dict): The JSON data containing Microsoft Graph API response
 
     Returns:
         dict: A dictionary with the confirmedLicensePurchased evaluation result

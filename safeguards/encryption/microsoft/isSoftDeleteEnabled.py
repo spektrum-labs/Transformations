@@ -44,8 +44,19 @@ def transform(input):
         data = data.get("apiResponse", data)
         data = data.get("data", data)
 
+        # An empty object, an auth-error envelope or any other body with no
+        # `properties` key at all is not evidence this is even a Key Vault resource
+        # response -- it must be rejected before the vendor's "absent means default
+        # true" reasoning below can apply to it.
+        if not isinstance(data, dict) or "properties" not in data:
+            return {"isSoftDeleteEnabled": False, "error": "No Key Vault resource data returned"}
+
         properties = data.get("properties", {})
-        # Default is True for new vaults (as of Feb 2021)
+        if not isinstance(properties, dict):
+            return {"isSoftDeleteEnabled": False, "error": "Unexpected properties shape"}
+
+        # Default is True for new vaults (as of Feb 2021) -- but only once we know we
+        # are reading an actual vault resource, per the check above.
         soft_delete_enabled = properties.get("enableSoftDelete", True)
 
         is_enabled = soft_delete_enabled is True

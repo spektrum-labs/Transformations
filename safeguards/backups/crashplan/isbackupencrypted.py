@@ -43,6 +43,39 @@ def transform(input):
         data = data.get("apiResponse", data)
         data = data.get("securitySettings", data)
 
+        # A RESPONSE THAT CARRIES NO SETTINGS IS NOT A RESPONSE ABOUT THIS TENANT. {} parses
+        # cleanly, so it used to fall straight through to the vendor default below and
+        # report isBackupEncrypted TRUE -- the same fail-open as the parse-error path, one
+        # step further in. "No override was present" and "nothing was returned" are
+        # different facts and only the first supports the default.
+        # An ERROR ENVELOPE is not settings either, and it is the likeliest thing to arrive
+        # here in practice. {"error": "401 unauthorized"} is a non-empty dict carrying no
+        # encryption keys, so it too used to reach the vendor default and report TRUE --
+        # a rejected credential reported as encrypted backups.
+        error_keys = ("error", "errors", "errorMessage", "errorType", "fault", "PSError")
+        looks_like_error = any(data.get(k) for k in error_keys) if isinstance(data, dict) else False
+        try:
+            status = int(data.get("statusCode") or data.get("status_code") or 0) if isinstance(data, dict) else 0
+        except (TypeError, ValueError):
+            status = 0
+        # A NON-EMPTY DICT IS NOT A CRASHPLAN SETTINGS RESPONSE. Requiring only
+        # non-emptiness let any unrelated payload through to the vendor default:
+        # measured 2026-09-22, {"hello": "world"} reported isBackupEncrypted TRUE. The
+        # body must name at least one setting this transform actually reads, or there is
+        # nothing here about this tenant's encryption to read.
+        known_keys = ("archiveKeyRule", "encryptionEnabled", "securityKeyLocked",
+                      "securityKeyType", "orgSecurityInfo")
+        names_a_setting = any(k in data for k in known_keys) if isinstance(data, dict) else False
+        if not isinstance(data, dict) or not data or looks_like_error or status >= 400 or not names_a_setting:
+            return {
+                "isBackupEncrypted": False,
+                "encryptionManaged": False,
+                "note": "CrashPlan returned no readable security settings (empty body or an "
+                        "error response), so encryption was not verified for this tenant. "
+                        "CrashPlan does encrypt by default, but that is a product fact and "
+                        "not a reading of this estate.",
+            }
+
         # CrashPlan always encrypts data by default
         # Check for encryption-related settings
         encryption_enabled = True  # CrashPlan default
@@ -81,11 +114,24 @@ def transform(input):
     except json.JSONDecodeError:
         return {"isBackupEncrypted": False, "error": "Invalid JSON"}
     except Exception as e:
-        # CrashPlan encrypts by default, so if we can't determine settings
-        # we return True with a note
+        # THE ERROR PATH MUST NOT ASSERT THE CONTROL HOLDS. This branch used to return
+        # isBackupEncrypted TRUE with a note reading "CrashPlan encrypts all data by
+        # default", which meant transform(None) -- no response read at all -- reported
+        # backups as encrypted, and said so with the same confidence as a real reading.
+        # Measured 2026-09-21: transform(None) returned {"isBackupEncrypted": true,
+        # "parseError": "Input must be JSON string, bytes, or dict"}. A criterion answered
+        # from a parse failure is not a measurement of this customer's estate.
+        #
+        # The vendor-default reasoning is not wrong and is kept where it belongs: in the
+        # success path above, which applies it to a response that WAS read and that did not
+        # explicitly disable encryption. What is removed is its use as a fallback for
+        # having read nothing. A product fact is not evidence about a tenant.
         return {
-            "isBackupEncrypted": True,
-            "encryptionManaged": True,
-            "note": "CrashPlan encrypts all data by default",
+            "isBackupEncrypted": False,
+            "encryptionManaged": False,
+            "note": "Could not read CrashPlan security settings, so encryption was not "
+                    "verified for this tenant. CrashPlan does encrypt by default, but that "
+                    "is a product fact and not a reading of this estate -- re-run once the "
+                    "call succeeds.",
             "parseError": str(e)
         }

@@ -46,7 +46,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _is_truthy(val):
+def is_truthy(val):
     if isinstance(val, bool):
         return val
     if isinstance(val, str):
@@ -57,49 +57,46 @@ def _is_truthy(val):
 
 
 def evaluate(data):
+    """Scheduled rotation is a Vault ACCOUNT POLICY setting, not an account field.
+
+    Source: GET /api/config/v1/vault/account-policy -> VaultAccountPolicy
+    Field:  scheduled_password_rotation (bool) + maximum_password_age (int, days)
+    """
     try:
         if isinstance(data, dict):
-            accounts = data.get("accounts", data.get("items", data.get("results", [])))
+            policies = data.get("account_policies", data.get("items", data.get("results", [])))
+            if isinstance(policies, dict):
+                policies = [policies]
         elif isinstance(data, list):
-            accounts = data
+            policies = data
         else:
-            return {
-                "isPasswordAutoManagementEnabled": False,
-                "automanagedCount": 0,
-                "totalAccounts": 0,
-                "coveragePercent": 0.0,
-                "reason": "Unexpected type"
-            }
+            return {"isPasswordAutoManagementEnabled": False, "rotatingPolicies": 0,
+                    "totalPolicies": 0, "coveragePercent": 0.0, "reason": "Unexpected type"}
 
-        total = len(accounts)
+        total = len(policies)
         if total == 0:
-            return {
-                "isPasswordAutoManagementEnabled": False,
-                "automanagedCount": 0,
-                "totalAccounts": 0,
-                "coveragePercent": 0.0,
-                "reason": "No vault accounts found"
-            }
+            return {"isPasswordAutoManagementEnabled": False, "rotatingPolicies": 0,
+                    "totalPolicies": 0, "coveragePercent": 0.0,
+                    "reason": "No vault account policies found"}
 
-        auto_count = 0
-        for account in accounts:
-            if not isinstance(account, dict):
+        rotating = 0
+        for policy in policies:
+            if not isinstance(policy, dict):
                 continue
-            rotation_flag = account.get("automatic_password_rotation")
-            rotation_interval = account.get("rotation_interval_in_days", 0)
-            if _is_truthy(rotation_flag) or (isinstance(rotation_interval, (int, float)) and rotation_interval > 0):
-                auto_count += 1
+            max_age = policy.get("maximum_password_age")
+            has_age = isinstance(max_age, (int, float)) and max_age > 0
+            if is_truthy(policy.get("scheduled_password_rotation")) and has_age:
+                rotating += 1
 
-        coverage = (auto_count / total) * 100
+        coverage = (rotating / total) * 100
         return {
             "isPasswordAutoManagementEnabled": coverage >= COVERAGE_THRESHOLD,
-            "automanagedCount": auto_count,
-            "totalAccounts": total,
+            "rotatingPolicies": rotating,
+            "totalPolicies": total,
             "coveragePercent": round(coverage, 2)
         }
     except Exception as e:
         return {"isPasswordAutoManagementEnabled": False, "error": str(e)}
-
 
 def transform(input):
     criteriaKey = "isPasswordAutoManagementEnabled"

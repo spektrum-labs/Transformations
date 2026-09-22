@@ -42,9 +42,11 @@ def transform(input):
         elif isinstance(input, list):
             is_valid = len(input) > 0
             details['count'] = len(input)
-        elif isinstance(input, dict) and len(input) > 0:
-            is_valid = True
-            details['data'] = input
+        # The old final branch -- "elif isinstance(input, dict) and len(input) > 0:
+        # is_valid = True" -- treated ANY non-empty dict as proof the control was
+        # enabled, so an auth-error envelope or any unrecognised body with any key at
+        # all satisfied the criterion. Removed: the response must actually name one of
+        # the recognised fields above.
 
         return {
             criteria_key: is_valid,

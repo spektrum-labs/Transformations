@@ -45,46 +45,66 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-# Values that indicate a permission is actively granted in PRA session policies
-ACTIVE_PERM_VALUES = ("allowed", "granted", "yes", "true", "1", "notdefined")
-# Keys on a session policy that represent access-control permissions
-ACCESS_PERM_KEYS = (
-    "screen_sharing", "command_shell", "remote_control", "file_transfer",
-    "canned_scripts", "send_special_actions", "system_information", "registry_access",
-    "elevation_prompt", "session_recording", "system_info_chat"
-)
+# Real JumpPolicy access-control fields (GET /api/config/v1/jump-policy).
+# GET /session-policy returns ONLY {id, display_name, code_name, description} - no controls.
+BOOL_CONTROL_KEYS = ("approval_required", "schedule_enabled",
+                     "session_start_notification", "session_end_notification")
+LIST_CONTROL_KEYS = ("approval_email_addresses", "approval_user_ids")
 
 
-def _is_active(val):
+def is_active(val):
     if isinstance(val, bool):
         return val
     if isinstance(val, (int, float)):
         return val > 0
     if isinstance(val, str):
-        return val.lower() in ACTIVE_PERM_VALUES
+        return val.lower() in ("true", "yes", "1", "allowed", "enabled")
     return False
 
-
 def evaluate(data):
+    """Access controls live on Jump Policies, not Session Policies.
+
+    Source: GET /api/config/v1/jump-policy -> JumpPolicy
+    Fields: approval_required, schedule_enabled, approval_max_duration, approval_scope,
+            approval_email_addresses[], approval_user_ids[]
+    """
     try:
         if isinstance(data, dict):
-            policies = data.get("session_policies", data.get("items", data.get("results", [])))
+            policies = data.get("jump_policies", data.get("items", data.get("results", [])))
+            if isinstance(policies, dict):
+                policies = [policies]
         elif isinstance(data, list):
             policies = data
         else:
-            return {"isAccessPolicyConfigured": False, "totalPolicies": 0, "configuredPolicyCount": 0, "reason": "Unexpected type"}
+            return {"isAccessPolicyConfigured": False, "totalPolicies": 0,
+                    "configuredPolicyCount": 0, "reason": "Unexpected type"}
 
         total = len(policies)
-        configured_count = 0
+        if total == 0:
+            return {"isAccessPolicyConfigured": False, "totalPolicies": 0,
+                    "configuredPolicyCount": 0, "reason": "No jump policies found"}
 
+        configured_count = 0
         for policy in policies:
             if not isinstance(policy, dict):
                 continue
-            # A policy counts as "configured" if at least one access-control permission is explicitly set
-            for key in ACCESS_PERM_KEYS:
-                if key in policy and _is_active(policy[key]):
-                    configured_count += 1
+            configured = False
+            for key in BOOL_CONTROL_KEYS:
+                if is_active(policy.get(key)):
+                    configured = True
                     break
+            if not configured:
+                max_dur = policy.get("approval_max_duration")
+                if isinstance(max_dur, (int, float)) and max_dur > 0:
+                    configured = True
+            if not configured:
+                for key in LIST_CONTROL_KEYS:
+                    val = policy.get(key)
+                    if isinstance(val, list) and len(val) > 0:
+                        configured = True
+                        break
+            if configured:
+                configured_count += 1
 
         return {
             "isAccessPolicyConfigured": configured_count > 0,
@@ -93,7 +113,6 @@ def evaluate(data):
         }
     except Exception as e:
         return {"isAccessPolicyConfigured": False, "error": str(e)}
-
 
 def transform(input):
     criteriaKey = "isAccessPolicyConfigured"

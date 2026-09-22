@@ -75,10 +75,11 @@ def transform(input):
     if not isinstance(devices, list):
         devices = []
 
-    total_devices = len(devices)
-    if total_devices == 0:
-        count_field = data.get("count")
-        total_devices = count_field if isinstance(count_field, int) else 0
+    # ``count`` is the fleet-wide total; ``devices`` is only the page we were
+    # served. Trusting len(devices) understates the fleet whenever the response
+    # is truncated (Lookout defaults to 100 per page, max 1000).
+    reported_count_field = data.get("count")
+    total_devices = reported_count_field if isinstance(reported_count_field, int) else len(devices)
 
     mdm_managed_count = 0
     for dev in devices:

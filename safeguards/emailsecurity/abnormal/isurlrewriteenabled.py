@@ -95,11 +95,17 @@ def transform(input):
         threat_count = 0
 
         if isinstance(data, dict):
-            # A successful /v1/threats response with a "threats" array confirms
-            # Abnormal's threat detection platform is active, which includes
-            # URL analysis and rewriting as a core capability.
-            threats = data.get('threats', [])
+            # `data.get('threats', [])` defaulted to an empty LIST when the key was
+            # absent, and `isinstance([], list)` is True -- so the fallback itself
+            # satisfied "a successful /v1/threats response" and every unrecognised body,
+            # including {} and an auth-error envelope, reported URL protection active.
+            # The key must actually be present in the payload now, not merely defaulted.
+            threats = data.get('threats')
             if isinstance(threats, list):
+                # A successful /v1/threats response with a "threats" array (even an
+                # empty one -- zero threats today is a valid result) confirms Abnormal's
+                # threat detection platform is active, which includes URL analysis and
+                # rewriting as a core capability.
                 url_protection_active = True
                 threat_count = len(threats)
 

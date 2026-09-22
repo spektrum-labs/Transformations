@@ -1,0 +1,7 @@
+{
+  "contract": "fail-closed",
+  "why": "no transformation may assert a satisfaction-style criterion true from a body that proves nothing; this list may only shrink",
+  "generated_by": "tools/check_fail_closed.py --emit-allowlist",
+  "count": 0,
+  "instances": []
+}
