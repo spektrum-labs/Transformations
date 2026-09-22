@@ -3,7 +3,7 @@ Transformation: isIDPEnabled
 Vendor: Endpoint Protection Platform
 Category: Identity / Authentication
 
-Evaluates if SSO/IDP is enabled for endpoint protection platform.
+Evaluates if SSO/IDP is enabled for the endpoint protection platform.
 """
 
 import json
@@ -86,7 +86,6 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Default to True if data is present (indicates active integration)
         # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
         # 2xx body -- including one describing the control as OFF -- satisfied this
         # criterion and no input could make it false. Resolved from the payload now.

@@ -3,8 +3,7 @@ def transform(input):
     Make sure that capabilities for removable media are restricted appropriately
 
     Parameters:
-        input (dict): The JSON data containing crowdstrike API response
-
+        input (dict): The JSON data containing the vendor's EPP API response
     Returns:
         dict: A dictionary with the isRemovableMediaControlled evaluation result
     """
