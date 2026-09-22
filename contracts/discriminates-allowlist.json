@@ -3,8 +3,6 @@
   "why": "a satisfaction-style criterion must have some input that makes it false; this list may only shrink",
   "generated_by": "tools/check_discriminates.py --emit-allowlist",
   "how_to_exempt": "a control the vendor's product does not permit disabling is legitimately always true. Record it here WITH A REASON, adjudicated by whoever owns the vendor relationship.",
-  "count": 1,
-  "instances": [
-    "safeguards/backups/crashplan/isbackupencrypted.py"
-  ]
+  "count": 0,
+  "instances": []
 }

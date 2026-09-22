@@ -76,6 +76,17 @@ NO_EVIDENCE = {
     "auth_error": {"error": {"type": "authentication_error", "message": "invalid credentials"}},
     "null": None,
     "empty_string": "{}",
+    # AN UNRELATED PAYLOAD IS ALSO NO EVIDENCE, and leaving it out was a hole in this
+    # checker for its first day. The very first negative control that started this work
+    # recorded `{"hello": "world"} -> True` against the MDR rubber stamp -- then this
+    # battery shipped testing only emptiness and errors. A transform whose rule is
+    # effectively `len(data) > 0` passes every case above and is still a rubber stamp:
+    # it confirms a control from a body that says nothing about that control. Measured
+    # 2026-09-22 after adding these: 1 file of 804 (crashplan isbackupencrypted, which
+    # required non-emptiness but not a RECOGNISED setting -- fixed in the same commit),
+    # so the gate closes at 0 and the allowlist does not grow to accommodate it.
+    "unrelated_json": {"hello": "world"},
+    "unrelated_nested": {"foo": {"bar": [1, 2, 3]}},
 }
 
 
