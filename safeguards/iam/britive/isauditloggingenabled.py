@@ -45,17 +45,20 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        # /api/v1/audit-logs returns:
-        # { "totalCount": int, "size": int, "data": [
-        #     { "eventId": str, "timestamp": str (ISO), "actor": {...},
-        #       "target": {...}, "action": str, "result": "success"|"failure" }
-        # ] }
+        # /api/logs returns a bare JSON array of audit events:
+        # [ { "timestamp": str (ISO), "id": str, "actor": {...},
+        #     "client": {...}, "event": {...}, "target": {...} }, ... ]
+        # Some deployments wrap it as { "totalCount": int, "data": [...] }.
         result = False
         last_event_timestamp = None
         total_count = 0
 
-        total_count = data.get("totalCount", data.get("count", 0))
-        records = data.get("data", data.get("records", data.get("auditLogs", [])))
+        if isinstance(data, list):
+            records = data
+            total_count = len(data)
+        else:
+            total_count = data.get("totalCount", data.get("count", 0))
+            records = data.get("data", data.get("records", data.get("auditLogs", [])))
 
         if isinstance(records, list) and len(records) > 0:
             result = True
@@ -65,6 +68,12 @@ def evaluate(data):
         elif isinstance(total_count, (int, float)) and total_count > 0:
             # totalCount present but no records in page — still indicates logging is active
             result = True
+
+        return {
+            "isAuditLoggingEnabled": result,
+            "recentEventCount": total_count,
+            "lastEventTimestamp": last_event_timestamp,
+        }
     except Exception as e:
         return {"isAuditLoggingEnabled": False, "error": str(e)}
 

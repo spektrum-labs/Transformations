@@ -45,7 +45,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        result = bool(data)
+        # `bool(data)` asked whether a response arrived, not what it said, so any
+        # non-empty body -- including one describing the feature as OFF -- satisfied
+        # this criterion and no input could make it false. Resolved from the named
+        # feature flag(s) now; see _affirmative_signal below.
+        result = _affirmative_signal(data, ['email_warning_tags', 'emailWarningTags'], require_all=False)
         return {"isEmailWarningTagsEnabled": result}
 
     except Exception as e:
@@ -106,3 +110,55 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def _affirmative_signal(data, feature_keys, require_all=False):
+    """True only when the payload POSITIVELY evidences the named feature(s).
+
+    Replaces `result = bool(data)`, which asked whether a response arrived rather than
+    what it said -- so ANY non-empty body, including one describing the feature as OFF,
+    satisfied the criterion and no input could ever make it false. Measured 2026-09-21.
+
+    Looks for feature_keys at the top level and inside common nested containers
+    (features/settings/config/policies/result). An explicit OFF for any checked key
+    beats everything. With require_all, every key must evidence ON; otherwise any one
+    doing so is enough. Anything unread, empty, erroring or unrecognised -> False
+    (never True by default).
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for err_key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(err_key):
+            return False
+    containers = [data]
+    for nest_key in ("features", "settings", "featureSettings", "configuration",
+                     "config", "policies", "data", "result"):
+        nested = data.get(nest_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    off_words = ("false", "disabled", "off", "inactive", "none")
+    on_words = ("true", "enabled", "on", "active", "yes")
+
+    def signal(key):
+        for container in containers:
+            if key in container:
+                value = container[key]
+                if value is False:
+                    return False
+                if isinstance(value, str) and value.strip().lower() in off_words:
+                    return False
+                if value is True:
+                    return True
+                if isinstance(value, str) and value.strip().lower() in on_words:
+                    return True
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                    return True
+                return None  # present but an unrecognised shape -- not a signal either way
+        return None  # key not present at all
+
+    signals = [signal(k) for k in feature_keys]
+    if any(s is False for s in signals):
+        return False
+    if require_all:
+        return bool(signals) and all(s is True for s in signals)
+    return any(s is True for s in signals)

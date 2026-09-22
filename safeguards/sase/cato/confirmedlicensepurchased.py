@@ -4,7 +4,6 @@ def transform(input):
 
     Parameters:
         input (dict): The JSON data containing Cato Networks licensing API response
-
     Returns:
         dict: A dictionary with the confirmedLicensePurchased evaluation result
     """

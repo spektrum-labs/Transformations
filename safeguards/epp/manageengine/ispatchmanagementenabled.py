@@ -1,29 +1,71 @@
 """
 Transformation: isPatchManagementEnabled
-Vendor: ManageEngine Endpoint Central  |  Category: EPP
-Evaluates: Whether patch management scanning and deployment processes are configured.
+Vendor: ManageEngine Endpoint Central (Cloud)  |  Category: EPP
+Evaluates: Whether patch scanning and deployment are actively running.
 Source: GET /api/1.4/patch/summary
+
+Endpoint Central Cloud wraps every payload in `message_response`, which the
+previous generic wrapper list did not cover, so the transform read an empty dict
+and always returned False. Field names below are taken from live Cloud responses.
 """
 import json
 from datetime import datetime
 
+ENVELOPE_KEYS = ["api_response", "response", "result", "apiResponse", "Output", "message_response"]
+
+
+def unwrap(data):
+    """Strip known response envelopes, including ManageEngine's message_response."""
+    if not isinstance(data, dict):
+        return data
+    for attempt in range(4):
+        moved = False
+        for key in ENVELOPE_KEYS:
+            inner = data.get(key)
+            if isinstance(inner, dict):
+                data = inner
+                moved = True
+                break
+        if not moved:
+            break
+    return data
+
+
+def section(data, name):
+    """Return dict `name`, tolerating one extra nesting level.
+
+    Works whether the caller hands us message_response.summary directly or the
+    still-enveloped payload, so the transform is correct with or without a
+    returnSpec on the integration definition.
+    """
+    if not isinstance(data, dict):
+        return {}
+    direct = data.get(name)
+    if isinstance(direct, dict):
+        return direct
+    for value in data.values():
+        if isinstance(value, dict):
+            nested = value.get(name)
+            if isinstance(nested, dict):
+                return nested
+    return {}
+
+
+def num(source, name, fallback=0):
+    """Read an int off a dict, tolerating strings and missing keys."""
+    try:
+        value = source.get(name, fallback)
+        if value is None:
+            return fallback
+        return int(value)
+    except Exception:
+        return fallback
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+        return unwrap(input_data["data"]), input_data["validation"]
+    return unwrap(input_data), {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -44,41 +86,69 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Check if patch management is enabled from patch summary data."""
+    """Patch management is enabled when systems are being scanned AND patching activity exists."""
     try:
-        # Patch summary returns counts of patches by status, systems scanned, etc.
-        total_patches = int(data.get("total_patches", data.get("totalPatches", data.get("total", 0))))
-        installed_patches = int(data.get("installed_patches", data.get("installedPatches", data.get("installed", 0))))
-        missing_patches = int(data.get("missing_patches", data.get("missingPatches", data.get("missing", 0))))
-        systems_scanned = int(data.get("systems_scanned", data.get("systemsScanned", data.get("scanned_systems", 0))))
-        healthy_systems = int(data.get("healthy_systems", data.get("healthySystems", data.get("healthy", 0))))
-        vulnerable_systems = int(data.get("vulnerable_systems", data.get("vulnerableSystems", data.get("vulnerable", 0))))
+        patch_summary = section(data, "patch_summary")
+        scan_summary = section(data, "patch_scan_summary")
+        system_summary = section(data, "system_summary")
+        apd_summary = section(data, "apd_summary")
+        db_summary = section(data, "vulnerability_db_summary")
 
-        # Check nested summary structures
-        patch_summary = data.get("patch_summary", data.get("patchSummary", {}))
-        if isinstance(patch_summary, dict) and not total_patches:
-            total_patches = int(patch_summary.get("total", 0))
-            installed_patches = int(patch_summary.get("installed", 0))
-            missing_patches = int(patch_summary.get("missing", 0))
+        installed = num(patch_summary, "installed_patches")
+        applicable = num(patch_summary, "applicable_patches")
+        missing = num(patch_summary, "missing_patches")
+        scanned = num(scan_summary, "scanned_systems")
+        unscanned = num(scan_summary, "unscanned_system_count")
+        scan_failures = num(scan_summary, "scan_failure_count")
+        total_systems = num(system_summary, "total_systems")
+        apd_tasks = num(apd_summary, "number_of_apd_tasks")
 
-        # Patch management is considered enabled if:
-        # 1. There are patches being tracked (total > 0)
-        # 2. OR systems are being scanned
-        # 3. OR there is any patch activity data
-        is_enabled = (total_patches > 0) or (systems_scanned > 0) or (installed_patches > 0)
+        auto_db_disabled = bool(db_summary.get("is_auto_db_update_disabled", False))
+        db_status = str(db_summary.get("last_db_update_status", ""))
 
-        # Check DB update status if available
-        db_status = data.get("db_update_status", data.get("dbUpdateStatus", ""))
-        last_scan = data.get("last_scan_time", data.get("lastScanTime", ""))
+        is_enabled = scanned > 0 and (installed > 0 or apd_tasks > 0)
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+        findings = []
+
+        if is_enabled:
+            pass_reasons.append(str(scanned) + " of " + str(total_systems) + " systems scanned for patches")
+            pass_reasons.append(str(installed) + " patches installed, " + str(applicable) + " applicable")
+            if apd_tasks > 0:
+                pass_reasons.append(str(apd_tasks) + " automated patch deployment tasks configured")
+        else:
+            if scanned == 0:
+                fail_reasons.append("No systems have been scanned for patches")
+                recommendations.append("Run a patch scan under Patch Management > Scan Systems")
+            else:
+                fail_reasons.append("Systems are scanned but no patch deployment activity was found")
+                recommendations.append("Configure an Automated Patch Deployment task")
+
+        if auto_db_disabled:
+            findings.append("Automatic vulnerability database updates are DISABLED (last status: "
+                            + db_status + ")")
+            recommendations.append("Re-enable automatic vulnerability database updates")
+        if unscanned > 0:
+            findings.append(str(unscanned) + " systems have never been scanned")
+        if scan_failures > 0:
+            findings.append(str(scan_failures) + " systems failed their most recent scan")
 
         return {
             "isPatchManagementEnabled": is_enabled,
-            "totalPatches": total_patches,
-            "installedPatches": installed_patches,
-            "missingPatches": missing_patches,
-            "systemsScanned": systems_scanned,
-            "healthySystems": healthy_systems,
-            "vulnerableSystems": vulnerable_systems
+            "scannedSystems": scanned,
+            "unscannedSystems": unscanned,
+            "totalSystems": total_systems,
+            "installedPatches": installed,
+            "applicablePatches": applicable,
+            "missingPatches": missing,
+            "automatedDeploymentTasks": apd_tasks,
+            "autoDbUpdateDisabled": auto_db_disabled,
+            "passReasons": pass_reasons,
+            "failReasons": fail_reasons,
+            "recommendations": recommendations,
+            "additionalFindings": findings,
         }
     except Exception as e:
         return {"isPatchManagementEnabled": False, "error": str(e)}
@@ -103,32 +173,17 @@ def transform(input):
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        if result_value:
-            pass_reasons.append("Patch management is actively tracking patches")
-            if extra_fields.get("totalPatches"):
-                pass_reasons.append(f"Tracking {extra_fields['totalPatches']} patches across managed systems")
-            if extra_fields.get("systemsScanned"):
-                pass_reasons.append(f"{extra_fields['systemsScanned']} systems scanned")
-            if extra_fields.get("missingPatches"):
-                additional = f"{extra_fields['missingPatches']} missing patches detected"
-                pass_reasons.append(additional)
-        else:
-            fail_reasons.append("No patch management activity detected in Endpoint Central")
-            recommendations.append("Enable patch management in Endpoint Central and run an initial scan")
-            recommendations.append("Configure automatic patch scanning schedule under Patch Management > Scan Systems")
+        meta_keys = ["error", "passReasons", "failReasons", "recommendations", "additionalFindings"]
+        extra_fields = {k: v for k, v in eval_result.items()
+                        if k != criteriaKey and k not in meta_keys}
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
+            pass_reasons=eval_result.get("passReasons", []),
+            fail_reasons=eval_result.get("failReasons", []),
+            recommendations=eval_result.get("recommendations", []),
+            additional_findings=eval_result.get("additionalFindings", []),
             input_summary={criteriaKey: result_value, **extra_fields}
         )
 
@@ -137,5 +192,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )

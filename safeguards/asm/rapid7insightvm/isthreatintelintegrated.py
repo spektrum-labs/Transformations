@@ -1,10 +1,9 @@
 def transform(input):
     """
-    ASM is integrated with TI feeds
+    Validates that CVE and threat intelligence templates are active
 
     Parameters:
-        input (dict): The JSON data containing rapid7insightvm API response
-
+        input (dict): The JSON data containing the vendor's ASM API response
     Returns:
         dict: A dictionary with the isThreatIntelIntegrated evaluation result
     """

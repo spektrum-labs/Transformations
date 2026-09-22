@@ -53,7 +53,7 @@ def evaluate(data):
         # ] }
         result = False
 
-        users = data.get("data", data.get("users", []))
+        users = data if isinstance(data, list) else data.get("data", data.get("users", []))
         if not isinstance(users, list) or len(users) == 0:
             return {
                 "areAdminAccountsSeparate": False,
@@ -68,11 +68,16 @@ def evaluate(data):
 
         admin_users = []
         for user in active_users:
+            # Britive flags tenant admins either via a populated adminRoles list
+            # (e.g. "TenantAdmin") or the rootUser boolean. Count both.
+            is_admin = bool(user.get("rootUser", False))
             roles = user.get("adminRoles", [])
             if isinstance(roles, list):
                 admin_role_names = [r.get("name", "") for r in roles]
                 if "TenantAdmin" in admin_role_names:
-                    admin_users.append(user.get("username", user.get("userId", "unknown")))
+                    is_admin = True
+            if is_admin:
+                admin_users.append(user.get("username", user.get("userId", "unknown")))
 
         admin_count = len(admin_users)
         admin_ratio = admin_count / total_active if total_active > 0 else 0
@@ -80,6 +85,12 @@ def evaluate(data):
         # Pass if fewer than 20% of active users are admins (separation of duties)
         # Also pass if admin accounts exist but none have regular user overlap
         result = admin_count > 0 and admin_ratio <= 0.20
+
+        return {
+            "areAdminAccountsSeparate": result,
+            "totalActiveUsers": total_active,
+            "adminAccounts": admin_count,
+        }
     except Exception as e:
         return {"areAdminAccountsSeparate": False, "error": str(e)}
 

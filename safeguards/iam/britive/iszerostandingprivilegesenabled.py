@@ -47,18 +47,31 @@ def evaluate(data):
     try:
         # /api/apps/{appId}/paps returns profile objects:
         # { "papId": str, "name": str, "status": "active",
-        #   "expirationInMinutes": int (0 = no expiry),
-        #   "sessionDuration": int|null, ... }
+        #   "expirationDuration": int (milliseconds, 0 = no expiry), ... }
         # Integration layer passes merged { "profiles": [...] }
 
-        profiles = (
-            data.get("profiles") or
-            data.get("data") or
-            data.get("paps") or
-            (data if isinstance(data, list) else [])
-        )
+        # The old fallback chain `.get("profiles") or .get("data") or .get("paps") or []`
+        # defaulted to an empty LIST when none of the three keys were present, which is
+        # indistinguishable from a genuinely empty profile list -- and an empty active-
+        # profile set was then reported "vacuously true." So an empty object, an
+        # auth-error envelope and any unrecognised body all reported ZSP enabled. A
+        # recognised key must actually be present now before "no active profiles" can
+        # be read as vacuously compliant.
+        if isinstance(data, list):
+            profiles = data
+            found_profile_key = True
+        else:
+            profiles = None
+            found_profile_key = False
+            if isinstance(data, dict):
+                for key in ("profiles", "data", "paps"):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        profiles = value
+                        found_profile_key = True
+                        break
 
-        if not isinstance(profiles, list):
+        if not found_profile_key or not isinstance(profiles, list):
             return {"isZeroStandingPrivilegesEnabled": False, "reason": "No profile data found"}
 
         # Only evaluate active profiles
@@ -68,36 +81,39 @@ def evaluate(data):
         ]
 
         if len(active_profiles) == 0:
-            # No active profiles — ZSP is vacuously true (nothing to check out)
+            # A recognised (even empty) profile list with no active profiles — ZSP is
+            # vacuously true (nothing to check out).
             return {"isZeroStandingPrivilegesEnabled": True, "activeProfiles": 0, "reason": "No active profiles found"}
 
         total = len(active_profiles)
         profiles_without_expiry = []
 
         for profile in active_profiles:
-            expiry = profile.get("expirationInMinutes", None)
-            session = profile.get("sessionDuration", None)
-
             has_expiry = False
 
-            if expiry is not None:
+            # Britive returns expirationDuration in milliseconds; older shapes
+            # used expirationInMinutes / sessionDuration.
+            for field in ("expirationDuration", "expirationInMinutes", "sessionDuration"):
+                value = profile.get(field)
+                if value is None:
+                    continue
                 try:
-                    if int(expiry) > 0:
+                    if int(value) > 0:
                         has_expiry = True
+                        break
                 except (TypeError, ValueError):
-                    pass
-
-            if not has_expiry and session is not None:
-                try:
-                    if int(session) > 0:
-                        has_expiry = True
-                except (TypeError, ValueError):
-                    pass
+                    continue
 
             if not has_expiry:
                 profiles_without_expiry.append(profile.get("name", profile.get("papId", "unknown")))
 
         result = len(profiles_without_expiry) == 0
+
+        return {
+            "isZeroStandingPrivilegesEnabled": result,
+            "activeProfiles": total,
+            "profilesWithoutExpiry": profiles_without_expiry,
+        }
     except Exception as e:
         return {"isZeroStandingPrivilegesEnabled": False, "error": str(e)}
 

@@ -67,18 +67,46 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# A Wordfence Intelligence Production Feed record is keyed by vulnerability uuid and
+# carries an "id" plus descriptive fields ("title", "software", "cvss", "cve",
+# "cve_link", "researchers", "published"). Inlined per file -- these run standalone
+# under RestrictedPython, so no shared helper may be imported.
+WORDFENCE_RECORD_FIELDS = ("title", "software", "cvss", "cve", "cve_link",
+                           "researchers", "published", "patched", "references")
+
+
+def is_wordfence_vulnerability_record(candidate):
+    """True only for a dict that looks like a real Production Feed vulnerability record."""
+    if not isinstance(candidate, dict):
+        return False
+    if not candidate.get("id"):
+        return False
+    for field in WORDFENCE_RECORD_FIELDS:
+        if field in candidate:
+            return True
+    return False
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
+    # EVIDENCE REQUIRED: at least one recognised Wordfence vulnerability record. The old
+    # code accepted ANY nested dict as a "record", so an auth-error envelope
+    # ({"error": {...}}) and an unrelated payload ({"foo": {"bar": [1,2,3]}}) each
+    # produced one record with no "cve"/"cve_link" -- which was then read as proof of
+    # NVD-independent coverage. A record must now carry an "id" and at least one Wordfence
+    # feed field before its missing CVE means anything.
     records = []
     if isinstance(data, dict):
         for key, value in data.items():
-            if isinstance(value, dict):
+            if key in ("_omitted_keys", "_truncated"):
+                continue
+            if is_wordfence_vulnerability_record(value):
                 records.append(value)
     elif isinstance(data, list):
         for value in data:
-            if isinstance(value, dict):
+            if is_wordfence_vulnerability_record(value):
                 records.append(value)
 
     total_records = len(records)

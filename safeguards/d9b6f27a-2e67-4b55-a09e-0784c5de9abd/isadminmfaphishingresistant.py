@@ -109,16 +109,25 @@ def transform(input):
             auth_type for auth_type in enabled_methods
             if auth_type['id'].lower() not in phishing_resistant
         ]
+        resistant_methods = [
+            auth_type for auth_type in enabled_methods
+            if auth_type['id'].lower() in phishing_resistant
+        ]
 
-        # Pass if no non-phishing-resistant methods are enabled
-        is_resistant = len(other_auth_types) == 0
+        # `is_resistant = len(other_auth_types) == 0` was true whenever NO methods were
+        # configured at all (an empty or unreadable `authenticationMethodConfigurations`
+        # read the same as one deliberately restricted to FIDO2/Authenticator), so an
+        # empty body, an auth-error envelope and a tenant with MFA not configured at all
+        # were all reported "phishing resistant." The docstring's own criterion -- ONLY
+        # FIDO2/Authenticator enabled -- requires one of them to actually be enabled.
+        is_resistant = len(other_auth_types) == 0 and len(resistant_methods) > 0
 
         if is_resistant:
-            if len(enabled_methods) > 0:
-                method_names = [m['id'] for m in enabled_methods]
-                pass_reasons.append(f"Only phishing-resistant authentication methods enabled: {', '.join(method_names)}")
-            else:
-                pass_reasons.append("No authentication methods configured")
+            method_names = [m['id'] for m in enabled_methods]
+            pass_reasons.append(f"Only phishing-resistant authentication methods enabled: {', '.join(method_names)}")
+        elif len(enabled_methods) == 0:
+            fail_reasons.append("No authentication methods configured")
+            recommendations.append("Enable FIDO2 or Microsoft Authenticator for admin MFA")
         else:
             insecure_names = [m['id'] for m in other_auth_types]
             fail_reasons.append(f"Non-phishing-resistant authentication methods enabled: {', '.join(insecure_names)}")

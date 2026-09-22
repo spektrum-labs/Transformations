@@ -145,7 +145,9 @@ def transform(input):
         else:
             unknown_count = unknown_count + 1
 
-    total_devices = len(devices)
+    reported_count_field = data.get("count")
+    total_devices = reported_count_field if isinstance(reported_count_field, int) else len(devices)
+    sampled_devices = len(devices)
     classified = corporate_count + personal_count
 
     if classified > 0:
@@ -185,6 +187,7 @@ def transform(input):
     result = {
         "isCorporateOwned": is_corporate_owned,
         "totalDevices": total_devices,
+        "sampledDevices": sampled_devices,
         "corporateDevices": corporate_count,
         "personalDevices": personal_count,
         "unknownOwnershipDevices": unknown_count,

@@ -51,11 +51,17 @@ def evaluate(data):
 
         # Error payload detection
         if isinstance(data, dict):
+            # An EMPTY dict, or one with none of the recognised signals below, used to
+            # fall through "no error keyword found" straight to True -- so {} and every
+            # unrecognised body were read as a confirmed license. Resolved from the
+            # payload now; see _affirmative_signal below.
+            if not data:
+                return {"confirmedLicensePurchased": False, "reason": "Empty response body"}
             error_msg = str(data.get("error", data.get("message", data.get("detail", "")))).lower()
             if error_msg and any(k in error_msg for k in ("license", "unauthorized", "forbidden", "invalid_client", "invalid_token")):
                 return {"confirmedLicensePurchased": False, "reason": error_msg}
             # Dict returned — valid but unexpected shape for vault/account (PRA returns a list)
-            return {"confirmedLicensePurchased": True}
+            return {"confirmedLicensePurchased": _affirmative_signal(data)}
 
         # List response (even empty) confirms license and API access
         if isinstance(data, list):
@@ -117,3 +123,44 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def _affirmative_signal(data):
+    """True only when a non-error dict POSITIVELY evidences an active license.
+
+    The caller has already ruled out an empty body and the PRA-specific error shapes
+    (error/message/detail text naming "license", "unauthorized", etc). This still must
+    not default True for an arbitrary unrecognised dict -- a synthetic body describing
+    every control as off (`"enabled": False`, `"licensed": False`, ...) is not evidence
+    of a purchased license either.
+
+    Deliberately conservative, in this order:
+      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
+      * an explicit ON among the recognised keys     -> True
+      * a non-empty population of records/settings   -> True
+      * anything unrecognised                        -> False  (never True by default)
+    """
+    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
+               "licensed", "licensePurchased", "subscribed", "subscription", "status",
+               "state", "installed", "compliant")
+    present = [data[k] for k in on_keys if k in data]
+    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
+    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
+    for value in present:
+        if value is False:
+            return False
+        if isinstance(value, str) and value.strip().lower() in off_words:
+            return False
+    for value in present:
+        if value is True:
+            return True
+        if isinstance(value, str) and value.strip().lower() in on_words:
+            return True
+    for key in ("items", "data", "records", "results", "accounts", "vaultAccounts",
+                "policies", "settings"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    return False

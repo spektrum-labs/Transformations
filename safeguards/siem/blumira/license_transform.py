@@ -55,9 +55,11 @@ def transform(input):
             any(ed in license_edition for ed in valid_editions)
         )
 
-        # Fallback: if API call succeeds, license is valid
-        if not is_licensed and data:
-            is_licensed = True
+        # The old fallback -- "if not is_licensed and data: is_licensed = True" --
+        # treated ANY non-empty body as proof of a valid license, so an empty object,
+        # an auth-error envelope, or a body naming an expired/invalid edition all
+        # satisfied the criterion once they cleared the emptiness check. There is no
+        # fallback now: the license must actually say active with a valid edition.
 
         return {"confirmedLicensePurchased": is_licensed}
 

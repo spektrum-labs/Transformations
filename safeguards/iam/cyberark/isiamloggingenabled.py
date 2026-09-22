@@ -3,8 +3,7 @@ def transform(input):
     Validate that logs are captured and monitored
 
     Parameters:
-        input (dict): The JSON data containing cyberark API response
-
+        input (dict): The JSON data containing the vendor's IAM API response
     Returns:
         dict: A dictionary with the isIAMLoggingEnabled evaluation result
     """

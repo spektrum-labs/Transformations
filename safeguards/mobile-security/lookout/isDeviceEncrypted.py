@@ -120,6 +120,8 @@ def transform(input):
     if not isinstance(devices, list):
         devices = []
 
+    reported_count_field = data.get("count")
+    fleet_devices = reported_count_field if isinstance(reported_count_field, int) else len(devices)
     total_devices = len(devices)
 
     explicit_true = 0
@@ -155,7 +157,8 @@ def transform(input):
     explicit_found = explicit_true + explicit_false
 
     input_summary = {
-        "totalDevicesInPage": total_devices,
+        "totalDevices": fleet_devices,
+        "sampledDevices": total_devices,
         "explicitEncryptionFieldFound": explicit_found,
         "explicitEncryptedCount": explicit_true,
         "explicitUnencryptedCount": explicit_false,
@@ -169,7 +172,7 @@ def transform(input):
     recommendations = []
 
     if total_devices == 0:
-        result = {"isDeviceEncrypted": False}
+        result = {"isDeviceEncrypted": False, "totalDevices": fleet_devices, "sampledDevices": total_devices}
         return create_response(
             result=result,
             validation=validation,
@@ -192,7 +195,13 @@ def transform(input):
             recommendations.append(
                 "Enforce device-level storage encryption (e.g. via MDM policy) on the devices flagged as unencrypted and re-scan."
             )
-        result = {"isDeviceEncrypted": is_encrypted}
+        result = {
+            "isDeviceEncrypted": is_encrypted,
+            "totalDevices": fleet_devices,
+            "sampledDevices": total_devices,
+            "explicitEncryptedCount": explicit_true,
+            "explicitUnencryptedCount": explicit_false,
+        }
         return create_response(
             result=result,
             validation=validation,
@@ -223,7 +232,13 @@ def transform(input):
             "Investigate devices not reporting SECURE/PROTECTED status in Lookout and confirm their storage encryption state directly with the device MDM."
         )
 
-    result = {"isDeviceEncrypted": is_encrypted}
+    result = {
+        "isDeviceEncrypted": is_encrypted,
+        "totalDevices": fleet_devices,
+        "sampledDevices": total_devices,
+        "proxySecureAndProtectedCount": proxy_secure,
+        "proxyNotSecureOrNotProtectedCount": proxy_insecure,
+    }
     return create_response(
         result=result,
         validation=validation,

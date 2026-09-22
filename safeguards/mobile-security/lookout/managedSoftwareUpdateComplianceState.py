@@ -75,7 +75,9 @@ def transform(input):
     if not isinstance(devices, list):
         devices = []
 
-    total_devices = len(devices)
+    reported_count_field = data.get("count")
+    total_devices = reported_count_field if isinstance(reported_count_field, int) else len(devices)
+    sampled_devices = len(devices)
     secure_count = 0
     non_secure_count = 0
     unknown_count = 0
@@ -106,6 +108,7 @@ def transform(input):
 
     input_summary = {
         "totalDevices": total_devices,
+        "sampledDevices": sampled_devices,
         "secureCount": secure_count,
         "nonSecureCount": non_secure_count,
         "unknownCount": unknown_count,
@@ -137,6 +140,7 @@ def transform(input):
     result = {
         "managedSoftwareUpdateComplianceState": state,
         "totalDevices": total_devices,
+        "sampledDevices": sampled_devices,
         "secureCount": secure_count,
         "nonSecureCount": non_secure_count,
         "unknownCount": unknown_count,

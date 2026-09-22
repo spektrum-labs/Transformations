@@ -1,10 +1,9 @@
 def transform(input):
     """
-    Makes sure that new internet-exposed assets and shadow IT are uncovered
+    Checks if scheduled scans are configured and running
 
     Parameters:
-        input (dict): The JSON data containing rapid7insightvm API response
-
+        input (dict): The JSON data containing the vendor's ASM API response
     Returns:
         dict: A dictionary with the isContinuousDiscoveryEnabled evaluation result
     """

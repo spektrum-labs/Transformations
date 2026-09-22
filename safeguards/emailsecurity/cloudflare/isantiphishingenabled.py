@@ -98,11 +98,22 @@ def transform(input):
 
         if isinstance(data, dict):
             # Cloudflare envelope: {"success": true, "result": [...], "result_info": {...}}
-            messages = data.get('result', data.get('results', data.get('messages', [])))
+            # The old chained `.get(..., .get(..., []))` defaulted to an empty LIST when
+            # none of the three keys were present, and `isinstance([], list)` is True --
+            # so the fallback itself satisfied "the investigate endpoint responds" and
+            # every unrecognised body, including {} and an auth-error envelope, reported
+            # anti-phishing as active. Each key must actually be present now.
+            messages = data.get('result')
+            if messages is None:
+                messages = data.get('results')
+            if messages is None:
+                messages = data.get('messages')
             result_info = data.get('result_info', {})
 
             if isinstance(messages, list):
-                # If the investigate endpoint responds, scanning is active
+                # A messages array being present at all -- even empty, meaning the scan
+                # ran and found nothing today -- is a genuine response from this
+                # endpoint, unlike a body with none of the three keys.
                 anti_phishing_enabled = True
                 total_detections = len(messages)
 

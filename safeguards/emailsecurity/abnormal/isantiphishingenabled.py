@@ -93,27 +93,38 @@ def transform(input):
         total_threats = 0
         phishing_threats_detected = 0
 
+        # `data.get('threats', data.get('results', []))` defaulted to an empty LIST when
+        # neither key was present, and `isinstance([], list)` is True -- so the fallback
+        # itself satisfied "the endpoint responded" and every unrecognised body, including
+        # {} and an auth-error envelope, reported anti-phishing as active. The
+        # 'total_count'/'pageNumber' branch had the same shape: the KEY's presence was
+        # read as evidence, not its value, so a paginated response with zero results also
+        # passed. Resolved from what the payload actually contains now: an empty
+        # threats/results list, or a zero count, is not a signal either way.
         if isinstance(data, dict):
             # Abnormal Security threats response
-            threats = data.get('threats', data.get('results', []))
+            threats = data.get('threats', data.get('results'))
             if isinstance(threats, list):
                 total_threats = len(threats)
-                # If the endpoint responds, anti-phishing is active
-                anti_phishing_enabled = True
-
                 phishing_threats = [t for t in threats if isinstance(t, dict) and (
                     'phishing' in t.get('threatType', '').lower() or
                     'phish' in t.get('attackType', '').lower()
                 )]
                 phishing_threats_detected = len(phishing_threats)
+                if total_threats > 0:
+                    # A non-empty population of monitored threats is evidence the
+                    # scanning feature is active.
+                    anti_phishing_enabled = True
             elif 'total_count' in data or 'pageNumber' in data:
-                # Paginated response indicates service is active
-                anti_phishing_enabled = True
-                total_threats = data.get('total_count', 0)
-            elif 'settings' in data:
+                total_threats = data.get('total_count', 0) or 0
+                if total_threats > 0:
+                    anti_phishing_enabled = True
+            if not anti_phishing_enabled and 'settings' in data:
                 settings = data['settings']
                 if isinstance(settings, dict):
-                    anti_phishing_enabled = settings.get('phishingProtection', {}).get('enabled', False)
+                    anti_phishing_enabled = bool(
+                        settings.get('phishingProtection', {}).get('enabled', False)
+                    )
 
         if anti_phishing_enabled:
             reason = "Anti-phishing protection is active"

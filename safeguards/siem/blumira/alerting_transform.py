@@ -45,9 +45,12 @@ def transform(input):
         findings = data.get("findings", [])
         findings_count = len(findings)
 
-        # Alerting enabled if findings exist or detection rules are active
-        # Note: Empty findings with active SIEM means rules deployed but no threats detected
-        is_alerting = findings_count > 0 or data.get("detectionRulesDeployed", True)
+        # `data.get("detectionRulesDeployed", True)` defaulted to True, so a body with
+        # zero findings AND no `detectionRulesDeployed` field at all -- an empty object,
+        # an auth-error envelope, an unrecognised shape -- still asserted alerting was
+        # enabled. The field must actually say so now.
+        # Alerting enabled if findings exist or detection rules are explicitly deployed.
+        is_alerting = findings_count > 0 or bool(data.get("detectionRulesDeployed", False))
 
         return {
             "isAlertingEnabled": is_alerting,

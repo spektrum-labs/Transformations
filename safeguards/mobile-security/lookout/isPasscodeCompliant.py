@@ -74,7 +74,9 @@ def transform(input):
     if not isinstance(devices, list):
         devices = []
 
-    total = len(devices)
+    reported_count_field = data.get("count")
+    total = reported_count_field if isinstance(reported_count_field, int) else len(devices)
+    sampled_devices = len(devices)
     compliant = 0
     noncompliant = 0
     unknown = 0
@@ -143,6 +145,7 @@ def transform(input):
     result = {
         "isPasscodeCompliant": result_bool,
         "totalDevices": total,
+        "sampledDevices": sampled_devices,
         "evaluatedDevices": evaluated,
         "compliantDevices": compliant,
         "nonCompliantDevices": noncompliant,
@@ -155,7 +158,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total, "evaluatedDevices": evaluated},
+        input_summary={"totalDevices": total, "sampledDevices": sampled_devices, "evaluatedDevices": evaluated},
         metadata={
             "transformationId": "isPasscodeCompliant",
             "vendor": "Lookout",

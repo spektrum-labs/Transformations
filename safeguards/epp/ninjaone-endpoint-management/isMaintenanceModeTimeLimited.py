@@ -71,16 +71,57 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else []
 
+    # EVIDENCE REQUIRED: a recognised getDevicesDetailed device list that actually
+    # contains at least one device record. The old fallback chain
+    # `data.get("data") or data.get("results") or []` defaulted to an EMPTY LIST whenever
+    # neither key was present, and an empty device list then fell into the
+    # "devices_in_maintenance == 0" branch and reported the control satisfied. So {},
+    # "{}", null, an auth-error envelope and an unrelated payload such as
+    # {"hello": "world"} all reported maintenance mode as time-limited. Zero device
+    # records is not "no indefinite suppression observed", it is nothing observed.
+    devices = None
+    recognized_device_list = False
     if isinstance(data, list):
         devices = data
+        recognized_device_list = True
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
-        if not isinstance(devices, list):
-            devices = []
-    else:
+        for key in ("data", "results"):
+            value = data.get(key)
+            if isinstance(value, list):
+                devices = value
+                recognized_device_list = True
+                break
+    if not recognized_device_list or not isinstance(devices, list):
         devices = []
 
     total_devices = len(devices)
+
+    if not recognized_device_list or total_devices == 0:
+        return create_response(
+            result={
+                "isMaintenanceModeTimeLimited": False,
+                "totalDevices": 0,
+                "devicesInMaintenance": 0,
+                "boundedWindows": 0,
+                "unboundedWindows": 0,
+            },
+            validation=validation,
+            fail_reasons=[
+                "The payload carried no recognisable getDevicesDetailed device list with at least one device record (expected a JSON array of devices, or an object with a 'data' or 'results' array), so whether maintenance mode is time-limited could not be determined."
+            ],
+            recommendations=[
+                "Verify the getDevicesDetailed call is authenticating and returning the tenant's device records, then re-run this check."
+            ],
+            input_summary={
+                "recognizedDeviceList": recognized_device_list,
+                "totalDevices": 0,
+            },
+            metadata={
+                "transformationId": "isMaintenanceModeTimeLimited",
+                "vendor": "NinjaOne Endpoint Management",
+                "category": "epp",
+            },
+        )
     devices_in_maintenance = 0
     bounded_windows = 0
     unbounded_windows = 0
@@ -121,6 +162,7 @@ def transform(input):
                 bounded_device_names.append(name)
 
     if devices_in_maintenance == 0:
+        # Reached only when at least one real device record was returned (guarded above).
         is_time_limited = True
         pass_reasons = [
             "Scanned %d devices via getDevicesDetailed; none currently report an active maintenance window (maintenance field empty on all records), so no indefinite suppression was observed." % total_devices

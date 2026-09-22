@@ -45,11 +45,61 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        result = bool(data)
+        # `bool(data)` asked whether a response arrived, not what it said, so any
+        # non-empty body -- including an error envelope or a body describing the
+        # license as expired/cancelled -- satisfied this criterion and no input could
+        # make it false. Resolved from the payload now; see _affirmative_signal below.
+        result = _affirmative_signal(data)
         return {"confirmedLicensePurchased": result}
 
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
+
+
+def _affirmative_signal(data):
+    """True only when the payload POSITIVELY evidences an active, purchased license.
+
+    Replaces `bool(data)`, which asked whether a response arrived rather than what it
+    said -- so any 2xx body, including one describing the license as expired or
+    cancelled, satisfied the criterion and no input could ever make it false.
+    Measured 2026-09-21.
+
+    Deliberately conservative, in this order:
+      * an unreadable, empty or error body           -> False
+      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
+      * an explicit ON among the recognised keys     -> True
+      * a non-empty population of orgs/products      -> True
+      * anything unrecognised                        -> False  (never True by default)
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    on_keys = ("licensePurchased", "licensed", "isLicensed", "subscriptionActive",
+               "active", "isActive", "enabled", "status", "subscriptionStatus",
+               "licenseStatus")
+    present = [data[k] for k in on_keys if k in data]
+    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled",
+                 "suspended", "trial_expired")
+    on_words = ("true", "enabled", "on", "active", "valid", "licensed", "purchased")
+    for value in present:
+        if value is False:
+            return False
+        if isinstance(value, str) and value.strip().lower() in off_words:
+            return False
+    for value in present:
+        if value is True:
+            return True
+        if isinstance(value, str) and value.strip().lower() in on_words:
+            return True
+    for key in ("organizations", "orgs", "products", "licenses", "subscriptions"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    return False
 
 
 def transform(input):
