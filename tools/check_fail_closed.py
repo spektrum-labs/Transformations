@@ -106,6 +106,20 @@ NO_EVIDENCE = {
     # so the gate closes at 0 and the allowlist does not grow to accommodate it.
     "unrelated_json": {"hello": "world"},
     "unrelated_nested": {"foo": {"bar": [1, 2, 3]}},
+    # AN AUTH FAILURE THAT CARRIES A STATUS CODE, and its absence was a second hole in
+    # this battery. `auth_error` above is an Anthropic-style envelope with no HTTP status,
+    # so a transform branching on `status_code == 401` never reached that branch under any
+    # probe and passed the gate while it was there. Measured 2026-09-22 across all 937
+    # walked files with these four added: exactly ONE was reaching for a status code and
+    # asserting the control from it -- check-point's
+    # isSingleActionMultiEntityRemediationEnabled, which set the criterion true BECAUSE the
+    # call returned 401, on the grounds that the endpoint's request schema documents the
+    # capability. Fixed in the same commit rather than allowlisted. Both spellings and the
+    # nested form are carried because all three appear in this tree's error handling.
+    "auth_401": {"statusCode": 401, "error": "Unauthorized"},
+    "auth_401_snake": {"status_code": 401, "error": "Unauthorized"},
+    "auth_401_nested": {"error": {"statusCode": 401, "message": "Unauthorized"}},
+    "auth_403": {"statusCode": 403, "error": "Forbidden"},
 }
 
 
