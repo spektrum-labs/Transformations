@@ -42,34 +42,44 @@ def transform(input):
         data = data.get("result", data)
         data = data.get("apiResponse", data)
 
-        # Get alerts data
-        alerts = (
-            data.get("alerts", []) or
-            data.get("data", []) or
-            data.get("items", [])
-        )
+        # Get alerts data. The old fallback chain `.get(..., []) or .get(..., [])`
+        # defaulted to an empty LIST when none of the three keys were present, and an
+        # empty list is falsy, so it fell through every `or` to the final `[]` -- which
+        # is STILL a list. `isinstance(alerts, list)` was then True unconditionally, and
+        # `is_logging_enabled = True` was hardcoded regardless of any of this. Together,
+        # an empty object, an auth-error envelope and any unrecognised body all reported
+        # logging enabled. Each key must actually be present now, and the hardcoded
+        # `True` is gone.
+        alerts = data.get("alerts")
+        if alerts is None:
+            alerts = data.get("data")
+        if alerts is None:
+            alerts = data.get("items")
 
         total_alerts = 0
         alert_types = set()
+        recognized_response = False
 
         if isinstance(alerts, list):
+            # A recognised alerts/data/items key being present at all -- even an empty
+            # list, meaning the endpoint is reachable and generated nothing today -- is
+            # a genuine response, unlike a body with none of these keys.
+            recognized_response = True
             total_alerts = len(alerts)
             for alert in alerts:
                 alert_type = alert.get("type", alert.get("name", ""))
                 if alert_type:
                     alert_types.add(alert_type)
 
-        elif data.get("totalCount"):
-            total_alerts = data.get("totalCount", 0)
+        elif "totalCount" in data:
+            recognized_response = True
+            total_alerts = data.get("totalCount", 0) or 0
 
-        # Logging is considered enabled if:
-        # 1. We can successfully query the alerts endpoint (API access works)
-        # 2. Alerts are being generated (total > 0) OR the endpoint is accessible
-        # CrashPlan has comprehensive logging built-in by default
-        is_logging_enabled = True  # CrashPlan always logs activity
+        # Logging is considered enabled only when the listAlerts endpoint actually
+        # returned one of its recognised shapes -- not merely because a response of
+        # some kind arrived.
+        is_logging_enabled = recognized_response
 
-        # If we got a valid response, logging is working
-        # Even if no alerts exist, the logging system is enabled
         has_alerts = total_alerts > 0
 
         return {
