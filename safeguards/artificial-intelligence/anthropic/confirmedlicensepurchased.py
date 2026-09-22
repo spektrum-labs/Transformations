@@ -11,6 +11,23 @@ from datetime import datetime
 
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
+    # A JSON string or bytes is decoded FIRST, before any shape is inspected. Without this
+    # every branch below falls through -- a str is not a dict, so no wrapper is unwrapped
+    # and evaluate()'s `if not isinstance(data, dict): data = {}` turns the whole body into
+    # an empty dict. The result is `confirmedLicensePurchased: False` with
+    # `organizationIdPresent: False`, i.e. THE EXACT OUTPUT OF A WRONG CREDENTIAL, reported
+    # for a perfectly good organization record that merely arrived as text. A false negative
+    # wearing a precise and completely wrong diagnosis is worse than no answer, because the
+    # recommendation tells the reader to go and replace a key that was never the problem.
+    # Measured 2026-09-21: the same organization body returns True as a dict and False as
+    # the string form of itself. Every other transform in this repo accepts all three forms
+    # (the `_parse_input` pattern in CLAUDE.md); this one did not.
+    # A string that is not JSON raises here and transform()'s handler records a
+    # transformation error with the body -- fail closed, never a silent True.
+    if isinstance(input_data, (str, bytes, bytearray)):
+        if isinstance(input_data, (bytes, bytearray)):
+            input_data = input_data.decode("utf-8")
+        input_data = json.loads(input_data)
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
