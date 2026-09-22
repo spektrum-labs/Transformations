@@ -45,11 +45,59 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        result = bool(data)
+        # `bool(data)` asked whether a response arrived, not what it said, so any
+        # non-empty body -- including one reporting a 0% completion rate -- satisfied
+        # this criterion and no input could make it false. Resolved from the completion
+        # rate the payload actually reports now; see _completion_rate_acceptable below.
+        result = _completion_rate_acceptable(data)
         return {"isCompletionRateAcceptable": result}
 
     except Exception as e:
         return {"isCompletionRateAcceptable": False, "error": str(e)}
+
+
+def _completion_rate_acceptable(data, threshold=80):
+    """True only when the payload POSITIVELY evidences a completion rate >= threshold.
+
+    Deliberately conservative: an unreadable/empty/error body, a rate below threshold,
+    or a body with no rate (and no completed/total counts to derive one from) is False.
+    Never True by default.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    containers = [data]
+    for nest_key in ("data", "result", "results", "response"):
+        nested = data.get(nest_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    rate_keys = ("completion_rate", "completionRate", "complete_percentage", "completionPercentage")
+    for container in containers:
+        for key in rate_keys:
+            if key in container:
+                try:
+                    return float(container[key]) >= threshold
+                except (TypeError, ValueError):
+                    return False
+    count_pairs = (
+        ("total_completed", "total_records"),
+        ("completed_count", "total_count"),
+        ("completedUsers", "totalUsers"),
+    )
+    for container in containers:
+        for completed_key, total_key in count_pairs:
+            if completed_key in container and total_key in container:
+                try:
+                    total = float(container[total_key])
+                    completed = float(container[completed_key])
+                except (TypeError, ValueError):
+                    continue
+                if total <= 0:
+                    return False
+                return (completed / total) * 100 >= threshold
+    return False
 
 
 def transform(input):

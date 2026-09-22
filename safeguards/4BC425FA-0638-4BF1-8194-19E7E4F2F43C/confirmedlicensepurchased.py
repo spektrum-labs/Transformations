@@ -88,8 +88,11 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        default_value = True if data is not None else False
-        license_purchased = data.get('licensePurchased', default_value) if isinstance(data, dict) else default_value
+        # `default_value = True if data is not None else False` asked whether a
+        # response arrived, not what it said, so any parseable dict -- including {} and
+        # an auth-error envelope -- defaulted `licensePurchased` to True. Never default
+        # True now: an absent key means unproven, not purchased.
+        license_purchased = bool(data.get('licensePurchased', False)) if isinstance(data, dict) else False
 
         if license_purchased:
             pass_reasons.append("Backup provider license active")

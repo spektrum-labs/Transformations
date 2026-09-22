@@ -49,9 +49,13 @@ def transform(input):
         # Check for explicit detection rules field
         detection_rules = data.get("detectionRules", [])
 
-        # Detection rules are active if we have findings or explicit rules
-        # Blumira auto-deploys rules with integrations, so active SIEM = active rules
-        is_active = len(findings) > 0 or len(detection_rules) > 0 or data.get("detectionRulesDeployed", True)
+        # `data.get("detectionRulesDeployed", True)` defaulted to True, so a body with no
+        # findings, no explicit rules AND no `detectionRulesDeployed` field at all --
+        # an empty object, an auth-error envelope, an unrecognised shape -- still
+        # asserted detection rules were active. The field must actually say so now.
+        # Detection rules are active if we have findings, explicit rules, or an
+        # explicit deployment flag.
+        is_active = len(findings) > 0 or len(detection_rules) > 0 or bool(data.get("detectionRulesDeployed", False))
 
         return {
             "isDetectionRulesActive": is_active,

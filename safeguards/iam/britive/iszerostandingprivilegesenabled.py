@@ -50,17 +50,28 @@ def evaluate(data):
         #   "expirationDuration": int (milliseconds, 0 = no expiry), ... }
         # Integration layer passes merged { "profiles": [...] }
 
+        # The old fallback chain `.get("profiles") or .get("data") or .get("paps") or []`
+        # defaulted to an empty LIST when none of the three keys were present, which is
+        # indistinguishable from a genuinely empty profile list -- and an empty active-
+        # profile set was then reported "vacuously true." So an empty object, an
+        # auth-error envelope and any unrecognised body all reported ZSP enabled. A
+        # recognised key must actually be present now before "no active profiles" can
+        # be read as vacuously compliant.
         if isinstance(data, list):
             profiles = data
+            found_profile_key = True
         else:
-            profiles = (
-                data.get("profiles") or
-                data.get("data") or
-                data.get("paps") or
-                []
-            )
+            profiles = None
+            found_profile_key = False
+            if isinstance(data, dict):
+                for key in ("profiles", "data", "paps"):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        profiles = value
+                        found_profile_key = True
+                        break
 
-        if not isinstance(profiles, list):
+        if not found_profile_key or not isinstance(profiles, list):
             return {"isZeroStandingPrivilegesEnabled": False, "reason": "No profile data found"}
 
         # Only evaluate active profiles
@@ -70,7 +81,8 @@ def evaluate(data):
         ]
 
         if len(active_profiles) == 0:
-            # No active profiles — ZSP is vacuously true (nothing to check out)
+            # A recognised (even empty) profile list with no active profiles — ZSP is
+            # vacuously true (nothing to check out).
             return {"isZeroStandingPrivilegesEnabled": True, "activeProfiles": 0, "reason": "No active profiles found"}
 
         total = len(active_profiles)

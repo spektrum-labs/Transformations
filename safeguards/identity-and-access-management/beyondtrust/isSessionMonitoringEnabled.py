@@ -51,6 +51,13 @@ def evaluate(data):
                     "reason": "Null response - Sessions endpoint unreachable or unauthorized"}
 
         if isinstance(data, dict):
+            # An EMPTY dict, or one with none of the recognised signals below, used to
+            # fall through "no error keyword found" straight to True -- so {} and every
+            # unrecognised body were read as session monitoring being enabled. Resolved
+            # from the payload now; see _affirmative_signal below.
+            if not data:
+                return {"isSessionMonitoringEnabled": False, "sessionCount": 0,
+                        "reason": "Empty response body"}
             error_msg = str(data.get("Message", data.get("error", data.get("detail", "")))).lower()
             error_keywords = ["unauthorized", "forbidden", "access denied", "license"]
             is_error_keyword = False
@@ -64,7 +71,8 @@ def evaluate(data):
             if status_val == "error":
                 return {"isSessionMonitoringEnabled": False, "sessionCount": 0,
                         "reason": "Error response from Sessions endpoint"}
-            return {"isSessionMonitoringEnabled": True, "sessionCount": 1}
+            result = _affirmative_signal(data)
+            return {"isSessionMonitoringEnabled": result, "sessionCount": 1 if result else 0}
 
         if isinstance(data, list):
             session_count = len(data)
@@ -117,3 +125,42 @@ def transform(input):
         return create_response(
             result={criteriaKey: False}, validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)], fail_reasons=["Transformation error: " + str(e)])
+
+
+def _affirmative_signal(data):
+    """True only when a non-error dict POSITIVELY evidences active session monitoring.
+
+    The caller has already ruled out an empty body and the BeyondTrust-specific error
+    shapes (Message/error text naming "unauthorized"/"forbidden"/"license", or an
+    explicit status=="error"). This still must not default True for an arbitrary
+    unrecognised dict -- a synthetic body describing every control as off
+    (`"enabled": False`, ...) is not evidence of active session monitoring either.
+
+    Deliberately conservative, in this order:
+      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
+      * an explicit ON among the recognised keys     -> True
+      * a non-empty population of records/settings   -> True
+      * anything unrecognised                        -> False  (never True by default)
+    """
+    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
+               "status", "state", "installed", "compliant")
+    present = [data[k] for k in on_keys if k in data]
+    off_words = ("false", "disabled", "off", "inactive", "none")
+    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid")
+    for value in present:
+        if value is False:
+            return False
+        if isinstance(value, str) and value.strip().lower() in off_words:
+            return False
+    for value in present:
+        if value is True:
+            return True
+        if isinstance(value, str) and value.strip().lower() in on_words:
+            return True
+    for key in ("sessions", "Sessions", "items", "data", "records", "results", "settings"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    return False

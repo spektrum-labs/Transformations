@@ -30,7 +30,14 @@ def transform(input):
         if 'data' in input:
             input = input['data']
 
+        # `dormant_disabled = True` started optimistic and was only ever lowered by a
+        # detected violation -- so an empty object, an auth-error envelope, or any body
+        # matching none of the four recognised shapes below (SCIM Resources, Commander
+        # users, security_audit, inactive_users) reported dormant accounts as disabled
+        # with zero evidence. `recognized_data` now tracks whether any shape was
+        # actually recognised, and the verdict defaults to False without it.
         dormant_disabled = True  # Assume compliant until we find violations
+        recognized_data = False
         dormant_details = {
             "totalUsers": 0,
             "activeUsers": 0,
@@ -63,8 +70,10 @@ def transform(input):
             return None
 
         # Check SCIM Resources
+        has_resources_key = 'Resources' in input or 'resources' in input
         resources = input.get('Resources', input.get('resources', []))
-        if isinstance(resources, list):
+        if has_resources_key and isinstance(resources, list):
+            recognized_data = True
             dormant_details["totalUsers"] = len(resources)
 
             for user in resources:
@@ -81,6 +90,7 @@ def transform(input):
         # Check users array with activity data (Commander user-report format)
         users = input.get('users', [])
         if isinstance(users, list) and len(users) > 0:
+            recognized_data = True
             dormant_details["totalUsers"] = len(users)
 
             for user in users:
@@ -121,6 +131,7 @@ def transform(input):
         if 'security_audit' in input or 'securityAudit' in input:
             audit = input.get('security_audit', input.get('securityAudit', {}))
             if isinstance(audit, dict):
+                recognized_data = True
                 dormant_count = audit.get('dormant_accounts', audit.get('dormantAccounts', 0))
                 if dormant_count > 0:
                     dormant_details["dormantUsers"] = dormant_count
@@ -134,6 +145,7 @@ def transform(input):
         if 'inactive_users' in input or 'inactiveUsers' in input:
             inactive = input.get('inactive_users', input.get('inactiveUsers', []))
             if isinstance(inactive, list):
+                recognized_data = True
                 for user in inactive:
                     if isinstance(user, dict):
                         if user.get('status', user.get('active', 'inactive')) in ['active', 'enabled', True]:
@@ -149,7 +161,7 @@ def transform(input):
             dormant_details["complianceScore"] = round(compliance_score, 2)
 
         return {
-            criteria_key: dormant_disabled,
+            criteria_key: dormant_disabled if recognized_data else False,
             **dormant_details
         }
 
