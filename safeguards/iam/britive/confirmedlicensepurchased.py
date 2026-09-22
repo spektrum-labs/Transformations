@@ -49,15 +49,22 @@ def evaluate(data):
         # or for newer versions: {"totalCount": N, "data": [...]}
         result = False
 
-        total = data.get("count", data.get("totalCount", 0))
-        users = data.get("data", data.get("users", []))
+        # /api/users may arrive as a bare list of users or wrapped as {count, data:[...]}
+        if isinstance(data, list):
+            users = data
+            total = len(data)
+        else:
+            total = data.get("count", data.get("totalCount", 0))
+            users = data.get("data", data.get("users", []))
 
-        if isinstance(total, (int, float)) and total > 0:
-            result = True
-        elif isinstance(users, list) and len(users) > 0:
+        if isinstance(users, list) and len(users) > 0:
             # Confirm at least one active user — confirms active subscription
             active_users = [u for u in users if u.get("status", "").lower() == "active"]
             result = len(active_users) > 0
+        elif isinstance(total, (int, float)) and total > 0:
+            result = True
+
+        return {"confirmedLicensePurchased": result, "userCount": total}
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
 

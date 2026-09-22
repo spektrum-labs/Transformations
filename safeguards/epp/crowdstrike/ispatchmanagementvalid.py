@@ -3,8 +3,7 @@ def transform(input):
     Ensure that processes exist and SLAs are met for vulnerability remediation.
 
     Parameters:
-        input (dict): The JSON data containing crowdstrike API response
-
+        input (dict): The JSON data containing the vendor's EPP API response
     Returns:
         dict: A dictionary with the isPatchManagementValid evaluation result
     """

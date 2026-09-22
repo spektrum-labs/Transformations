@@ -40,9 +40,11 @@ def transform(input):
         elif isinstance(input, list) and len(input) > 0:
             is_enabled = True
             config_details['count'] = len(input)
-        elif isinstance(input, dict) and len(input) > 0:
-            is_enabled = True
-            config_details['config'] = input
+        # The old final branch -- "elif isinstance(input, dict) and len(input) > 0:
+        # is_enabled = True" -- treated ANY non-empty dict as proof of this state, so
+        # an auth-error envelope or any unrecognised body with any key at all satisfied
+        # the criterion. Removed: the response must actually name one of the
+        # recognised fields above.
 
         return {
             criteria_key: is_enabled,

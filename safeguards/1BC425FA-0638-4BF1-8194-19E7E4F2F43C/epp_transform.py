@@ -87,9 +87,20 @@ def transform(input):
         recommendations = []
 
         # Initialize counters
-        isEPPConfigured = data.get("isEPPConfigured", True) if isinstance(data, dict) else True
-
-        items = data.get("items", []) if isinstance(data, dict) else []
+        # Token-Service preprocessing may deliver the endpoints as a bare list
+        # (when the API response's `data` field is itself a list) or as a dict
+        # containing `items`. Handle both so counts aren't silently zeroed.
+        if isinstance(data, list):
+            items = data
+            explicit_configured = None
+        elif isinstance(data, dict):
+            items = data.get("items") or []
+            if not isinstance(items, list):
+                items = []
+            explicit_configured = data.get("isEPPConfigured")
+        else:
+            items = []
+            explicit_configured = None
         total_endpoints = len(items)
         total_computers = 0
         total_servers = 0
@@ -265,7 +276,15 @@ def transform(input):
         coverage_scores["requiredCoveragePercentage"] = coverage_scores["Endpoint Protection"]
         coverage_scores["requiredConfigurationPercentage"] = coverage_scores["Endpoint Protection"]
 
-        coverage_scores["isEPPConfigured"] = isEPPConfigured
+        # "Configured" must reflect real deployment: honor an explicit flag from
+        # the API if present, otherwise require at least one protected endpoint.
+        # Previously this defaulted to True, producing a false PASS on zero data.
+        if explicit_configured is not None:
+            coverage_scores["isEPPConfigured"] = bool(explicit_configured)
+        else:
+            coverage_scores["isEPPConfigured"] = (
+                total_endpoints > 0 and coverage_scores["Endpoint Protection"] > 0
+            )
 
         # Build pass/fail reasons (use concatenation to avoid list mutation in restricted Python)
         epp_coverage = coverage_scores.get('Endpoint Protection', 0)

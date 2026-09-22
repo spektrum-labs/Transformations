@@ -1,0 +1,99 @@
+# The transformation contract: every transform() must be importable, and none may
+# assert a control is satisfied from a body that proves nothing.
+#
+# WHY THIS GATE EXISTS. Measured 2026-09-21 across 802 loadable transforms: 120
+# asserted a satisfaction-style criterion true for an empty or authentication-error
+# body, and 18 did so for null -- among them "backups are encrypted", "MFA is
+# enforced for users" and "endpoint protection is configured", each answered from a
+# response that was never read. One file of 803 could not be imported at all, so
+# whatever wired it received an import error instead of a verdict.
+#
+# It runs on pull_request only, against the same branches as the other gates here.
+# It needs no credentials and makes no network call: it imports each transform and
+# hands it four bodies that contain no evidence.
+name: transform-contract
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The checker's own self-test runs FIRST and is fatal. It plants three
+      # transforms and proves the checker catches a `data is not None` default,
+      # clears a correct fail-closed transform, and clears an INVERTED key (one
+      # whose true denotes the insecure condition). A checker that has quietly
+      # stopped catching anything would otherwise report a clean tree forever,
+      # which is the same failure this gate exists to prevent, one level up.
+      - name: Checker self-test
+        run: python tools/check_fail_closed.py --self-test
+
+      # Fails when a transform NOT on contracts/fail-closed-allowlist.json asserts a
+      # satisfaction-style criterion true from {}, an auth-error envelope, null or
+      # "{}" -- or when any transform cannot be imported. Listed files are reported
+      # and do not fail the run; the list may only shrink, and entries that no
+      # longer reproduce are reported STALE so the ratchet keeps moving.
+      - name: No transform may answer from a body that proves nothing
+        run: python tools/check_fail_closed.py
+
+      # The second contract, and a genuinely different question. A transform hard-wired
+      # to `true` passes the gate above, because it answers the same way from
+      # everything; only this one asks whether ANY input makes it say no. Its self-test
+      # runs first for the same reason as the other's.
+      - name: Discrimination checker self-test
+        run: python tools/check_discriminates.py --self-test
+
+      - name: No criterion may be incapable of reporting a failure
+        run: python tools/check_discriminates.py
+
+  # WHY THIS JOB WAS ADDED. Measured 2026-09-22 on this branch: the repo contains
+  # 9 pytest files holding 71 tests, and no workflow here ran a single one of them
+  # -- `grep -rn "pytest\|unittest" .github/workflows/` returned nothing. All 71
+  # passed the moment they were run, so nothing was broken; what was broken was
+  # the belief that they were being checked. A suite that has never run and a gate
+  # that cannot fail are the same defect, which is why this job lives in this file
+  # rather than a new one. (A new workflow would also mean a new required status
+  # check, i.e. a branch-protection change, which is not this change's to make.)
+  #
+  # It inherits the `pull_request`-only trigger at the top of this file, and like
+  # the checks above it needs no credentials and makes no network call.
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # pytest and pydantic, and measurably nothing else -- see the comments in
+      # requirements-test.txt for why each bound is where it is.
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+
+      # Self-test first and fatal, for the same reason as the checkers above: the
+      # guard here is a count, and a counting guard that has stopped counting
+      # looks exactly like a suite that is passing. This proves the floor logic
+      # still rejects a short count, an all-skipped run, and a collection error.
+      - name: Test-floor checker self-test
+        run: python tools/check_test_floor.py --self-test
+
+      # Runs `pytest safeguards/` from the repo root -- measured 2026-09-22, that
+      # single invocation collects all 71 tests across all 9 files, including the
+      # 5 sonicwall ones that `from conftest import ...`, so no per-directory
+      # invocation is needed. The wrapper then fails the job if fewer than 71
+      # tests were collected, if any were skipped, or if anything errored during
+      # collection -- all three of which a bare `pytest` step reports as exit 0.
+      - name: Transformation unit tests, and the suite may not shrink
+        run: python tools/check_test_floor.py

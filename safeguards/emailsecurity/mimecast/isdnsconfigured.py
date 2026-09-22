@@ -1,10 +1,25 @@
 """
 Transformation: isDNSConfigured
 Vendor: Mimecast  |  Category: emailsecurity
-Evaluates: Ensure that DMARC, DKIM and SPF records are set up properly
-           by verifying at least one active DNS Authentication Outbound policy exists.
+Evaluates: Ensure that DMARC, DKIM and SPF records are set up properly.
+
+isDKIMConfigured / isSPFConfigured / isDMARCConfigured all route to the
+isDNSConfigured method, which calls the Spektrum mail-server security checker
+(mail_server_security_checks/tool). That tool performs a live DNS/CNAME probe of
+the email domain and returns a flat dict keyed by protocol, e.g.:
+
+    {"result": {"SPF": <bool|record-string|false>,
+                "DKIM": <bool|record-string|false>,
+                "DMARC": <bool|record-string|false>,
+                "SMTPBanner": ...}}
+
+DKIM/SPF/DMARC are published DNS records, so they are verified by DNS lookup
+(vendor-agnostic) rather than via a Mimecast API. This transformation reads the
+SPF/DKIM/DMARC values and emits the per-protocol criteria keys plus the aggregate
+isDNSConfigured.
 """
 import json
+import ast
 from datetime import datetime
 
 
@@ -14,7 +29,7 @@ def extract_input(input_data):
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
+        for _ in range(4):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
@@ -65,78 +80,55 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def get_policy_list(data):
+def coerce_data(value):
+    """Best-effort conversion of a raw response into a dict."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(value)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+    return value if isinstance(value, dict) else {}
+
+
+def record_present(value):
+    """True if a protocol value from the DNS tool indicates a record exists.
+
+    The tool returns either a boolean, the actual DNS record string, or a falsey
+    sentinel (False / "" / "False" / "None" / "not found"). Any real record string
+    or boolean True counts as configured.
     """
-    Extract the list of DNS auth outbound policies from the API response.
-    Mimecast /api/gateway/policies/dns-auth-outbound returns:
-      { "data": [ { "id": "...", "policy": { ... }, "option": { ... } }, ... ] }
-    The returnSpec maps data -> data, so by the time we receive it the top-level
-    key is already 'data'.
-    """
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ["data", "policies", "items", "results"]:
-            val = data.get(key)
-            if isinstance(val, list):
-                return val
-    return []
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lower() in ("false", "none", "null", "", "no", "0", "not found", "n/a", "no banner found"):
+            return False
+        return len(stripped) > 0
+    return bool(value)
 
 
-def is_policy_enabled(policy_entry):
-    """Return True if a policy entry is considered active/enabled."""
-    if isinstance(policy_entry, dict):
-        # Direct enabled flag
-        if "enabled" in policy_entry:
-            return bool(policy_entry.get("enabled"))
-        # Nested under 'policy' key
-        nested = policy_entry.get("policy")
-        if isinstance(nested, dict) and "enabled" in nested:
-            return bool(nested.get("enabled"))
-        # If there is no explicit enabled flag, treat existence as enabled
-        return True
-    return False
-
-
-def evaluate(data):
-    """
-    Core evaluation logic for isDNSConfigured.
-
-    Criteria: At least one DNS Authentication Outbound policy must exist
-    and be enabled, indicating that DKIM/SPF/DMARC outbound signing or
-    verification is configured in Mimecast.
-    """
-    try:
-        policies = get_policy_list(data)
-        total_policies = len(policies)
-
-        if total_policies == 0:
-            return {
-                "isDNSConfigured": False,
-                "totalPolicies": 0,
-                "enabledPolicies": 0,
-                "error": "No DNS Authentication Outbound policies found"
-            }
-
-        enabled_count = 0
-        for policy in policies:
-            if is_policy_enabled(policy):
-                enabled_count = enabled_count + 1
-
-        is_configured = enabled_count > 0
-
-        return {
-            "isDNSConfigured": is_configured,
-            "totalPolicies": total_policies,
-            "enabledPolicies": enabled_count
-        }
-
-    except Exception as e:
-        return {"isDNSConfigured": False, "error": str(e)}
+def get_protocol(data, name):
+    """Fetch a protocol value (SPF/DKIM/DMARC) regardless of key casing."""
+    if name in data:
+        return data.get(name)
+    lowered = {k.lower(): v for k, v in data.items() if isinstance(k, str)}
+    return lowered.get(name.lower())
 
 
 def transform(input):
-    criteriaKey = "isDNSConfigured"
+    is_dmarc_configured = False
+    is_dkim_configured = False
+    is_spf_configured = False
+
     try:
         if isinstance(input, str):
             input = json.loads(input)
@@ -144,87 +136,93 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
+        data = coerce_data(data)
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={
+                    "isDNSConfigured": False,
+                    "isDMARCConfigured": False,
+                    "isDKIMConfigured": False,
+                    "isSPFConfigured": False
+                },
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
-
-        eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         additional_findings = []
 
-        total = eval_result.get("totalPolicies", 0)
-        enabled = eval_result.get("enabledPolicies", 0)
+        is_spf_configured = record_present(get_protocol(data, "SPF"))
+        is_dkim_configured = record_present(get_protocol(data, "DKIM"))
+        is_dmarc_configured = record_present(get_protocol(data, "DMARC"))
 
-        if result_value:
-            pass_reasons.append(
-                "DNS Authentication Outbound policies are configured: "
-                + str(enabled) + " of " + str(total) + " policy(s) are enabled"
-            )
-            pass_reasons.append(
-                "DKIM/SPF/DMARC outbound configuration is active in Mimecast"
-            )
+        is_dns_configured = is_dmarc_configured and is_dkim_configured and is_spf_configured
+
+        if is_dns_configured:
+            pass_reasons.append("All email DNS records (DMARC, DKIM, SPF) are properly configured")
         else:
-            if total == 0:
-                fail_reasons.append(
-                    "No DNS Authentication Outbound policies found in Mimecast"
-                )
-                recommendations.append(
-                    "Create at least one DNS Authentication Outbound policy in the Mimecast "
-                    "Administration Console under Gateway | Policies | DNS Authentication Outbound"
-                )
-            else:
-                fail_reasons.append(
-                    str(total) + " DNS Authentication Outbound policy(s) exist but none are enabled"
-                )
-                recommendations.append(
-                    "Enable at least one DNS Authentication Outbound policy in Mimecast to ensure "
-                    "DKIM signing and DMARC/SPF verification are active"
-                )
+            not_configured = []
+            if not is_dmarc_configured:
+                not_configured.append("DMARC")
+            if not is_dkim_configured:
+                not_configured.append("DKIM")
+            if not is_spf_configured:
+                not_configured.append("SPF")
+            fail_reasons.append("Missing DNS records: " + ", ".join(not_configured))
             recommendations.append(
-                "Ensure DMARC, DKIM, and SPF DNS records are published and that Mimecast "
-                "DNS Authentication policies reference the correct signing profile"
+                "Publish the missing DNS records (" + ", ".join(not_configured) + ") for the email domain. "
+                "For Mimecast-signed DKIM, ensure the Mimecast DKIM selector CNAME(s) are published."
             )
 
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-
-        additional_findings.append(
-            "Total DNS Auth Outbound policies: " + str(total)
-        )
-        additional_findings.append(
-            "Enabled DNS Auth Outbound policies: " + str(enabled)
-        )
-
-        full_result = {criteriaKey: result_value}
-        for k, v in extra_fields.items():
-            full_result[k] = v
+        for metric, configured, label in (
+            ("isDMARCConfigured", is_dmarc_configured, "DMARC"),
+            ("isDKIMConfigured", is_dkim_configured, "DKIM"),
+            ("isSPFConfigured", is_spf_configured, "SPF"),
+        ):
+            if configured:
+                additional_findings.append({
+                    "metric": metric,
+                    "status": "pass",
+                    "reason": label + " record is configured"
+                })
+            else:
+                additional_findings.append({
+                    "metric": metric,
+                    "status": "fail",
+                    "reason": label + " DNS record not found",
+                    "recommendation": "Configure " + label + " record for the email domain"
+                })
 
         return create_response(
-            result=full_result,
+            result={
+                "isDMARCConfigured": is_dmarc_configured,
+                "isDKIMConfigured": is_dkim_configured,
+                "isSPFConfigured": is_spf_configured,
+                "isDNSConfigured": is_dns_configured
+            },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=additional_findings,
             input_summary={
-                criteriaKey: result_value,
-                "totalPolicies": total,
-                "enabledPolicies": enabled
-            },
-            additional_findings=additional_findings
+                "dmarcConfigured": is_dmarc_configured,
+                "dkimConfigured": is_dkim_configured,
+                "spfConfigured": is_spf_configured
+            }
         )
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={
+                "isDNSConfigured": False,
+                "isDMARCConfigured": is_dmarc_configured,
+                "isDKIMConfigured": is_dkim_configured,
+                "isSPFConfigured": is_spf_configured
+            },
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: " + str(e)]

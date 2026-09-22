@@ -87,7 +87,24 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        isEPPConfigured = data.get("isEPPConfigured", True) if isinstance(data, dict) else True
+        # A DEFAULT OF True ON BOTH BRANCHES MEANT NOTHING COULD DISCONFIRM THIS. The line
+        # read `data.get("isEPPConfigured", True) if isinstance(data, dict) else True`, so a
+        # body missing the key reported endpoint protection CONFIGURED, and a body that was
+        # not a dict at all -- null, a bare string, an unparsed response -- did too, via the
+        # else. Measured 2026-09-21: transform(None) returned isEPPConfigured true across
+        # all six copies of this file. The key is absent from every real vendor payload
+        # this transform handles; it is a passthrough for a caller-supplied hint, and its
+        # absence is the normal case, which made True the answer almost every time.
+        #
+        # Absence of the hint is now resolved from what WAS read: endpoint protection is
+        # configured if any coverage was actually observed. An unreadable body observes
+        # nothing and is False.
+        if not isinstance(data, dict) or not data:
+            isEPPConfigured = False
+        elif "isEPPConfigured" in data:
+            isEPPConfigured = bool(data.get("isEPPConfigured"))
+        else:
+            isEPPConfigured = _epp_coverage_observed(data)
 
         items = data.get("items", []) if isinstance(data, dict) else []
         total_endpoints = len(items)
@@ -249,3 +266,27 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def _epp_coverage_observed(data):
+    """True when the payload actually evidences endpoint protection on something.
+
+    Deliberately narrow: it looks for a non-empty population of devices/agents/hosts, or
+    an explicit enabled/installed flag. An error envelope carries none of these, so it
+    resolves False rather than inheriting the old optimistic default.
+    """
+    if not isinstance(data, dict):
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    for key in ("devices", "agents", "hosts", "endpoints", "resources", "items", "data"):
+        value = data.get(key)
+        if isinstance(value, list) and value:
+            return True
+        if isinstance(value, dict) and value:
+            return True
+    for key in ("isEnabled", "enabled", "installed", "protectionEnabled", "eppEnabled"):
+        if data.get(key) is True:
+            return True
+    return False

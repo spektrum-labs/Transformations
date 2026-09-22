@@ -45,11 +45,47 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic extracted from doc transform."""
     try:
-        result = bool(data)
+        # `bool(data)` asked whether a response arrived, not what it said, so any
+        # non-empty body -- including an auth-error envelope or a body with zero
+        # reported messages -- satisfied this criterion and no input could make it
+        # false. Resolved from whether PhishAlarm report data actually exists now;
+        # see _phishalarm_data_exists below.
+        result = _phishalarm_data_exists(data)
         return {"isReportingEnabled": result}
 
     except Exception as e:
         return {"isReportingEnabled": False, "error": str(e)}
+
+
+def _phishalarm_data_exists(data):
+    """True only when the payload POSITIVELY evidences PhishAlarm report data.
+
+    Deliberately conservative: an unreadable/empty/error body, or one with
+    `total_records` at zero and no non-empty report list, is False. Anything
+    unrecognised is False -- never True by default.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
+        if data.get(key):
+            return False
+    containers = [data]
+    for nest_key in ("data", "result", "results", "response"):
+        nested = data.get(nest_key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    for container in containers:
+        if "total_records" in container:
+            try:
+                if int(container["total_records"]) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        for key in ("reports", "reported_messages", "reportedMessages", "phishalarm_reports"):
+            value = container.get(key)
+            if isinstance(value, list) and value:
+                return True
+    return False
 
 
 def transform(input):

@@ -3,8 +3,7 @@ def transform(input):
     EPP solutions deployed on % of endpoints
 
     Parameters:
-        input (dict): The JSON data containing synqly API response
-
+        input (dict): The JSON data containing the vendor's EPP API response
     Returns:
         dict: A dictionary with the isEPPDeployed evaluation result
     """

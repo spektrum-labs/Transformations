@@ -1,9 +1,13 @@
 """
 Transformation: isBackupEnabled
-Vendor: Azure
+Vendor: Azure Recovery Services
 Category: Backup / Data Protection
 
-Evaluates the backup status of DB instances.
+Evaluates whether Azure Backup is enabled by checking for diagnostic settings
+configurations across Recovery Services vaults and Backup vaults.
+
+Data source: Azure Resource Graph query (getBackupDiagnosticSettings) returning
+vault diagnostic settings with log categories and destinations.
 """
 
 import json

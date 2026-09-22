@@ -1,10 +1,9 @@
 def transform(input):
     """
-    Ensure that processes exist and SLAs are met for vulnerability remediation
+    Checks if retest functionality is being used to validate fixes
 
     Parameters:
-        input (dict): The JSON data containing rapid7insightvm API response
-
+        input (dict): The JSON data containing the vendor's ASM API response
     Returns:
         dict: A dictionary with the isRemediationTracked evaluation result
     """

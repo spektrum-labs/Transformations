@@ -1,0 +1,28 @@
+# Dependencies for the transformation unit tests (`pytest safeguards/`).
+#
+# Measured 2026-09-22 over the 9 test files and everything they import: the only
+# non-stdlib names are pytest itself and pydantic. Nothing else is needed -- the
+# transforms are stdlib-only, and the tests load them through importlib rather
+# than installing the repo, so there is no package to build.
+#
+# This is its own file rather than a line in the workflow because the repo has no
+# root requirements.txt to extend, and requirements-docs.txt is the mkdocs build
+# (mkdocs-material and friends), which the tests do not use. A file also means a
+# developer reproduces the CI run with one command instead of reading the YAML.
+#
+# pydantic: exactly one test needs it --
+# test_haslocalaccountinventoryvisibility.py::test_all_five_schemas_accept_collector_contract_and_scripts_follow_restricted_conventions,
+# which imports safeguards/firewall/sonicwall/schemas/*.py. Measured 2026-09-22
+# without pydantic installed: "1 failed, 70 passed". Capped below 3 because those
+# schemas declare class-based `class Config`, which pydantic 2.13 already warns is
+# removed in v3 (PydanticDeprecatedSince20) -- an unpinned install would turn that
+# warning into a red suite the day v3 ships.
+pydantic>=2,<3
+
+# pytest: measured green on both 8.4.2 and 9.1.1 on 2026-09-22. Capped below 10
+# because the 5 sonicwall test files do `from conftest import ...`, which works
+# only under the `prepend` import mode that puts each test's own directory on
+# sys.path. Measured with --import-mode=importlib on 2026-09-22: "5 errors during
+# collection". The job passes --import-mode=prepend explicitly so a future change
+# of pytest's default cannot silently decide this for us.
+pytest>=8,<10

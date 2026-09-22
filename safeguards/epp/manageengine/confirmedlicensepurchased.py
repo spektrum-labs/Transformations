@@ -1,29 +1,71 @@
 """
 Transformation: confirmedLicensePurchased
-Vendor: ManageEngine Endpoint Central  |  Category: EPP
-Evaluates: Whether the Endpoint Central server is active with a valid license.
+Vendor: ManageEngine Endpoint Central (Cloud)  |  Category: EPP
+Evaluates: Whether the Endpoint Central Cloud tenant is live and provisioned.
 Source: GET /api/1.4/desktop/serverproperties
+
+Endpoint Central Cloud wraps every payload in `message_response`, which the
+previous generic wrapper list did not cover, so the transform read an empty dict
+and always returned False. Field names below are taken from live Cloud responses.
 """
 import json
 from datetime import datetime
 
+ENVELOPE_KEYS = ["api_response", "response", "result", "apiResponse", "Output", "message_response"]
+
+
+def unwrap(data):
+    """Strip known response envelopes, including ManageEngine's message_response."""
+    if not isinstance(data, dict):
+        return data
+    for attempt in range(4):
+        moved = False
+        for key in ENVELOPE_KEYS:
+            inner = data.get(key)
+            if isinstance(inner, dict):
+                data = inner
+                moved = True
+                break
+        if not moved:
+            break
+    return data
+
+
+def section(data, name):
+    """Return dict `name`, tolerating one extra nesting level.
+
+    Works whether the caller hands us message_response.summary directly or the
+    still-enveloped payload, so the transform is correct with or without a
+    returnSpec on the integration definition.
+    """
+    if not isinstance(data, dict):
+        return {}
+    direct = data.get(name)
+    if isinstance(direct, dict):
+        return direct
+    for value in data.values():
+        if isinstance(value, dict):
+            nested = value.get(name)
+            if isinstance(nested, dict):
+                return nested
+    return {}
+
+
+def num(source, name, fallback=0):
+    """Read an int off a dict, tolerating strings and missing keys."""
+    try:
+        value = source.get(name, fallback)
+        if value is None:
+            return fallback
+        return int(value)
+    except Exception:
+        return fallback
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+        return unwrap(input_data["data"]), input_data["validation"]
+    return unwrap(input_data), {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -44,32 +86,53 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Check if ManageEngine Endpoint Central server is active with a valid license."""
+    """Confirm an active Endpoint Central Cloud subscription.
+
+    Cloud's serverproperties returns only tenant structure -- branch_offices,
+    domains, custom_groups. The licence fields the on-premise edition exposes
+    (product_name, license_type, license_expiry) are absent, so the proof here
+    is that an authenticated call returns a provisioned estate: a tenant that
+    serves branch offices and domains is a live, paid subscription.
+    """
     try:
-        # serverproperties returns server info including product name, version, build, license type
-        server_name = data.get("server_name", data.get("serverName", data.get("name", "")))
-        product = data.get("product_name", data.get("productName", data.get("product", "")))
-        version = data.get("product_version", data.get("productVersion", data.get("version", "")))
-        build_number = data.get("build_number", data.get("buildNumber", data.get("build", "")))
-        license_type = data.get("license_type", data.get("licenseType", data.get("license", "")))
-        license_expiry = data.get("license_expiry", data.get("licenseExpiry", data.get("expiry_date", "")))
+        props = data
+        if not isinstance(props, dict):
+            return {"confirmedLicensePurchased": False,
+                    "failReasons": ["serverproperties payload was not an object"]}
 
-        # A successful response from serverproperties means the server is active
-        is_active = bool(product or server_name or version)
+        inner = props.get("serverproperties")
+        if isinstance(inner, dict):
+            props = inner
 
-        # Check license type - professional/enterprise/UEM are valid, trial/free may not be
-        if license_type:
-            license_lower = str(license_type).lower()
-            if license_lower in ("expired", "invalid"):
-                is_active = False
+        branch_offices = props.get("branch_offices") or []
+        domains = props.get("domains") or []
+        custom_groups = props.get("custom_groups") or []
+
+        branch_count = len(branch_offices) if isinstance(branch_offices, list) else 0
+        domain_count = len(domains) if isinstance(domains, list) else 0
+        group_count = len(custom_groups) if isinstance(custom_groups, list) else 0
+
+        is_active = (branch_count + domain_count + group_count) > 0
+
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+        if is_active:
+            pass_reasons.append("Endpoint Central Cloud tenant responded with a provisioned estate")
+            pass_reasons.append(str(branch_count) + " branch offices, " + str(domain_count)
+                                + " domains, " + str(group_count) + " custom groups")
+        else:
+            fail_reasons.append("Tenant authenticated but returned no branch offices, domains or custom groups")
+            recommendations.append("Confirm the Endpoint Central Cloud subscription is active and the tenant is provisioned")
 
         return {
             "confirmedLicensePurchased": is_active,
-            "serverName": str(server_name),
-            "product": str(product),
-            "version": str(version),
-            "buildNumber": str(build_number),
-            "licenseType": str(license_type)
+            "branchOfficeCount": branch_count,
+            "domainCount": domain_count,
+            "customGroupCount": group_count,
+            "passReasons": pass_reasons,
+            "failReasons": fail_reasons,
+            "recommendations": recommendations,
         }
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
@@ -94,32 +157,17 @@ def transform(input):
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        if result_value:
-            pass_reasons.append("ManageEngine Endpoint Central server is active")
-            if extra_fields.get("product"):
-                pass_reasons.append(f"Product: {extra_fields['product']}")
-            if extra_fields.get("version"):
-                pass_reasons.append(f"Version: {extra_fields['version']}")
-            if extra_fields.get("licenseType"):
-                pass_reasons.append(f"License: {extra_fields['licenseType']}")
-        else:
-            fail_reasons.append("ManageEngine Endpoint Central server is not responding or license is invalid")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append("Verify Endpoint Central server status and license validity in the admin console")
+        meta_keys = ["error", "passReasons", "failReasons", "recommendations", "additionalFindings"]
+        extra_fields = {k: v for k, v in eval_result.items()
+                        if k != criteriaKey and k not in meta_keys}
 
         return create_response(
             result={criteriaKey: result_value, **extra_fields},
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
+            pass_reasons=eval_result.get("passReasons", []),
+            fail_reasons=eval_result.get("failReasons", []),
+            recommendations=eval_result.get("recommendations", []),
+            additional_findings=eval_result.get("additionalFindings", []),
             input_summary={criteriaKey: result_value, **extra_fields}
         )
 
@@ -128,5 +176,5 @@ def transform(input):
             result={criteriaKey: False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error: " + str(e)]
         )

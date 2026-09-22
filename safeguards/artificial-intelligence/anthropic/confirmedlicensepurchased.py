@@ -1,0 +1,262 @@
+"""
+Transformation: confirmedLicensePurchased
+Vendor: Anthropic  |  Category: Artificial Intelligence
+Product: Claude Developer Platform (Claude API)
+Evaluates: Ensures the supplied credential resolves to a real Anthropic organization, confirming an active Claude Enterprise or Claude Console subscription.
+API Source: getOrganization
+"""
+import json
+from datetime import datetime
+
+
+def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
+    # A JSON string or bytes is decoded FIRST, before any shape is inspected. Without this
+    # every branch below falls through -- a str is not a dict, so no wrapper is unwrapped
+    # and evaluate()'s `if not isinstance(data, dict): data = {}` turns the whole body into
+    # an empty dict. The result is `confirmedLicensePurchased: False` with
+    # `organizationIdPresent: False`, i.e. THE EXACT OUTPUT OF A WRONG CREDENTIAL, reported
+    # for a perfectly good organization record that merely arrived as text. A false negative
+    # wearing a precise and completely wrong diagnosis is worse than no answer, because the
+    # recommendation tells the reader to go and replace a key that was never the problem.
+    # Measured 2026-09-21: the same organization body returns True as a dict and False as
+    # the string form of itself. Every other transform in this repo accepts all three forms
+    # (the `_parse_input` pattern in CLAUDE.md); this one did not.
+    # A string that is not JSON raises here and transform()'s handler records a
+    # transformation error with the body -- fail closed, never a silent True.
+    if isinstance(input_data, (str, bytes, bytearray)):
+        if isinstance(input_data, (bytes, bytearray)):
+            input_data = input_data.decode("utf-8")
+        input_data = json.loads(input_data)
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for attempt in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    validation = {
+        "status": "unknown",
+        "errors": [],
+        "warnings": ["Legacy input format - no schema validation performed"],
+    }
+    return data, validation
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, metadata=None,
+                    transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    api_err_list = api_errors or []
+    transform_err_list = transformation_errors or []
+    data_collection_status = "error" if api_err_list else "success"
+    transformation_status = "error" if transform_err_list else "success"
+    response_metadata = {
+        "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+        "schemaVersion": "2.0",
+    }
+    if metadata:
+        response_metadata.update(metadata)
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": data_collection_status, "errors": api_err_list},
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", []),
+            },
+            "transformation": {
+                "status": transformation_status,
+                "errors": transform_err_list,
+                "inputSummary": input_summary or {},
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or [],
+            },
+            "metadata": response_metadata,
+        },
+    }
+
+
+METADATA = {
+    "transformationId": "confirmedLicensePurchased",
+    "vendor": "Anthropic",
+    "category": "Artificial Intelligence",
+}
+
+
+# Unique sentinel. object() is unavailable in the RestrictedPython sandbox
+# Token-Service runs transforms in, so a fresh list is used instead: a list
+# literal is never interned, which keeps the "is MISSING" identity checks valid.
+MISSING = ["__missing__"]
+
+# HTTP status -> why the call was refused. These are NOT posture findings: they mean
+# the credential or tenancy cannot reach the endpoint, so the control is UNKNOWN
+# rather than absent. Anthropic's compliance org-data endpoints (settings, groups,
+# organizations, users) accept only a Compliance Access Key (sk-ant-api01-...)
+# created in claude.ai; an Admin API key (sk-ant-admin01-...) gets 403, and a
+# standalone Claude Console organization can reach the Activity Feed only.
+REFUSAL_REASONS = {
+    401: ("the credential was rejected",
+          "Confirm the key is an admin-class key and has not been revoked or expired."),
+    403: ("this organization's credential is not permitted to call the endpoint",
+          "This endpoint requires a Compliance Access Key (sk-ant-api01-...) created in "
+          "claude.ai > Organization settings > API with the read:org_audit scope. An Admin "
+          "API key (sk-ant-admin01-...) from Claude Console returns 403 here. A standalone "
+          "Claude Console organization cannot read these settings at all - treat this "
+          "criterion as not applicable for that tenant rather than failed."),
+    404: ("the endpoint or organization was not found",
+          "Check the Organization ID. The compliance endpoints take a compliance "
+          "organization uuid from GET /v1/compliance/organizations, which is a different "
+          "value from the Console organization id shown at "
+          "platform.claude.com/settings/organization."),
+    429: ("the vendor rate-limited the call",
+          "Compliance endpoints allow 600 requests/minute per parent organization. Retry."),
+}
+
+
+def detect_refusal(data):
+    """Return (status, why, fix) when the payload is an error envelope, else None."""
+    if not isinstance(data, dict):
+        return None
+    if not (data.get("error") or data.get("errorType") or data.get("status") == "Error"):
+        return None
+    status = data.get("statusCode") or data.get("status_code")
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = None
+    why, fix = REFUSAL_REASONS.get(status, (
+        "the vendor call did not succeed",
+        "Inspect the integration method response for the underlying error."))
+    detail = data.get("message") or data.get("errorMessage") or ""
+    if detail:
+        why = why + " (" + str(detail) + ")"
+    return status, why, fix
+
+
+def as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "1", "enabled", "on")
+    return bool(value)
+
+
+def settings_map(data):
+    """Reduce the effective-settings rows to {name: value}.
+
+    A setting this organization's administrators cannot change is omitted from
+    the response entirely, so a missing name means "not controllable here",
+    never "off". Callers must distinguish absent from False, which is why this
+    returns a plain dict and callers use the _MISSING sentinel.
+    """
+    rows = None
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        for key in ("data", "settings"):
+            if isinstance(data.get(key), list):
+                rows = data[key]
+                break
+    if rows is None:
+        rows = []
+    out = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("name") is not None:
+            out[row["name"]] = row.get("value", MISSING)
+    return out
+
+
+def evaluate(input):
+    data, validation = extract_input(input)
+    # Token-Service navigates into the response's "data" key (codeexecutor
+    # navigation_keys), so this transform usually receives the bare navigated
+    # value. Accept that, the returnSpec-mapped dict, and the raw API body so
+    # the same file works in the live pipeline and in direct/local testing.
+    if isinstance(data, list):
+        data = data[0] if data and isinstance(data[0], dict) else {}
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    if not isinstance(data, dict):
+        data = {}
+
+    org_id = data.get("id") or ""
+    org_type = data.get("type") or ""
+    org_name = data.get("name") or ""
+
+    if not org_id:
+        return create_response(
+            result={"confirmedLicensePurchased": False, "organizationId": None, "organizationName": None},
+            validation=validation,
+            fail_reasons=[
+                "GET /v1/organizations/me returned no organization id, so no Anthropic "
+                "organization could be confirmed. This is the exact symptom of a standard "
+                "inference key (sk-ant-api03-) being supplied where an Admin API key "
+                "(sk-ant-admin01-) or Compliance Access Key (sk-ant-api01-) is required."
+            ],
+            recommendations=[
+                "Replace the credential with an Admin API key created in Claude Console > Settings > "
+                "Admin keys, or a Compliance Access Key created in claude.ai > Organization settings > "
+                "API with the read:org_audit scope."
+            ],
+            input_summary={"organizationIdPresent": False, "objectType": org_type},
+            metadata=METADATA,
+        )
+
+    if org_type and org_type != "organization":
+        return create_response(
+            result={"confirmedLicensePurchased": False, "organizationId": org_id, "organizationName": org_name},
+            validation=validation,
+            fail_reasons=[
+                "GET /v1/organizations/me returned an object of type '" + str(org_type) +
+                "' rather than 'organization', so the response could not be confirmed as an "
+                "Anthropic organization record."
+            ],
+            recommendations=["Verify the API base URL and that no proxy is rewriting the response."],
+            input_summary={"organizationIdPresent": True, "objectType": org_type},
+            metadata=METADATA,
+        )
+
+    return create_response(
+        result={
+            "confirmedLicensePurchased": True,
+            "organizationId": org_id,
+            "organizationName": org_name,
+        },
+        validation=validation,
+        pass_reasons=[
+            "Anthropic organization '" + str(org_name) + "' (id: " + str(org_id) + ") returned a "
+            "valid getOrganization response, confirming an active licensed organization reachable "
+            "with an administrative credential."
+        ],
+        input_summary={"organizationIdPresent": True, "objectType": org_type or "organization"},
+        metadata=METADATA,
+    )
+
+
+def transform(input):
+    try:
+        return evaluate(input)
+    except Exception as exc:  # never raise into the pipeline
+        return create_response(
+            result={"confirmedLicensePurchased": False},
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(exc)],
+            fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
+            recommendations=["Report this to the Spektrum integrations team with the raw API response."],
+            metadata=METADATA,
+        )

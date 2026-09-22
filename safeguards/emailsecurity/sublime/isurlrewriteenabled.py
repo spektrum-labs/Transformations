@@ -3,8 +3,7 @@ def transform(input):
     Ensure that URLs are checked before delivery
 
     Parameters:
-        input (dict): The JSON data containing sublime API response
-
+        input (dict): The JSON data containing the vendor's email-security API response
     Returns:
         dict: A dictionary with the isURLRewriteEnabled evaluation result
     """
