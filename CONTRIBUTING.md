@@ -5,6 +5,7 @@ This guide explains how to create transformation files that are compatible with 
 ## Table of Contents
 
 - [Overview](#overview)
+- [The fail-closed rule](#the-fail-closed-rule)
 - [Directory Structure](#directory-structure)
 - [Creating a Transformation](#creating-a-transformation)
 - [Response Schema](#response-schema)
@@ -24,6 +25,115 @@ Transformations convert third-party API responses into standardized boolean/nume
 2. Parses and validates the input
 3. Applies business logic to determine pass/fail
 4. Returns a standardized response with reasons and recommendations
+
+---
+
+## The fail-closed rule
+
+**A criterion may only be reported satisfied from a body that actually shows it is
+satisfied.** If the vendor returned nothing, returned an error, or returned something
+this transformation does not recognise, the answer is `False` — not `True`, and not
+"True because a response arrived".
+
+This is enforced in CI. `.github/workflows/transform-contract.yml` runs
+`tools/check_fail_closed.py` on every pull request and on every push to `develop`,
+`staging` and `main`. It hands each `transform()` a set of bodies that contain **no
+evidence about any estate** and fails the build if a satisfaction-style key
+(`^(confirmed|is|are|has)[A-Z]`) comes back `True`:
+
+<!-- BEGIN no-evidence-battery: checked against tools/check_fail_closed.py NO_EVIDENCE
+     by the gate itself. A documented contract that silently diverges from the enforced
+     one is the same defect this page is about, so the run fails if these disagree.
+     Add a probe in the code, then add its row here. -->
+
+| probe | body |
+|---|---|
+| `empty_dict` | `{}` |
+| `null` | `None` |
+| `empty_string` | `"{}"` |
+| `auth_error` | `{"error": {"type": "authentication_error", "message": "invalid credentials"}}` |
+| `auth_401` | `{"statusCode": 401, "error": "Unauthorized"}` |
+| `auth_401_snake` | `{"status_code": 401, "error": "Unauthorized"}` |
+| `auth_401_nested` | `{"error": {"statusCode": 401, "message": "Unauthorized"}}` |
+| `auth_403` | `{"statusCode": 403, "error": "Forbidden"}` |
+| `unrelated_json` | `{"hello": "world"}` |
+| `unrelated_nested` | `{"foo": {"bar": [1, 2, 3]}}` |
+
+<!-- END no-evidence-battery -->
+
+Each is fed both as a dict and as a JSON string. A companion contract,
+`tools/check_discriminates.py`, additionally fails a criterion that has **no reachable
+false** — one that no input at all can make say no.
+
+### What this rules out
+
+These are not hypotheticals. Every one was found in this repository and fixed:
+
+```python
+# NO. "Did a response arrive" is not the question the criterion asks.
+default_value = data is not None
+license_purchased = data.get('licensePurchased', default_value)
+
+# NO. An empty list to loop over produces a count of zero, and zero findings
+# then reads as compliant -- from a body that named no findings at all.
+vulnerabilities = data.get("vulnerabilities", data.get("value", []))
+
+# NO. Any dict with any key in it is not proof the subscription is active.
+elif isinstance(data, dict) and len(data) > 0:
+    license_purchased = True
+
+# NO. A bare dict is not one record. `{}` became "one assignment".
+if isinstance(data, dict):
+    return [data]
+
+# NO. A documented capability is not a measured posture. The endpoint's request
+# schema says nothing about THIS tenant, and a 401 means nothing was read.
+elif is_error and status_code == 401:
+    result_value = True
+```
+
+### What to write instead
+
+Require the response to carry a signal the transformation actually reads, and say so:
+
+```python
+# The query must be shown to have run before its result can be read as evidence.
+if not (isinstance(data, dict) and isinstance(data.get("findings"), list)):
+    return create_response(
+        result={criteriaKey: False},
+        validation=validation,
+        api_errors=["no findings collection in the response: the query cannot be "
+                    "shown to have run, so a count of zero is not evidence"])
+```
+
+A **proven** empty result set is different from silence, and is allowed to pass where
+that is the right reading — `{"findings": []}` may legitimately mean "we looked and
+there are none". `{}` may not.
+
+### Two exceptions, both narrow
+
+- **Inverted keys.** A few criteria use `True` to denote the *insecure* condition —
+  `isPublicStorageBucketExposed`, `localLoginAllowed`,
+  `hasIdentifiedServiceAccountsMFAGap`. For these, `True` on unknown input **is**
+  fail-closed. They are listed explicitly in `check_fail_closed.INVERTED`; the set is
+  named rather than inferred from the key, because guessing polarity from a name is
+  exactly how a correct transformation gets "fixed" into a defect. If you add one,
+  establish the polarity from the transformation's own pass/fail reasons, not its name.
+- **Raising is fine.** An exception is fail-closed: the pipeline records a
+  transformation error. What is never fine is an `except` branch that returns the
+  criterion satisfied.
+
+Run both contracts locally before you open a pull request:
+
+```bash
+python3 tools/check_fail_closed.py --self-test && python3 tools/check_fail_closed.py
+python3 tools/check_discriminates.py --self-test && python3 tools/check_discriminates.py
+```
+
+`docs2/03-writing-a-transform.md` has the long-form anti-pattern gallery, with real
+files named. Read it before copying an existing transformation — and read the file you
+are copying, because a fair number of them were the reason this rule had to be written
+down.
 
 ---
 
@@ -416,12 +526,24 @@ echo '{"users": [{"userId": "1", "mfaEnabled": true}]}' | python local_tester.py
 
 ### Test Cases to Cover
 
-1. **Happy path** - Valid input, criteria passes
-2. **Failure case** - Valid input, criteria fails
-3. **Empty data** - No items to evaluate
-4. **API error** - Error message in response
-5. **Malformed JSON** - Invalid input format
-6. **Legacy format** - Input without enriched validation
+Cases 3 to 7 have a **required answer**, not merely required coverage: the criterion
+must come back `False` (or `True` for an [inverted key](#the-fail-closed-rule)). Listing
+the case without asserting the answer is how the defects in the fail-closed section got
+in.
+
+| # | case | input | required answer |
+|---|---|---|---|
+| 1 | Happy path | valid input, control in place | `True` |
+| 2 | Failure case | valid input, control absent | `False` |
+| 3 | Empty data | `{}`, `None`, `"{}"` | **`False`** |
+| 4 | API error | an error envelope, with and without an HTTP status code | **`False`** |
+| 5 | Unrelated payload | `{"hello": "world"}`, `{"foo": {"bar": [1, 2, 3]}}` | **`False`** |
+| 6 | Malformed JSON | invalid input format | **`False`** or raise |
+| 7 | Legacy format | input without enriched validation | as case 1 or 2 |
+
+Case 5 is easy to skip and was missing from this guide, and from the contract itself,
+for longer than it should have been: a transformation whose effective rule is
+`len(data) > 0` answers cases 3 and 4 correctly and is still a rubber stamp.
 
 ---
 
@@ -476,7 +598,10 @@ Before submitting a transformation:
 - [ ] Uses `extract_input()` for input parsing
 - [ ] Returns `create_response()` with all required fields
 - [ ] Handles JSON parse errors gracefully
-- [ ] Handles unexpected exceptions gracefully
+- [ ] Handles unexpected exceptions gracefully **without returning the criterion satisfied**
+- [ ] Returns `False` for an empty body, an error envelope (with and without a status code), and an unrelated payload — see [The fail-closed rule](#the-fail-closed-rule)
+- [ ] Has at least one input that makes the criterion return `False`
+- [ ] `python3 tools/check_fail_closed.py` and `python3 tools/check_discriminates.py` both exit 0
 - [ ] Uses camelCase for criteria keys
 - [ ] Avoids RestrictedPython limitations (no `map()`, no `strptime()`)
 - [ ] Includes docstring with transformation name, vendor, category
