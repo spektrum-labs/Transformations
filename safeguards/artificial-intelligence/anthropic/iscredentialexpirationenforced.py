@@ -11,6 +11,16 @@ from datetime import datetime
 
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
+    # Decode a JSON string or bytes BEFORE inspecting shape. Without this a str body
+    # matches no branch here, stays a str, and every caller's `isinstance(data, dict)`
+    # test fails -- so a perfectly good response is read as "nothing came back" and the
+    # criterion is answered from an empty shape. CLAUDE.md's `_parse_input` pattern makes
+    # str, bytes and dict equivalent everywhere else in this repo; this family did not.
+    # A string that is not JSON raises into each transform's existing handler: fail closed.
+    if isinstance(input_data, (str, bytes, bytearray)):
+        if isinstance(input_data, (bytes, bytearray)):
+            input_data = input_data.decode("utf-8")
+        input_data = json.loads(input_data)
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -194,10 +204,39 @@ def evaluate(input):
             items = data.get("apiKeys")
     else:
         items = None
-    if not isinstance(items, list):
+    # WHETHER A LIST CAME BACK AT ALL IS A DIFFERENT FACT FROM WHAT WAS IN IT, and
+    # collapsing the two is what made this criterion pass on nothing. `items = []` used to
+    # mean both "the organization returned a key list and it was empty" and "no key list
+    # was returned -- null body, error envelope, unrecognised shape", and the `not active`
+    # branch below then reported isCredentialExpirationEnforced TRUE for both. Measured
+    # 2026-09-21: transform(None) returned True. A control asserted from an absent response
+    # is the failure mode the pass-on-absence branch was explicitly reasoned about and this
+    # one was not: that branch's own text says "no standing non-expiring credential exists",
+    # which is a claim about a list that was READ, not about a call that produced nothing.
+    items_returned = isinstance(items, list)
+    if not items_returned:
         items = []
 
     active = [k for k in items if isinstance(k, dict) and str(k.get("status", "")).lower() == "active"]
+
+    if not items_returned:
+        return create_response(
+            result={"isCredentialExpirationEnforced": False, "activeKeyCount": 0,
+                    "keysWithoutExpiry": 0, "nonExpiringKeyNames": []},
+            validation=validation,
+            fail_reasons=[
+                "listApiKeys returned no key list at all -- the body was absent, an error "
+                "envelope, or a shape this transform does not recognise. Nothing was read, "
+                "so credential expiry could be neither confirmed nor refuted. This is NOT "
+                "the documented zero-active-keys pass: that one requires a list."
+            ],
+            recommendations=[
+                "Confirm the Admin API key is valid and that listApiKeys returned a 2xx with "
+                "a `data` or `apiKeys` array before reading this criterion."
+            ],
+            input_summary={"keyListReturned": False},
+            metadata=METADATA,
+        )
 
     if not active:
         return create_response(

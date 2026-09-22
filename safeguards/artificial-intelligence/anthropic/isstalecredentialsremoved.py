@@ -11,6 +11,16 @@ from datetime import datetime
 
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
+    # Decode a JSON string or bytes BEFORE inspecting shape. Without this a str body
+    # matches no branch here, stays a str, and every caller's `isinstance(data, dict)`
+    # test fails -- so a perfectly good response is read as "nothing came back" and the
+    # criterion is answered from an empty shape. CLAUDE.md's `_parse_input` pattern makes
+    # str, bytes and dict equivalent everywhere else in this repo; this family did not.
+    # A string that is not JSON raises into each transform's existing handler: fail closed.
+    if isinstance(input_data, (str, bytes, bytearray)):
+        if isinstance(input_data, (bytes, bytearray)):
+            input_data = input_data.decode("utf-8")
+        input_data = json.loads(input_data)
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -212,10 +222,36 @@ def evaluate(input):
             items = data.get("apiKeys")
     else:
         items = None
-    if not isinstance(items, list):
+    # "No key list came back" and "a key list came back and it was empty" are different
+    # facts, and `items = []` used to mean both -- so the pass-on-absence branch below
+    # reported isStaleCredentialsRemoved TRUE for a null body and an unrecognised shape
+    # alike. Measured 2026-09-21: transform(None) returned True. The branch's own reason,
+    # "the organization has no active API keys, so no credential can be stale", is a claim
+    # about a list that was READ; it says nothing about a call that returned nothing.
+    items_returned = isinstance(items, list)
+    if not items_returned:
         items = []
 
     active = [k for k in items if isinstance(k, dict) and str(k.get("status", "")).lower() == "active"]
+
+    if not items_returned:
+        return create_response(
+            result={"isStaleCredentialsRemoved": False, "activeKeyCount": 0, "staleKeyCount": 0,
+                    "staleKeyNames": [], "maxAgeDays": MAX_KEY_AGE_DAYS},
+            validation=validation,
+            fail_reasons=[
+                "listApiKeys returned no key list at all -- the body was absent, an error "
+                "envelope, or a shape this transform does not recognise. Nothing was read, "
+                "so credential staleness could be neither confirmed nor refuted. This is "
+                "NOT the zero-active-keys pass below: that one requires a list."
+            ],
+            recommendations=[
+                "Confirm the Admin API key is valid and that listApiKeys returned a 2xx with "
+                "a `data` or `apiKeys` array before reading this criterion."
+            ],
+            input_summary={"keyListReturned": False},
+            metadata=METADATA,
+        )
 
     if not active:
         return create_response(
