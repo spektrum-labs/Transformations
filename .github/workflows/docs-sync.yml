@@ -111,7 +111,12 @@ jobs:
       - name: Open docs PR
         if: (steps.drift.outputs.dev_drift == '1' || steps.drift.outputs.main_drift == '1') && env.HAS_KEY != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Opening a PR needs the org/enterprise policy "Allow GitHub Actions to
+          # create and approve pull requests", which is off here. Fall back to a
+          # fine-grained token (org secret DOCS_SYNC_PR_TOKEN, Pull requests:
+          # read/write on these repos) when present; otherwise use the default
+          # token, which works once that policy is enabled.
+          GH_TOKEN: ${{ secrets.DOCS_SYNC_PR_TOKEN != '' && secrets.DOCS_SYNC_PR_TOKEN || github.token }}
           HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DEV_REPORT: ${{ steps.drift.outputs.dev_report }}
           MAIN_REPORT: ${{ steps.drift.outputs.main_report }}

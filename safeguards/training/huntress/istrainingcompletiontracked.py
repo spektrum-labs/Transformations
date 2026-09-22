@@ -3,8 +3,15 @@ Transformation: isTrainingCompletionTracked
 Vendor: Huntress SAT (Curricula)
 Category: Training / Completion Tracking
 
-Ensures training completion is tracked and learners are enrolled.
-Checks the learners endpoint for enrolled users.
+Validates that learners are enrolled in Huntress SAT for the customer.
+Consumes /api/v1/accounts/{accountId}/learners which returns a JSON:API list:
+
+  {"data": [{"type": "learners", "id": "...", "attributes": {firstName, lastName, email, status, ...}}, ...],
+   "meta": {"page": {"total": N, ...}}}
+
+Each learner has a status: 'active', 'deactivated', etc. The safeguard passes
+when at least one active learner exists, since training completion is recorded
+per learner once they are enrolled.
 """
 
 import json
@@ -30,7 +37,8 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -67,6 +75,18 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def pull_jsonapi_items(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get('data'), list):
+            return data['data']
+        if isinstance(data.get('data'), dict):
+            return [data['data']]
+        return [data]
+    return []
+
+
 def transform(input):
     criteriaKey = "isTrainingCompletionTracked"
 
@@ -90,64 +110,62 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        completion_tracked = False
-        total_learners = 0
-        completed_learners = 0
+        learners = pull_jsonapi_items(data)
 
-        learners = []
+        total = len(learners)
+        active = 0
+        deactivated = 0
+        other = 0
+        do_not_phish = 0
 
-        if isinstance(data, dict):
-            if 'learners' in data and isinstance(data['learners'], list):
-                learners = data['learners']
-            elif 'data' in data and isinstance(data['data'], list):
-                learners = data['data']
-            elif 'total' in data or 'total_count' in data:
-                # Paginated response with count only
-                total_learners = data.get('total', data.get('total_count', 0))
-                if total_learners > 0:
-                    completion_tracked = True
-        elif isinstance(data, list):
-            learners = data
+        for l in learners:
+            if not isinstance(l, dict):
+                continue
+            attrs = l.get('attributes') if isinstance(l.get('attributes'), dict) else l
+            status = str(attrs.get('status', '')).lower()
+            if status == 'active':
+                active += 1
+            elif status == 'deactivated':
+                deactivated += 1
+            else:
+                other += 1
+            if attrs.get('doNotPhish'):
+                do_not_phish += 1
 
-        if learners:
-            total_learners = len(learners)
-
-            for learner in learners:
-                if isinstance(learner, dict):
-                    status = str(learner.get('status', '')).lower()
-                    completed = learner.get('completed', learner.get('is_completed', False))
-                    progress = learner.get('progress', learner.get('completion_percentage', 0))
-
-                    if completed or status == 'completed' or progress == 100:
-                        completed_learners += 1
-
-            if total_learners > 0:
-                completion_tracked = True
+        # Completion tracking requires at least one active learner — learners are
+        # the records against which completion is recorded inside Curricula.
+        completion_tracked = active > 0
 
         if completion_tracked:
-            reason = f"Training completion is tracked ({total_learners} learner(s) enrolled"
-            if completed_learners > 0:
-                reason += f", {completed_learners} completed)"
-            else:
-                reason += ")"
-            pass_reasons.append(reason)
-
-            if total_learners > 0 and completed_learners == 0:
-                additional_findings.append("No learners have completed training yet")
+            pass_reasons.append(
+                f"Training completion tracking is in place: {active} active learner(s) enrolled "
+                f"(of {total} total)"
+            )
+            if deactivated > 0:
+                additional_findings.append(
+                    f"{deactivated} learner(s) are deactivated and will not receive new training"
+                )
         else:
-            fail_reasons.append("No learners enrolled in training")
-            recommendations.append("Enroll users as learners in Huntress SAT to track training completion")
-
-        completion_rate = 0
-        if total_learners > 0:
-            completion_rate = round((completed_learners / total_learners) * 100, 1)
+            if total == 0:
+                fail_reasons.append("No learners enrolled in Huntress SAT for this customer")
+                recommendations.append(
+                    "Add learners (users) to the customer's Huntress SAT account so training "
+                    "completion can be tracked"
+                )
+            else:
+                fail_reasons.append(
+                    f"No active learners — all {total} enrolled learners are deactivated or in another non-active state"
+                )
+                recommendations.append("Re-activate learners to resume training completion tracking")
 
         return create_response(
             result={
                 criteriaKey: completion_tracked,
-                "totalLearners": total_learners,
-                "completedLearners": completed_learners,
-                "completionRate": completion_rate
+                "totalLearners": total,
+                "activeLearners": active,
+                "deactivatedLearners": deactivated,
+                "otherStatusLearners": other,
+                "doNotPhishLearners": do_not_phish
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -155,9 +173,9 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "totalLearners": total_learners,
-                "completedLearners": completed_learners,
-                "completionRate": completion_rate
+                "totalLearners": total,
+                "activeLearners": active,
+                "deactivatedLearners": deactivated
             }
         )
 

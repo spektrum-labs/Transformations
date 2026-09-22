@@ -55,6 +55,15 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SAFEGUARDS = ROOT / "safeguards"
 ALLOWLIST = ROOT / "contracts" / "fail-closed-allowlist.json"
 
+#: A CLEAN TREE AND A TREE THIS CHECKER HAS STOPPED READING BOTH PRINT ZERO FINDINGS.
+#: The self-test proves the logic on a corpus it builds itself in a temp directory, so
+#: it cannot notice that the real walk has collapsed -- a moved `safeguards/`, a renamed
+#: directory, a bad ROOT -- and a collapsed walk exits 0 and reads as a pass. Measured
+#: 2026-09-22: 937 files walked, 936 of them defining a callable `transform` (the one
+#: that does not is safeguards/common/response_helper.py, a shared helper). The floor is
+#: set well below that: it is here to catch a collapse, not to track the population.
+MIN_JUDGED_TRANSFORMS = 400
+
 #: a key whose True asserts the control IS in place
 SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
 
@@ -68,6 +77,16 @@ INVERTED = frozenset({
     "isLegacyAuthAllowed",
     "isLocalLoginAllowed",
     "isPublicSharingAllowed",
+    # SonicWall service accounts: True means A GAP WAS FOUND. Established from the
+    # transform's own output rather than from the key name -- True is returned only
+    # alongside failReasons ("Required service-account evidence was not collected"),
+    # False only alongside passReasons ("No configured MFA gap was identified..."),
+    # and the vendor's own suite tabulates True as the SAFE value for a partial
+    # envelope while tabulating False for its four normal-polarity siblings
+    # (safeguards/firewall/sonicwall/test_haslocalaccountinventoryvisibility.py:99).
+    # Forcing this key False on no evidence would report "no MFA gap" from a body
+    # that proves nothing -- the opposite of fail-closed.
+    "hasIdentifiedServiceAccountsMFAGap",
 })
 
 #: bodies that contain no evidence about any estate
@@ -87,6 +106,20 @@ NO_EVIDENCE = {
     # so the gate closes at 0 and the allowlist does not grow to accommodate it.
     "unrelated_json": {"hello": "world"},
     "unrelated_nested": {"foo": {"bar": [1, 2, 3]}},
+    # AN AUTH FAILURE THAT CARRIES A STATUS CODE, and its absence was a second hole in
+    # this battery. `auth_error` above is an Anthropic-style envelope with no HTTP status,
+    # so a transform branching on `status_code == 401` never reached that branch under any
+    # probe and passed the gate while it was there. Measured 2026-09-22 across all 937
+    # walked files with these four added: exactly ONE was reaching for a status code and
+    # asserting the control from it -- check-point's
+    # isSingleActionMultiEntityRemediationEnabled, which set the criterion true BECAUSE the
+    # call returned 401, on the grounds that the endpoint's request schema documents the
+    # capability. Fixed in the same commit rather than allowlisted. Both spellings and the
+    # nested form are carried because all three appear in this tree's error handling.
+    "auth_401": {"statusCode": 401, "error": "Unauthorized"},
+    "auth_401_snake": {"status_code": 401, "error": "Unauthorized"},
+    "auth_401_nested": {"error": {"statusCode": 401, "message": "Unauthorized"}},
+    "auth_403": {"statusCode": 403, "error": "Forbidden"},
 }
 
 
@@ -109,11 +142,83 @@ def satisfaction_keys_true(response) -> list[str]:
     )
 
 
-def transform_files() -> list[pathlib.Path]:
+#: a pytest module: never something the evaluator loads as a transform
+TEST_MODULE = re.compile(r"^(test_.*|conftest)\.py$")
+DEF_TRANSFORM = re.compile(r"^def\s+transform\s*\(", re.MULTILINE)
+
+
+def _candidate_files() -> list[pathlib.Path]:
     return sorted(
         p for p in SAFEGUARDS.rglob("*.py")
         if "schemas" not in p.parts and p.name != "__init__.py"
     )
+
+
+def transform_files() -> list[pathlib.Path]:
+    return [p for p in _candidate_files() if not TEST_MODULE.match(p.name)]
+
+
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
+DOC_REGION = re.compile(
+    r"<!-- BEGIN no-evidence-battery.*?-->(.*?)<!-- END no-evidence-battery -->",
+    re.DOTALL,
+)
+DOC_PROBE = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|", re.MULTILINE)
+
+
+def doc_battery_drift() -> list[str]:
+    """Ways CONTRIBUTING.md's documented battery disagrees with the enforced one.
+
+    CONTRIBUTING.md is the page that says "copy these helper functions", and it is
+    where the shape of 173 files in this tree came from. It now also states the
+    fail-closed rule and lists this battery. A documented contract that silently
+    diverges from the enforced one is the same defect the rule is about -- and this
+    battery has grown three times in two days, so it will drift.
+
+    Absent file or absent region is not drift: a checkout without the page, or a
+    fixture tree, is not a contradiction. Disagreeing content is.
+    """
+    if not CONTRIBUTING.is_file():
+        return []
+    region = DOC_REGION.search(CONTRIBUTING.read_text(encoding="utf-8", errors="replace"))
+    if region is None:
+        return []
+    documented = {m for m in DOC_PROBE.findall(region.group(1)) if m != "probe"}
+    enforced = set(NO_EVIDENCE)
+    out = []
+    for name in sorted(enforced - documented):
+        out.append(f"probe `{name}` is enforced but not listed in CONTRIBUTING.md")
+    for name in sorted(documented - enforced):
+        out.append(f"CONTRIBUTING.md lists probe `{name}`, which this contract does not carry")
+    return out
+
+
+def smuggled_transforms() -> list[str]:
+    """Excluded pytest modules that nonetheless define a top-level `transform`.
+
+    UNLOADABLE is FATAL in this checker on purpose: a transform that cannot be
+    imported standalone cannot run under RestrictedPython in Token-Service either,
+    so "I could not judge this" must never pass for "clean". That made the five
+    safeguards/firewall/sonicwall/test_*.py files fatal -- not because they are
+    broken (`pytest -q` there is 26 passed) but because importlib does not put a
+    file's own directory on sys.path the way pytest does, so their `import conftest`
+    raised, while conftest.py is present.
+
+    The fix is NOT to put each file's directory on sys.path during the load. That
+    would make a sibling import succeed here and still fail in the pipeline, hiding
+    exactly the defect the UNLOADABLE category exists to catch. A pytest module is
+    instead excluded by name -- and because a name-based exclusion could in principle
+    drop something judgeable, this reads the SOURCE of every excluded file and the
+    run fails if any of them defines a transform. Measured 2026-09-22: 5 excluded,
+    0 smuggled, and the finding count is unchanged by the exclusion.
+    """
+    out = []
+    for p in _candidate_files():
+        if not TEST_MODULE.match(p.name):
+            continue
+        if DEF_TRANSFORM.search(p.read_text(encoding="utf-8", errors="replace")):
+            out.append(str(p.relative_to(ROOT)))
+    return sorted(out)
 
 
 def census(files=None) -> dict:
@@ -121,6 +226,7 @@ def census(files=None) -> dict:
     warnings.filterwarnings("ignore")
     findings: dict[str, dict[str, list[str]]] = {}
     unloadable: dict[str, str] = {}
+    judged = 0
     files = files if files is not None else transform_files()
     for i, path in enumerate(files):
         rel = str(path.relative_to(ROOT))
@@ -134,6 +240,7 @@ def census(files=None) -> dict:
             continue
         if not callable(getattr(module, "transform", None)):
             continue
+        judged += 1
         per_case: dict[str, list[str]] = {}
         for case, body in NO_EVIDENCE.items():
             try:
@@ -147,7 +254,7 @@ def census(files=None) -> dict:
                 per_case[case] = keys
         if per_case:
             findings[rel] = per_case
-    return {"findings": findings, "unloadable": unloadable, "examined": len(files)}
+    return {"findings": findings, "unloadable": unloadable, "examined": len(files), "judged": judged}
 
 
 def load_allowlist() -> dict:
@@ -195,11 +302,31 @@ def self_test() -> int:
             "def transform(input):\n"
             "    return {'localLoginAllowed': True}\n"
         )
+        # a genuine pytest module: imports a sibling the way the sonicwall suite does,
+        # defines no transform, and must be excluded rather than reported UNLOADABLE
+        (d / "conftest.py").write_text("HELPER = 1\n")
+        test_mod = d / "test_something.py"
+        test_mod.write_text(
+            "import conftest\n"
+            "def transformation():\n"
+            "    return conftest.HELPER\n"
+        )
+        # a pytest-named file that DOES define a transform: the exclusion must not
+        # silently swallow it
+        smuggler = d / "test_smuggled.py"
+        smuggler.write_text(
+            "def transform(input):\n"
+            "    return {'isSmuggled': True}\n"
+        )
         global SAFEGUARDS, ROOT
         saved_s, saved_r = SAFEGUARDS, ROOT
         SAFEGUARDS, ROOT = d, d
         try:
-            found = census()["findings"]
+            result = census()
+            found = result["findings"]
+            walked = {p.name for p in transform_files()}
+            unloadable = result["unloadable"]
+            smuggled = smuggled_transforms()
         finally:
             SAFEGUARDS, ROOT = saved_s, saved_r
         if "isplanteddefect.py" not in found:
@@ -208,6 +335,53 @@ def self_test() -> int:
             failures.append("a clean fail-closed transform was wrongly flagged")
         if "isinvertedkey.py" in found:
             failures.append("an INVERTED key (true == insecure) was wrongly flagged")
+        if "test_something.py" in walked or "conftest.py" in walked:
+            failures.append("a pytest module was walked as a transform")
+        if unloadable:
+            failures.append(
+                "a pytest module importing a present sibling was reported UNLOADABLE: "
+                + ", ".join(sorted(unloadable))
+            )
+        if "isplanteddefect.py" not in walked:
+            failures.append("the pytest exclusion also dropped a real transform")
+        if smuggled != ["test_smuggled.py"]:
+            failures.append(
+                "a file excluded as a pytest module that DEFINES a transform was not "
+                f"caught; smuggled_transforms() returned {smuggled!r}"
+            )
+    # R: a COLLAPSED real corpus must be refused, not reported as clean. This is the one
+    # rule the rest of the self-test structurally cannot cover: every other rule runs
+    # against a corpus this function builds itself, which is exactly the shape of a walk
+    # that has stopped reading the tree.
+    with tempfile.TemporaryDirectory() as tmp:
+        d = pathlib.Path(tmp)
+        (d / "iscleancontrol.py").write_text(
+            "def transform(input):\n"
+            "    data = input if isinstance(input, dict) else {}\n"
+            "    return {'isCleanControl': bool(data.get('x'))}\n"
+        )
+        saved_s, saved_r = SAFEGUARDS, ROOT
+        saved_argv = sys.argv
+        SAFEGUARDS, ROOT = d, d
+        sys.argv = ["check_fail_closed.py"]
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main()
+            said = buf.getvalue()
+        finally:
+            SAFEGUARDS, ROOT, sys.argv = saved_s, saved_r, saved_argv
+        if rc == 0:
+            failures.append(
+                "a corpus of 1 transform -- a collapsed walk -- exited 0 instead of "
+                "being refused"
+            )
+        elif "REFUSING TO REPORT" not in said:
+            failures.append(
+                "a collapsed corpus was non-zero but did not say why; it printed: "
+                + said.strip().splitlines()[0] if said.strip() else "(nothing)"
+            )
+
     for f in failures:
         print(f"  self-test FAIL: {f}")
     print("self-test ok" if not failures else f"self-test FAILED ({len(failures)})")
@@ -227,13 +401,41 @@ def main() -> int:
         print(f"wrote {ALLOWLIST.relative_to(ROOT)}: {out['count']} instance(s)")
         return 0
 
+    drift = doc_battery_drift()
+    if drift:
+        print("✗ the battery CONTRIBUTING.md documents is not the battery this contract "
+              "enforces:")
+        for line in drift:
+            print(f"  {line}")
+        return 1
+
+    smuggled = smuggled_transforms()
+    if smuggled:
+        print("✗ a file excluded as a pytest module defines a transform, so the "
+              "name-based exclusion is dropping something this gate must judge:")
+        for rel in smuggled:
+            print(f"  {rel}")
+        return 1
+
     result = census()
+    if result["judged"] < MIN_JUDGED_TRANSFORMS:
+        print(
+            f"✗ REFUSING TO REPORT: only {result['judged']} file(s) with a callable "
+            f"transform were found under {SAFEGUARDS}, below the floor of "
+            f"{MIN_JUDGED_TRANSFORMS}. A clean tree and a tree this checker has stopped "
+            "reading both print zero findings, so a collapsed walk is refused rather "
+            "than reported as a pass."
+        )
+        return 1
     findings, unloadable = result["findings"], result["unloadable"]
     allowed = set(load_allowlist().get("instances", []))
     new = sorted(set(findings) - allowed)
     stale = sorted(allowed - set(findings))
 
-    print(f"{result['examined']} transform file(s) examined; "
+    # "examined" is the walk; "judged" is how many of those actually defined a callable
+    # transform and were run against the battery. Printing only the first would let a
+    # tree full of unjudgeable files read as a clean one.
+    print(f"{result['examined']} transform file(s) examined, {result['judged']} judged; "
           f"{len(findings)} assert a satisfaction-style criterion true from a body that "
           f"proves nothing ({len(new)} outside the allowlist)")
     if unloadable:

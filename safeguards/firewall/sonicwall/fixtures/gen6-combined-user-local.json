@@ -1,0 +1,301 @@
+{
+  "user": {
+    "local": {
+      "group": [
+        {
+          "name": "Synthetic Email OTP Group",
+          "one_time_password": {
+            "otp": true
+          },
+          "member": [
+            {
+              "name": "synthetic-user-inherited-email"
+            },
+            {
+              "name": "synthetic-user-inherited-email"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Nested Parent",
+          "one_time_password": {
+            "totp": true
+          },
+          "member": [
+            {
+              "name": "Synthetic Nested Child"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Nested Child",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "synthetic-user-inherited-nested"
+            }
+          ]
+        },
+        {
+          "name": "SonicWall Administrators",
+          "one_time_password": {
+            "totp": true
+          },
+          "member": [
+            {
+              "name": "synthetic-additional-admin"
+            },
+            {
+              "name": "Synthetic Full Admin Delegates"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Full Admin Delegates",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "synthetic-full-admin-nested"
+            }
+          ]
+        },
+        {
+          "name": "SSLVPN Services",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "synthetic-additional-admin"
+            },
+            {
+              "name": "Synthetic VPN Delegates"
+            }
+          ]
+        },
+        {
+          "name": "SonicWall Read-Only Admins",
+          "one_time_password": {
+            "totp": true
+          },
+          "member": [
+            {
+              "name": "Synthetic Read-Only Delegates"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Read-Only Delegates",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "synthetic-read-only-admin"
+            }
+          ]
+        },
+        {
+          "name": "Limited Administrators",
+          "one_time_password": {
+            "totp": true
+          },
+          "member": [
+            {
+              "name": "Synthetic Limited Delegates"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Limited Delegates",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "synthetic-limited-admin"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic VPN Delegates",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "synthetic-vpn-nested"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Cycle A",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "Synthetic Cycle B"
+            },
+            {
+              "name": "synthetic-user-cycle"
+            }
+          ]
+        },
+        {
+          "name": "Synthetic Cycle B",
+          "one_time_password": {
+            "otp": false
+          },
+          "member": [
+            {
+              "name": "Synthetic Cycle A"
+            }
+          ]
+        }
+      ],
+      "user": [
+        {
+          "name": "synthetic-user-direct-email",
+          "one_time_password": {
+            "otp": true
+          }
+        },
+        {
+          "name": "synthetic-user-direct-totp",
+          "one_time_password": {
+            "totp": true
+          }
+        },
+        {
+          "name": "synthetic-user-inherited-email",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Email OTP Group"
+            },
+            {
+              "name": "Synthetic Email OTP Group"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-user-inherited-nested",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Nested Child"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-user-expired",
+          "one_time_password": {
+            "otp": false
+          },
+          "account_lifetime": {
+            "expired": true
+          }
+        },
+        {
+          "name": "synthetic-user-unknown-state",
+          "one_time_password": {
+            "totp": true
+          }
+        },
+        {
+          "name": "synthetic-additional-admin",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "SonicWall Administrators"
+            },
+            {
+              "name": "SSLVPN Services"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-user-cycle",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Cycle A"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-service-backup-agent",
+          "one_time_password": {
+            "totp": true
+          }
+        },
+        {
+          "name": "synthetic-domain-proxy",
+          "domain": {
+            "name": "synthetic.example"
+          },
+          "one_time_password": {
+            "otp": false
+          }
+        },
+        {
+          "name": "synthetic-read-only-admin",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Read-Only Delegates"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-limited-admin",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Limited Delegates"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-vpn-nested",
+          "one_time_password": {
+            "totp": true
+          },
+          "member_of": [
+            {
+              "name": "Synthetic VPN Delegates"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-full-admin-nested",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Full Admin Delegates"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

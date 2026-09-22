@@ -1,0 +1,144 @@
+{
+  "user": {
+    "local": {
+      "user": [
+        {
+          "name": "synthetic-user-direct-email",
+          "one_time_password": {
+            "otp": true
+          }
+        },
+        {
+          "name": "synthetic-user-direct-totp",
+          "one_time_password": {
+            "totp": true
+          }
+        },
+        {
+          "name": "synthetic-user-inherited-email",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Email OTP Group"
+            },
+            {
+              "name": "Synthetic Email OTP Group"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-user-inherited-nested",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Nested Child"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-user-expired",
+          "one_time_password": {
+            "otp": false
+          },
+          "account_lifetime": {
+            "expired": true
+          }
+        },
+        {
+          "name": "synthetic-user-unknown-state",
+          "one_time_password": {
+            "totp": true
+          }
+        },
+        {
+          "name": "synthetic-additional-admin",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "SonicWall Administrators"
+            },
+            {
+              "name": "SSLVPN Services"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-user-cycle",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Cycle A"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-service-backup-agent",
+          "one_time_password": {
+            "totp": true
+          }
+        },
+        {
+          "name": "synthetic-domain-proxy",
+          "domain": {
+            "name": "synthetic.example"
+          },
+          "one_time_password": {
+            "otp": false
+          }
+        },
+        {
+          "name": "synthetic-read-only-admin",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Read-Only Delegates"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-limited-admin",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Limited Delegates"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-vpn-nested",
+          "one_time_password": {
+            "totp": true
+          },
+          "member_of": [
+            {
+              "name": "Synthetic VPN Delegates"
+            }
+          ]
+        },
+        {
+          "name": "synthetic-full-admin-nested",
+          "one_time_password": {
+            "otp": false
+          },
+          "member_of": [
+            {
+              "name": "Synthetic Full Admin Delegates"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -8,13 +8,39 @@
 # response that was never read. One file of 803 could not be imported at all, so
 # whatever wired it received an import error instead of a verdict.
 #
-# It runs on pull_request only, against the same branches as the other gates here.
 # It needs no credentials and makes no network call: it imports each transform and
-# hands it four bodies that contain no evidence.
+# hands it bodies that contain no evidence.
 name: transform-contract
 
+# RUNS ON TRUNK AS WELL AS ON PULL REQUESTS, because a quarter of what lands on
+# develop never went through one. Measured 2026-09-22 on origin/develop: of its 103
+# first-parent commits, 27 are NOT merge commits -- they were pushed straight to the
+# branch. The most recent is 8bf278fb (2026-09-04), and among the others are
+# `fix: huntress transformations`, `fix: tenable transformations`, `Netskope` and
+# `Mimecast changes` -- four of the files that were in the 124 this gate found. main
+# has them too (faccedc7, 43fdf34a, both 2026-08-20). A pull_request-only gate would
+# not have run on any of them.
+#
+# PUSH IS RESTRICTED TO THE THREE LONG-LIVED BRANCHES, and that restriction is the
+# whole design rather than a tidiness choice. `on: [push, pull_request]` unrestricted
+# fires BOTH events for a push to a branch that has an open pull request, so every sha
+# gets two identical runs; spektrum-platform measured exactly that on its PR #153 (two
+# runs three seconds apart on one sha, and `gh pr checks` reporting eight rows for four
+# logical checks). Naming only develop/staging/main here means a feature branch is
+# covered by pull_request alone and trunk by push alone, so there is one run per sha.
+#
+# AND NOT A JOB-LEVEL `if:`, which is the other obvious way to write this: a skipped
+# job still creates a check run, and GitHub counts a skipped check as SUCCESS for a
+# required status check. That rebuilds the hollow gate out of skips. Filtering at the
+# trigger means the redundant run is never created.
+#
+# The push/pull_request baseline difference that matters for a diff-based checker does
+# not arise here: these contracts judge the whole tree rather than a diff, so both
+# events ask the same question and the two runs could not disagree.
 on:
   pull_request:
+    branches: [develop, staging, main]
+  push:
     branches: [develop, staging, main]
 
 permissions:
@@ -56,3 +82,44 @@ jobs:
 
       - name: No criterion may be incapable of reporting a failure
         run: python tools/check_discriminates.py
+
+  # WHY THIS JOB WAS ADDED. Measured 2026-09-22 on this branch: the repo contains
+  # 9 pytest files holding 71 tests, and no workflow here ran a single one of them
+  # -- `grep -rn "pytest\|unittest" .github/workflows/` returned nothing. All 71
+  # passed the moment they were run, so nothing was broken; what was broken was
+  # the belief that they were being checked. A suite that has never run and a gate
+  # that cannot fail are the same defect, which is why this job lives in this file
+  # rather than a new one. (A new workflow would also mean a new required status
+  # check, i.e. a branch-protection change, which is not this change's to make.)
+  #
+  # It inherits the `pull_request`-only trigger at the top of this file, and like
+  # the checks above it needs no credentials and makes no network call.
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # pytest and pydantic, and measurably nothing else -- see the comments in
+      # requirements-test.txt for why each bound is where it is.
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt
+
+      # Self-test first and fatal, for the same reason as the checkers above: the
+      # guard here is a count, and a counting guard that has stopped counting
+      # looks exactly like a suite that is passing. This proves the floor logic
+      # still rejects a short count, an all-skipped run, and a collection error.
+      - name: Test-floor checker self-test
+        run: python tools/check_test_floor.py --self-test
+
+      # Runs `pytest safeguards/` from the repo root -- measured 2026-09-22, that
+      # single invocation collects all 71 tests across all 9 files, including the
+      # 5 sonicwall ones that `from conftest import ...`, so no per-directory
+      # invocation is needed. The wrapper then fails the job if fewer than 71
+      # tests were collected, if any were skipped, or if anything errored during
+      # collection -- all three of which a bare `pytest` step reports as exit 0.
+      - name: Transformation unit tests, and the suite may not shrink
+        run: python tools/check_test_floor.py

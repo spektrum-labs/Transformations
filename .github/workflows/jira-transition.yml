@@ -49,6 +49,10 @@ env:
   STATUS_MERGED_INTEGRATION: "Ready for QA"
   STATUS_MERGED_STAGING: "In Stage (Demo)"
   STATUS_MERGED_MAIN: "Merged/Deployed"
+  # Scrum board id: a card only shows on the board while it is in the active
+  # sprint, so on PR-open the ticket is added to the board's active sprint if it
+  # is not in any sprint yet. Leave empty to disable.
+  JIRA_BOARD_ID: "286"
 
 jobs:
   transition:
@@ -199,6 +203,29 @@ jobs:
               "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions" \
               && echo "Moved $KEY to '$TARGET'." \
               || { echo "::warning::Transition POST failed for $KEY."; HTTP_FAILED=1; continue; }
+
+            # PR opened -> put the card on the board: add it to the active sprint
+            # if it is in no sprint. Fail open with a warning; never move a card
+            # that is already in a sprint (past, active or future).
+            if [ "$TARGET" = "$STATUS_PR_OPEN" ] && [ -n "${JIRA_BOARD_ID:-}" ]; then
+              if CUR=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/agile/1.0/issue/$KEY?fields=sprint,closedSprints"); then
+                IN_SPRINT=$(echo "$CUR" | jq -r '[.fields.sprint.id?, (.fields.closedSprints // [])[].id] | map(select(. != null)) | length')
+                if [ "$IN_SPRINT" = "0" ]; then
+                  SPRINT_ID=$("${CURL_GET[@]}" "$JIRA_BASE_URL/rest/agile/1.0/board/$JIRA_BOARD_ID/sprint?state=active" | jq -r '.values[0].id // empty') || SPRINT_ID=""
+                  if [ -n "$SPRINT_ID" ]; then
+                    "${CURL_POST[@]}" -X POST -H "Content-Type: application/json" \
+                      -d "{\"issues\": [\"$KEY\"]}" \
+                      "$JIRA_BASE_URL/rest/agile/1.0/sprint/$SPRINT_ID/issue" >/dev/null \
+                      && echo "Added $KEY to active sprint $SPRINT_ID." \
+                      || echo "::warning::Could not add $KEY to sprint $SPRINT_ID - it stays in the backlog."
+                  else
+                    echo "::warning::No active sprint on board $JIRA_BOARD_ID - $KEY stays in the backlog."
+                  fi
+                fi
+              else
+                echo "::warning::Could not read sprint state for $KEY - not touching its sprint."
+              fi
+            fi
 
             # Comment the PR link on the ticket (merges only).
             if [ "$EVENT_ACTION" = "closed" ] && [ "$MERGED" = "true" ]; then

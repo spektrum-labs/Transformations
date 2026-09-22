@@ -9,14 +9,15 @@ class IstrainingcompletiontrackedInput(BaseModel):
     Expected input schema for the istrainingcompletiontracked transformation.
     Criteria key: isTrainingCompletionTracked
 
-    Ensures training completion is tracked by checking the learners
-    endpoint for enrolled users and their completion status.
+    Consumes /api/v1/accounts/{accountId}/learners from Huntress SAT (Curricula),
+    a JSON:API list:
+      {"data": [{"type": "learners", "id": "...", "attributes": {firstName, lastName, email, status, doNotPhish, ...}}, ...],
+       "meta": {"page": {"total": N, ...}}}
+    Token-Service preprocessing reduces this to the bare list of items.
     """
 
-    learners: Optional[List[Dict[str, Any]]] = None
     data: Optional[List[Dict[str, Any]]] = None
-    total: Optional[int] = None
-    total_count: Optional[int] = None
+    meta: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
