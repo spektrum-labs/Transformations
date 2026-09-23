@@ -4,6 +4,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,6 +30,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -71,79 +73,74 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        repos = data
+        configs = data
     elif isinstance(data, dict):
-        repos = data.get("data") or data.get("apiResponse") or []
-        if not isinstance(repos, list):
-            repos = []
+        configs = data.get("data") or data.get("results") or []
+        if not isinstance(configs, list):
+            configs = []
     else:
-        repos = []
+        configs = []
 
-    total_repos = len(repos)
-    non_archived_non_disabled = [r for r in repos if isinstance(r, dict) and not r.get("archived") and not r.get("disabled")]
+    org_configs = [c for c in configs if isinstance(c, dict) and c.get("target_type") == "organization"]
+    enforced_org_configs = [c for c in org_configs if c.get("enforcement") == "enforced"]
 
-    evaluated = []
-    enabled_count = 0
-    disabled_count = 0
-    missing_count = 0
+    scope_configs = enforced_org_configs if enforced_org_configs else org_configs
 
-    for repo in non_archived_non_disabled:
-        sa = repo.get("security_and_analysis")
-        name = repo.get("full_name") or repo.get("name") or "unknown"
-        if isinstance(sa, dict):
-            adv = sa.get("advanced_security") or {}
-            status = adv.get("status") if isinstance(adv, dict) else None
-            if status == "enabled":
-                enabled_count = enabled_count + 1
-                evaluated.append(name)
-            elif status == "disabled":
-                disabled_count = disabled_count + 1
-            else:
-                missing_count = missing_count + 1
+    is_enabled = False
+    matched_config_names = []
+    for c in scope_configs:
+        if c.get("advanced_security") == "enabled":
+            is_enabled = True
+            matched_config_names.append(c.get("name") or str(c.get("id")))
+
+    total_configs = len(configs)
+    total_org_configs = len(org_configs)
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if is_enabled:
+        names = ", ".join(matched_config_names) if matched_config_names else "an organization configuration"
+        pass_reasons.append(
+            f"Organization-level code security configuration(s) [{names}] have advanced_security='enabled' "
+            f"(evaluated {total_org_configs} organization-scoped configuration(s) out of {total_configs} total)."
+        )
+    else:
+        if total_org_configs == 0:
+            fail_reasons.append(
+                f"No organization-scoped (target_type='organization') code security configuration was found "
+                f"among {total_configs} configuration(s) returned by the org."
+            )
+            recommendations.append(
+                "Create and enforce an organization-level code security configuration with GitHub Advanced Security enabled."
+            )
         else:
-            missing_count = missing_count + 1
-
-    applicable_total = enabled_count + disabled_count
-
-    if applicable_total == 0:
-        is_enabled = False
-        fail_reasons = [
-            "No repository in the fetched list of %d repos exposed a readable security_and_analysis.advanced_security.status field, so GHAS enablement could not be confirmed." % total_repos
-        ]
-        pass_reasons = []
-        recommendations = [
-            "Verify the API token has admin/org-level access sufficient to read security_and_analysis on repositories, and enable GitHub Advanced Security at the organization level for new repositories."
-        ]
-    elif disabled_count == 0:
-        is_enabled = True
-        pass_reasons = [
-            "All %d repositories with a readable security_and_analysis field report advanced_security.status='enabled' (checked out of %d total non-archived, non-disabled repos)." % (enabled_count, len(non_archived_non_disabled))
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        is_enabled = False
-        fail_reasons = [
-            "%d of %d repositories with readable security_and_analysis have advanced_security.status not equal to 'enabled' (enabled=%d, disabled=%d, unreadable=%d)." % (disabled_count, applicable_total, enabled_count, disabled_count, missing_count)
-        ]
-        pass_reasons = []
-        recommendations = [
-            "Enable GitHub Advanced Security organization-wide (and specifically on the flagged repositories) so new repositories inherit code scanning, CodeQL, and secret scanning by default."
-        ]
+            statuses = [c.get("advanced_security") for c in scope_configs]
+            fail_reasons.append(
+                f"Organization-scoped configuration(s) report advanced_security statuses {statuses}, "
+                f"none of which are 'enabled' (checked {len(scope_configs)} config(s))."
+            )
+            recommendations.append(
+                "Enable GitHub Advanced Security in the organization's enforced code security configuration."
+            )
 
     result = {
         "isAdvancedSecurityEnabled": is_enabled,
-        "totalRepositories": total_repos,
-        "applicableRepositories": applicable_total,
-        "advancedSecurityEnabledCount": enabled_count,
-        "advancedSecurityDisabledCount": disabled_count,
-        "unreadableSecurityAnalysisCount": missing_count,
+        "totalConfigurations": total_configs,
+        "organizationScopedConfigurations": total_org_configs,
     }
 
     input_summary = {
-        "totalRepositories": total_repos,
-        "nonArchivedNonDisabledRepos": len(non_archived_non_disabled),
-        "applicableRepositories": applicable_total,
+        "totalConfigurations": total_configs,
+        "organizationScopedConfigurations": total_org_configs,
+        "enforcedOrganizationConfigurations": len(enforced_org_configs),
+    }
+
+    metadata = {
+        "transformationId": "isAdvancedSecurityEnabled",
+        "vendor": "GitHub",
+        "category": "devsecops",
     }
 
     return create_response(
@@ -153,9 +150,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isAdvancedSecurityEnabled",
-            "vendor": "GitHub",
-            "category": "devsecops",
-        },
+        metadata=metadata,
     )
