@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,42 +74,52 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        devices = data.get("data") or data.get("devices") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
-    total_devices = 0
-    offline_count = 0
-    offline_names = []
-    transform_errors = []
+    total_devices = len(devices)
+    offline_devices = [d for d in devices if isinstance(d, dict) and d.get("offline") is True]
+    offline_count = len(offline_devices)
 
-    for d in devices:
-        if not isinstance(d, dict):
-            continue
-        total_devices = total_devices + 1
-        if d.get("offline") is True:
-            offline_count = offline_count + 1
-            name = d.get("systemName") or ("device-%s" % str(d.get("id")))
-            if len(offline_names) < 5:
-                offline_names.append(name)
+    sample_names = [d.get("systemName") or d.get("displayName") or str(d.get("id")) for d in offline_devices[:5]]
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
     if total_devices == 0:
-        pass_reasons = []
-        fail_reasons = ["No device records were present in the getDevicesDetailed response; offline count could not be determined."]
-        recommendations = ["Verify the NinjaOne getDevicesDetailed integration is returning device inventory data."]
+        fail_reasons.append("No device records were returned by getDevices; unable to determine offline sensor count.")
+        recommendations.append("Verify the NinjaOne API credentials and device inventory are accessible.")
     else:
-        sample = ", ".join(offline_names) if offline_names else "none"
-        pass_reasons = [
-            "Counted %d offline device(s) out of %d total managed devices in getDevicesDetailed (offline=true). Sample offline devices: %s" % (offline_count, total_devices, sample)
-        ]
-        fail_reasons = []
-        recommendations = []
         if offline_count > 0:
-            recommendations = ["Investigate offline devices (e.g. %s) to confirm they are decommissioned or restore connectivity." % sample]
+            fail_reasons.append(
+                f"{offline_count} of {total_devices} managed devices report offline=true (examples: {', '.join([str(n) for n in sample_names])})."
+            )
+            recommendations.append(
+                "Investigate offline devices to confirm whether the NinjaOne agent has stopped checking in beyond the acceptable window, and remediate connectivity or agent health issues."
+            )
+        else:
+            pass_reasons.append(
+                f"All {total_devices} managed devices report offline=false; no offline sensors detected."
+            )
 
     result = {
         "offlineSensorCount": offline_count,
         "totalDevices": total_devices,
+    }
+
+    input_summary = {
+        "totalDevices": total_devices,
+        "offlineDevices": offline_count,
+    }
+
+    metadata = {
+        "transformationId": "offlineSensorCount",
+        "vendor": "NinjaOne",
+        "category": "epp",
     }
 
     return create_response(
@@ -116,10 +128,6 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total_devices, "offlineCount": offline_count},
-        metadata={
-            "transformationId": "offlineSensorCount",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        input_summary=input_summary,
+        metadata=metadata,
     )
