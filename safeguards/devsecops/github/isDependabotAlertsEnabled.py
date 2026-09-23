@@ -67,58 +67,63 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
-
     if isinstance(data, list):
-        repos = data
+        configs = data
     elif isinstance(data, dict):
-        repos = data.get("data") or data.get("repos") or data.get("items") or []
-        if not isinstance(repos, list):
-            repos = []
+        configs = data.get("data") or data.get("configurations") or []
+        if not isinstance(configs, list):
+            configs = []
     else:
-        repos = []
+        configs = []
 
-    active_repos = [r for r in repos if isinstance(r, dict) and not r.get("archived") and not r.get("disabled")]
+    total_configs = len(configs)
 
-    total = len(active_repos)
-    enabled_count = 0
-    disabled_repo_names = []
-    for r in active_repos:
-        sa = r.get("security_and_analysis") or {}
-        dsu = sa.get("dependabot_security_updates") or {}
-        status = dsu.get("status")
-        if status == "enabled":
-            enabled_count = enabled_count + 1
-        else:
-            name = r.get("full_name") or r.get("name") or "unknown"
-            disabled_repo_names.append(name)
+    org_configs = [c for c in configs if isinstance(c, dict) and c.get("target_type") == "organization"]
+    enforced_org_configs = [c for c in org_configs if c.get("enforcement") == "enforced"]
+    enforced_org_enabled = [c for c in enforced_org_configs if c.get("dependabot_alerts") == "enabled"]
 
-    is_enabled = bool(total > 0 and enabled_count == total)
+    enforced_any = [c for c in configs if isinstance(c, dict) and c.get("enforcement") == "enforced"]
+    enforced_any_enabled = [c for c in enforced_any if c.get("dependabot_alerts") == "enabled"]
+
+    is_enabled = False
+    driving_names = []
+
+    if enforced_org_enabled:
+        is_enabled = True
+        driving_names = [c.get("name") for c in enforced_org_enabled]
+    elif enforced_any_enabled:
+        is_enabled = True
+        driving_names = [c.get("name") for c in enforced_any_enabled]
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if total == 0:
-        fail_reasons.append("No active (non-archived, non-disabled) repositories were found in the organization repo list to evaluate dependabot_security_updates.status.")
-        recommendations.append("Verify org repository listing access and re-run once repositories are visible.")
-    elif is_enabled:
+    if is_enabled:
         pass_reasons.append(
-            f"All {total} active repositories report security_and_analysis.dependabot_security_updates.status='enabled' ({enabled_count}/{total})."
+            "Enforced code security configuration(s) %s have dependabot_alerts='enabled', with enforcement='enforced'."
+            % ", ".join([str(n) for n in driving_names])
         )
     else:
-        sample = ", ".join(disabled_repo_names[:5])
         fail_reasons.append(
-            f"Only {enabled_count}/{total} active repositories have security_and_analysis.dependabot_security_updates.status='enabled'. Repos without it enabled include: {sample}."
+            "No enforced organization code security configuration was found with dependabot_alerts='enabled'. Found %d total configuration(s), %d organization-scoped, %d enforced."
+            % (total_configs, len(org_configs), len(enforced_any))
         )
         recommendations.append(
-            "Enable Dependabot security updates (and alerts) by default for all repositories via org-level security settings, or enable it individually on the listed repositories."
+            "Create or update an organization-level code security configuration with dependabot_alerts set to 'enabled' and enforcement set to 'enforced', then apply it to all repositories."
         )
 
     result = {
         "isDependabotAlertsEnabled": is_enabled,
-        "totalActiveRepos": total,
-        "reposWithDependabotEnabled": enabled_count,
+        "totalConfigurations": total_configs,
+        "organizationScopedConfigurations": len(org_configs),
+        "enforcedConfigurationsWithDependabotAlertsEnabled": len(enforced_any_enabled),
+    }
+
+    input_summary = {
+        "totalConfigurations": total_configs,
+        "organizationScopedConfigurations": len(org_configs),
+        "enforcedConfigurations": len(enforced_any),
     }
 
     return create_response(
@@ -127,7 +132,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalActiveRepos": total, "reposWithDependabotEnabled": enabled_count},
+        input_summary=input_summary,
         metadata={
             "transformationId": "isDependabotAlertsEnabled",
             "vendor": "GitHub",
