@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -74,68 +72,67 @@ def transform(input):
     if isinstance(data, list):
         alerts = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or data.get("apiResponse") or []
+        alerts = data.get("data") or data.get("alerts") or []
         if not isinstance(alerts, list):
             alerts = []
     else:
         alerts = []
 
-    critical_open_count = 0
+    open_critical = []
     repos_affected = {}
-    ecosystems = {}
-
-    for alert in alerts:
-        if not isinstance(alert, dict):
+    for a in alerts:
+        if not isinstance(a, dict):
             continue
-        state = alert.get("state")
-        vuln = alert.get("security_vulnerability") or {}
-        severity = vuln.get("severity") if isinstance(vuln, dict) else None
+        state = a.get("state")
+        advisory = a.get("security_advisory") or {}
+        severity = advisory.get("severity")
+        if severity is None:
+            severity = a.get("severity")
         if state == "open" and severity == "critical":
-            critical_open_count = critical_open_count + 1
-            repo = alert.get("repository") or {}
-            repo_name = repo.get("full_name") if isinstance(repo, dict) else None
-            if repo_name:
-                repos_affected[repo_name] = True
-            dep = alert.get("dependency") or {}
-            pkg = dep.get("package") or {} if isinstance(dep, dict) else {}
-            eco = pkg.get("ecosystem") if isinstance(pkg, dict) else None
-            if eco:
-                ecosystems[eco] = True
+            open_critical.append(a)
+            repo = (a.get("repository") or {}).get("full_name") or "unknown"
+            repos_affected[repo] = repos_affected.get(repo, 0) + 1
+        elif state == "open" and severity is None:
+            open_critical.append(a)
+            repo = (a.get("repository") or {}).get("full_name") or "unknown"
+            repos_affected[repo] = repos_affected.get(repo, 0) + 1
 
-    total_records = len(alerts)
-    distinct_repos = len(repos_affected.keys())
-    distinct_ecosystems = len(ecosystems.keys())
+    count = len(open_critical)
 
-    if critical_open_count > 0:
-        pass_reasons = []
-        fail_reasons = [
-            f"Found {critical_open_count} open critical-severity Dependabot alerts across {distinct_repos} repositories (ecosystems: {distinct_ecosystems})."
-        ]
-        recommendations = [
-            "Prioritize remediation of open critical Dependabot alerts by upgrading affected dependencies to their first_patched_version."
-        ]
-    else:
-        pass_reasons = [
-            f"No open critical-severity Dependabot alerts found among {total_records} records returned by the org-level Dependabot alerts API filtered to state=open and severity=critical."
-        ]
+    repo_list = sorted(repos_affected.keys())
+    top_repos = repo_list[:5]
+
+    if count == 0:
+        pass_reasons = ["No open critical Dependabot alerts were found in the organization's alert feed (state=open, severity=critical filter)."]
         fail_reasons = []
         recommendations = []
+    else:
+        pass_reasons = []
+        fail_reasons = [
+            f"{count} open critical Dependabot alerts found across {len(repo_list)} repositories, e.g. {', '.join(top_repos)}."
+        ]
+        recommendations = [
+            "Triage and remediate open critical Dependabot alerts by upgrading affected dependencies or applying vendor-recommended patches.",
+        ]
+
+    result = {
+        "openCriticalDependabotAlertsCount": count,
+        "affectedRepositoryCount": len(repo_list),
+    }
+
+    input_summary = {
+        "totalAlertsInResponse": len(alerts),
+        "openCriticalAlerts": count,
+        "affectedRepositories": len(repo_list),
+    }
 
     return create_response(
-        result={
-            "openCriticalDependabotAlertsCount": critical_open_count,
-            "distinctRepositoriesAffected": distinct_repos,
-            "distinctEcosystemsAffected": distinct_ecosystems,
-            "totalRecordsReturned": total_records,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalRecordsReturned": total_records,
-            "criticalOpenCount": critical_open_count,
-        },
+        input_summary=input_summary,
         metadata={
             "transformationId": "openCriticalDependabotAlertsCount",
             "vendor": "GitHub",
