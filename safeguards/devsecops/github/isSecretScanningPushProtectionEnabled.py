@@ -1,3 +1,4 @@
+"""Transformation: isSecretScanningPushProtectionEnabled"""
 import json
 from datetime import datetime
 
@@ -70,89 +71,80 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        repos = data
+        configs = data
     elif isinstance(data, dict):
-        repos = data.get("data") or data.get("items") or data.get("repositories") or []
-        if not isinstance(repos, list):
-            repos = []
+        configs = data.get("data") or data.get("configurations") or []
+        if not isinstance(configs, list):
+            configs = []
     else:
-        repos = []
+        configs = []
 
-    active_repos = [r for r in repos if isinstance(r, dict) and not r.get("archived", False) and not r.get("disabled", False)]
+    org_configs = [c for c in configs if isinstance(c, dict) and c.get("target_type") == "organization"]
 
-    enabled_repos = []
-    disabled_repos = []
-    unknown_repos = []
+    enabled_enforced = [
+        c for c in org_configs
+        if c.get("secret_scanning_push_protection") == "enabled" and c.get("enforcement") == "enforced"
+    ]
+    enabled_any = [
+        c for c in org_configs
+        if c.get("secret_scanning_push_protection") == "enabled"
+    ]
 
-    for r in active_repos:
-        sa = r.get("security_and_analysis")
-        name = r.get("full_name") or r.get("name") or "unknown"
-        if not isinstance(sa, dict):
-            unknown_repos.append(name)
-            continue
-        pp = sa.get("secret_scanning_push_protection")
-        if not isinstance(pp, dict):
-            unknown_repos.append(name)
-            continue
-        status = pp.get("status")
-        if status == "enabled":
-            enabled_repos.append(name)
-        elif status == "disabled":
-            disabled_repos.append(name)
-        else:
-            unknown_repos.append(name)
+    is_enabled = len(enabled_enforced) > 0
 
-    total_active = len(active_repos)
-    total_enabled = len(enabled_repos)
-    total_disabled = len(disabled_repos)
-    total_unknown = len(unknown_repos)
-
-    is_enabled = total_active > 0 and total_disabled == 0 and total_unknown == 0
+    total_org_configs = len(org_configs)
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if total_active == 0:
-        fail_reasons.append("No active (non-archived, non-disabled) repositories were returned by listOrgRepositories, so push protection coverage cannot be confirmed.")
-        recommendations.append("Verify the org has repositories and that the API token has org read access.")
-    elif is_enabled:
-        sample = enabled_repos[:5]
+    if is_enabled:
+        names = [c.get("name") for c in enabled_enforced]
         pass_reasons.append(
-            f"All {total_active} active repositories report security_and_analysis.secret_scanning_push_protection.status='enabled' (e.g. {sample})."
+            f"Organization-level code security configuration(s) {names} have "
+            f"secret_scanning_push_protection='enabled' and enforcement='enforced' "
+            f"out of {total_org_configs} organization-scoped configuration(s)."
         )
     else:
-        if total_disabled > 0:
-            sample = disabled_repos[:5]
+        if total_org_configs == 0:
             fail_reasons.append(
-                f"{total_disabled} of {total_active} active repositories report secret_scanning_push_protection.status='disabled' (e.g. {sample})."
+                "No organization-scoped code security configuration was found in the "
+                "listOrgCodeSecurityConfigurations response; cannot confirm push protection policy."
             )
             recommendations.append(
-                "Enable secret scanning push protection on all repositories, or enforce it enterprise-wide via the organization security configuration."
+                "Create an organization-level code security configuration enforcing secret scanning push protection."
             )
-        if total_unknown > 0:
-            sample = unknown_repos[:5]
+        elif enabled_any:
+            names = [c.get("name") for c in enabled_any]
             fail_reasons.append(
-                f"{total_unknown} of {total_active} active repositories do not expose a readable secret_scanning_push_protection.status field (e.g. {sample})."
+                f"Organization configuration(s) {names} have secret_scanning_push_protection='enabled' "
+                f"but enforcement is not 'enforced' (actual enforcement values: "
+                f"{[c.get('enforcement') for c in enabled_any]})."
             )
             recommendations.append(
-                "Confirm GitHub Advanced Security is enabled for these repositories so the secret_scanning_push_protection status can be evaluated."
+                "Set the enforcement status of the organization security configuration to 'enforced' "
+                "so push protection applies to all repositories."
+            )
+        else:
+            values = [c.get("secret_scanning_push_protection") for c in org_configs]
+            fail_reasons.append(
+                f"None of the {total_org_configs} organization-scoped configuration(s) have "
+                f"secret_scanning_push_protection='enabled' (observed values: {values})."
+            )
+            recommendations.append(
+                "Enable secret scanning push protection in the organization's code security configuration "
+                "and enforce it across all repositories."
             )
 
     result = {
         "isSecretScanningPushProtectionEnabled": is_enabled,
-        "totalActiveRepositories": total_active,
-        "pushProtectionEnabledCount": total_enabled,
-        "pushProtectionDisabledCount": total_disabled,
-        "pushProtectionUnknownCount": total_unknown,
+        "organizationConfigCount": total_org_configs,
+        "enabledEnforcedConfigCount": len(enabled_enforced),
     }
 
     input_summary = {
-        "totalRepositoriesInResponse": len(repos),
-        "activeRepositories": total_active,
-        "enabledCount": total_enabled,
-        "disabledCount": total_disabled,
-        "unknownCount": total_unknown,
+        "totalConfigurations": len(configs) if isinstance(configs, list) else 0,
+        "organizationScopedConfigurations": total_org_configs,
     }
 
     return create_response(
