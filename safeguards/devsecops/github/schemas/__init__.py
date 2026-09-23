@@ -4,6 +4,7 @@ from .isAdvancedSecurityEnabled import IsAdvancedSecurityEnabledInput
 from .isDependabotAlertsEnabled import IsDependabotAlertsEnabledInput
 from .isSecretScanningPushProtectionEnabled import IsSecretScanningPushProtectionEnabledInput
 from .openCriticalDependabotAlertsCount import OpenCriticalDependabotAlertsCountInput
+from .openSecretScanningAlertsCount import OpenSecretScanningAlertsCountInput
 
 __all__ = [
     "IsAdvancedSecurityEnabledInput",
