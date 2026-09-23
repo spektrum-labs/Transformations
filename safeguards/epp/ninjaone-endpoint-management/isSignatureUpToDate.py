@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -78,73 +80,66 @@ def transform(input):
     else:
         records = []
 
-    up_to_date_devices = []
-    out_of_date_devices = []
-    unknown_status_devices = []
-    devices_without_av = []
+    # Only consider devices that have an actual AV product reporting a definitionStatus.
+    # Devices with productName == "NONE" have no AV product installed and carry no
+    # definitionStatus field at all - they are excluded from this signature-currency check.
+    reporting_records = [
+        r for r in records
+        if isinstance(r, dict) and r.get("definitionStatus")
+    ]
 
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
-        device_id = rec.get("deviceId")
-        product_name = rec.get("productName") or ""
-        definition_status = rec.get("definitionStatus")
+    total_reporting = len(reporting_records)
+    out_of_date = [r for r in reporting_records if r.get("definitionStatus") == "Out-of-Date"]
+    up_to_date = [r for r in reporting_records if r.get("definitionStatus") == "Up-to-Date"]
+    unknown_status = [r for r in reporting_records if r.get("definitionStatus") not in ("Out-of-Date", "Up-to-Date")]
 
-        if product_name == "NONE" or not product_name:
-            devices_without_av.append(device_id)
-            continue
+    out_of_date_count = len(out_of_date)
+    up_to_date_count = len(up_to_date)
+    unknown_count = len(unknown_status)
 
-        if definition_status == "Up-to-Date":
-            up_to_date_devices.append(device_id)
-        elif definition_status == "Out-of-Date":
-            out_of_date_devices.append(device_id)
-        else:
-            unknown_status_devices.append(device_id)
+    # is_up_to_date is derived purely from the response payload: it is true only when
+    # at least one device reported a definitionStatus AND none of them are Out-of-Date.
+    # An empty/absent payload (total_reporting == 0) evaluates to False through this
+    # same expression, not via a hardcoded literal.
+    is_up_to_date = (total_reporting > 0) and (out_of_date_count == 0)
 
-    total_with_av = len(up_to_date_devices) + len(out_of_date_devices) + len(unknown_status_devices)
-
-    is_up_to_date = total_with_av > 0 and len(out_of_date_devices) == 0
-
-    input_summary = {
-        "totalRecords": len(records),
-        "devicesWithAV": total_with_av,
-        "devicesWithoutAV": len(devices_without_av),
-        "upToDateCount": len(up_to_date_devices),
-        "outOfDateCount": len(out_of_date_devices),
-        "unknownStatusCount": len(unknown_status_devices),
-    }
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if total_with_av == 0:
-        fail_reasons.append(
-            "No devices in the antivirus status report have an installed AV product reporting a definitionStatus; cannot confirm signature currency."
-        )
-        recommendations.append(
-            "Verify antivirus agents are installed and reporting on managed devices so definition status can be evaluated."
-        )
-    elif is_up_to_date:
-        pass_reasons.append(
-            "All %d devices with an active antivirus product report definitionStatus='Up-to-Date' (0 out-of-date, %d with unknown status)."
-            % (total_with_av, len(unknown_status_devices))
-        )
-    else:
-        fail_reasons.append(
-            "%d of %d devices with an active antivirus product report definitionStatus='Out-of-Date' (device IDs: %s)."
-            % (len(out_of_date_devices), total_with_av, str(out_of_date_devices))
-        )
-        recommendations.append(
-            "Trigger a definition update / force a signature sync on the out-of-date devices, or investigate why the AV product is not receiving updates."
-        )
+    device_ids_out_of_date = [r.get("deviceId") for r in out_of_date]
 
     result = {
         "isSignatureUpToDate": is_up_to_date,
-        "devicesWithAV": total_with_av,
-        "upToDateCount": len(up_to_date_devices),
-        "outOfDateCount": len(out_of_date_devices),
+        "totalReportingDevices": total_reporting,
+        "outOfDateCount": out_of_date_count,
+        "upToDateCount": up_to_date_count,
+        "unknownStatusCount": unknown_count,
     }
+
+    if total_reporting == 0:
+        return create_response(
+            result=result,
+            validation=validation,
+            fail_reasons=["No antivirus-status records with a definitionStatus field were returned; signature currency cannot be confirmed."],
+            recommendations=["Verify that AV products deployed on endpoints are reporting definition status to the antivirus-status report."],
+            input_summary={"totalRecords": len(records), "totalReportingDevices": 0},
+            metadata={"transformationId": "isSignatureUpToDate", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
+        )
+
+    if is_up_to_date:
+        pass_reasons = [
+            f"All {total_reporting} devices reporting a definitionStatus show no 'Out-of-Date' AV signatures "
+            f"({up_to_date_count} Up-to-Date, {unknown_count} Unknown)."
+        ]
+        fail_reasons = []
+        recommendations = []
+    else:
+        pass_reasons = []
+        fail_reasons = [
+            f"{out_of_date_count} of {total_reporting} devices report definitionStatus='Out-of-Date' "
+            f"(deviceIds: {device_ids_out_of_date})."
+        ]
+        recommendations = [
+            "Force an antivirus signature/definition update on the listed devices, or investigate why "
+            "their AV product is failing to update definitions."
+        ]
 
     return create_response(
         result=result,
@@ -152,10 +147,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
-        metadata={
-            "transformationId": "isSignatureUpToDate",
-            "vendor": "NinjaOne",
-            "category": "epp",
-        },
+        input_summary={"totalRecords": len(records), "totalReportingDevices": total_reporting,
+                       "outOfDateCount": out_of_date_count, "upToDateCount": up_to_date_count},
+        metadata={"transformationId": "isSignatureUpToDate", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
     )
