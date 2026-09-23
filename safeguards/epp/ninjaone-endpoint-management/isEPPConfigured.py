@@ -1,10 +1,8 @@
-
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -30,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -70,60 +67,75 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        devices = data
+        records = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
-        if not isinstance(devices, list):
-            devices = []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        devices = []
+        records = []
 
-    total_devices = len(devices)
-    configured_count = 0
-    sample_systems = []
-
-    for device in devices:
-        if not isinstance(device, dict):
+    total_records = len(records)
+    deployed = []
+    for r in records:
+        if not isinstance(r, dict):
             continue
-        policy_id = device.get("policyId")
-        has_policy = False
-        if isinstance(policy_id, list):
-            has_policy = len(policy_id) > 0
-        elif isinstance(policy_id, (int, str)):
-            has_policy = bool(policy_id)
-        if has_policy:
-            configured_count = configured_count + 1
-            if len(sample_systems) < 5:
-                sample_systems.append(device.get("systemName") or str(device.get("id")))
+        product_name = r.get("productName") or "NONE"
+        if product_name != "NONE":
+            deployed.append(r)
 
-    is_configured = configured_count > 0
+    deployed_count = len(deployed)
+    with_state = [r for r in deployed if r.get("productState")]
+    on_count = sum(1 for r in with_state if r.get("productState") == "ON")
+    off_count = sum(1 for r in with_state if r.get("productState") == "OFF")
+    state_count = len(with_state)
 
-    if total_devices == 0:
-        fail_reasons = ["No device records were returned by getDevicesDetailed, so EPP policy assignment could not be verified."]
-        recommendations = ["Verify NinjaOne device inventory API connectivity and confirm devices are enrolled."]
-        pass_reasons = []
-    elif is_configured:
-        pass_reasons = [
-            f"{configured_count} of {total_devices} devices report a non-empty policyId, indicating an endpoint protection policy is assigned. Sample devices: {sample_systems}."
-        ]
-        fail_reasons = []
-        recommendations = []
+    on_ratio = (on_count / state_count) if state_count > 0 else 0.0
+
+    is_configured = state_count > 0 and on_ratio >= 0.5
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if is_configured:
+        pass_reasons.append(
+            "%d of %d devices with a reporting EPP product show productState=ON (%.1f%%), meeting the 50%% configured threshold." % (on_count, state_count, on_ratio * 100)
+        )
     else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed have a policyId assigned (all policyId fields were empty), so no endpoint protection policy is configured on any device."
-        ]
-        recommendations = [
-            "Assign a NinjaOne policy that enables antivirus/EPP settings to each device's organization or device group."
-        ]
+        if state_count == 0:
+            fail_reasons.append(
+                "No devices among %d antivirus-status records report a productState value; EPP configuration cannot be confirmed." % total_records
+            )
+            recommendations.append(
+                "Verify that the assigned policy pushes and enables an endpoint protection product so that productState reports ON."
+            )
+        else:
+            fail_reasons.append(
+                "Only %d of %d devices with a reporting EPP product show productState=ON (%.1f%%); %d devices report OFF, indicating EPP is installed but not actively configured/running under the assigned policy." % (on_count, state_count, on_ratio * 100, off_count)
+            )
+            recommendations.append(
+                "Review the policy-assigned endpoint protection product configuration and enable real-time protection on devices currently reporting productState=OFF."
+            )
 
     result = {
         "isEPPConfigured": is_configured,
-        "totalDevices": total_devices,
-        "devicesWithAssignedPolicy": configured_count,
+        "totalDevicesReported": total_records,
+        "devicesWithEPPProduct": deployed_count,
+        "devicesWithProductState": state_count,
+        "devicesConfiguredOn": on_count,
+        "devicesConfiguredOff": off_count,
+    }
+
+    input_summary = {
+        "totalRecords": total_records,
+        "deployedCount": deployed_count,
+        "stateReportingCount": state_count,
+        "onCount": on_count,
+        "offCount": off_count,
     }
 
     return create_response(
@@ -132,10 +144,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total_devices, "devicesWithAssignedPolicy": configured_count},
+        input_summary=input_summary,
         metadata={
             "transformationId": "isEPPConfigured",
-            "vendor": "NinjaOne",
+            "vendor": "NinjaOne Endpoint Management",
             "category": "epp",
         },
     )

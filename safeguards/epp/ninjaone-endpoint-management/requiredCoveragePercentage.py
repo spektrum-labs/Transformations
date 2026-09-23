@@ -70,73 +70,73 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        records = data
+        devices = data
     elif isinstance(data, dict):
-        records = data.get("results") or data.get("data") or []
-        if not isinstance(records, list):
-            records = []
+        devices = data.get("data") or data.get("devices") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
-        records = []
+        devices = []
 
-    failed_device_ids = set()
-    failed_record_count = 0
-    total_records = len(records)
-    status_counts = {}
-
-    for rec in records:
-        if not isinstance(rec, dict):
+    total = len(devices)
+    covered = 0
+    uncovered_samples = []
+    for d in devices:
+        if not isinstance(d, dict):
             continue
-        status = rec.get("status") or "UNKNOWN"
-        status_counts[status] = status_counts.get(status, 0) + 1
-        if status == "FAILED":
-            failed_record_count = failed_record_count + 1
-            device_id = rec.get("deviceId")
-            if device_id is not None:
-                failed_device_ids.add(device_id)
+        policy_id = d.get("policyId")
+        role_policy_id = d.get("rolePolicyId")
+        has_policy = (policy_id is not None) or (role_policy_id is not None)
+        if has_policy:
+            covered = covered + 1
+        else:
+            if len(uncovered_samples) < 5:
+                name = d.get("systemName") or d.get("displayName") or str(d.get("id"))
+                uncovered_samples.append(name)
 
-    scan_failure_count = len(failed_device_ids)
-
-    transformation_errors = []
-    if total_records == 0:
-        transformation_errors.append("No OS patch records found in report")
+    if total == 0:
+        percentage = 0
+    else:
+        percentage = round((covered / total) * 100.0, 2)
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if scan_failure_count == 0:
+    if total == 0:
+        fail_reasons.append("No devices were returned by getDevices, so policy coverage cannot be confirmed.")
+        recommendations.append("Verify the getDevices API call returns the managed device fleet.")
+    elif percentage >= 100.0:
         pass_reasons.append(
-            f"No devices reported a FAILED status across {total_records} patch records in the Pending/Failed/Rejected OS Patches report (status distribution: {status_counts})."
+            f"All {total} managed devices carry a policyId (device/override) or rolePolicyId "
+            f"(role-based default policy), giving {covered}/{total} devices ({percentage}%) with a security policy assigned."
         )
     else:
         fail_reasons.append(
-            f"{scan_failure_count} distinct device(s) reported a FAILED status ({failed_record_count} failed patch records) out of {total_records} total patch records (status distribution: {status_counts})."
+            f"Only {covered} of {total} managed devices ({percentage}%) have a policyId or rolePolicyId set; "
+            f"{total - covered} devices show neither field populated."
         )
-        recommendations.append(
-            "Investigate devices with FAILED patch status and re-trigger the OS patch scan/install cycle for those devices."
-        )
-
-    result = {
-        "scanFailureCount": scan_failure_count,
-        "totalPatchRecords": total_records,
-        "failedPatchRecords": failed_record_count,
-    }
+        if uncovered_samples:
+            recommendations.append(
+                f"Assign an organization default, location, or device-level policy to unpoliced devices such as: "
+                f"{', '.join([str(s) for s in uncovered_samples])}."
+            )
+        else:
+            recommendations.append("Assign an organization default, location, or device-level policy to all unpoliced devices.")
 
     return create_response(
-        result=result,
+        result={
+            "requiredCoveragePercentage": percentage,
+            "devicesWithPolicy": covered,
+            "totalDevices": total,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalPatchRecords": total_records,
-            "failedPatchRecords": failed_record_count,
-            "distinctFailedDevices": scan_failure_count,
-            "statusCounts": status_counts,
-        },
-        transformation_errors=transformation_errors,
+        input_summary={"totalDevices": total, "devicesWithPolicy": covered},
         metadata={
-            "transformationId": "scanFailureCount",
+            "transformationId": "requiredCoveragePercentage",
             "vendor": "NinjaOne",
             "category": "epp",
         },

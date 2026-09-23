@@ -1,3 +1,4 @@
+
 import json
 from datetime import datetime
 
@@ -70,74 +71,58 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        records = data
+        threats = data
     elif isinstance(data, dict):
-        records = data.get("results") or data.get("data") or []
-        if not isinstance(records, list):
-            records = []
+        threats = data.get("results") or data.get("data") or []
+        if not isinstance(threats, list):
+            threats = []
     else:
-        records = []
+        threats = []
 
-    failed_device_ids = set()
-    failed_record_count = 0
-    total_records = len(records)
-    status_counts = {}
-
-    for rec in records:
-        if not isinstance(rec, dict):
+    quarantine_statuses = ["QUARANTINE", "QUARANTINED"]
+    quarantined = []
+    other_statuses = []
+    for t in threats:
+        if not isinstance(t, dict):
             continue
-        status = rec.get("status") or "UNKNOWN"
-        status_counts[status] = status_counts.get(status, 0) + 1
-        if status == "FAILED":
-            failed_record_count = failed_record_count + 1
-            device_id = rec.get("deviceId")
-            if device_id is not None:
-                failed_device_ids.add(device_id)
+        status = t.get("status")
+        status_upper = status.upper() if isinstance(status, str) else ""
+        if any(qs in status_upper for qs in quarantine_statuses):
+            quarantined.append(t)
+        else:
+            other_statuses.append(status)
 
-    scan_failure_count = len(failed_device_ids)
+    quarantined_count = len(quarantined)
+    total_threats = len(threats)
 
-    transformation_errors = []
-    if total_records == 0:
-        transformation_errors.append("No OS patch records found in report")
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if scan_failure_count == 0:
-        pass_reasons.append(
-            f"No devices reported a FAILED status across {total_records} patch records in the Pending/Failed/Rejected OS Patches report (status distribution: {status_counts})."
-        )
+    if total_threats == 0:
+        pass_reasons = []
+        fail_reasons = ["The antivirus threats report (getAntivirusThreats) returned zero threat records for this tenant, so no quarantined files could be identified."]
+        recommendations = ["Verify the antivirus product is actively scanning and reporting threats; if the fleet is genuinely clean, no action is needed."]
     else:
-        fail_reasons.append(
-            f"{scan_failure_count} distinct device(s) reported a FAILED status ({failed_record_count} failed patch records) out of {total_records} total patch records (status distribution: {status_counts})."
-        )
-        recommendations.append(
-            "Investigate devices with FAILED patch status and re-trigger the OS patch scan/install cycle for those devices."
-        )
+        sample_names = [t.get("fileName") or t.get("threatName") for t in quarantined[:5]]
+        pass_reasons = [
+            f"Found {quarantined_count} of {total_threats} threat records with a quarantine status (e.g. {sample_names})."
+        ] if quarantined_count > 0 else []
+        fail_reasons = [] if quarantined_count > 0 else [
+            f"None of the {total_threats} threat records reported a quarantine status; statuses observed: {list(set(other_statuses))[:10]}."
+        ]
+        recommendations = []
 
-    result = {
-        "scanFailureCount": scan_failure_count,
-        "totalPatchRecords": total_records,
-        "failedPatchRecords": failed_record_count,
+    input_summary = {
+        "totalThreatRecords": total_threats,
+        "quarantinedFileCount": quarantined_count,
     }
 
     return create_response(
-        result=result,
+        result={
+            "quarantinedFileCount": quarantined_count,
+            "totalThreatRecords": total_threats,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalPatchRecords": total_records,
-            "failedPatchRecords": failed_record_count,
-            "distinctFailedDevices": scan_failure_count,
-            "statusCounts": status_counts,
-        },
-        transformation_errors=transformation_errors,
-        metadata={
-            "transformationId": "scanFailureCount",
-            "vendor": "NinjaOne",
-            "category": "epp",
-        },
+        input_summary=input_summary,
+        metadata={"transformationId": "quarantinedFileCount", "vendor": "NinjaOne", "category": "epp"},
     )

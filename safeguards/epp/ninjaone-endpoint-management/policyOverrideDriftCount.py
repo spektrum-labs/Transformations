@@ -1,10 +1,8 @@
-
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -30,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -73,93 +70,66 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        records = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
-        if not isinstance(results, list):
-            results = []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        results = []
+        records = []
 
-    total = len(results)
-    failed_count = 0
-    installed_count = 0
-    other_statuses = {}
-
-    for rec in results:
+    drifted_devices = []
+    for rec in records:
         if not isinstance(rec, dict):
             continue
-        status = rec.get("status")
-        if status == "FAILED":
-            failed_count = failed_count + 1
-        elif status == "INSTALLED":
-            installed_count = installed_count + 1
-        else:
-            key = status if status else "UNKNOWN"
-            other_statuses[key] = other_statuses.get(key, 0) + 1
+        device_id = rec.get("deviceId")
+        overrides = rec.get("overrides") or []
+        if isinstance(overrides, list) and len(overrides) > 0:
+            drifted_devices.append({"deviceId": device_id, "overrides": overrides})
 
-    FAILURE_THRESHOLD_PCT = 5.0
+    drift_count = len(drifted_devices)
+    total_records = len(records)
 
-    if total == 0:
-        is_valid = False
-        failure_rate = 0.0
-        fail_reasons = [
-            "No OS patch installation records were returned by getOSPatchInstallsReport, "
-            "so patch installation activity cannot be confirmed as executing successfully."
+    if drift_count > 0:
+        sample = drifted_devices[:5]
+        sample_desc = ", ".join(
+            [f"device {d['deviceId']} overrides {d['overrides']}" for d in sample]
+        )
+        pass_reasons = [
+            f"Found {drift_count} device(s) with non-empty overriddenSections in the policy-overrides report "
+            f"(out of {total_records} device override records returned): {sample_desc}."
         ]
-        pass_reasons = []
+        fail_reasons = []
         recommendations = [
-            "Verify that devices are checking in and reporting patch installation activity to NinjaOne."
+            "Review the listed devices and reconcile device-level policy overrides with the "
+            "organization/location default policy, or document why the override is intentional."
         ]
     else:
-        failure_rate = (failed_count / total) * 100.0
-        if failure_rate < FAILURE_THRESHOLD_PCT:
-            is_valid = True
-            pass_reasons = [
-                f"Of {total} OS patch installation records, {installed_count} report status=INSTALLED "
-                f"and only {failed_count} report status=FAILED ({failure_rate:.2f}% failure rate), "
-                f"below the {FAILURE_THRESHOLD_PCT}% threshold indicating patch management is executing successfully."
-            ]
-            fail_reasons = []
-            recommendations = []
-        else:
-            is_valid = False
-            pass_reasons = []
-            fail_reasons = [
-                f"Of {total} OS patch installation records, {failed_count} report status=FAILED "
-                f"({failure_rate:.2f}% failure rate), exceeding the {FAILURE_THRESHOLD_PCT}% threshold, "
-                f"indicating patch installation is stuck or erroring on the fleet."
-            ]
-            recommendations = [
-                "Investigate devices with FAILED patch installation status and re-run patch scans/installs.",
-                "Check device connectivity and disk space, which commonly cause patch install failures."
-            ]
-
-    result = {
-        "isPatchManagementValid": is_valid,
-        "totalPatchInstallRecords": total,
-        "failedPatchInstallCount": failed_count,
-        "installedPatchInstallCount": installed_count,
-        "failureRatePercentage": round(failure_rate, 2),
-    }
+        pass_reasons = [
+            f"No devices with non-empty overriddenSections were found among {total_records} "
+            "policy-override records returned by /v2/queries/policy-overrides."
+        ]
+        fail_reasons = []
+        recommendations = []
 
     input_summary = {
-        "totalRecords": total,
-        "installedCount": installed_count,
-        "failedCount": failed_count,
-        "otherStatusCounts": other_statuses,
+        "totalOverrideRecords": total_records,
+        "driftedDeviceCount": drift_count,
     }
 
     return create_response(
-        result=result,
+        result={
+            "policyOverrideDriftCount": drift_count,
+            "totalOverrideRecords": total_records,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
         metadata={
-            "transformationId": "isPatchManagementValid",
-            "vendor": "NinjaOne Endpoint Management",
+            "transformationId": "policyOverrideDriftCount",
+            "vendor": "NinjaOne",
             "category": "epp",
         },
     )

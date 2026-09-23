@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -69,129 +67,76 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
-    # EVIDENCE REQUIRED: a recognised getDevicesDetailed device list that actually
-    # contains at least one device record. The old fallback chain
-    # `data.get("data") or data.get("results") or []` defaulted to an EMPTY LIST whenever
-    # neither key was present, and an empty device list then fell into the
-    # "devices_in_maintenance == 0" branch and reported the control satisfied. So {},
-    # "{}", null, an auth-error envelope and an unrelated payload such as
-    # {"hello": "world"} all reported maintenance mode as time-limited. Zero device
-    # records is not "no indefinite suppression observed", it is nothing observed.
-    devices = None
-    recognized_device_list = False
     if isinstance(data, list):
         devices = data
-        recognized_device_list = True
     elif isinstance(data, dict):
-        for key in ("data", "results"):
-            value = data.get(key)
-            if isinstance(value, list):
-                devices = value
-                recognized_device_list = True
-                break
-    if not recognized_device_list or not isinstance(devices, list):
+        devices = data.get("data") or data.get("devices") or data.get("apiResponse") or []
+        if not isinstance(devices, list):
+            devices = []
+    else:
         devices = []
 
     total_devices = len(devices)
+    devices_with_maintenance = []
+    bounded_count = 0
+    unbounded_count = 0
 
-    if not recognized_device_list or total_devices == 0:
-        return create_response(
-            result={
-                "isMaintenanceModeTimeLimited": False,
-                "totalDevices": 0,
-                "devicesInMaintenance": 0,
-                "boundedWindows": 0,
-                "unboundedWindows": 0,
-            },
-            validation=validation,
-            fail_reasons=[
-                "The payload carried no recognisable getDevicesDetailed device list with at least one device record (expected a JSON array of devices, or an object with a 'data' or 'results' array), so whether maintenance mode is time-limited could not be determined."
-            ],
-            recommendations=[
-                "Verify the getDevicesDetailed call is authenticating and returning the tenant's device records, then re-run this check."
-            ],
-            input_summary={
-                "recognizedDeviceList": recognized_device_list,
-                "totalDevices": 0,
-            },
-            metadata={
-                "transformationId": "isMaintenanceModeTimeLimited",
-                "vendor": "NinjaOne Endpoint Management",
-                "category": "epp",
-            },
-        )
-    devices_in_maintenance = 0
-    bounded_windows = 0
-    unbounded_windows = 0
-    unbounded_device_names = []
-    bounded_device_names = []
-
-    for device in devices:
-        if not isinstance(device, dict):
+    for d in devices:
+        if not isinstance(d, dict):
             continue
-        maint = device.get("maintenance")
-        entries = []
-        if isinstance(maint, list):
-            entries = [m for m in maint if isinstance(m, dict)]
-        elif isinstance(maint, dict) and maint:
-            entries = [maint]
-
-        if not entries:
-            continue
-
-        devices_in_maintenance = devices_in_maintenance + 1
-        name = device.get("systemName") or ("device-%s" % str(device.get("id")))
-
-        device_has_unbounded = False
-        for entry in entries:
-            end_val = entry.get("end")
-            start_val = entry.get("start")
-            if end_val is None or start_val is None:
-                device_has_unbounded = True
-                unbounded_windows = unbounded_windows + 1
+        maintenance = d.get("maintenance")
+        if isinstance(maintenance, dict) and maintenance:
+            devices_with_maintenance.append(d)
+            start = maintenance.get("start")
+            end = maintenance.get("end")
+            if start is not None and end is not None:
+                bounded_count = bounded_count + 1
             else:
-                bounded_windows = bounded_windows + 1
+                unbounded_count = unbounded_count + 1
 
-        if device_has_unbounded:
-            if len(unbounded_device_names) < 10:
-                unbounded_device_names.append(name)
-        else:
-            if len(bounded_device_names) < 10:
-                bounded_device_names.append(name)
+    maintenance_seen = len(devices_with_maintenance)
 
-    if devices_in_maintenance == 0:
-        # Reached only when at least one real device record was returned (guarded above).
-        is_time_limited = True
-        pass_reasons = [
-            "Scanned %d devices via getDevicesDetailed; none currently report an active maintenance window (maintenance field empty on all records), so no indefinite suppression was observed." % total_devices
-        ]
-        fail_reasons = []
-        recommendations = []
-    elif unbounded_windows == 0:
-        is_time_limited = True
-        pass_reasons = [
-            "Of %d devices in maintenance mode, all %d maintenance window(s) carry both start and end timestamps (bounded: %s), indicating no indefinite suppression." % (devices_in_maintenance, bounded_windows, ", ".join(bounded_device_names))
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if maintenance_seen == 0:
         is_time_limited = False
-        pass_reasons = []
-        fail_reasons = [
-            "%d of %d devices in maintenance mode have at least one maintenance window missing a start or end timestamp (examples: %s), meaning alerts are suppressed indefinitely rather than for a bounded window." % (len(unbounded_device_names), devices_in_maintenance, ", ".join(unbounded_device_names))
-        ]
-        recommendations = [
-            "Configure maintenance mode with an explicit end time (bounded window) on affected devices instead of leaving it open-ended."
-        ]
+        fail_reasons.append(
+            "No device records in the getDevicesDetailed response (%d devices scanned) carry a populated 'maintenance' object, so no active or configured maintenance window could be inspected for a start/end bound." % total_devices
+        )
+        recommendations.append(
+            "Place a device into maintenance mode and re-scan, or verify via the NinjaOne console that maintenance windows are configured with both a start and end timestamp rather than left open-ended."
+        )
+    elif unbounded_count > 0:
+        is_time_limited = False
+        fail_reasons.append(
+            "%d of %d devices with a maintenance object have a start timestamp but no end timestamp, indicating an indefinite (non-time-limited) maintenance suppression." % (unbounded_count, maintenance_seen)
+        )
+        recommendations.append(
+            "Configure all maintenance mode windows with an explicit end time so alert suppression is automatically bounded."
+        )
+    else:
+        is_time_limited = True
+        pass_reasons.append(
+            "All %d devices carrying a maintenance object have both 'start' and 'end' epoch fields populated, confirming maintenance windows are bounded rather than indefinite." % maintenance_seen
+        )
 
     result = {
         "isMaintenanceModeTimeLimited": is_time_limited,
-        "totalDevices": total_devices,
-        "devicesInMaintenance": devices_in_maintenance,
-        "boundedWindows": bounded_windows,
-        "unboundedWindows": unbounded_windows,
+        "devicesWithMaintenanceWindow": maintenance_seen,
+        "boundedMaintenanceWindows": bounded_count,
+        "unboundedMaintenanceWindows": unbounded_count,
+        "totalDevicesScanned": total_devices,
+    }
+
+    input_summary = {
+        "totalDevicesScanned": total_devices,
+        "devicesWithMaintenanceWindow": maintenance_seen,
+        "boundedMaintenanceWindows": bounded_count,
+        "unboundedMaintenanceWindows": unbounded_count,
     }
 
     return create_response(
@@ -200,15 +145,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalDevices": total_devices,
-            "devicesInMaintenance": devices_in_maintenance,
-            "boundedWindows": bounded_windows,
-            "unboundedWindows": unbounded_windows,
-        },
+        input_summary=input_summary,
         metadata={
             "transformationId": "isMaintenanceModeTimeLimited",
-            "vendor": "NinjaOne Endpoint Management",
+            "vendor": "NinjaOne",
             "category": "epp",
         },
     )

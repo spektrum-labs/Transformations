@@ -1,4 +1,3 @@
-
 import json
 from datetime import datetime
 
@@ -73,81 +72,80 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        activities = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
-        if not isinstance(results, list):
-            results = []
+        activities = data.get("activities") or data.get("data") or []
+        if not isinstance(activities, list):
+            activities = []
     else:
-        results = []
+        activities = []
 
-    total = len(results)
-    failed_count = 0
-    installed_count = 0
-    other_statuses = {}
+    total_activities = len(activities)
 
-    for rec in results:
-        if not isinstance(rec, dict):
+    admin_action_status_codes = [
+        "USER_LOGGED_IN",
+        "USER_LOGGED_OUT",
+        "SYSTEM_REBOOTED",
+        "SOFTWARE_UPDATED",
+        "SOFTWARE_ADDED",
+    ]
+
+    admin_action_count = 0
+    activity_type_counts = {}
+    user_attributed_count = 0
+
+    for activity in activities:
+        if not isinstance(activity, dict):
             continue
-        status = rec.get("status")
-        if status == "FAILED":
-            failed_count = failed_count + 1
-        elif status == "INSTALLED":
-            installed_count = installed_count + 1
-        else:
-            key = status if status else "UNKNOWN"
-            other_statuses[key] = other_statuses.get(key, 0) + 1
+        status_code = activity.get("statusCode")
+        activity_type = activity.get("activityType") or "UNKNOWN"
+        activity_type_counts[activity_type] = activity_type_counts.get(activity_type, 0) + 1
+        if status_code in admin_action_status_codes:
+            admin_action_count = admin_action_count + 1
+        if activity.get("userId") is not None:
+            user_attributed_count = user_attributed_count + 1
 
-    FAILURE_THRESHOLD_PCT = 5.0
+    distinct_activity_types = len(activity_type_counts)
 
-    if total == 0:
-        is_valid = False
-        failure_rate = 0.0
-        fail_reasons = [
-            "No OS patch installation records were returned by getOSPatchInstallsReport, "
-            "so patch installation activity cannot be confirmed as executing successfully."
-        ]
-        pass_reasons = []
-        recommendations = [
-            "Verify that devices are checking in and reporting patch installation activity to NinjaOne."
-        ]
+    is_enabled = total_activities > 0 and distinct_activity_types > 0
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if is_enabled:
+        sample_types = list(activity_type_counts.keys())[:5]
+        pass_reasons.append(
+            "GET /v2/activities returned %d retrievable audit log entries spanning %d distinct activityType values (sample: %s), including %d records with recognizable administrative/status events (e.g. USER_LOGGED_IN, SYSTEM_REBOOTED) and %d records attributed to a userId, confirming console/API actions are recorded and retrievable."
+            % (total_activities, distinct_activity_types, sample_types, admin_action_count, user_attributed_count)
+        )
     else:
-        failure_rate = (failed_count / total) * 100.0
-        if failure_rate < FAILURE_THRESHOLD_PCT:
-            is_valid = True
-            pass_reasons = [
-                f"Of {total} OS patch installation records, {installed_count} report status=INSTALLED "
-                f"and only {failed_count} report status=FAILED ({failure_rate:.2f}% failure rate), "
-                f"below the {FAILURE_THRESHOLD_PCT}% threshold indicating patch management is executing successfully."
-            ]
-            fail_reasons = []
-            recommendations = []
-        else:
-            is_valid = False
-            pass_reasons = []
-            fail_reasons = [
-                f"Of {total} OS patch installation records, {failed_count} report status=FAILED "
-                f"({failure_rate:.2f}% failure rate), exceeding the {FAILURE_THRESHOLD_PCT}% threshold, "
-                f"indicating patch installation is stuck or erroring on the fleet."
-            ]
-            recommendations = [
-                "Investigate devices with FAILED patch installation status and re-run patch scans/installs.",
-                "Check device connectivity and disk space, which commonly cause patch install failures."
-            ]
+        fail_reasons.append(
+            "GET /v2/activities returned %d activity records with %d distinct activityType values, so no retrievable administrator/technician action log evidence was found."
+            % (total_activities, distinct_activity_types)
+        )
+        recommendations.append(
+            "Verify the NinjaOne activities feed is populating for this tenant, and confirm the OAuth client has permission to read /v2/activities."
+        )
 
     result = {
-        "isPatchManagementValid": is_valid,
-        "totalPatchInstallRecords": total,
-        "failedPatchInstallCount": failed_count,
-        "installedPatchInstallCount": installed_count,
-        "failureRatePercentage": round(failure_rate, 2),
+        "isApiAuditLoggingEnabled": is_enabled,
+        "totalActivityRecords": total_activities,
+        "distinctActivityTypes": distinct_activity_types,
+        "adminActionRecordCount": admin_action_count,
+        "userAttributedRecordCount": user_attributed_count,
     }
 
     input_summary = {
-        "totalRecords": total,
-        "installedCount": installed_count,
-        "failedCount": failed_count,
-        "otherStatusCounts": other_statuses,
+        "totalActivityRecords": total_activities,
+        "distinctActivityTypes": distinct_activity_types,
+        "adminActionRecordCount": admin_action_count,
+    }
+
+    metadata = {
+        "transformationId": "isApiAuditLoggingEnabled",
+        "vendor": "NinjaOne",
+        "category": "epp",
     }
 
     return create_response(
@@ -157,9 +155,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isPatchManagementValid",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        metadata=metadata,
     )
