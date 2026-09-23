@@ -1,8 +1,10 @@
+
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +30,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -65,91 +68,87 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-FAILURE_STATUSES = {
-    "FAILED",
-    "FAILED_DOWNLOAD",
-    "FAILED_INSTALL",
-    "REJECTED",
-    "ERROR",
-    "CANCELLED",
-    "TIMED_OUT",
-}
-
-
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        records = data
+        results = data
     elif isinstance(data, dict):
-        records = data.get("results") or data.get("data") or []
-        if not isinstance(records, list):
-            records = []
+        results = data.get("results") or data.get("data") or []
+        if not isinstance(results, list):
+            results = []
     else:
-        records = []
+        results = []
 
-    total = len(records)
-    status_counts = {}
+    total = len(results)
     failed_count = 0
     installed_count = 0
-    devices_with_failures = set()
+    other_statuses = {}
 
-    for rec in records:
+    for rec in results:
         if not isinstance(rec, dict):
             continue
-        status = rec.get("status") or "UNKNOWN"
-        status_counts[status] = (status_counts.get(status) or 0) + 1
-        if status in FAILURE_STATUSES:
+        status = rec.get("status")
+        if status == "FAILED":
             failed_count = failed_count + 1
-            device_id = rec.get("deviceId")
-            if device_id is not None:
-                devices_with_failures.add(device_id)
         elif status == "INSTALLED":
             installed_count = installed_count + 1
+        else:
+            key = status if status else "UNKNOWN"
+            other_statuses[key] = other_statuses.get(key, 0) + 1
 
-    # failure_rate is undefined (None) when there are no records to evaluate;
-    # otherwise it's the fraction of records in FAILURE_STATUSES.
-    failure_rate = (failed_count / total) * 100.0 if total > 0 else None
+    FAILURE_THRESHOLD_PCT = 5.0
 
-    # is_valid is derived purely from data seen in the payload: it requires
-    # at least one patch-install record AND a low observed failure rate.
-    is_valid = (total > 0) and (failure_rate is not None) and (failure_rate < 5.0)
-
-    status_summary = ", ".join([f"{k}={v}" for k, v in status_counts.items()]) if status_counts else "no records"
+    if total == 0:
+        is_valid = False
+        failure_rate = 0.0
+        fail_reasons = [
+            "No OS patch installation records were returned by getOSPatchInstallsReport, "
+            "so patch installation activity cannot be confirmed as executing successfully."
+        ]
+        pass_reasons = []
+        recommendations = [
+            "Verify that devices are checking in and reporting patch installation activity to NinjaOne."
+        ]
+    else:
+        failure_rate = (failed_count / total) * 100.0
+        if failure_rate < FAILURE_THRESHOLD_PCT:
+            is_valid = True
+            pass_reasons = [
+                f"Of {total} OS patch installation records, {installed_count} report status=INSTALLED "
+                f"and only {failed_count} report status=FAILED ({failure_rate:.2f}% failure rate), "
+                f"below the {FAILURE_THRESHOLD_PCT}% threshold indicating patch management is executing successfully."
+            ]
+            fail_reasons = []
+            recommendations = []
+        else:
+            is_valid = False
+            pass_reasons = []
+            fail_reasons = [
+                f"Of {total} OS patch installation records, {failed_count} report status=FAILED "
+                f"({failure_rate:.2f}% failure rate), exceeding the {FAILURE_THRESHOLD_PCT}% threshold, "
+                f"indicating patch installation is stuck or erroring on the fleet."
+            ]
+            recommendations = [
+                "Investigate devices with FAILED patch installation status and re-run patch scans/installs.",
+                "Check device connectivity and disk space, which commonly cause patch install failures."
+            ]
 
     result = {
         "isPatchManagementValid": is_valid,
         "totalPatchInstallRecords": total,
         "failedPatchInstallCount": failed_count,
-        "installedPatchCount": installed_count,
-        "failureRatePercentage": round(failure_rate, 2) if failure_rate is not None else None,
+        "installedPatchInstallCount": installed_count,
+        "failureRatePercentage": round(failure_rate, 2),
     }
 
-    if total == 0:
-        return create_response(
-            result=result,
-            validation=validation,
-            fail_reasons=["No patch install records were returned by getOSPatchInstalls, so patch management operation cannot be confirmed from this response."],
-            recommendations=["Verify the NinjaOne patch management module is enabled and reporting for at least one device."],
-            input_summary={"totalRecords": 0},
-            metadata={"transformationId": "isPatchManagementValid", "vendor": "NinjaOne Endpoint management", "category": "epp"},
-        )
-
-    if is_valid:
-        pass_reasons = [
-            f"Patch install history shows {failed_count} failed records out of {total} total ({round(failure_rate, 2)}% failure rate), status breakdown: {status_summary}.",
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            f"Patch install history shows {failed_count} failed records out of {total} total ({round(failure_rate, 2)}% failure rate), status breakdown: {status_summary}.",
-        ]
-        recommendations = [
-            f"Investigate patch failures on affected devices ({len(devices_with_failures)} distinct devices with failed installs) and re-run patch scans to resolve the backlog.",
-        ]
+    input_summary = {
+        "totalRecords": total,
+        "installedCount": installed_count,
+        "failedCount": failed_count,
+        "otherStatusCounts": other_statuses,
+    }
 
     return create_response(
         result=result,
@@ -157,6 +156,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalRecords": total, "statusCounts": status_counts},
-        metadata={"transformationId": "isPatchManagementValid", "vendor": "NinjaOne Endpoint management", "category": "epp"},
+        input_summary=input_summary,
+        metadata={
+            "transformationId": "isPatchManagementValid",
+            "vendor": "NinjaOne Endpoint Management",
+            "category": "epp",
+        },
     )
