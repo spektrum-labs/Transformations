@@ -1,4 +1,3 @@
-
 import json
 from datetime import datetime
 
@@ -68,89 +67,77 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+PATCH_KEYWORDS = ["patch", "softwarePatchManagement", "osPatchManagement", "patchManagement"]
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        policies = data
+        records = data
     elif isinstance(data, dict):
-        policies = data.get("data") or data.get("policies") or data.get("results") or []
-        if not isinstance(policies, list):
-            policies = []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        policies = []
+        records = []
 
-    total_policies = len(policies)
-    restricted_policy_names = []
-    blanket_auto_approve_names = []
-    unknown_policy_names = []
+    total_records = len(records)
+    devices_with_patch_override = []
 
-    for p in policies:
-        if not isinstance(p, dict):
+    for rec in records:
+        if not isinstance(rec, dict):
             continue
-        name = p.get("name") or f"policy-{p.get('id')}"
-        conditions = p.get("conditions") or []
-        if not isinstance(conditions, list):
-            conditions = []
-
-        found_patch_condition = False
-        is_restricted = False
-        is_blanket_auto_approve = False
-
-        for c in conditions:
-            if not isinstance(c, dict):
-                continue
-            ctype = str(c.get("type") or c.get("conditionType") or "").lower()
-            mode = str(c.get("approvalMode") or c.get("mode") or c.get("approval") or "").lower()
-            if "patch" in ctype or "approval" in ctype:
-                found_patch_condition = True
-                if "manual" in mode or "review" in mode or "restrict" in mode:
-                    is_restricted = True
-                elif "auto" in mode and ("all" in mode or "blanket" in mode or mode == "auto"):
-                    is_blanket_auto_approve = True
-
-        if found_patch_condition and is_restricted:
-            restricted_policy_names.append(name)
-        elif found_patch_condition and is_blanket_auto_approve:
-            blanket_auto_approve_names.append(name)
-        else:
-            unknown_policy_names.append(name)
-
-    has_explicit_restriction = len(restricted_policy_names) > 0
-    has_explicit_blanket = len(blanket_auto_approve_names) > 0
-
-    if has_explicit_blanket:
-        is_restricted_verdict = False
-        fail_reasons = [
-            f"Policies {blanket_auto_approve_names} carry an explicit patch-approval condition configured to auto-approve all categories without review."
+        overrides = rec.get("overrides") or []
+        if not isinstance(overrides, list):
+            continue
+        device_id = rec.get("deviceId")
+        matched = [
+            o for o in overrides
+            if isinstance(o, str) and any(kw.lower() in o.lower() for kw in PATCH_KEYWORDS)
         ]
-        pass_reasons = []
-        recommendations = [
-            "Configure the patching policy's approval section to require manual review for at least one patch category (e.g. security/critical patches) instead of blanket auto-approval."
-        ]
-    elif has_explicit_restriction:
-        is_restricted_verdict = True
+        if matched:
+            devices_with_patch_override.append({"deviceId": device_id, "overrides": matched})
+
+    restricted = len(devices_with_patch_override) > 0
+
+    input_summary = {
+        "totalOverrideRecords": total_records,
+        "devicesWithPatchOverride": len(devices_with_patch_override),
+    }
+
+    if restricted:
+        sample = devices_with_patch_override[0]
         pass_reasons = [
-            f"Policies {restricted_policy_names} carry an explicit patch-approval condition requiring manual review, so blanket auto-approval is not in effect."
+            (
+                "Found %d device-level policy override record(s) affecting patch management "
+                "(e.g. deviceId=%s overrides=%s). This indicates patch auto-approval is scoped/"
+                "restricted at the device level rather than applied as a blanket auto-approve "
+                "across the whole fleet."
+            ) % (len(devices_with_patch_override), sample.get("deviceId"), sample.get("overrides"))
         ]
         fail_reasons = []
         recommendations = []
     else:
-        is_restricted_verdict = False
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_policies} policies returned by getPolicies expose a patch-approval condition restricting auto-approval; conditions arrays are empty or lack patch/approval entries ({unknown_policy_names[:5]} sampled), which cannot confirm any manual-review restriction is configured."
+            (
+                "No device-level policy override records referencing patch management were found "
+                "among the %d override record(s) returned by getPolicyOverridesSummary. Without a "
+                "documented per-device or per-category restriction, the patching policy's approval "
+                "section cannot be confirmed as restricted from blanket auto-approval."
+            ) % total_records
         ]
         recommendations = [
-            "Add an explicit patch-approval condition to the relevant policies (e.g. Windows Workstation Policy, Windows Server Policy) that requires manual review for at least one patch category rather than relying on default auto-approval."
+            "Review the patching policy approval section and configure category-level or device-"
+            "scoped approval overrides instead of a single blanket auto-approve-all rule."
         ]
 
     result = {
-        "isPatchAutoApprovalRestricted": is_restricted_verdict,
-        "totalPolicies": total_policies,
-        "restrictedPolicyCount": len(restricted_policy_names),
-        "blanketAutoApprovePolicyCount": len(blanket_auto_approve_names),
+        "isPatchAutoApprovalRestricted": restricted,
+        "totalOverrideRecords": total_records,
+        "devicesWithPatchOverride": len(devices_with_patch_override),
     }
 
     return create_response(
@@ -159,11 +146,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalPolicies": total_policies,
-            "restrictedPolicyNames": restricted_policy_names,
-            "blanketAutoApprovePolicyNames": blanket_auto_approve_names,
-        },
+        input_summary=input_summary,
         metadata={
             "transformationId": "isPatchAutoApprovalRestricted",
             "vendor": "NinjaOne Endpoint Management",
