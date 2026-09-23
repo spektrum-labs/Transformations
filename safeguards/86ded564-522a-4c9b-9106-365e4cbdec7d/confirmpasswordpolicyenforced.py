@@ -77,6 +77,14 @@ def transform(input):
 
         data, validation = extract_input(input)
 
+        # A body that decodes to nothing carries no evidence either way.
+        if data in (None, {}, [], ""):
+            return create_response(
+                result={criteriaKey: False},
+                validation={"status": "error", "errors": ["the vendor returned no data to evaluate"], "warnings": []},
+                api_errors=["the vendor returned no data to evaluate"],
+            )
+
         if validation.get("status") == "failed":
             return create_response(
                 result={criteriaKey: False},
@@ -88,13 +96,58 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Check for password policy configuration
-        password_policy_enforced = data is not None
+        # FAIL CLOSED ON A BODY THAT IS NOT A POLICY LIST. This used to read
+        # `password_policy_enforced = data is not None`, which has no reachable false past
+        # the guard above: an error envelope, or a response to some other call, reported the
+        # password policy enforced. The criterion was "did a response arrive".
+        #
+        # The shape read is Okta GET /api/v1/policies?type=PASSWORD -- the one production
+        # definition measured pointing at this file is Okta's -- which answers with a JSON
+        # ARRAY of Policy objects, each carrying id, type ("PASSWORD"), name and status
+        # ("ACTIVE"/"INACTIVE") (https://developer.okta.com/docs/reference/api/policy/).
+        # An Okta error is an object ({"errorCode": ..., "errorSummary": ...}), not an array.
+        #
+        # So admit only a policy collection, bare or under `policies`/`data`/`items`, and ask
+        # the policy question of it: ENFORCED means at least one PASSWORD policy is ACTIVE.
+        # The reachable false is a collection in which no policy is active (including a
+        # named, explicitly empty one). Anything with no collection at all routes to
+        # dataCollection.status="error": never listing the policies is not the same as
+        # listing them and finding none enforced.
+        policies = data if isinstance(data, list) else None
+        if policies is None and isinstance(data, dict):
+            for key in ("policies", "data", "items"):
+                if isinstance(data.get(key), list):
+                    policies = data[key]
+                    break
+        if policies is None:
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                api_errors=[("no policy collection in the /api/v1/policies?type=PASSWORD "
+                             "response: the password policies were never listed, so their "
+                             "enforcement cannot be reported either way")])
+
+        active_policies = []
+        for policy in policies:
+            if not isinstance(policy, dict):
+                continue
+            policy_type = policy.get("type")
+            if isinstance(policy_type, str) and policy_type.upper() != "PASSWORD":
+                continue
+            status = policy.get("status")
+            if isinstance(status, str) and status.upper() == "ACTIVE":
+                active_policies.append(policy.get("name") or policy.get("id") or "unnamed")
+
+        password_policy_enforced = len(active_policies) > 0
 
         if password_policy_enforced:
-            pass_reasons.append("Password policy is configured")
+            pass_reasons.append(
+                "Password policy is configured and ACTIVE: "
+                + ", ".join([str(name) for name in active_policies[:5]]))
         else:
-            fail_reasons.append("No password policy configuration found")
+            fail_reasons.append(
+                "The IDP returned " + str(len(policies)) + " password policy record(s) and "
+                "none of them is ACTIVE, so no password policy is enforced")
             recommendations.append("Configure and enforce password policy in the IDP")
 
         return create_response(
@@ -103,7 +156,9 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"hasPasswordPolicy": password_policy_enforced}
+            input_summary={"hasPasswordPolicy": password_policy_enforced,
+                           "activePasswordPolicies": len(active_policies),
+                           "passwordPolicyRecords": len(policies)}
         )
 
     except Exception as e:

@@ -21,11 +21,15 @@ def extract_findings(input_data):
         if nxt is None:
             break
         data = nxt
-    if isinstance(data, dict) and "Findings" in data:
+    # None, not [], when the body carries no findings collection: `[]` would read as "AWS
+    # returned no findings", and every verdict in this file rests on telling that apart
+    # from "this body was never a findings response". Only an explicit `Findings` list is a
+    # proven result set, so `{"Findings": []}` is a real zero and `{}` is not.
+    if isinstance(data, dict) and isinstance(data.get("Findings"), list):
         return data["Findings"]
-    if isinstance(data, list):
+    if isinstance(data, list) and data:
         return data
-    return []
+    return None
 
 
 def build_response(result, transform_id, pass_reasons=None, fail_reasons=None, errors=None):
@@ -66,7 +70,27 @@ TRANSFORM_ID = "ispublicstoragebucketexposed"
 def transform(input):
     try:
         findings = extract_findings(input)
+        # FAIL CLOSED ON A BODY THAT IS NOT A FINDINGS RESPONSE. The shape read is Security
+        # Hub GetFindings (POST /findings), whose response is
+        # {"Findings": [AwsSecurityFinding, ...], "NextToken": "..."}. An AWS error is an
+        # object carrying `__type`/`message` and no `Findings`; so is a 401/403 envelope, and
+        # so is a payload about anything else. Before this, all of those came back as an
+        # empty findings list and reported "No public S3 bucket exposure
+        # detected" -- and this key is inverted, so the silent False was the rubber stamp.
+        if findings is None:
+            return build_response({CRITERIA_KEY: True}, TRANSFORM_ID,
+                                  errors=["no Findings collection in the Security Hub GetFindings response: the findings "
+                                          "query cannot be shown to have run, so the absence of a public-bucket "
+                                          "finding is not evidence that no bucket is public"])
         statuses = control_status_map(findings, CONTROL_IDS)
+        # A findings list that reports no status for any S3 public-access control is not an
+        # all-clear either: those controls were not evaluated in what we were shown.
+        if not statuses:
+            return build_response({CRITERIA_KEY: True}, TRANSFORM_ID,
+                                  errors=["the Security Hub findings carry no status for any of "
+                                          + ", ".join(CONTROL_IDS) + ": the public-access controls "
+                                          "were not evaluated in what was returned, so no exposure "
+                                          "verdict can be given"])
         failed = [cid for cid, st in statuses.items() if st == "FAILED"]
         exposed = len(failed) > 0
         return build_response({CRITERIA_KEY: exposed}, TRANSFORM_ID,

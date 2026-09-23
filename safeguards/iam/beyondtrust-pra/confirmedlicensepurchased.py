@@ -54,14 +54,14 @@ def evaluate(data):
             # An EMPTY dict, or one with none of the recognised signals below, used to
             # fall through "no error keyword found" straight to True -- so {} and every
             # unrecognised body were read as a confirmed license. Resolved from the
-            # payload now; see _affirmative_signal below.
+            # payload now; see affirmative_signal below.
             if not data:
                 return {"confirmedLicensePurchased": False, "reason": "Empty response body"}
             error_msg = str(data.get("error", data.get("message", data.get("detail", "")))).lower()
             if error_msg and any(k in error_msg for k in ("license", "unauthorized", "forbidden", "invalid_client", "invalid_token")):
                 return {"confirmedLicensePurchased": False, "reason": error_msg}
             # Dict returned — valid but unexpected shape for vault/account (PRA returns a list)
-            return {"confirmedLicensePurchased": _affirmative_signal(data)}
+            return {"confirmedLicensePurchased": affirmative_signal(data)}
 
         # List response (even empty) confirms license and API access
         if isinstance(data, list):
@@ -125,7 +125,7 @@ def transform(input):
         )
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when a non-error dict POSITIVELY evidences an active license.
 
     The caller has already ruled out an empty body and the PRA-specific error shapes
