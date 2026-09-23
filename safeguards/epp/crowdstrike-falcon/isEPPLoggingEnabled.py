@@ -133,7 +133,10 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDetections": total, "resourceCount": len(resources)},
+        # Only the fleet-wide meta.pagination.total answers this check. len(resources)
+        # is whatever page size the API happened to return, so surfacing it in the
+        # summary just reads as a contradiction next to the real total.
+        input_summary={"totalDetections": total},
         metadata={
             "transformationId": "isEPPLoggingEnabled",
             "vendor": "CrowdStrike Falcon",
