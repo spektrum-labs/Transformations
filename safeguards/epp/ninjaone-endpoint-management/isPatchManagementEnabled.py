@@ -79,54 +79,55 @@ def transform(input):
         records = []
 
     total_records = len(records)
-
-    distinct_devices = set()
+    device_ids = set()
     status_counts = {}
     for rec in records:
         if not isinstance(rec, dict):
             continue
-        device_id = rec.get("deviceId")
-        if device_id is not None:
-            distinct_devices.add(device_id)
+        dev_id = rec.get("deviceId")
+        if dev_id is not None:
+            device_ids.add(dev_id)
         status = rec.get("status") or "UNKNOWN"
         status_counts[status] = status_counts.get(status, 0) + 1
 
-    installed_count = status_counts.get("INSTALLED", 0)
-    distinct_device_count = len(distinct_devices)
+    devices_with_patch_activity = len(device_ids)
+    is_enabled = total_records > 0 and devices_with_patch_activity > 0
 
-    is_enabled = total_records > 0 and distinct_device_count > 0
-
-    input_summary = {
-        "totalPatchInstallRecords": total_records,
-        "distinctDevicesWithPatchHistory": distinct_device_count,
-        "statusBreakdown": status_counts,
-    }
+    status_summary = ", ".join([f"{k}={v}" for k, v in status_counts.items()])
 
     if is_enabled:
         pass_reasons = [
-            f"OS patch install history returned {total_records} patch records "
-            f"across {distinct_device_count} distinct devices (deviceId), with "
-            f"{installed_count} records showing status=INSTALLED. This confirms "
-            f"OS patch scanning/deployment is active via NinjaOne policy."
+            f"OS patch scan report returned {total_records} patch records across {devices_with_patch_activity} distinct devices "
+            f"(status breakdown: {status_summary}), confirming OS patch management is actively scanning and reporting patch state."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"The os-patch-installs report returned {total_records} records across "
-            f"{distinct_device_count} devices, showing no evidence of active patch "
-            f"deployment history for the managed fleet."
+            "The pending/failed/rejected OS patches report returned zero records, so no evidence of active OS patch "
+            "management or scanning could be found for any device."
         ]
         recommendations = [
-            "Verify that a NinjaOne policy with OS Patch Management enabled is "
-            "assigned to managed devices, and that patch scans have run recently."
+            "Enable OS patch management policies on device policies in NinjaOne so that patch scan results are reported."
         ]
 
     result = {
         "isPatchManagementEnabled": is_enabled,
-        "totalPatchInstallRecords": total_records,
-        "distinctDevicesWithPatchHistory": distinct_device_count,
+        "totalPatchRecords": total_records,
+        "devicesWithPatchActivity": devices_with_patch_activity,
+    }
+
+    input_summary = {
+        "totalPatchRecords": total_records,
+        "devicesWithPatchActivity": devices_with_patch_activity,
+        "statusBreakdown": status_counts,
+    }
+
+    metadata = {
+        "transformationId": "isPatchManagementEnabled",
+        "vendor": "NinjaOne Endpoint Management",
+        "category": "epp",
     }
 
     return create_response(
@@ -136,9 +137,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isPatchManagementEnabled",
-            "vendor": "NinjaOne",
-            "category": "epp",
-        },
+        metadata=metadata,
     )
