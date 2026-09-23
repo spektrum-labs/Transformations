@@ -1,9 +1,9 @@
+
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +29,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,72 +71,63 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        records = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        results = []
+        records = []
 
-    if not isinstance(results, list):
-        results = []
+    total_records = len(records)
+    deployed_devices = []
+    not_deployed_devices = []
 
-    device_ids_with_epp = set()
-    device_ids_seen = set()
-    product_names_seen = set()
-
-    for row in results:
-        if not isinstance(row, dict):
+    for rec in records:
+        if not isinstance(rec, dict):
             continue
-        device_id = row.get("deviceId")
-        if device_id is None:
-            continue
-        device_ids_seen.add(device_id)
-        product_name = row.get("productName") or ""
-        product_state = row.get("productState") or ""
-        if product_name:
-            product_names_seen.add(product_name)
-        if product_state == "ON":
-            device_ids_with_epp.add(device_id)
+        device_id = rec.get("deviceId")
+        product_name = rec.get("productName") or ""
+        product_name_clean = product_name.strip().upper() if isinstance(product_name, str) else ""
+        if product_name_clean and product_name_clean != "NONE":
+            deployed_devices.append(device_id)
+        else:
+            not_deployed_devices.append(device_id)
 
-    total_devices_reporting = len(device_ids_seen)
-    devices_with_active_epp = len(device_ids_with_epp)
-
-    is_epp_deployed = devices_with_active_epp > 0
+    deployed_count = len(deployed_devices)
+    not_deployed_count = len(not_deployed_devices)
+    is_deployed = deployed_count > 0
 
     input_summary = {
-        "totalAntivirusRecords": len(results),
-        "totalDevicesReporting": total_devices_reporting,
-        "devicesWithActiveEPP": devices_with_active_epp,
-        "productNamesSeen": sorted(list(product_names_seen)),
+        "totalDevicesReported": total_records,
+        "devicesWithEPPProduct": deployed_count,
+        "devicesWithoutEPPProduct": not_deployed_count,
     }
 
-    if is_epp_deployed:
-        sample_products = ", ".join(sorted(list(product_names_seen))[:3])
+    if is_deployed:
+        sample_ids = deployed_devices[:5]
         pass_reasons = [
-            f"Antivirus-status report returned {len(results)} product records across "
-            f"{total_devices_reporting} devices; {devices_with_active_epp} devices have at "
-            f"least one product with productState='ON' (e.g. {sample_products}), confirming "
-            f"an EPP agent is installed and actively reporting."
+            f"{deployed_count} of {total_records} devices in the antivirus status report show a "
+            f"non-NONE productName (e.g. device IDs {sample_ids}), confirming an EPP/antivirus agent "
+            f"is installed and reporting on managed devices."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            f"Antivirus-status report returned {len(results)} records across "
-            f"{total_devices_reporting} devices, but none report productState='ON'. No "
-            f"evidence of an actively reporting EPP product was found."
+            f"None of the {total_records} devices in the antivirus status report have a productName "
+            f"other than 'NONE'; no EPP/antivirus agent appears installed or reporting."
         ]
         recommendations = [
-            "Verify that an endpoint protection product (e.g. CrowdStrike Falcon Sensor, "
-            "Microsoft Defender Antivirus) is installed and enabled on managed devices, and "
-            "confirm the NinjaOne agent is reporting antivirus status correctly."
+            "Deploy an antivirus/EPP agent (e.g. via NinjaOne policy) to managed endpoints so it "
+            "reports through the antivirus-status query."
         ]
 
     result = {
-        "isEPPDeployed": is_epp_deployed,
-        "totalDevicesReporting": total_devices_reporting,
-        "devicesWithActiveEPP": devices_with_active_epp,
+        "isEPPDeployed": is_deployed,
+        "devicesWithEPPProduct": deployed_count,
+        "totalDevicesReported": total_records,
     }
 
     return create_response(
@@ -149,7 +139,7 @@ def transform(input):
         input_summary=input_summary,
         metadata={
             "transformationId": "isEPPDeployed",
-            "vendor": "NinjaOne Endpoint Management",
+            "vendor": "NinjaOne Endpoint management",
             "category": "epp",
         },
     )
