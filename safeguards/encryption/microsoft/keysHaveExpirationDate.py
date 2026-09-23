@@ -46,8 +46,15 @@ def transform(input):
         data = data.get("apiResponse", data)
         data = data.get("data", data)
 
-        # Get list of keys
-        keys = data.get("value", [])
+        # The Key Vault list response is {"value": [...], "nextLink": ...}. Only an explicit
+        # `value` list is a proven result set: defaulting it to [] made an error envelope, a
+        # 401/403 or an unrelated body read as "no keys", which this criterion counts as
+        # compliant. Without the list the vault was never listed, so say false, not true.
+        keys = data.get("value") if isinstance(data, dict) else None
+        if not isinstance(keys, list):
+            return {"keysHaveExpirationDate": False,
+                    "error": "no `value` list in the Key Vault list-keys response: the "
+                             "keys were never listed"}
 
         # If no keys exist, consider compliant
         if len(keys) == 0:

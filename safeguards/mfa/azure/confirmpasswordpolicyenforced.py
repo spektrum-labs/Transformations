@@ -88,13 +88,45 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Check for password policy configuration
-        password_policy_enforced = data is not None
+        # FAIL CLOSED ON A BODY THAT IS NOT A POLICY LIST. This used to read
+        # `password_policy_enforced = data is not None`: an error envelope, or a response to
+        # some other call, reported the password policy enforced.
+        #
+        # Every Microsoft product that carries this criterion routes it to Graph
+        # GET /beta/identity/conditionalAccess/policies, a collection
+        # {"@odata.context": ..., "value": [{id, displayName, state}, ...]}, where `state` is
+        # "enabled", "disabled" or "enabledForReportingButNotEnforced". A Graph error is
+        # {"error": {"code": ..., "message": ...}} and carries no such collection.
+        #
+        # So admit only that collection (or the bare array), and count a policy as enforced
+        # only when its state is "enabled" -- report-only is by its own name not enforced,
+        # and a record with no state says nothing. Anything with no collection routes to
+        # dataCollection.status="error": the policies were never read.
+        policies = data if isinstance(data, list) else None
+        if policies is None and isinstance(data, dict) and isinstance(data.get("value"), list):
+            policies = data["value"]
+        if policies is None:
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                api_errors=[("no policy collection in the conditionalAccess/policies "
+                             "response: the policies were never read, so their enforcement "
+                             "cannot be reported either way")])
+
+        enforced_policies = []
+        for policy in policies:
+            if isinstance(policy, dict) and str(policy.get("state") or "").lower() == "enabled":
+                enforced_policies.append(policy.get("displayName") or policy.get("id") or "unnamed")
+
+        password_policy_enforced = len(enforced_policies) > 0
 
         if password_policy_enforced:
-            pass_reasons.append("Password policy is configured")
+            pass_reasons.append(
+                "Enforced policy present: " + ", ".join([str(n) for n in enforced_policies[:5]]))
         else:
-            fail_reasons.append("No password policy configuration found")
+            fail_reasons.append(
+                "Graph returned " + str(len(policies)) + " policy record(s) and none is "
+                "enabled, so no password policy is enforced")
             recommendations.append("Configure and enforce password policy in the IDP")
 
         return create_response(
@@ -103,7 +135,9 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"hasPasswordPolicy": password_policy_enforced}
+            input_summary={"hasPasswordPolicy": password_policy_enforced,
+                           "enforcedPolicies": len(enforced_policies),
+                           "policyRecords": len(policies)}
         )
 
     except Exception as e:
