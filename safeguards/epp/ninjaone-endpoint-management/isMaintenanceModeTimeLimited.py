@@ -72,71 +72,75 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("devices") or []
+        devices = data.get("data") or data.get("devices") or data.get("apiResponse") or []
         if not isinstance(devices, list):
             devices = []
     else:
         devices = []
 
     total_devices = len(devices)
-    devices_in_maintenance = 0
-    unbounded_devices = []
-    bounded_devices = []
+    devices_with_maintenance = []
+    bounded_count = 0
+    unbounded_count = 0
 
     for d in devices:
         if not isinstance(d, dict):
             continue
-        m = d.get("maintenance")
-        if not isinstance(m, dict):
-            continue
-        devices_in_maintenance = devices_in_maintenance + 1
-        end_val = m.get("end")
-        if end_val is None:
-            end_val = m.get("endTime")
-        device_label = d.get("displayName") or d.get("systemName") or d.get("id")
-        if end_val is None:
-            unbounded_devices.append(device_label)
-        else:
-            bounded_devices.append(device_label)
+        maintenance = d.get("maintenance")
+        if isinstance(maintenance, dict) and maintenance:
+            devices_with_maintenance.append(d)
+            start = maintenance.get("start")
+            end = maintenance.get("end")
+            if start is not None and end is not None:
+                bounded_count = bounded_count + 1
+            else:
+                unbounded_count = unbounded_count + 1
 
-    if devices_in_maintenance == 0:
-        is_time_limited = True
-        pass_reasons = [
-            f"No devices currently report an active maintenance object out of {total_devices} devices scanned via listDevices; there are no indefinite maintenance windows to flag."
-        ]
-        fail_reasons = []
-        recommendations = []
-    elif len(unbounded_devices) == 0:
-        is_time_limited = True
-        pass_reasons = [
-            f"All {devices_in_maintenance} device(s) currently in maintenance mode have a defined 'end' timestamp (devices: {bounded_devices})."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
+    maintenance_seen = len(devices_with_maintenance)
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if maintenance_seen == 0:
         is_time_limited = False
-        pass_reasons = []
-        fail_reasons = [
-            f"{len(unbounded_devices)} of {devices_in_maintenance} device(s) in maintenance mode have no 'end' timestamp set (devices: {unbounded_devices}), meaning maintenance mode is indefinite."
-        ]
-        recommendations = [
-            "Set an explicit end time for maintenance windows on all devices instead of leaving maintenance mode open-ended."
-        ]
+        fail_reasons.append(
+            "No device records in the getDevicesDetailed response (%d devices scanned) carry a populated 'maintenance' object, so no active or configured maintenance window could be inspected for a start/end bound." % total_devices
+        )
+        recommendations.append(
+            "Place a device into maintenance mode and re-scan, or verify via the NinjaOne console that maintenance windows are configured with both a start and end timestamp rather than left open-ended."
+        )
+    elif unbounded_count > 0:
+        is_time_limited = False
+        fail_reasons.append(
+            "%d of %d devices with a maintenance object have a start timestamp but no end timestamp, indicating an indefinite (non-time-limited) maintenance suppression." % (unbounded_count, maintenance_seen)
+        )
+        recommendations.append(
+            "Configure all maintenance mode windows with an explicit end time so alert suppression is automatically bounded."
+        )
+    else:
+        is_time_limited = True
+        pass_reasons.append(
+            "All %d devices carrying a maintenance object have both 'start' and 'end' epoch fields populated, confirming maintenance windows are bounded rather than indefinite." % maintenance_seen
+        )
+
+    result = {
+        "isMaintenanceModeTimeLimited": is_time_limited,
+        "devicesWithMaintenanceWindow": maintenance_seen,
+        "boundedMaintenanceWindows": bounded_count,
+        "unboundedMaintenanceWindows": unbounded_count,
+        "totalDevicesScanned": total_devices,
+    }
 
     input_summary = {
-        "totalDevices": total_devices,
-        "devicesInMaintenance": devices_in_maintenance,
-        "unboundedMaintenanceDevices": len(unbounded_devices),
-        "boundedMaintenanceDevices": len(bounded_devices),
+        "totalDevicesScanned": total_devices,
+        "devicesWithMaintenanceWindow": maintenance_seen,
+        "boundedMaintenanceWindows": bounded_count,
+        "unboundedMaintenanceWindows": unbounded_count,
     }
 
     return create_response(
-        result={
-            "isMaintenanceModeTimeLimited": is_time_limited,
-            "totalDevices": total_devices,
-            "devicesInMaintenance": devices_in_maintenance,
-            "unboundedMaintenanceDevices": len(unbounded_devices),
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
