@@ -1,34 +1,33 @@
 """Schema registry for this vendor's transformations."""
 
-from .confirmedLicensePurchased import ConfirmedLicensePurchasedInput
 from .endpointOperationalStatusUnprotectedCount import EndpointOperationalStatusUnprotectedCountInput
+from
+from .isApiAuditLoggingEnabled import IsApiAuditLoggingEnabledInput
 from .isBitLockerRecoveryKeyEscrowed import IsBitLockerRecoveryKeyEscrowedInput
 from
 from .isDeviceOSVersionVisible import IsDeviceOSVersionVisibleInput
+from
 from .isEDRDeployed import IsEDRDeployedInput
+from
+from .isEPPConfigured import IsEPPConfiguredInput
 from .isEPPDeployed import IsEPPDeployedInput
-from .isEPPEnabled import IsEPPEnabledInput
+from
 from .isEPPMisconfigured import IsEPPMisconfiguredInput
 from
 from .isMaintenanceModeTimeLimited import IsMaintenanceModeTimeLimitedInput
-from
 from .isPatchManagementEnabled import IsPatchManagementEnabledInput
-from .isPatchManagementValid import IsPatchManagementValidInput
+from
 from .isSignatureUpToDate import IsSignatureUpToDateInput
-from .maintenanceModeActiveEndpointCount import MaintenanceModeActiveEndpointCountInput
+from
 from .offlineSensorCount import OfflineSensorCountInput
-from .pendingApprovalRequestCount import PendingApprovalRequestCountInput
-from .policyOverrideDriftCount import PolicyOverrideDriftCountInput
-from .quarantinedFileCount import QuarantinedFileCountInput
-from .requiredCoveragePercentage import RequiredCoveragePercentageInput
+from
 from .scanFailureCount import ScanFailureCountInput
 from
-from .staleSensorCount import StaleSensorCountInput
 
 __all__ = [
-    "ConfirmedLicensePurchasedInput",
     "EndpointOperationalStatusUnprotectedCountInput",
     "IsAgentDeployedInput",
+    "IsApiAuditLoggingEnabledInput",
     "IsBitLockerRecoveryKeyEscrowedInput",
     "IsDeviceAutoApprovalDisabledInput",
     "IsDeviceOSVersionVisibleInput",
@@ -45,12 +44,8 @@ __all__ = [
     "IsPatchManagementValidInput",
     "IsSignatureUpToDateInput",
     "IsThirdPartyPatchManagementEnabledInput",
-    "MaintenanceModeActiveEndpointCountInput",
     "OfflineSensorCountInput",
     "PendingApprovalRequestCountInput",
-    "PolicyOverrideDriftCountInput",
-    "QuarantinedFileCountInput",
-    "RequiredCoveragePercentageInput",
     "ScanFailureCountInput",
     "StaleSensorCountInput",
 ]
