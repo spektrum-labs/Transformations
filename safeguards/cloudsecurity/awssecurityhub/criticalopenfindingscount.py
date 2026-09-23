@@ -21,11 +21,15 @@ def extract_findings(input_data):
         if nxt is None:
             break
         data = nxt
-    if isinstance(data, dict) and "Findings" in data:
+    # None, not [], when the body carries no findings collection: `[]` would read as "AWS
+    # returned no findings", and every verdict in this file rests on telling that apart
+    # from "this body was never a findings response". Only an explicit `Findings` list is a
+    # proven result set, so `{"Findings": []}` is a real zero and `{}` is not.
+    if isinstance(data, dict) and isinstance(data.get("Findings"), list):
         return data["Findings"]
-    if isinstance(data, list):
+    if isinstance(data, list) and data:
         return data
-    return []
+    return None
 
 
 def build_response(result, transform_id, pass_reasons=None, fail_reasons=None, errors=None):
@@ -65,6 +69,18 @@ TRANSFORM_ID = "criticalopenfindingscount"
 def transform(input):
     try:
         findings = extract_findings(input)
+        # FAIL CLOSED ON A BODY THAT IS NOT A FINDINGS RESPONSE. The shape read is Security
+        # Hub GetFindings (POST /findings), whose response is
+        # {"Findings": [AwsSecurityFinding, ...], "NextToken": "..."}. An AWS error is an
+        # object carrying `__type`/`message` and no `Findings`; so is a 401/403 envelope, and
+        # so is a payload about anything else. Before this, all of those came back as an
+        # empty findings list and reported "No open critical findings"
+        # about an estate that was never queried.
+        if findings is None:
+            return build_response({CRITERIA_KEY: False, "openCriticalFindings": -1}, TRANSFORM_ID,
+                                  errors=["no Findings collection in the Security Hub GetFindings response: the findings "
+                                          "query cannot be shown to have run, so zero open critical findings is not "
+                                          "evidence of a clean estate"])
         critical = 0
         for f in findings:
             if not isinstance(f, dict):
