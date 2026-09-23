@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -74,7 +72,7 @@ def transform(input):
     if isinstance(data, list):
         alerts = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("apiResponse") or []
+        alerts = data.get("data") or data.get("alerts") or []
         if not isinstance(alerts, list):
             alerts = []
     else:
@@ -93,39 +91,36 @@ def transform(input):
         if repo_name:
             repos[repo_name] = repos.get(repo_name, 0) + 1
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
     if open_count == 0:
-        pass_reasons.append(
-            "No open secret scanning alerts found across org repositories "
-            "(state=open filter applied at the API query level)."
-        )
+        pass_reasons = ["No open secret scanning alerts were found across the organization's repositories (0 records with state=open)."]
+        fail_reasons = []
+        recommendations = []
     else:
-        top_types = sorted(secret_types.items(), key=lambda kv: -kv[1])[:5]
-        type_summary = ", ".join([f"{t}: {c}" for t, c in top_types])
-        fail_reasons.append(
-            f"Found {open_count} open secret scanning alerts across "
-            f"{len(repos)} repositories. Top secret types: {type_summary}."
-        )
-        recommendations.append(
-            "Review and remediate the flagged secrets (rotate/revoke credentials) "
-            "and resolve the corresponding secret scanning alerts in the affected repositories."
-        )
-
-    result = {
-        "openSecretScanningAlertsCount": open_count,
-        "affectedRepositoryCount": len(repos),
-        "secretTypeBreakdown": secret_types,
-    }
+        pass_reasons = []
+        top_types = sorted(secret_types.items(), key=lambda x: -x[1])[:5]
+        type_summary = ", ".join([f"{t}={c}" for t, c in top_types])
+        repo_count = len(repos)
+        fail_reasons = [
+            f"Found {open_count} open secret scanning alerts across {repo_count} repositories. Secret type breakdown: {type_summary}."
+        ]
+        recommendations = [
+            "Rotate the exposed secrets and remove them from git history, then resolve the corresponding secret scanning alerts as 'revoked' or 'false positive' as appropriate.",
+            "Enable secret scanning push protection organization-wide to prevent future leaks from being committed.",
+        ]
 
     return create_response(
-        result=result,
+        result={
+            "openSecretScanningAlertsCount": open_count,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalAlertsInResponse": len(alerts), "openAlertsCounted": open_count},
+        input_summary={
+            "totalAlertsInResponse": len(alerts),
+            "openAlertsCounted": open_count,
+            "distinctReposWithOpenAlerts": len(repos),
+        },
         metadata={
             "transformationId": "openSecretScanningAlertsCount",
             "vendor": "GitHub",
