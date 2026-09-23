@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,79 +70,84 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        records = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
-        if not isinstance(results, list):
-            results = []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        results = []
+        records = []
 
-    total_devices = len(results)
-    configured_devices = 0
-    unconfigured_devices = 0
-    products_seen = set()
-
-    for rec in results:
-        if not isinstance(rec, dict):
+    total_records = len(records)
+    deployed = []
+    for r in records:
+        if not isinstance(r, dict):
             continue
-        product_name = rec.get("productName") or "NONE"
-        product_state = rec.get("productState")
-        if product_name != "NONE" and product_state is not None:
-            configured_devices = configured_devices + 1
-            products_seen.add(product_name)
-        else:
-            unconfigured_devices = unconfigured_devices + 1
+        product_name = r.get("productName") or "NONE"
+        if product_name != "NONE":
+            deployed.append(r)
 
-    is_configured = configured_devices > 0
+    deployed_count = len(deployed)
+    with_state = [r for r in deployed if r.get("productState")]
+    on_count = sum(1 for r in with_state if r.get("productState") == "ON")
+    off_count = sum(1 for r in with_state if r.get("productState") == "OFF")
+    state_count = len(with_state)
 
-    input_summary = {
-        "totalDevicesReported": total_devices,
-        "configuredDevices": configured_devices,
-        "unconfiguredDevices": unconfigured_devices,
-        "distinctProducts": list(products_seen),
-    }
+    on_ratio = (on_count / state_count) if state_count > 0 else 0.0
 
-    metadata = {"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"}
+    is_configured = state_count > 0 and on_ratio >= 0.5
 
-    if total_devices == 0:
-        return create_response(
-            result={"isEPPConfigured": is_configured, "configuredDevices": configured_devices, "totalDevices": total_devices},
-            validation=validation,
-            fail_reasons=["Antivirus status report returned no device records (results list empty); cannot confirm an EPP product is configured via policy."],
-            recommendations=["Assign an endpoint protection policy to managed devices and verify the antivirus status report populates."],
-            input_summary=input_summary,
-            metadata=metadata,
-        )
-
-    sample_products = ", ".join(list(products_seen)) if products_seen else "unknown"
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
     if is_configured:
-        return create_response(
-            result={
-                "isEPPConfigured": is_configured,
-                "configuredDevices": configured_devices,
-                "totalDevices": total_devices,
-            },
-            validation=validation,
-            pass_reasons=[
-                f"{configured_devices} of {total_devices} devices report a non-NONE productName with a populated productState (e.g. {sample_products}), indicating an EPP product is configured on managed devices via policy."
-            ],
-            input_summary=input_summary,
-            metadata=metadata,
+        pass_reasons.append(
+            "%d of %d devices with a reporting EPP product show productState=ON (%.1f%%), meeting the 50%% configured threshold." % (on_count, state_count, on_ratio * 100)
         )
     else:
-        return create_response(
-            result={
-                "isEPPConfigured": is_configured,
-                "configuredDevices": configured_devices,
-                "totalDevices": total_devices,
-            },
-            validation=validation,
-            fail_reasons=[
-                f"All {total_devices} devices report productName='NONE' with no productState, indicating no endpoint protection product is configured on any managed device."
-            ],
-            recommendations=["Assign an endpoint protection policy (e.g. Windows Defender, Sophos) to managed devices in NinjaOne."],
-            input_summary=input_summary,
-            metadata=metadata,
-        )
+        if state_count == 0:
+            fail_reasons.append(
+                "No devices among %d antivirus-status records report a productState value; EPP configuration cannot be confirmed." % total_records
+            )
+            recommendations.append(
+                "Verify that the assigned policy pushes and enables an endpoint protection product so that productState reports ON."
+            )
+        else:
+            fail_reasons.append(
+                "Only %d of %d devices with a reporting EPP product show productState=ON (%.1f%%); %d devices report OFF, indicating EPP is installed but not actively configured/running under the assigned policy." % (on_count, state_count, on_ratio * 100, off_count)
+            )
+            recommendations.append(
+                "Review the policy-assigned endpoint protection product configuration and enable real-time protection on devices currently reporting productState=OFF."
+            )
+
+    result = {
+        "isEPPConfigured": is_configured,
+        "totalDevicesReported": total_records,
+        "devicesWithEPPProduct": deployed_count,
+        "devicesWithProductState": state_count,
+        "devicesConfiguredOn": on_count,
+        "devicesConfiguredOff": off_count,
+    }
+
+    input_summary = {
+        "totalRecords": total_records,
+        "deployedCount": deployed_count,
+        "stateReportingCount": state_count,
+        "onCount": on_count,
+        "offCount": off_count,
+    }
+
+    return create_response(
+        result=result,
+        validation=validation,
+        pass_reasons=pass_reasons,
+        fail_reasons=fail_reasons,
+        recommendations=recommendations,
+        input_summary=input_summary,
+        metadata={
+            "transformationId": "isEPPConfigured",
+            "vendor": "NinjaOne Endpoint Management",
+            "category": "epp",
+        },
+    )
