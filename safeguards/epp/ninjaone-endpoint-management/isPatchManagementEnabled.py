@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -67,129 +65,68 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-OS_NODE_CLASSES = set([
-    "WINDOWS_SERVER", "WINDOWS_WORKSTATION", "MAC", "MAC_SERVER",
-    "LINUX_WORKSTATION", "LINUX_SERVER",
-])
-
-
-def policy_patch_enabled(policy):
-    """Inspect a single policy record for evidence patch management is enabled.
-
-    Checks (in priority order):
-      1. An explicit nested patch-management settings object with an
-         'enabled' flag or a non-disabled 'mode'/'status' string.
-      2. A 'conditions' entry whose type/conditionType mentions PATCH.
-      3. The policy-level 'enabled' flag as a last-resort signal that the
-         policy itself (and whatever patching behavior it carries) is on.
-
-    Returns a tuple (has_evidence: bool, enabled: bool, source: str).
-    """
-    for key in ("patchManagement", "osPatchManagement", "patchManagementSettings"):
-        val = policy.get(key)
-        if isinstance(val, dict) and val:
-            mode = val.get("mode") or val.get("status") or ""
-            enabled_flag = val.get("enabled")
-            if enabled_flag is True:
-                return True, True, key
-            if enabled_flag is False:
-                return True, False, key
-            if isinstance(mode, str) and mode != "":
-                is_on = mode.upper() not in ("DISABLED", "OFF", "NONE")
-                return True, is_on, key
-
-    conditions = policy.get("conditions")
-    if isinstance(conditions, list) and conditions:
-        for c in conditions:
-            if isinstance(c, dict):
-                ctype = str(c.get("conditionType") or c.get("type") or "").upper()
-                if "PATCH" in ctype:
-                    return True, True, "conditions"
-
-    enabled_val = policy.get("enabled")
-    if isinstance(enabled_val, bool):
-        return True, enabled_val, "enabled"
-
-    return False, False, "none"
-
-
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else []
+    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        policies = data
+        records = data
     elif isinstance(data, dict):
-        policies = data.get("data") or data.get("results") or data.get("policies") or []
-        if not isinstance(policies, list):
-            policies = []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        policies = []
+        records = []
 
-    os_policies = [p for p in policies if isinstance(p, dict) and (p.get("nodeClass") in OS_NODE_CLASSES)]
+    total_records = len(records)
 
-    enabled_names = []
-    disabled_names = []
-    no_evidence_names = []
+    distinct_devices = set()
+    status_counts = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        device_id = rec.get("deviceId")
+        if device_id is not None:
+            distinct_devices.add(device_id)
+        status = rec.get("status") or "UNKNOWN"
+        status_counts[status] = status_counts.get(status, 0) + 1
 
-    for p in os_policies:
-        has_evidence, is_enabled, source = policy_patch_enabled(p)
-        label = p.get("name") or str(p.get("id"))
-        if not has_evidence:
-            no_evidence_names.append(label)
-        elif is_enabled:
-            enabled_names.append(f"{label} ({source})")
-        else:
-            disabled_names.append(f"{label} ({source})")
+    installed_count = status_counts.get("INSTALLED", 0)
+    distinct_device_count = len(distinct_devices)
 
-    is_patch_management_enabled = len(enabled_names) > 0
+    is_enabled = total_records > 0 and distinct_device_count > 0
 
-    total_os_policies = len(os_policies)
     input_summary = {
-        "totalPolicies": len(policies),
-        "totalOsPolicies": total_os_policies,
-        "policiesWithPatchEnabled": len(enabled_names),
-        "policiesWithPatchDisabled": len(disabled_names),
-        "policiesWithNoEvidence": len(no_evidence_names),
+        "totalPatchInstallRecords": total_records,
+        "distinctDevicesWithPatchHistory": distinct_device_count,
+        "statusBreakdown": status_counts,
     }
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if is_patch_management_enabled:
-        pass_reasons.append(
-            f"{len(enabled_names)} of {total_os_policies} OS-targeting policies report an active patch "
-            f"management configuration: {', '.join(enabled_names[:5])}."
-        )
+    if is_enabled:
+        pass_reasons = [
+            f"OS patch install history returned {total_records} patch records "
+            f"across {distinct_device_count} distinct devices (deviceId), with "
+            f"{installed_count} records showing status=INSTALLED. This confirms "
+            f"OS patch scanning/deployment is active via NinjaOne policy."
+        ]
+        fail_reasons = []
+        recommendations = []
     else:
-        if total_os_policies == 0:
-            fail_reasons.append(
-                "No OS-targeting policies (Windows/Mac/Linux server or workstation nodeClass) were returned "
-                "by /v2/policies, so patch management configuration could not be confirmed."
-            )
-        elif no_evidence_names:
-            fail_reasons.append(
-                f"{len(no_evidence_names)} of {total_os_policies} OS policies expose no patch management "
-                f"settings, conditions, or enabled flag in the policy record (e.g. {', '.join(no_evidence_names[:5])})."
-            )
-        elif disabled_names:
-            fail_reasons.append(
-                f"All {total_os_policies} OS policies with patch management evidence report it disabled: "
-                f"{', '.join(disabled_names[:5])}."
-            )
-        else:
-            fail_reasons.append(
-                "No evidence of an enabled patch management configuration was found across OS-targeting policies."
-            )
-        recommendations.append(
-            "Enable OS patch management on the Windows/Mac/Linux policies governing managed devices in NinjaOne."
-        )
+        pass_reasons = []
+        fail_reasons = [
+            f"The os-patch-installs report returned {total_records} records across "
+            f"{distinct_device_count} devices, showing no evidence of active patch "
+            f"deployment history for the managed fleet."
+        ]
+        recommendations = [
+            "Verify that a NinjaOne policy with OS Patch Management enabled is "
+            "assigned to managed devices, and that patch scans have run recently."
+        ]
 
     result = {
-        "isPatchManagementEnabled": is_patch_management_enabled,
-        "totalOsPolicies": total_os_policies,
-        "policiesWithPatchEnabled": len(enabled_names),
+        "isPatchManagementEnabled": is_enabled,
+        "totalPatchInstallRecords": total_records,
+        "distinctDevicesWithPatchHistory": distinct_device_count,
     }
 
     return create_response(
@@ -201,7 +138,7 @@ def transform(input):
         input_summary=input_summary,
         metadata={
             "transformationId": "isPatchManagementEnabled",
-            "vendor": "NinjaOne Endpoint Management",
+            "vendor": "NinjaOne",
             "category": "epp",
         },
     )
