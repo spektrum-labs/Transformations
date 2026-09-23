@@ -1,29 +1,32 @@
 """Schema registry for this vendor's transformations."""
 
+from .confirmedLicensePurchased import ConfirmedLicensePurchasedInput
 from .endpointOperationalStatusUnprotectedCount import EndpointOperationalStatusUnprotectedCountInput
-from .isAgentDeployed import IsAgentDeployedInput
 from .isBitLockerRecoveryKeyEscrowed import IsBitLockerRecoveryKeyEscrowedInput
-from .isDeviceAutoApprovalDisabled import IsDeviceAutoApprovalDisabledInput
+from
 from .isDeviceOSVersionVisible import IsDeviceOSVersionVisibleInput
-from .isDeviceOfflineAlertingEnabled import IsDeviceOfflineAlertingEnabledInput
 from .isEDRDeployed import IsEDRDeployedInput
-from .isEPPConfigured import IsEPPConfiguredInput
 from .isEPPDeployed import IsEPPDeployedInput
 from .isEPPEnabled import IsEPPEnabledInput
 from .isEPPMisconfigured import IsEPPMisconfiguredInput
-from .isEncryptionEnabled import IsEncryptionEnabledInput
+from
 from .isMaintenanceModeTimeLimited import IsMaintenanceModeTimeLimitedInput
-from .isPatchAutoApprovalRestricted import IsPatchAutoApprovalRestrictedInput
+from
 from .isPatchManagementEnabled import IsPatchManagementEnabledInput
 from .isPatchManagementValid import IsPatchManagementValidInput
 from .isSignatureUpToDate import IsSignatureUpToDateInput
-from .isThirdPartyPatchManagementEnabled import IsThirdPartyPatchManagementEnabledInput
+from .maintenanceModeActiveEndpointCount import MaintenanceModeActiveEndpointCountInput
 from .offlineSensorCount import OfflineSensorCountInput
 from .pendingApprovalRequestCount import PendingApprovalRequestCountInput
+from .policyOverrideDriftCount import PolicyOverrideDriftCountInput
+from .quarantinedFileCount import QuarantinedFileCountInput
+from .requiredCoveragePercentage import RequiredCoveragePercentageInput
 from .scanFailureCount import ScanFailureCountInput
+from
 from .staleSensorCount import StaleSensorCountInput
 
 __all__ = [
+    "ConfirmedLicensePurchasedInput",
     "EndpointOperationalStatusUnprotectedCountInput",
     "IsAgentDeployedInput",
     "IsBitLockerRecoveryKeyEscrowedInput",
@@ -42,8 +45,12 @@ __all__ = [
     "IsPatchManagementValidInput",
     "IsSignatureUpToDateInput",
     "IsThirdPartyPatchManagementEnabledInput",
+    "MaintenanceModeActiveEndpointCountInput",
     "OfflineSensorCountInput",
     "PendingApprovalRequestCountInput",
+    "PolicyOverrideDriftCountInput",
+    "QuarantinedFileCountInput",
+    "RequiredCoveragePercentageInput",
     "ScanFailureCountInput",
     "StaleSensorCountInput",
 ]
