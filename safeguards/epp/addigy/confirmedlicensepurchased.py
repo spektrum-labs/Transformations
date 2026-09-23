@@ -11,6 +11,14 @@ def transform(input):
     """
 
     try:
+        # The production executor passes this transform the ENRICHED envelope
+        # {"data": <body>, "validation": {...}}, because it classifies any source that reads
+        # `input.get('data'` as new-format. Unwrap it first: otherwise the envelope's own
+        # non-empty `data` key reads as evidence, and any non-empty body -- an auth error,
+        # an unrelated payload -- reports the license purchased.
+        if isinstance(input, dict) and 'data' in input and 'validation' in input:
+            input = input['data']
+
         # Handle nested response structure
         if 'response' in input:
             input = input['response']
@@ -20,7 +28,7 @@ def transform(input):
         # `input is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
         # 2xx body -- including one describing the control as OFF -- satisfied this
         # criterion and no input could make it false. Resolved from the payload now.
-        default_value = _affirmative_signal(input)
+        default_value = affirmative_signal(input)
 
         # Check if permissions were returned (indicates valid subscription)
         has_permissions = False
@@ -39,7 +47,7 @@ def transform(input):
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when the payload POSITIVELY evidences the control.
 
     Replaces `data is not None`, which asked whether a response arrived rather than what
