@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -81,53 +79,37 @@ def transform(input):
         devices = []
 
     total_devices = len(devices)
-    offline_devices = [d for d in devices if isinstance(d, dict) and d.get("offline") is True]
-    offline_count = len(offline_devices)
+    offline_count = 0
+    offline_names = []
+    for d in devices:
+        if not isinstance(d, dict):
+            continue
+        if d.get("offline") is True:
+            offline_count = offline_count + 1
+            name = d.get("systemName") or d.get("displayName") or str(d.get("id"))
+            if len(offline_names) < 5:
+                offline_names.append(name)
 
-    sample_names = [d.get("systemName") or d.get("displayName") or str(d.get("id")) for d in offline_devices[:5]]
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    sample_str = ", ".join(offline_names) if offline_names else "none"
 
     if total_devices == 0:
-        fail_reasons.append("No device records were returned by getDevices; unable to determine offline sensor count.")
-        recommendations.append("Verify the NinjaOne API credentials and device inventory are accessible.")
+        pass_reasons = []
+        fail_reasons = ["No device records were returned by getDevicesDetailed; unable to confirm offline sensor count from an empty inventory."]
+        recommendations = ["Verify the getDevicesDetailed endpoint is returning device inventory data for this tenant."]
     else:
-        if offline_count > 0:
-            fail_reasons.append(
-                f"{offline_count} of {total_devices} managed devices report offline=true (examples: {', '.join([str(n) for n in sample_names])})."
-            )
-            recommendations.append(
-                "Investigate offline devices to confirm whether the NinjaOne agent has stopped checking in beyond the acceptable window, and remediate connectivity or agent health issues."
-            )
-        else:
-            pass_reasons.append(
-                f"All {total_devices} managed devices report offline=false; no offline sensors detected."
-            )
-
-    result = {
-        "offlineSensorCount": offline_count,
-        "totalDevices": total_devices,
-    }
-
-    input_summary = {
-        "totalDevices": total_devices,
-        "offlineDevices": offline_count,
-    }
-
-    metadata = {
-        "transformationId": "offlineSensorCount",
-        "vendor": "NinjaOne",
-        "category": "epp",
-    }
+        pass_reasons = [f"{offline_count} of {total_devices} devices report offline=true in the device inventory returned by getDevicesDetailed (examples: {sample_str})."]
+        fail_reasons = []
+        recommendations = [f"Investigate offline devices such as {sample_str} to restore connectivity."] if offline_count > 0 else []
 
     return create_response(
-        result=result,
+        result={
+            "offlineSensorCount": offline_count,
+            "totalDevices": total_devices,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
-        metadata=metadata,
+        input_summary={"totalDevices": total_devices, "offlineDevices": offline_count},
+        metadata={"transformationId": "offlineSensorCount", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
     )
