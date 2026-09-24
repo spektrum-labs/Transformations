@@ -71,68 +71,96 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
-    if isinstance(data, list):
-        threats = data
-        total = len(threats)
-    else:
-        threats = data.get("threats") or []
-        if not isinstance(threats, list):
-            threats = []
-        total = data.get("total")
-        if not isinstance(total, int):
-            total = len(threats)
+    messages = []
+    if isinstance(data, dict):
+        messages = data.get("messages") or []
+    elif isinstance(data, list):
+        messages = data
 
-    # Look for direct attackType / impersonatedParty evidence if the sample carries it
-    attack_type_samples = []
-    for t in threats:
-        if isinstance(t, dict):
-            at = t.get("attackType")
-            ip = t.get("impersonatedParty")
-            if at or ip:
-                attack_type_samples.append({"attackType": at, "impersonatedParty": ip})
+    total_messages = len(messages)
+    classified_count = 0
+    impersonation_signal_count = 0
+    attack_types_seen = []
+    attack_strategies_seen = []
+    impersonated_parties_seen = []
 
-    is_enabled = total > 0
-    input_summary = {
-        "totalThreats": total,
-        "threatsInPage": len(threats),
-        "threatsWithAttackTypeEvidence": len(attack_type_samples),
-    }
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        attack_type = m.get("attackType")
+        attack_strategy = m.get("attackStrategy")
+        impersonated_party = m.get("impersonatedParty")
+
+        if attack_type and attack_strategy:
+            classified_count = classified_count + 1
+
+        if attack_type:
+            if attack_type not in attack_types_seen:
+                attack_types_seen.append(attack_type)
+        if attack_strategy:
+            if attack_strategy not in attack_strategies_seen:
+                attack_strategies_seen.append(attack_strategy)
+        if impersonated_party:
+            if impersonated_party not in impersonated_parties_seen:
+                impersonated_parties_seen.append(impersonated_party)
+
+        impersonation_keywords = ["impersonation", "spoof", "bec", "invoice", "payment fraud", "executive"]
+        strategy_lower = (attack_strategy or "").lower()
+        type_lower = (attack_type or "").lower()
+        is_impersonation_flavoured = False
+        for kw in impersonation_keywords:
+            if kw in strategy_lower or kw in type_lower:
+                is_impersonation_flavoured = True
+        if impersonated_party and impersonated_party not in ["None / Others", "None", ""]:
+            is_impersonation_flavoured = True
+
+        if is_impersonation_flavoured:
+            impersonation_signal_count = impersonation_signal_count + 1
+
+    is_enabled = total_messages > 0 and classified_count == total_messages
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
     if is_enabled:
-        if attack_type_samples:
-            sample = attack_type_samples[0]
+        pass_reasons.append(
+            f"All {total_messages} inspected message(s) carry populated attackType and attackStrategy "
+            f"classification fields (attackTypes observed: {attack_types_seen}, attackStrategies observed: "
+            f"{attack_strategies_seen}), demonstrating Abnormal's behavioral AI actively classifies inbound "
+            f"messages including an impersonatedParty field (values observed: {impersonated_parties_seen}) "
+            f"used specifically for imposter/BEC detection."
+        )
+        if impersonation_signal_count > 0:
             pass_reasons.append(
-                "Threat feed at /v1/threats returned %d total classified threats (total=%d); "
-                "sample message carries attackType=%r / impersonatedParty=%r, confirming Abnormal's "
-                "behavioral AI is actively classifying inbound messages for impersonation/BEC patterns."
-                % (total, total, sample.get("attackType"), sample.get("impersonatedParty"))
-            )
-        else:
-            pass_reasons.append(
-                "Threat feed at /v1/threats returned total=%d classified threats across %d threatIds "
-                "in this page, evidencing that Abnormal's inbound threat detection pipeline (which "
-                "classifies messages by attackType including impersonation and BEC) is active and "
-                "producing threat records for this tenant." % (total, len(threats))
+                f"{impersonation_signal_count} of {total_messages} message(s) carried impersonation/BEC-flavoured "
+                f"classification signals (non-default impersonatedParty or attackType/attackStrategy keywords)."
             )
     else:
-        fail_reasons.append(
-            "The /v1/threats endpoint returned total=0 threats, so no evidence of active "
-            "imposter/BEC email classification could be observed for this tenant."
-        )
-        recommendations.append(
-            "Confirm the Abnormal Security inbound email product is provisioned and actively "
-            "scanning mail flow for this tenant; if threats are expected, verify the API token "
-            "has access to the correct mailbox/tenant scope."
-        )
+        if total_messages == 0:
+            fail_reasons.append("No threat message records were present in the response to evaluate classification fields.")
+            recommendations.append("Verify the tenant has threat data and that the threat detail endpoint is reachable.")
+        else:
+            fail_reasons.append(
+                f"Only {classified_count} of {total_messages} message(s) carried both attackType and "
+                f"attackStrategy classification fields; imposter/BEC classification does not appear consistently active."
+            )
+            recommendations.append(
+                "Confirm Abnormal's behavioral AI detection engine is enabled and fully licensed for this tenant."
+            )
 
     result = {
         "isImposterEmailDetectionEnabled": is_enabled,
-        "totalThreats": total,
-        "threatsWithAttackTypeEvidence": len(attack_type_samples),
+        "totalMessagesEvaluated": total_messages,
+        "classifiedMessages": classified_count,
+        "impersonationFlavouredMessages": impersonation_signal_count,
+    }
+
+    input_summary = {
+        "totalMessagesEvaluated": total_messages,
+        "classifiedMessages": classified_count,
+        "attackTypesObserved": attack_types_seen,
+        "attackStrategiesObserved": attack_strategies_seen,
     }
 
     return create_response(
