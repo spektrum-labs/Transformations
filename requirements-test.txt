@@ -26,3 +26,10 @@ pydantic>=2,<3
 # collection". The job passes --import-mode=prepend explicitly so a future change
 # of pytest's default cannot silently decide this for us.
 pytest>=8,<10
+
+# RestrictedPython: tools/check_sandbox_compile.py compiles every transform the way the
+# production executor does. Same range the platform's executor pins
+# (services/fabric/pyproject.toml: "RestrictedPython>=8.0,<9.0"). The CI job installs it
+# directly; it is listed here so one `pip install -r requirements-test.txt` reproduces
+# every contract locally.
+RestrictedPython>=8.0,<9.0

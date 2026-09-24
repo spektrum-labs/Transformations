@@ -48,6 +48,9 @@ def evaluate(data):
         has_full = False
         has_incremental = False
         scheduled_plans = 0
+        # RestrictedPython (the production executor) rejects `nonlocal`, so the scan
+        # accumulates into a dict instead; the values are read back below.
+        state = {"has_full": False, "has_incremental": False, "scheduled_plans": 0}
 
         FULL_KEYWORDS = {"full", "full_backup", "synth_full", "synthetic_full"}
         INCR_KEYWORDS = {"incremental", "incr", "differential", "diff", "delta"}
@@ -65,7 +68,6 @@ def evaluate(data):
             return is_full, is_incr
 
         def scan_plan(plan_obj):
-            nonlocal has_full, has_incremental, scheduled_plans
             plan_full = False
             plan_incr = False
 
@@ -97,9 +99,9 @@ def evaluate(data):
                         plan_incr = plan_incr or is_i2
 
             if plan_full or plan_incr:
-                scheduled_plans += 1
-                has_full = has_full or plan_full
-                has_incremental = has_incremental or plan_incr
+                state["scheduled_plans"] = state["scheduled_plans"] + 1
+                state["has_full"] = state["has_full"] or plan_full
+                state["has_incremental"] = state["has_incremental"] or plan_incr
 
         # Handle both list of plans and single plan
         plans = (
@@ -120,6 +122,9 @@ def evaluate(data):
             if isinstance(plan_detail, dict):
                 scan_plan(plan_detail)
 
+        has_full = state["has_full"]
+        has_incremental = state["has_incremental"]
+        scheduled_plans = state["scheduled_plans"]
         result = has_full and has_incremental
     except Exception as e:
         return {"isBackupTypesScheduled": False, "error": str(e)}

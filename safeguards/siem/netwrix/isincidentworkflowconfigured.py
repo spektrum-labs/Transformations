@@ -86,7 +86,7 @@ def evaluate(data):
 
             # Netwrix API data source = records written via Integration API (3rd-party workflows)
             if "netwrix api" in data_source or "api" in data_source:
-                workflow_indicators["api_written_records"] += 1
+                workflow_indicators["api_written_records"] = workflow_indicators["api_written_records"] + 1
 
             # Check action and object type for response indicators
             for keyword in response_action_keywords:

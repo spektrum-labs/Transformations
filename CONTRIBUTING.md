@@ -133,7 +133,14 @@ Run both contracts locally before you open a pull request:
 ```bash
 python3 tools/check_fail_closed.py --self-test && python3 tools/check_fail_closed.py
 python3 tools/check_discriminates.py --self-test && python3 tools/check_discriminates.py
+python3 tools/check_sandbox_compile.py --self-test && python3 tools/check_sandbox_compile.py
 ```
+
+The third one matters more than it looks. Production compiles every transform with
+RestrictedPython, which rejects **any name starting with `_`** (only `_parse_input` and
+`_listify` are rewritten first), **`x["k"] += 1`** (write `x["k"] = x["k"] + 1`) and
+**`nonlocal`**. Plain Python accepts all three, so a transform can pass the first two
+contracts and never run in production -- 80 did, on 2026-09-22.
 
 `docs2/03-writing-a-transform.md` has the long-form anti-pattern gallery, with real
 files named. Read it before copying an existing transformation — and read the file you
