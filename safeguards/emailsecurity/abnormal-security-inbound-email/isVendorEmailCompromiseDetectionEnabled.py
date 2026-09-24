@@ -72,54 +72,49 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        vendors = data
+        vendor_cases = data
     elif isinstance(data, dict):
-        vendors = data.get("vendors") or data.get("data") or []
-        if not isinstance(vendors, list):
-            vendors = []
+        vendor_cases = data.get("vendorCases") or data.get("data") or []
     else:
-        vendors = []
+        vendor_cases = []
 
-    tracked_domains = []
-    for v in vendors:
-        if isinstance(v, dict):
-            domain = v.get("vendorDomain")
-            if domain:
-                tracked_domains.append(domain)
+    case_count = len(vendor_cases) if isinstance(vendor_cases, list) else 0
+    is_enabled = case_count > 0
 
-    vendor_count = len(tracked_domains)
-    is_enabled = vendor_count > 0
-
-    input_summary = {
-        "vendorCount": vendor_count,
-        "sampleVendorDomains": tracked_domains[:5],
-    }
+    sample_ids = []
+    if isinstance(vendor_cases, list):
+        for case in vendor_cases[:5]:
+            if isinstance(case, dict) and case.get("vendorCaseId") is not None:
+                sample_ids.append(case.get("vendorCaseId"))
 
     if is_enabled:
         pass_reasons = [
-            f"VendorBase /v1/vendors endpoint returned {vendor_count} tracked vendor domains "
-            f"(e.g. {', '.join(tracked_domains[:5])}), indicating Vendor Email Compromise (VEC) "
-            f"monitoring is licensed and actively tracking third-party vendor domains for this tenant."
+            f"Found {case_count} Vendor Email Compromise (VEC) case record(s) via /v1/vendor-cases "
+            f"(sample vendorCaseId values: {sample_ids}). Vendor cases are generated exclusively by "
+            "Abnormal's VEC detection module, so their presence evidences the capability is enabled."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            "The /v1/vendors endpoint returned zero tracked vendor domains, indicating the "
-            "VendorBase / Vendor Email Compromise (VEC) monitoring product is not populated or "
-            "not licensed for this tenant."
+            "No vendor case records were returned from /v1/vendor-cases, so there is no evidence "
+            "that Vendor Email Compromise (VEC) detection has produced any detections for this tenant."
         ]
         recommendations = [
-            "Enable and license the Abnormal Security VendorBase / Vendor Email Compromise "
-            "detection product for this tenant so vendor domains are tracked and monitored."
+            "Confirm Vendor Email Compromise detection is licensed and enabled in the Abnormal Security "
+            "console, and verify the API token has access to the vendor-cases resource."
         ]
 
+    result = {
+        "isVendorEmailCompromiseDetectionEnabled": is_enabled,
+        "vendorCaseCount": case_count,
+    }
+
+    input_summary = {"vendorCaseCount": case_count}
+
     return create_response(
-        result={
-            "isVendorEmailCompromiseDetectionEnabled": is_enabled,
-            "trackedVendorCount": vendor_count,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
