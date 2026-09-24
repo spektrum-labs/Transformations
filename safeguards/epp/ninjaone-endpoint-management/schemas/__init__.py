@@ -20,6 +20,7 @@ from .isSignatureUpToDate import IsSignatureUpToDateInput
 from .isThirdPartyPatchManagementEnabled import IsThirdPartyPatchManagementEnabledInput
 from .offlineSensorCount import OfflineSensorCountInput
 from .pendingApprovalRequestCount import PendingApprovalRequestCountInput
+from .requiredCoveragePercentage import RequiredCoveragePercentageInput
 from .scanFailureCount import ScanFailureCountInput
 from .staleSensorCount import StaleSensorCountInput
 
@@ -44,6 +45,7 @@ __all__ = [
     "IsThirdPartyPatchManagementEnabledInput",
     "OfflineSensorCountInput",
     "PendingApprovalRequestCountInput",
+    "RequiredCoveragePercentageInput",
     "ScanFailureCountInput",
     "StaleSensorCountInput",
 ]
