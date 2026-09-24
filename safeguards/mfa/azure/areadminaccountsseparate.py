@@ -99,7 +99,7 @@ MAIL_EXCHANGE_SKU_IDS = {
 }
 
 
-def _as_list(value):
+def as_list(value):
     if value is None:
         return []
     if isinstance(value, list):
@@ -112,7 +112,7 @@ def _as_list(value):
     return [value]
 
 
-def _role_id_from_entry(entry):
+def role_id_from_entry(entry):
     if isinstance(entry, str):
         return entry
     if not isinstance(entry, dict):
@@ -120,7 +120,7 @@ def _role_id_from_entry(entry):
     return entry.get("roleDefinitionId") or entry.get("roleTemplateId") or entry.get("roleId")
 
 
-def _directory_role_template_id(role):
+def directory_role_template_id(role):
     if isinstance(role, str):
         return role
     if not isinstance(role, dict):
@@ -128,7 +128,7 @@ def _directory_role_template_id(role):
     return role.get("roleTemplateId") or role.get("roleDefinitionId")
 
 
-def _principal_id_from_entry(entry):
+def principal_id_from_entry(entry):
     if isinstance(entry, str):
         return entry
     if not isinstance(entry, dict):
@@ -136,23 +136,23 @@ def _principal_id_from_entry(entry):
     return entry.get("principalId") or entry.get("id") or entry.get("userId")
 
 
-def _collect_admin_principal_ids(data, users):
+def collect_admin_principal_ids(data, users):
     admin_ids = set()
 
-    for assignment in _as_list(data.get("roleAssignments")):
-        role_id = _role_id_from_entry(assignment)
-        principal_id = _principal_id_from_entry(assignment)
+    for assignment in as_list(data.get("roleAssignments")):
+        role_id = role_id_from_entry(assignment)
+        principal_id = principal_id_from_entry(assignment)
         if role_id in PRIVILEGED_ROLE_IDS and principal_id:
             admin_ids.add(principal_id)
 
-    for role in _as_list(data.get("directoryRoles")):
-        role_id = _directory_role_template_id(role)
+    for role in as_list(data.get("directoryRoles")):
+        role_id = directory_role_template_id(role)
         if role_id not in PRIVILEGED_ROLE_IDS:
             continue
         if not isinstance(role, dict):
             continue
-        for member in _as_list(role.get("members")):
-            principal_id = _principal_id_from_entry(member)
+        for member in as_list(role.get("members")):
+            principal_id = principal_id_from_entry(member)
             if principal_id:
                 admin_ids.add(principal_id)
 
@@ -160,15 +160,15 @@ def _collect_admin_principal_ids(data, users):
         if not isinstance(user, dict):
             continue
         user_id = user.get("id")
-        for role_entry in _as_list(user.get("assignedRoles") or user.get("directoryRoleIds")):
-            role_id = _role_id_from_entry(role_entry)
+        for role_entry in as_list(user.get("assignedRoles") or user.get("directoryRoleIds")):
+            role_id = role_id_from_entry(role_entry)
             if role_id in PRIVILEGED_ROLE_IDS and user_id:
                 admin_ids.add(user_id)
 
     return admin_ids
 
 
-def _user_has_mail_or_exchange_license(user):
+def user_has_mail_or_exchange_license(user):
     licenses = user.get("assignedLicenses") or []
     for lic in licenses:
         if not isinstance(lic, dict):
@@ -249,10 +249,10 @@ def transform(input):
         users_by_id = {user.get("id"): user for user in users if isinstance(user, dict) and user.get("id")}
 
         has_license_data = any(isinstance(user, dict) and "assignedLicenses" in user for user in users)
-        admin_principal_ids = _collect_admin_principal_ids(data, users)
+        admin_principal_ids = collect_admin_principal_ids(data, users)
         has_role_data = (
-            bool(_as_list(data.get("directoryRoles")))
-            or bool(_as_list(data.get("roleAssignments")))
+            bool(as_list(data.get("directoryRoles")))
+            or bool(as_list(data.get("roleAssignments")))
             or len(admin_principal_ids) > 0
         )
 
@@ -268,7 +268,7 @@ def transform(input):
                 if user is None:
                     admins_missing_from_user_feed += 1
                     continue
-                if _user_has_mail_or_exchange_license(user):
+                if user_has_mail_or_exchange_license(user):
                     admins_with_mail_license += 1
 
             is_separate = (

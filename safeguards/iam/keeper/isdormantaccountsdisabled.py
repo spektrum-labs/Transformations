@@ -83,9 +83,9 @@ def transform(input):
                     # SCIM doesn't typically include last login, so we check active status
                     # If user is inactive, they're properly disabled
                     if not is_active:
-                        dormant_details["dormantDisabled"] += 1
+                        dormant_details["dormantDisabled"] = dormant_details["dormantDisabled"] + 1
                     else:
-                        dormant_details["activeUsers"] += 1
+                        dormant_details["activeUsers"] = dormant_details["activeUsers"] + 1
 
         # Check users array with activity data (Commander user-report format)
         users = input.get('users', [])
@@ -108,24 +108,24 @@ def transform(input):
                             is_dormant = activity_date < threshold_date
 
                             if is_dormant:
-                                dormant_details["dormantUsers"] += 1
+                                dormant_details["dormantUsers"] = dormant_details["dormantUsers"] + 1
                                 if is_enabled:
                                     # Violation: dormant but still enabled
-                                    dormant_details["dormantEnabled"] += 1
+                                    dormant_details["dormantEnabled"] = dormant_details["dormantEnabled"] + 1
                                     dormant_disabled = False
                                 else:
-                                    dormant_details["dormantDisabled"] += 1
+                                    dormant_details["dormantDisabled"] = dormant_details["dormantDisabled"] + 1
                             else:
-                                dormant_details["activeUsers"] += 1
+                                dormant_details["activeUsers"] = dormant_details["activeUsers"] + 1
                         else:
                             # Can't parse date, assume active
-                            dormant_details["activeUsers"] += 1
+                            dormant_details["activeUsers"] = dormant_details["activeUsers"] + 1
                     else:
                         # No activity data, check enabled status only
                         if is_enabled:
-                            dormant_details["activeUsers"] += 1
+                            dormant_details["activeUsers"] = dormant_details["activeUsers"] + 1
                         else:
-                            dormant_details["dormantDisabled"] += 1
+                            dormant_details["dormantDisabled"] = dormant_details["dormantDisabled"] + 1
 
         # Check for security audit data with dormant account info
         if 'security_audit' in input or 'securityAudit' in input:
@@ -150,9 +150,9 @@ def transform(input):
                     if isinstance(user, dict):
                         if user.get('status', user.get('active', 'inactive')) in ['active', 'enabled', True]:
                             dormant_disabled = False
-                            dormant_details["dormantEnabled"] += 1
+                            dormant_details["dormantEnabled"] = dormant_details["dormantEnabled"] + 1
                         else:
-                            dormant_details["dormantDisabled"] += 1
+                            dormant_details["dormantDisabled"] = dormant_details["dormantDisabled"] + 1
 
         # Calculate compliance score
         total_dormant = dormant_details["dormantUsers"] or (dormant_details["dormantEnabled"] + dormant_details["dormantDisabled"])

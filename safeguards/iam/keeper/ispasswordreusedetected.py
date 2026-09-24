@@ -109,7 +109,7 @@ def transform(input):
                         reuse_count = entry.get('reused', entry.get('reused_passwords', 0))
                         if reuse_count > 0:
                             password_reuse_detected = True
-                            reuse_details["reusedPasswords"] += reuse_count
+                            reuse_details["reusedPasswords"] = reuse_details["reusedPasswords"] + reuse_count
 
         return {
             criteria_key: password_reuse_detected,

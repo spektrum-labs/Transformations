@@ -114,7 +114,7 @@ def parse_api_error(raw_error, source=None):
         )
 
 
-def _as_list(value):
+def as_list(value):
     if value is None:
         return []
     if isinstance(value, list):
@@ -122,7 +122,7 @@ def _as_list(value):
     return [value]
 
 
-def _as_number(value, default=0):
+def as_number(value, default=0):
     if value is None:
         return default
     if isinstance(value, (int, float)):
@@ -192,10 +192,10 @@ def transform(input):
 
         # AdminMFAV2 verifies admin MFA registration, not strict phishing-resistance; a stricter
         # check would need the authenticationMethodsPolicy feed.
-        values = _as_list(data.get("value") or [])
+        values = as_list(data.get("value") or [])
         if len(values) > 0:
             secure_score = values[0] if isinstance(values[0], dict) else {}
-            control_scores = _as_list(secure_score.get("controlScores") or [])
+            control_scores = as_list(secure_score.get("controlScores") or [])
             matched = [
                 entry for entry in control_scores
                 if isinstance(entry, dict) and entry.get("controlName") == controlName
@@ -213,11 +213,11 @@ def transform(input):
                 )
             elif len(matched) == 1:
                 matched_obj = matched[0]
-                score_in_percentage = _as_number(matched_obj.get("scoreInPercentage"), 0.0)
+                score_in_percentage = as_number(matched_obj.get("scoreInPercentage"), 0.0)
                 is_resistant = score_in_percentage == 100.00
 
-                count = _as_number(matched_obj.get("count"), 0)
-                total = _as_number(matched_obj.get("total"), 0)
+                count = as_number(matched_obj.get("count"), 0)
+                total = as_number(matched_obj.get("total"), 0)
 
                 if is_resistant:
                     pass_reasons.append(f"Admin MFA control '{controlName}' is fully satisfied (score: 100%)")
