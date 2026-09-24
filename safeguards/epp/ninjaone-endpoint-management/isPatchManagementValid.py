@@ -1,3 +1,4 @@
+
 import json
 from datetime import datetime
 
@@ -75,76 +76,78 @@ def transform(input):
         results = data
     elif isinstance(data, dict):
         results = data.get("results") or data.get("data") or []
+        if not isinstance(results, list):
+            results = []
     else:
         results = []
 
-    if not isinstance(results, list):
-        results = []
-
-    failed_statuses = ["FAILED", "ERROR", "STUCK", "TIMEOUT", "CANCELLED"]
     total = len(results)
+    failed_count = 0
+    installed_count = 0
+    other_statuses = {}
 
-    failed_records = []
-    for r in results:
-        if isinstance(r, dict):
-            status_val = str(r.get("status") or "").upper()
-            if status_val in failed_statuses:
-                failed_records.append(r)
+    for rec in results:
+        if not isinstance(rec, dict):
+            continue
+        status = rec.get("status")
+        if status == "FAILED":
+            failed_count = failed_count + 1
+        elif status == "INSTALLED":
+            installed_count = installed_count + 1
+        else:
+            key = status if status else "UNKNOWN"
+            other_statuses[key] = other_statuses.get(key, 0) + 1
 
-    failed_count = len(failed_records)
-
-    input_summary = {
-        "totalPatchInstallRecords": total,
-        "failedPatchInstallRecords": failed_count,
-    }
+    FAILURE_THRESHOLD_PCT = 5.0
 
     if total == 0:
         is_valid = False
-        result = {
-            "isPatchManagementValid": is_valid,
-            "totalPatchInstallRecords": total,
-            "failedPatchInstallRecords": failed_count,
-        }
-        return create_response(
-            result=result,
-            validation=validation,
-            pass_reasons=[],
-            fail_reasons=[
-                "getOSPatchInstalls returned zero patch-install records fleet-wide; there is no evidence that OS patch scanning/installation has executed for any device."
-            ],
-            recommendations=[
-                "Confirm patch management policies are assigned to devices and that scheduled OS patch scans/installs are actually running; investigate why no os-patch-install history exists for this tenant."
-            ],
-            input_summary=input_summary,
-            metadata={
-                "transformationId": "isPatchManagementValid",
-                "vendor": "NinjaOne Endpoint Management",
-                "category": "epp",
-            },
-        )
-
-    is_valid = failed_count == 0
-
-    if is_valid:
-        pass_reasons = [
-            f"All {total} patch install records returned by getOSPatchInstalls report non-failure statuses (none of the {total} records matched FAILED/ERROR/STUCK/TIMEOUT/CANCELLED), indicating patch scanning/installation is executing successfully."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        sample_ids = [str(r.get("deviceId")) for r in failed_records[:5] if isinstance(r, dict)]
-        pass_reasons = []
+        failure_rate = 0.0
         fail_reasons = [
-            f"{failed_count} of {total} patch install records report a failure-type status (e.g. FAILED/ERROR/STUCK/TIMEOUT/CANCELLED); sample affected deviceIds: {', '.join(sample_ids) if sample_ids else 'unknown'}."
+            "No OS patch installation records were returned by getOSPatchInstallsReport, "
+            "so patch installation activity cannot be confirmed as executing successfully."
         ]
+        pass_reasons = []
         recommendations = [
-            "Investigate the devices with failed or stuck patch installs, re-run the patch scan/install job, and verify agent connectivity and disk space on affected endpoints."
+            "Verify that devices are checking in and reporting patch installation activity to NinjaOne."
         ]
+    else:
+        failure_rate = (failed_count / total) * 100.0
+        if failure_rate < FAILURE_THRESHOLD_PCT:
+            is_valid = True
+            pass_reasons = [
+                f"Of {total} OS patch installation records, {installed_count} report status=INSTALLED "
+                f"and only {failed_count} report status=FAILED ({failure_rate:.2f}% failure rate), "
+                f"below the {FAILURE_THRESHOLD_PCT}% threshold indicating patch management is executing successfully."
+            ]
+            fail_reasons = []
+            recommendations = []
+        else:
+            is_valid = False
+            pass_reasons = []
+            fail_reasons = [
+                f"Of {total} OS patch installation records, {failed_count} report status=FAILED "
+                f"({failure_rate:.2f}% failure rate), exceeding the {FAILURE_THRESHOLD_PCT}% threshold, "
+                f"indicating patch installation is stuck or erroring on the fleet."
+            ]
+            recommendations = [
+                "Investigate devices with FAILED patch installation status and re-run patch scans/installs.",
+                "Check device connectivity and disk space, which commonly cause patch install failures."
+            ]
 
     result = {
         "isPatchManagementValid": is_valid,
         "totalPatchInstallRecords": total,
-        "failedPatchInstallRecords": failed_count,
+        "failedPatchInstallCount": failed_count,
+        "installedPatchInstallCount": installed_count,
+        "failureRatePercentage": round(failure_rate, 2),
+    }
+
+    input_summary = {
+        "totalRecords": total,
+        "installedCount": installed_count,
+        "failedCount": failed_count,
+        "otherStatusCounts": other_statuses,
     }
 
     return create_response(

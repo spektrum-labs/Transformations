@@ -74,60 +74,59 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        devices = data.get("data") or data.get("results") or data.get("apiResponse") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
     total_devices = len(devices)
-
     approved_count = 0
+    pending_count = 0
+    rejected_count = 0
+    other_status_count = 0
     communicating_count = 0
-    sample_names = []
 
     for d in devices:
         if not isinstance(d, dict):
             continue
-        approval = d.get("approvalStatus")
-        if approval == "APPROVED":
+        status = d.get("approvalStatus") or ""
+        if status == "APPROVED":
             approved_count = approved_count + 1
-        last_contact = d.get("lastContact")
-        if approval == "APPROVED" and last_contact:
+        elif status == "PENDING":
+            pending_count = pending_count + 1
+        elif status == "REJECTED":
+            rejected_count = rejected_count + 1
+        else:
+            other_status_count = other_status_count + 1
+        if d.get("offline") is False:
             communicating_count = communicating_count + 1
-            if len(sample_names) < 3:
-                sample_names.append(d.get("systemName") or str(d.get("id")))
 
-    is_deployed = communicating_count > 0
+    is_agent_deployed = total_devices > 0 and approved_count == total_devices
 
-    input_summary = {
-        "totalDevices": total_devices,
-        "approvedDevices": approved_count,
-        "communicatingDevices": communicating_count,
-    }
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
-    if is_deployed:
-        sample_str = ", ".join(sample_names) if sample_names else "none"
-        pass_reasons = [
-            f"{communicating_count} of {total_devices} devices report approvalStatus=APPROVED "
-            f"with a non-null lastContact timestamp, indicating the NinjaOne agent is installed "
-            f"and actively communicating (e.g. {sample_str})."
-        ]
-        fail_reasons = []
-        recommendations = []
+    if total_devices == 0:
+        fail_reasons.append("No device records were returned by getDevicesDetailed; agent deployment cannot be confirmed.")
+        recommendations.append("Verify the NinjaOne integration credentials and confirm devices are enrolled in the tenant.")
+    elif is_agent_deployed:
+        pass_reasons.append(
+            f"All {total_devices} devices report approvalStatus=APPROVED (agent installed), with {communicating_count} of {total_devices} currently communicating (offline=false)."
+        )
     else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_devices} devices returned by getDevicesDetailed report both "
-            f"approvalStatus=APPROVED and a non-null lastContact timestamp."
-        ]
-        recommendations = [
-            "Verify the NinjaOne agent installer has been deployed to endpoints and that devices "
-            "are approved in the console (Administration > Devices > Approval)."
-        ]
+        fail_reasons.append(
+            f"Only {approved_count} of {total_devices} devices report approvalStatus=APPROVED; {pending_count} PENDING and {rejected_count} REJECTED devices indicate the agent is not fully deployed/approved fleet-wide."
+        )
+        recommendations.append("Approve pending devices in the NinjaOne console and investigate rejected devices to ensure the management agent is active fleet-wide.")
 
     result = {
-        "isAgentDeployed": is_deployed,
+        "isAgentDeployed": is_agent_deployed,
         "totalDevices": total_devices,
         "approvedDevices": approved_count,
+        "pendingDevices": pending_count,
+        "rejectedDevices": rejected_count,
         "communicatingDevices": communicating_count,
     }
 
@@ -137,7 +136,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={"totalDevices": total_devices, "approvedDevices": approved_count},
         metadata={
             "transformationId": "isAgentDeployed",
             "vendor": "NinjaOne",

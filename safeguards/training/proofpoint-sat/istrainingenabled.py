@@ -49,15 +49,15 @@ def evaluate(data):
         # non-empty body -- including an auth-error envelope or a body reporting zero
         # assignments -- satisfied this criterion and no input could make it false.
         # Resolved from `total_records` (the field this criterion is documented against)
-        # now; see _has_training_assignments below.
-        result = _has_training_assignments(data)
+        # now; see has_training_assignments below.
+        result = has_training_assignments(data)
         return {"isTrainingEnabled": result}
 
     except Exception as e:
         return {"isTrainingEnabled": False, "error": str(e)}
 
 
-def _has_training_assignments(data):
+def has_training_assignments(data):
     """True only when the payload POSITIVELY evidences `total_records > 0`.
 
     Deliberately conservative: an unreadable/empty/error body, or a body naming
