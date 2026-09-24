@@ -66,7 +66,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _as_list(value):
+def as_list(value):
     if value is None:
         return []
     if isinstance(value, list):
@@ -123,7 +123,7 @@ def transform(input):
         # does not exist on the merged getEstateMFAStatus payload; mirror the CA-based logic from
         # safeguards/mfa/azure/ismfaenforcedforusers.py instead.
         auth_methods = data.get("authMethodsPolicy") or {}
-        method_configs = _as_list(auth_methods.get("authenticationMethodConfigurations") or [])
+        method_configs = as_list(auth_methods.get("authenticationMethodConfigurations") or [])
         mfa_method_types = ["microsoftauthenticator", "fido2", "softwareoath", "temporaryaccesspass"]
         enabled_methods = []
         for method in method_configs:
@@ -137,7 +137,7 @@ def transform(input):
         methods_available = len(enabled_methods) > 0
 
         ca_data = data.get("conditionalAccessPolicies") or {}
-        policies = _as_list(ca_data.get("value") or [])
+        policies = as_list(ca_data.get("value") or [])
 
         policies_enforcing_mfa_for_users = []
         for policy in policies:

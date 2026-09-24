@@ -105,7 +105,7 @@ def transform(input):
         elif "isEPPConfigured" in data:
             isEPPConfigured = bool(data.get("isEPPConfigured"))
         else:
-            isEPPConfigured = _epp_coverage_observed(data)
+            isEPPConfigured = epp_coverage_observed(data)
 
         endpoints = []
         if isinstance(data, dict) and 'value' in data:
@@ -324,7 +324,7 @@ def transform(input):
         )
 
 
-def _epp_coverage_observed(data):
+def epp_coverage_observed(data):
     """True when the payload actually evidences endpoint protection on something.
 
     Deliberately narrow: it looks for a non-empty population of devices/agents/hosts, or
