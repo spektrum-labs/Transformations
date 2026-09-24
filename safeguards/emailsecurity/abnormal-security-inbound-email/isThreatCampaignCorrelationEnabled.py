@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -71,63 +69,64 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
-    threats = []
-    total = 0
-
-    if isinstance(data, dict):
-        raw_threats = data.get("threats")
-        threats = raw_threats if isinstance(raw_threats, list) else []
-        total_val = data.get("total")
-        total = total_val if isinstance(total_val, int) else len(threats)
-    elif isinstance(data, list):
-        threats = data
-        total = len(threats)
-
-    threat_ids = [t.get("threatId") for t in threats if isinstance(t, dict) and t.get("threatId")]
-    distinct_ids_sample = len(set(threat_ids))
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    is_enabled = False
-
-    if total > 0 and len(threat_ids) > 0:
-        is_enabled = True
-        pass_reasons.append(
-            f"getThreats returned total={total} threats, each identified by a distinct threatId "
-            f"(sampled {distinct_ids_sample} unique threatId values in this page). Per Abnormal's "
-            "documented model, each threatId represents a threat campaign that correlates multiple "
-            "related messages and identity signals into a single grouped entity, evidencing that "
-            "threat-campaign correlation is active for this tenant."
-        )
+    if isinstance(data, list):
+        threat_id = None
+        messages = []
     else:
-        fail_reasons.append(
-            f"getThreats returned total={total} threats with {len(threat_ids)} threatId values present "
-            "in the sampled page, so no evidence of campaign-grouped threatId entities could be observed."
-        )
-        recommendations.append(
-            "Confirm the tenant has active threat detections and that the /v1/threats endpoint is "
-            "returning populated threatId-grouped records; if the feed is empty, campaign correlation "
-            "cannot be verified from this endpoint."
-        )
+        threat_id = data.get("threatId")
+        messages = data.get("messages") or []
+        if not isinstance(messages, list):
+            messages = []
 
-    result = {
-        "isThreatCampaignCorrelationEnabled": is_enabled,
-        "totalThreats": total,
-        "sampledThreatIdCount": len(threat_ids),
-    }
+    message_count = len(messages)
+
+    same_threat_ids = 0
+    analysis_fields_present = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        if m.get("threatId") == threat_id and threat_id:
+            same_threat_ids = same_threat_ids + 1
+        if m.get("attackStrategy") or m.get("attackType") or m.get("attackedParty"):
+            analysis_fields_present = analysis_fields_present + 1
+
+    has_grouping_structure = bool(threat_id) and isinstance(messages, list) and message_count >= 1
+    grouped_correlation = same_threat_ids == message_count and message_count > 0 and analysis_fields_present > 0
+
+    correlation_enabled = bool(has_grouping_structure and grouped_correlation)
 
     input_summary = {
-        "totalThreats": total,
-        "sampledThreatIdCount": len(threat_ids),
-        "distinctSampledThreatIds": distinct_ids_sample,
+        "threatId": threat_id,
+        "messageCount": message_count,
+        "messagesSharingThreatId": same_threat_ids,
+        "messagesWithAnalysisFields": analysis_fields_present,
     }
 
-    metadata = {
-        "transformationId": "isThreatCampaignCorrelationEnabled",
-        "vendor": "Abnormal Security",
-        "category": "emailsecurity",
+    if correlation_enabled:
+        pass_reasons = [
+            f"Threat {threat_id} groups {message_count} message(s) under a single threatId, "
+            f"with {same_threat_ids} of {message_count} messages sharing that threatId and "
+            f"{analysis_fields_present} carrying attackStrategy/attackType/attackedParty analysis fields, "
+            "evidencing case-level correlation of related malicious messages rather than isolated events."
+        ]
+        fail_reasons = []
+        recommendations = []
+    else:
+        pass_reasons = []
+        fail_reasons = [
+            f"Threat detail response for threatId={threat_id} did not demonstrate grouped correlation: "
+            f"messageCount={message_count}, messagesSharingThreatId={same_threat_ids}, "
+            f"messagesWithAnalysisFields={analysis_fields_present}."
+        ]
+        recommendations = [
+            "Verify Abnormal's threat-campaign correlation feature is enabled for this tenant so that "
+            "related malicious messages are grouped into a single Case/threat object with analysis metadata."
+        ]
+
+    result = {
+        "isThreatCampaignCorrelationEnabled": correlation_enabled,
+        "messageCount": message_count,
+        "messagesSharingThreatId": same_threat_ids,
     }
 
     return create_response(
@@ -137,5 +136,9 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata=metadata,
+        metadata={
+            "transformationId": "isThreatCampaignCorrelationEnabled",
+            "vendor": "Abnormal Security Inbound Email",
+            "category": "emailsecurity",
+        },
     )
