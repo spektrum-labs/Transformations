@@ -38,8 +38,11 @@ this transformation does not recognise, the answer is `False` — not `True`, an
 This is enforced in CI. `.github/workflows/transform-contract.yml` runs
 `tools/check_fail_closed.py` on every pull request and on every push to `develop`,
 `staging` and `main`. It hands each `transform()` a set of bodies that contain **no
-evidence about any estate** and fails the build if a satisfaction-style key
-(`^(confirmed|is|are|has)[A-Z]`) comes back `True`:
+evidence about any estate** and fails the build if **any** key comes back `True` -- or
+any inverted key (below) comes back `False`. Every key is judged, whatever its name: the
+gate used to judge only keys shaped `^(confirmed|is|are|has)[A-Z]`, and ten live rubber
+stamps (`authTypesAllowed`, `confirmPasswordPolicyEnforced`, `keysHaveExpirationDate`, ...)
+passed it for exactly that reason:
 
 <!-- BEGIN no-evidence-battery: checked against tools/check_fail_closed.py NO_EVIDENCE
      by the gate itself. A documented contract that silently diverges from the enforced
@@ -115,7 +118,9 @@ there are none". `{}` may not.
 - **Inverted keys.** A few criteria use `True` to denote the *insecure* condition —
   `isPublicStorageBucketExposed`, `localLoginAllowed`,
   `hasIdentifiedServiceAccountsMFAGap`. For these, `True` on unknown input **is**
-  fail-closed. They are listed explicitly in `check_fail_closed.INVERTED`; the set is
+  fail-closed, and `False` -- "not exposed", "no gap" -- is the rubber stamp, so the gate
+  fails an inverted key that answers `False` from no evidence. They are listed explicitly
+  in `check_fail_closed.INVERTED`; the set is
   named rather than inferred from the key, because guessing polarity from a name is
   exactly how a correct transformation gets "fixed" into a defect. If you add one,
   establish the polarity from the transformation's own pass/fail reasons, not its name.

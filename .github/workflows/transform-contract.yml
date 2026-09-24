@@ -65,8 +65,8 @@ jobs:
       - name: Checker self-test
         run: python tools/check_fail_closed.py --self-test
 
-      # Fails when a transform NOT on contracts/fail-closed-allowlist.json asserts a
-      # satisfaction-style criterion true from {}, an auth-error envelope, null or
+      # Fails when a transform NOT on contracts/fail-closed-allowlist.json returns any
+      # key true (an INVERTED key false) from {}, an auth-error envelope, null or
       # "{}" -- or when any transform cannot be imported. Listed files are reported
       # and do not fail the run; the list may only shrink, and entries that no
       # longer reproduce are reported STALE so the ratchet keeps moving.

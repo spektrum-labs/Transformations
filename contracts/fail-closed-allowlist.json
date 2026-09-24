@@ -1,6 +1,6 @@
 {
   "contract": "fail-closed",
-  "why": "no transformation may assert a satisfaction-style criterion true from a body that proves nothing; this list may only shrink",
+  "why": "no transformation may return a criterion's safe answer (true, or false for an INVERTED key) from a body that proves nothing; this list may only shrink",
   "generated_by": "tools/check_fail_closed.py --emit-allowlist",
   "count": 0,
   "instances": []
