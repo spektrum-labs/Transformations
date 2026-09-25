@@ -65,8 +65,69 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# Duo answers GET /admin/v1/logs/authentication with
+#   403 {"code": 40301, "message": "Access forbidden", "stat": "FAIL"}
+# when the Admin API application is not granted "Grant read log" (Duo Admin API
+# docs: 403 = "This integration is not authorized for this endpoint"). A revoked
+# or invalid key is a 401, not this. So this 403 is the answer to the question
+# "does the API credential have authentication log access": no.
+# Integration-Service hands that one refusal over as data only when the method
+# opts in (vendorErrorAsResponse), nested as
+#   {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <vendor body>}}
+ACCESS_FORBIDDEN_CODE = 40301
+
+
+def duo_access_forbidden(data):
+    """True only for Integration-Service's marked 403 / 40301 "Access forbidden" refusal."""
+    if not isinstance(data, dict):
+        return False
+    marker = data.get("vendorErrorAsResponse")
+    if not isinstance(marker, dict) or marker.get("status") != 403:
+        return False
+    body = marker.get("body")
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except ValueError:
+            return False
+    if not isinstance(body, dict):
+        return False
+    return body.get("code") == ACCESS_FORBIDDEN_CODE and body.get("message") == "Access forbidden"
+
+
 def transform(input):
+    if isinstance(input, (str, bytes)):
+        try:
+            input = json.loads(input)
+        except ValueError:
+            input = {}
     data, validation = extract_input(input)
+    if duo_access_forbidden(data):
+        # A measured FAIL, not an error: Duo answered the question.
+        return create_response(
+            result={"hasAuthenticationLogAPIAccess": False, "totalRecords": 0},
+            validation=validation,
+            fail_reasons=[
+                "Duo refused the authentication logs endpoint (/admin/v1/logs/authentication) with HTTP 403, "
+                "code 40301 \"Access forbidden\": the Admin API application is not granted read access to "
+                "authentication logs."
+            ],
+            recommendations=[
+                "In the Duo Admin Panel, open the Admin API application used for Spektrum and enable the "
+                "\"Grant read log\" permission."
+            ],
+            input_summary={"vendorStatus": 403, "vendorCode": ACCESS_FORBIDDEN_CODE},
+            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
+        )
+    if isinstance(data, dict) and "vendorErrorAsResponse" in data:
+        # Any other handed-over vendor error is not log data: report it, do not judge on it.
+        return create_response(
+            result={"hasAuthenticationLogAPIAccess": False, "totalRecords": 0},
+            validation=validation,
+            api_errors=["Duo returned an error instead of authentication log data: %s"
+                        % str(data.get("vendorErrorAsResponse"))[:300]],
+            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
+        )
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):

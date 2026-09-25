@@ -16,8 +16,11 @@ endpoint has no protection agent / no sensor.
 Fails closed: an error body, an unrecognised body, an empty endpoint list, or a merged
 response that still carries nextLink (pages left unread) all return false.
 
-Verdict: true when every endpoint in the inventory has a Trend Micro protection agent
-(an eppAgent block). A sensor-only endpoint, or one discovered without any agent, fails it.
+Verdict: true when every endpoint in the inventory has a Trend Micro protection agent: an
+eppAgent block carrying a version or a protectionManager. Vision One also writes an empty
+eppAgent placeholder (no version, no protectionManager, status off/unknown) on sensor-only
+endpoints (real payload: 21 of 417); those count as no agent, the same has_protection_agent
+rule the sibling checks use. A sensor-only endpoint, or one discovered without any agent, fails it.
 
 What this proves: every endpoint Vision One knows about has the Trend endpoint protection
 agent installed. What it does not prove: that the agent is connected or its protection
@@ -135,6 +138,16 @@ def load_endpoints(criteria_key, input, fail_value):
     return items, validation, None
 
 
+def has_protection_agent(endpoint):
+    """An eppAgent block with neither a version nor a protection manager is a placeholder
+    Vision One writes for sensor-only endpoints (real payload: 21 of 417, status off/unknown),
+    not an installed protection agent."""
+    agent = sub(endpoint, "eppAgent")
+    if agent is None:
+        return False
+    return bool(str(agent.get("version") or "").strip() or str(agent.get("protectionManager") or "").strip())
+
+
 def failure(criteria_key, fail_value, error):
     return create_response(criteria_key, {criteria_key: fail_value},
                            validation={"status": "error", "errors": [], "warnings": []},
@@ -147,7 +160,7 @@ def transform(input):
         endpoints, validation, failed = load_endpoints(criteriaKey, input, False)
         if failed:
             return failed
-        missing = [endpoint_name(e) for e in endpoints if sub(e, "eppAgent") is None]
+        missing = [endpoint_name(e) for e in endpoints if not has_protection_agent(e)]
         value = len(missing) == 0
         summary = {"totalEndpoints": len(endpoints), "endpointsWithoutProtectionAgent": len(missing),
                    "sampleWithoutProtectionAgent": missing[:10]}
