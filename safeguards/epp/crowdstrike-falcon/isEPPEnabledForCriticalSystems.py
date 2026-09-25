@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -12,11 +11,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -67,111 +65,80 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-CRITICAL_KEYWORDS = [
-    "critical", "server", "domain controller", "domain-controller",
-    "dc", "tier0", "tier 0", "tier-0",
-]
-
-
-def is_critical_group_name(name):
-    if not name:
-        return False
-    lower_name = name.lower()
-    for kw in CRITICAL_KEYWORDS:
-        if kw in lower_name:
-            return True
-    return False
-
-
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error"):
-        err_msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
-        api_errors.append(f"CrowdStrike API returned an error: {err_msg}")
+    if isinstance(data, dict):
+        policies = data.get("resources") or data.get("data") or []
+    elif isinstance(data, list):
+        policies = data
+    else:
+        policies = []
 
-    policies = data.get("resources") or []
     if not isinstance(policies, list):
         policies = []
 
-    critical_group_names = set()
-    covered_critical_group_names = set()
-    inspected_policies = []
+    critical_keywords = ["server", "critical", "production", "domain controller", "dc", "prod"]
 
-    for policy in policies:
-        if not isinstance(policy, dict):
+    critical_policies = []
+    for p in policies:
+        if not isinstance(p, dict):
             continue
-        policy_enabled = bool(policy.get("enabled"))
-        policy_name = policy.get("name") or policy.get("id") or "unnamed-policy"
-        groups = policy.get("groups") or []
-        if not isinstance(groups, list):
-            groups = []
-        for group in groups:
-            if not isinstance(group, dict):
-                continue
-            group_name = group.get("name") or group.get("id") or ""
-            if is_critical_group_name(group_name):
-                critical_group_names.add(group_name)
-                if policy_enabled:
-                    covered_critical_group_names.add(group_name)
-                    inspected_policies.append(f"{policy_name} (enabled) -> {group_name}")
+        name = (p.get("name") or "").lower()
+        desc = (p.get("description") or "").lower()
+        groups = p.get("groups") or []
+        is_critical_name = False
+        for kw in critical_keywords:
+            if kw in name or kw in desc:
+                is_critical_name = True
+                break
+        has_groups = len(groups) > 0
+        if is_critical_name or has_groups:
+            critical_policies.append(p)
 
-    total_critical = len(critical_group_names)
-    total_covered = len(covered_critical_group_names)
+    total_critical = len(critical_policies)
+    enabled_critical = [p for p in critical_policies if p.get("enabled") is True]
+    disabled_names = [p.get("name") or "unknown" for p in critical_policies if not p.get("enabled")]
+    enabled_names = [p.get("name") or "unknown" for p in enabled_critical]
 
-    if total_critical > 0:
-        is_enabled_for_critical = total_covered == total_critical
-    else:
-        is_enabled_for_critical = False
-
-    input_summary = {
-        "totalPolicies": len(policies),
-        "criticalHostGroupsFound": total_critical,
-        "criticalHostGroupsCovered": total_covered,
-    }
+    is_enabled = total_critical > 0 and len(enabled_critical) == total_critical
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if api_errors:
+    if total_critical == 0:
         fail_reasons.append(
-            "The getCombinedPreventionPolicies API call returned an error; no prevention policy data was available to evaluate critical system coverage."
+            "No prevention policies could be identified as covering critical systems (no policy name/description matched critical keywords and no policy had host groups assigned)."
         )
         recommendations.append(
-            "Verify CrowdStrike API credentials and connectivity, then re-run the scan to retrieve prevention policy assignments."
+            "Assign prevention policies explicitly to critical host groups (e.g. servers, domain controllers) and ensure they are enabled."
         )
-    elif total_critical == 0:
-        fail_reasons.append(
-            "No host groups matching critical-system naming patterns (e.g. 'server', 'domain controller', 'tier0', 'critical') were found across the "
-            f"{len(policies)} prevention policies retrieved, so critical-system EPP coverage could not be confirmed."
-        )
-        recommendations.append(
-            "Tag critical host groups (servers, domain controllers, tier-0 systems) with identifiable names and assign an enabled Prevention Policy to them."
-        )
-    elif is_enabled_for_critical:
+    elif is_enabled:
         pass_reasons.append(
-            f"All {total_critical} critical-tagged host group(s) ({', '.join(sorted(covered_critical_group_names))}) are assigned to a Prevention Policy with enabled=true."
+            "Found %d prevention policy(ies) covering critical systems (%s), all with enabled=true."
+            % (total_critical, ", ".join(enabled_names))
         )
-        if inspected_policies:
-            pass_reasons.append(
-                "Cross-referenced policy-to-group assignments: " + "; ".join(inspected_policies[:5])
-            )
     else:
-        uncovered = sorted(critical_group_names - covered_critical_group_names)
         fail_reasons.append(
-            f"{total_critical - total_covered} of {total_critical} critical host group(s) ({', '.join(uncovered)}) are not covered by any Prevention Policy with enabled=true."
+            "Of %d prevention policy(ies) covering critical systems, %d are disabled: %s."
+            % (total_critical, len(disabled_names), ", ".join(disabled_names))
         )
         recommendations.append(
-            f"Assign an enabled Prevention Policy to the following critical host groups: {', '.join(uncovered)}."
+            "Enable the prevention policy(ies) assigned to critical host groups: %s." % ", ".join(disabled_names)
         )
 
     result = {
-        "isEPPEnabledForCriticalSystems": is_enabled_for_critical,
-        "criticalHostGroupsFound": total_critical,
-        "criticalHostGroupsCovered": total_covered,
+        "isEPPEnabledForCriticalSystems": is_enabled,
+        "totalCriticalPolicies": total_critical,
+        "enabledCriticalPolicies": len(enabled_critical),
+    }
+
+    input_summary = {
+        "totalPoliciesEvaluated": len(policies),
+        "criticalPoliciesIdentified": total_critical,
+        "criticalPoliciesEnabled": len(enabled_critical),
     }
 
     return create_response(
@@ -186,5 +153,4 @@ def transform(input):
             "vendor": "CrowdStrike Falcon",
             "category": "epp",
         },
-        api_errors=api_errors,
     )

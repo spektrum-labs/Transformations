@@ -11,11 +11,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -67,55 +67,49 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error") is True or data.get("statusCode") == 500:
-        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
+    meta = {}
+    resources = []
+    if isinstance(data, dict):
+        meta = data.get("meta") or {}
+        resources = data.get("resources") or []
+    elif isinstance(data, list):
+        resources = data
 
-    resources = data.get("resources") or []
-    meta = data.get("meta") or {}
     pagination = meta.get("pagination") or {}
     total = pagination.get("total")
     if total is None:
-        total = len(resources)
+        total = len(resources) if isinstance(resources, list) else 0
 
     is_deployed = bool(total and total > 0)
 
-    input_summary = {"totalDevices": total, "resourcesInPage": len(resources)}
-
-    if api_errors:
-        result = {"isEPPDeployed": False, "totalDevices": 0}
-        return create_response(
-            result=result,
-            validation=validation,
-            fail_reasons=[
-                "The queryDevicesScroll API call returned an error: %s. Unable to confirm sensor enrollment." % api_errors[0]
-            ],
-            recommendations=[
-                "Verify CrowdStrike API credentials/scopes and retry the devices-scroll query to confirm sensor deployment."
-            ],
-            input_summary=input_summary,
-            metadata={"transformationId": "isEPPDeployed", "vendor": "CrowdStrike Falcon", "category": "epp"},
-            api_errors=api_errors,
-        )
-
-    result = {"isEPPDeployed": is_deployed, "totalDevices": total}
+    input_summary = {
+        "totalEnrolledDevices": total,
+        "resourcesInPage": len(resources) if isinstance(resources, list) else 0,
+    }
 
     if is_deployed:
         pass_reasons = [
-            "meta.pagination.total reports %d enrolled devices in the tenant, confirming Falcon sensors are installed and reporting." % total
+            f"queryDevicesByFilter reports meta.pagination.total={total} enrolled Falcon sensor devices, "
+            "confirming the EPP agent is installed and reporting on managed endpoints."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
         fail_reasons = [
-            "meta.pagination.total is %s, indicating no devices are currently enrolled/reporting via the Falcon sensor." % str(total)
+            f"queryDevicesByFilter returned meta.pagination.total={total}, indicating no enrolled Falcon "
+            "sensor devices were found for this tenant."
         ]
         recommendations = [
-            "Deploy the Falcon sensor to endpoints and confirm they check in via the devices-scroll query."
+            "Deploy the Falcon sensor to managed endpoints and confirm devices register in the Falcon console."
         ]
+
+    result = {
+        "isEPPDeployed": is_deployed,
+        "totalEnrolledDevices": total,
+    }
 
     return create_response(
         result=result,
@@ -124,5 +118,9 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={"transformationId": "isEPPDeployed", "vendor": "CrowdStrike Falcon", "category": "epp"},
+        metadata={
+            "transformationId": "isEPPDeployed",
+            "vendor": "CrowdStrike Falcon",
+            "category": "epp",
+        },
     )

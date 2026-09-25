@@ -12,11 +12,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -69,20 +69,27 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error"):
-        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
-
-    policies = data.get("resources") or []
-    if not isinstance(policies, list):
+    if isinstance(data, list):
+        policies = data
+        meta = {}
+    elif isinstance(data, dict):
+        policies = data.get("resources") or []
+        if not isinstance(policies, list):
+            policies = []
+        meta = data.get("meta") or {}
+    else:
         policies = []
+        meta = {}
+
+    pagination = meta.get("pagination") or {}
+    total_reported = pagination.get("total")
 
     total_policies = len(policies)
-    enabled_assigned_policies = []
-    enabled_unassigned_policies = []
-    disabled_policies = []
+    enabled_count = 0
+    enabled_with_group_count = 0
+    sample_names = []
 
     for p in policies:
         if not isinstance(p, dict):
@@ -90,58 +97,41 @@ def transform(input):
         is_enabled = bool(p.get("enabled"))
         groups = p.get("groups") or []
         has_groups = isinstance(groups, list) and len(groups) > 0
-        name = p.get("name") or p.get("id") or "unnamed policy"
-        if is_enabled and has_groups:
-            enabled_assigned_policies.append(name)
-        elif is_enabled and not has_groups:
-            enabled_unassigned_policies.append(name)
-        elif not is_enabled:
-            disabled_policies.append(name)
+        if is_enabled:
+            enabled_count = enabled_count + 1
+            if has_groups:
+                enabled_with_group_count = enabled_with_group_count + 1
+                if len(sample_names) < 5:
+                    sample_names.append(p.get("name") or p.get("id") or "unknown")
 
-    is_enabled_result = len(enabled_assigned_policies) > 0
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    is_patch_mgmt_enabled = enabled_with_group_count > 0
 
     input_summary = {
-        "totalPolicies": total_policies,
-        "enabledAssignedCount": len(enabled_assigned_policies),
-        "enabledUnassignedCount": len(enabled_unassigned_policies),
-        "disabledCount": len(disabled_policies),
+        "totalSensorUpdatePolicies": total_policies,
+        "reportedTotal": total_reported,
+        "enabledPolicies": enabled_count,
+        "enabledPoliciesWithGroupAssignment": enabled_with_group_count,
     }
 
-    if api_errors:
-        fail_reasons.append(
-            f"Sensor update policy API returned an error: {api_errors[0]}"
-        )
-        recommendations.append(
-            "Verify CrowdStrike API credentials and scopes for the sensor-update-policies collection, then retry."
-        )
-    elif total_policies == 0:
-        fail_reasons.append(
-            "No sensor update policies were returned by getCombinedSensorUpdatePolicies; no policy is assigned to any host group."
-        )
-        recommendations.append(
-            "Create and assign a Sensor Update Policy to host groups in the Falcon console to govern sensor build updates."
-        )
-    elif is_enabled_result:
-        sample = ", ".join(enabled_assigned_policies[:5])
-        pass_reasons.append(
-            f"{len(enabled_assigned_policies)} of {total_policies} sensor update policies are enabled and assigned to host groups (e.g. {sample}), confirming sensor build updates are governed rather than left to manual installer choice."
-        )
+    if is_patch_mgmt_enabled:
+        pass_reasons = [
+            f"Found {enabled_with_group_count} enabled Sensor Update Policy(ies) assigned to at least one host group out of {total_policies} sampled policies (e.g. {', '.join(sample_names)}). This governs sensor build updates rather than leaving them to manual installer choice."
+        ]
+        fail_reasons = []
+        recommendations = []
     else:
-        fail_reasons.append(
-            f"None of the {total_policies} sensor update policies found are both enabled=true and assigned to a host group (enabled-but-unassigned: {len(enabled_unassigned_policies)}, disabled: {len(disabled_policies)})."
-        )
-        recommendations.append(
-            "Enable the Sensor Update Policy and assign it to the relevant host groups so sensor build updates are governed."
-        )
+        pass_reasons = []
+        fail_reasons = [
+            f"No enabled Sensor Update Policy with a host group assignment was found among {total_policies} policies retrieved (enabled_count={enabled_count})."
+        ]
+        recommendations = [
+            "Enable at least one Sensor Update Policy and assign it to the relevant host group(s) so sensor build updates are governed rather than manually installed."
+        ]
 
     result = {
-        "isPatchManagementEnabled": is_enabled_result,
-        "totalPolicies": total_policies,
-        "enabledAssignedPolicies": len(enabled_assigned_policies),
+        "isPatchManagementEnabled": is_patch_mgmt_enabled,
+        "totalSensorUpdatePolicies": total_policies,
+        "enabledPoliciesWithGroupAssignment": enabled_with_group_count,
     }
 
     return create_response(
@@ -151,7 +141,6 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        api_errors=api_errors,
         metadata={
             "transformationId": "isPatchManagementEnabled",
             "vendor": "CrowdStrike Falcon",
