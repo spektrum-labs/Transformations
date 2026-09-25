@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isMFAEnforcedForUsers
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: RSC enforces TOTP MFA globally or makes it mandatory for every user.
+API Source: getMfaAndOrgs (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/globalMfaSetting/
+Note: SSO users authenticate at their IdP; this reads RSC's own TOTP enforcement.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isMFAEnforcedForUsers"
+METHOD = "getMfaAndOrgs"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,15 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
-    if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
-
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    root, validation, failure = read(input, ["globalMfaSetting"], "MFA settings (globalMfaSetting)")
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    m = root.get("globalMfaSetting")
+    enforced, mandatory = m.get("isTotpEnforcedGlobal"), m.get("isTotpMandatory")
+    summary = {"isTotpEnforcedGlobal": enforced, "isTotpMandatory": mandatory}
+    if not isinstance(enforced, bool) or not isinstance(mandatory, bool):
+        return fail(validation, "globalMfaSetting did not return both TOTP flags.", None, summary)
+    if not (enforced or mandatory):
+        return fail(validation, "TOTP MFA is neither enforced globally nor mandatory in RSC.", "Enforce TOTP for all users in RSC Settings > Security.", summary)
+    return ok(validation, True, "RSC requires TOTP MFA for users (" + ("enforced globally" if enforced else "mandatory") + ").", summary)

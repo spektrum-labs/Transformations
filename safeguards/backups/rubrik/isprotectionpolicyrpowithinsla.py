@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isProtectionPolicyRPOWithinSLA
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Every SLA domain protecting objects takes snapshots at least every 24 hours.
+API Source: listSlaDomains (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/slaDomains/
+Note: RPO target: 24 hours (snapshot interval from baseFrequency, else the minute/hourly/daily schedule).
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isProtectionPolicyRPOWithinSLA"
+METHOD = "listSlaDomains"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,69 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+UNIT_HOURS = {"MINUTES": 1.0 / 60, "HOURS": 1.0, "DAYS": 24.0, "WEEKS": 168.0, "MONTHS": 730.0, "QUARTERS": 2190.0, "YEARS": 8760.0}
+
+
+def active_slas(input):
+    """(slas, validation, failure): SLA domains that are not archived and protect at least one object."""
+    root, validation, failure = read(input, ["slaDomains"], "SLA domains (slaDomains)")
     if failure:
         return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+    conn = root.get("slaDomains")
+    if not page_complete(conn):
+        return None, validation, fail(validation, "slaDomains returned more than one page; the SLA set is incomplete.",
+                                      "Raise the page size of the listSlaDomains method.", {"pageInfo": conn.get("pageInfo") if isinstance(conn, dict) else None})
+    slas = []
+    for n in conn.get("nodes"):
+        if not isinstance(n, dict) or n.get("isArchived") is True:
+            continue
+        cnt = n.get("protectedObjectCount")
+        if isinstance(cnt, bool) or not isinstance(cnt, int):
+            return None, validation, fail(validation, "SLA domain '" + str(n.get("name")) + "' has no protectedObjectCount; cannot tell whether it is in use.")
+        if cnt > 0:
+            slas.append(n)
+    if not slas:
+        return None, validation, fail(validation, "No SLA domain protects any object, so no backup policy is in force.",
+                                      "Assign SLA domains to the workloads that need protection.", {"slaDomains": len(conn.get("nodes"))})
+    return slas, validation, None
+
+
+def frequency_hours(sla):
+    """Shortest snapshot interval in hours, from baseFrequency, else from the minute/hourly/daily schedule. None if unknown."""
+    bf = sla.get("baseFrequency")
+    if isinstance(bf, dict) and isinstance(bf.get("duration"), int) and not isinstance(bf.get("duration"), bool) \
+            and bf.get("duration") > 0 and bf.get("unit") in UNIT_HOURS:
+        return bf.get("duration") * UNIT_HOURS[bf.get("unit")]
+    sched = sla.get("snapshotSchedule")
+    best = None
+    if isinstance(sched, dict):
+        for name, per in (("minute", 1.0 / 60), ("hourly", 1.0), ("daily", 24.0)):
+            part = sched.get(name)
+            basic = part.get("basicSchedule") if isinstance(part, dict) else None
+            freq = basic.get("frequency") if isinstance(basic, dict) else None
+            if isinstance(freq, int) and not isinstance(freq, bool) and freq > 0:
+                hours = freq * per
+                best = hours if best is None or hours < best else best
+    return best
+
+MAX_HOURS = 24.0
+
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    slas, validation, failure = active_slas(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    late, unknown = [], []
+    for s in slas:
+        h = frequency_hours(s)
+        if h is None:
+            unknown.append(str(s.get("name")))
+        elif h > MAX_HOURS:
+            late.append(str(s.get("name")) + " every " + str(round(h, 2)) + "h")
+    summary = {"slaDomainsInUse": len(slas), "overMaxInterval": late, "noFrequency": unknown}
+    if unknown:
+        return fail(validation, "RSC reports no snapshot frequency for SLA domain(s) in use: " + ", ".join(unknown) + ".", None, summary)
+    if late:
+        return fail(validation, "SLA domain(s) in use take snapshots less often than every " + str(MAX_HOURS) + "h: " + ", ".join(late) + ".",
+                    "Shorten the snapshot frequency of these SLA domains.", summary)
+    return ok(validation, True, "All " + str(len(slas)) + " SLA domains in use take snapshots at least every " + str(MAX_HOURS) + "h.", summary)

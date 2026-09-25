@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: areBackupsTested
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: A recovery or test failover succeeded in the last 90 days (activity series).
+API Source: getBackupActivity (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/activitySeriesConnection/
+Note: Activity types RECOVERY, LOCAL_RECOVERY, ISOLATED_RECOVERY, TEST_FAILOVER, SCHEDULE_RECOVERY, BULK_RECOVERY; window 90 days.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "areBackupsTested"
+METHOD = "getBackupActivity"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,24 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+def activity(input, fields):
+    root, validation, failure = read(input, fields, "backup activity (activitySeriesConnection)")
     if failure:
         return None, validation, failure
     c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
+    for f in fields:
         c[f] = as_count(root.get(f))
         if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+            return None, validation, fail(validation, "activitySeriesConnection " + f + " did not return an integer count.", None, {"field": f})
+    return c, root, None
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    c, root, failure = activity(input, ["recoverySucceeded"])
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    validation = extract_input(input)[1]
+    if c["recoverySucceeded"] < 1:
+        return fail(validation, "No recovery, test failover or scheduled recovery succeeded in the last 90 days.",
+                    "Run and record a restore test (for example a Recovery Plan test failover) at least quarterly.", dict(c), value=False)
+    return ok(validation, True, str(c["recoverySucceeded"]) + " recoveries or test failovers succeeded in the last 90 days.", dict(c),
+              {"successfulRecoveries90d": c["recoverySucceeded"]})

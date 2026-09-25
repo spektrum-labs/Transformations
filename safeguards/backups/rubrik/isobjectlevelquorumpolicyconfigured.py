@@ -1,10 +1,10 @@
 """
-Transformation: isBackupEnabled
+Transformation: isObjectLevelQuorumPolicyConfigured
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Quorum Authorization is enabled and a custom TPR policy covers protectable objects.
+API Source: getTprSettings (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/customTprPolicies/
 
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
@@ -12,8 +12,8 @@ unrecognised body is False (booleans) or None (numbers), with the reason. Never 
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isObjectLevelQuorumPolicyConfigured"
+METHOD = "getTprSettings"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,36 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+DELETE_RULES = ("DELETE_SNAPSHOT", "DELETE_BACKUP_OBJECT")
+
+
+def tpr(input):
+    root, validation, failure = read(input, ["tprConfiguration", "customTprPolicies"], "Quorum Authorization (tprConfiguration, customTprPolicies)")
     if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+        return None, None, validation, failure
+    cfg = root.get("tprConfiguration")
+    conn = root.get("customTprPolicies")
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("isTprEnabled"), bool):
+        return None, None, validation, fail(validation, "tprConfiguration.isTprEnabled is missing.")
+    if not page_complete(conn):
+        return None, None, validation, fail(validation, "customTprPolicies returned more than one page; the policy set is incomplete.")
+    policies = [p for p in conn.get("nodes") if isinstance(p, dict)]
+    return cfg, policies, validation, None
+
+
+def quorum_ok(p):
+    q = p.get("quorumRequirement")
+    return isinstance(q, int) and not isinstance(q, bool) and q >= 1
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    cfg, policies, validation, failure = tpr(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    scoped = [str(p.get("policyName")) for p in policies if quorum_ok(p) and isinstance(p.get("numberOfProtectableObjects"), int)
+              and not isinstance(p.get("numberOfProtectableObjects"), bool) and p.get("numberOfProtectableObjects") > 0]
+    summary = {"isTprEnabled": cfg.get("isTprEnabled"), "customPolicies": len(policies), "objectScopedPolicies": scoped}
+    if cfg.get("isTprEnabled") is not True:
+        return fail(validation, "Quorum Authorization (TPR) is disabled for the organization.", "Enable Quorum Authorization in RSC Settings.", summary)
+    if not scoped:
+        return fail(validation, "Quorum Authorization is enabled but no custom policy covers protectable objects.", "Create an object-scoped TPR policy.", summary)
+    return ok(validation, True, "Quorum Authorization is enabled and object-scoped policies exist: " + ", ".join(scoped) + ".", summary)

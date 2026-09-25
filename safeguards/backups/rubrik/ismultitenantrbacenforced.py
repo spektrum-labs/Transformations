@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isMultiTenantRBACEnforced
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: At least one tenant organization exists (RSC `orgs` excludes the global org).
+API Source: getMfaAndOrgs (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/orgs/
+Note: RSC `orgs` excludes the global organization (live: 0 for single-tenant accounts).
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isMultiTenantRBACEnforced"
+METHOD = "getMfaAndOrgs"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,14 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
-    if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
-
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    root, validation, failure = read(input, ["orgs"], "organizations (orgs)")
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    n = as_count(root.get("orgs"))
+    if n is None:
+        return fail(validation, "orgs did not return an integer count.")
+    summary = {"tenantOrganizations": n}
+    if n < 1:
+        return fail(validation, "No tenant organization exists: RSC multi-tenancy (organization-scoped RBAC) is not in use.", None, summary)
+    return ok(validation, True, str(n) + " tenant organizations scope access in RSC.", summary)

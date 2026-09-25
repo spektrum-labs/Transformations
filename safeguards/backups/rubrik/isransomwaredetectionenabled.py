@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isRansomwareDetectionEnabled
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Anomaly detection analysed snapshots in the last 7 days, or ransomware investigation is enabled.
+API Source: getRansomwareDetection (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/ransomwareInvestigationEnablement/
+Note: Evidence that detection RUNS (ANOMALY activity, 7 days) or is enabled for cloud/M365/RCV workloads.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isRansomwareDetectionEnabled"
+METHOD = "getRansomwareDetection"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,29 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
-    if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
-
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    root, validation, failure = read(input, ["ransomwareInvestigationEnablement", "anomalyAnalyses"], "anomaly detection (ransomwareInvestigationEnablement, activitySeriesConnection)")
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    runs = as_count(root.get("anomalyAnalyses"))
+    if runs is None:
+        return fail(validation, "anomalyAnalyses did not return an integer count.")
+    en = root.get("ransomwareInvestigationEnablement")
+    enabled = []
+    if isinstance(en, dict):
+        for kind in ("awsAccounts", "azureSubscriptions", "gcpProjects", "microsoft365Subscriptions", "rubrikCloudVaultLocations", "cloudDirectClusters"):
+            items = en.get(kind)
+            if isinstance(items, list):
+                n = len([i for i in items if isinstance(i, dict) and i.get("enabled") is True])
+                if n:
+                    enabled.append(kind + ":" + str(n))
+    summary = {"anomalyAnalyses7d": runs, "enabledWorkloads": enabled}
+    if runs < 1 and not enabled:
+        return fail(validation, "No Anomaly Detection analysis ran in the last 7 days and ransomware investigation is not enabled for any workload.",
+                    "Enable Anomaly Detection (Threat Analytics) for the protected workloads.", summary)
+    reasons = []
+    if runs:
+        reasons.append(str(runs) + " Anomaly Detection analyses ran on snapshots in the last 7 days")
+    if enabled:
+        reasons.append("ransomware investigation is enabled for " + ", ".join(enabled))
+    return ok(validation, True, "; ".join(reasons) + ".", summary, {"anomalyAnalyses7d": runs})

@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isCloudTierEncryptionEnabled
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Every active cloud archival target reports an encryption type.
+API Source: listArchivalTargets (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/targets/
+Note: RCS/Azure/Glacier targets expose no encryptionType in the RSC schema, so they fail as not evidenced (not as unencrypted).
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isCloudTierEncryptionEnabled"
+METHOD = "listArchivalTargets"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,47 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+AIR_GAPPED_TYPES = ("RCS_AZURE", "RCV_AWS", "RCV_GCP", "TAPE")
+NON_CLOUD_TYPES = ("NFS", "TAPE")
+# Rubrik encrypts archived data with AES-256 before upload; the key-protection options differ (password, RSA key, KMS,
+# unified key management). SSE_* are the provider's server-side AES-256. Doc-inferred mapping, not an API field:
+# https://docs.rubrik.com/ (archival location encryption). UNKNOWN_ENCRYPTION_TYPE never counts.
+AES256_TYPES = ("ENCRYPTION_PASSWORD_BASED", "KMS_MASTER_KEY_BASED", "RSA_KEY_BASED", "UEKM_AKV_BASED", "UEKM_AWS_KMS_BASED",
+                "UEKM_RSA_BASED", "UNIFIED_ENCRYPTION_KEY_MGMT_BASED", "SSE_CMK", "SSE_CPK", "SSE_DEFAULT_PMK")
+
+
+def active_targets(input):
+    root, validation, failure = read(input, ["targets"], "archival locations (targets)")
     if failure:
         return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+    conn = root.get("targets")
+    if not page_complete(conn):
+        return None, validation, fail(validation, "targets returned more than one page; the archival location set is incomplete.",
+                                      None, {"pageInfo": conn.get("pageInfo") if isinstance(conn, dict) else None})
+    out = [t for t in conn.get("nodes") if isinstance(t, dict) and t.get("isActive") is True and t.get("isArchived") is not True]
+    return out, validation, None
+
+
+def encryption_gaps(targets, allowed):
+    gaps = []
+    for t in targets:
+        enc = t.get("encryptionType")
+        if enc is None:
+            gaps.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): RSC does not report an encryption type for this target type")
+        elif enc not in allowed:
+            gaps.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): encryptionType " + str(enc))
+    return gaps
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    targets, validation, failure = active_targets(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    cloud = [t for t in targets if t.get("targetType") not in NON_CLOUD_TYPES]
+    summary = {"activeCloudTargets": len(cloud)}
+    if not cloud:
+        return fail(validation, "No active cloud archival location exists.", None, summary)
+    gaps = encryption_gaps(cloud, AES256_TYPES)
+    summary["gaps"] = gaps
+    if gaps:
+        return fail(validation, "Encryption is not evidenced for every active cloud archival location: " + "; ".join(gaps) + ".", None, summary)
+    return ok(validation, True, "All " + str(len(cloud)) + " active cloud archival locations report an encryption type.", summary)

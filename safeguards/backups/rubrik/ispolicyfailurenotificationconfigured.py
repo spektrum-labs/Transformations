@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isPolicyFailureNotificationConfigured
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: An enabled webhook subscribes to backup failure events.
+API Source: listWebhooks (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/allWebhooksV2/
+Note: Email event digests need per-recipient user ids and are not read; digest-only notification fails as not evidenced.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isPolicyFailureNotificationConfigured"
+METHOD = "listWebhooks"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,35 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+def enabled_webhooks(input):
+    root, validation, failure = read(input, ["allWebhooksV2"], "webhooks (allWebhooksV2)")
     if failure:
         return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+    hooks = root.get("allWebhooksV2")
+    if not isinstance(hooks, list):
+        return None, validation, fail(validation, "allWebhooksV2 is not a list.")
+    return [h for h in hooks if isinstance(h, dict) and h.get("status") == "ENABLED"], validation, None
+
+
+def subscription(hook, kind):
+    st = hook.get("subscriptionType")
+    sub = st.get(kind) if isinstance(st, dict) else None
+    return sub if isinstance(sub, dict) else None
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    hooks, validation, failure = enabled_webhooks(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    notify = []
+    for h in hooks:
+        e = subscription(h, "eventSubscription")
+        if not e:
+            continue
+        types = e.get("eventTypes") if isinstance(e.get("eventTypes"), list) else []
+        sev = e.get("severities") if isinstance(e.get("severities"), list) else []
+        if (e.get("isSubscribedToAllEvents") is True or "BACKUP" in types) and (not sev or "SEVERITY_CRITICAL" in sev):
+            notify.append(str(h.get("name")))
+    summary = {"enabledWebhooks": len(hooks), "backupFailureWebhooks": notify}
+    if not notify:
+        return fail(validation, "No enabled webhook is subscribed to critical backup events.", "Subscribe a webhook to Backup events at critical severity.", summary)
+    return ok(validation, True, "Backup failure events are sent by enabled webhook(s): " + ", ".join(notify) + ".", summary)

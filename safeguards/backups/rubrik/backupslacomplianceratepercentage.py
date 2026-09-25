@@ -1,7 +1,7 @@
 """
-Transformation: isBackupEnabled
+Transformation: backupSlaComplianceRatePercentage
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
+Evaluates: Percent of active protected objects whose SLA compliance is IN_COMPLIANCE.
 API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
@@ -12,7 +12,7 @@ unrecognised body is False (booleans) or None (numbers), with the reason. Never 
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
+KEY = "backupSlaComplianceRatePercentage"
 METHOD = "getSnappableCompliance"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
@@ -79,7 +79,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -217,7 +217,10 @@ def evaluate(input):
     c, validation, failure = snappable_counts(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    judged = c["inCompliance"] + c["outOfCompliance"]
+    summary = {"inCompliance": c["inCompliance"], "outOfCompliance": c["outOfCompliance"], "protectedObjects": c["protectedObjects"]}
+    if judged == 0:
+        return fail(validation, "No active protected object has an SLA compliance verdict (IN_COMPLIANCE or OUT_OF_COMPLIANCE).", None, summary)
+    pct = round(100.0 * c["inCompliance"] / judged, 2)
+    return ok(validation, pct, str(c["inCompliance"]) + " of " + str(judged) + " active protected objects are in compliance with their SLA (" + str(pct) + "%).",
+              summary, {"inComplianceCount": c["inCompliance"], "outOfComplianceCount": c["outOfCompliance"]})
