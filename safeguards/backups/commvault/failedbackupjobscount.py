@@ -1,4 +1,4 @@
-# isbackupenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# failedbackupjobscount.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
 # Method: getBackupJobs -> GET {serverUrl}/Job?jobFilter=Backup&jobCategory=Finished&completedJobLookupTime=604800
 #         (header limit: 1000; Accept: application/json)
@@ -15,11 +15,14 @@ import json
 
 def transform(input):
     """
-    isBackupEnabled = true when at least one backup job ended Completed (or Completed w/ one or more
-    warnings) in the last 7 days. Proves Commvault is actually backing something up, not only that a
-    plan exists. Does not prove every workload is covered.
+    failedBackupJobsCount = finished backup jobs in the last 7 days that ended Failed, Failed to Start,
+    Killed, Abnormal Terminated Cleanup, Committed, Interrupted or Completed w/ one or more errors.
+    The requirement compares with isEquals "0".
+    Proves: Commvault's own job records for the window were read in full. Does not prove: anything
+    outside the 7 days. None (no evidence) on an unreadable or partial body, an unknown status, or no
+    finished backup job at all, so an empty read never reports zero failures.
     """
-    key = "isBackupEnabled"
+    key = "failedBackupJobsCount"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -130,10 +133,15 @@ def transform(input):
     try:
         rows, problem = read_jobs(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         c = classify(rows)
-        if len(c["success"]) == 0:
-            return {key: False, "reason": "No backup job completed in the last 7 days (" + str(len(rows)) + " finished jobs read)"}
-        return {key: True, "reason": str(len(c["success"])) + " backup jobs completed in the last 7 days"}
+        if len(c["unknown"]) > 0:
+            return {key: None, "reason": "Unrecognised job status: " + label(c["unknown"][0])}
+        finished = len(c["success"]) + len(c["failure"])
+        if finished == 0:
+            return {key: None, "reason": "No backup job finished in the last 7 days; the count is not proven"}
+        n = len(c["failure"])
+        return {key: n, "reason": str(n) + " of " + str(finished) + " finished backup jobs in the last 7 days did not complete cleanly",
+                "finishedBackupJobs": finished, "failedJobs": [label(s) for s in c["failure"]][:25]}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}

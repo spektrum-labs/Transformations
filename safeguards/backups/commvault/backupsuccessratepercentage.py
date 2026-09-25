@@ -1,4 +1,4 @@
-# isbackupenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# backupsuccessratepercentage.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
 # Method: getBackupJobs -> GET {serverUrl}/Job?jobFilter=Backup&jobCategory=Finished&completedJobLookupTime=604800
 #         (header limit: 1000; Accept: application/json)
@@ -15,11 +15,11 @@ import json
 
 def transform(input):
     """
-    isBackupEnabled = true when at least one backup job ended Completed (or Completed w/ one or more
-    warnings) in the last 7 days. Proves Commvault is actually backing something up, not only that a
-    plan exists. Does not prove every workload is covered.
+    backupSuccessRatePercentage = Completed + Completed w/ one or more warnings, over all finished backup
+    jobs in the last 7 days, x 100 (2 dp). None on an unreadable or partial body, an unknown status, or
+    no finished backup job.
     """
-    key = "isBackupEnabled"
+    key = "backupSuccessRatePercentage"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -130,10 +130,15 @@ def transform(input):
     try:
         rows, problem = read_jobs(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         c = classify(rows)
-        if len(c["success"]) == 0:
-            return {key: False, "reason": "No backup job completed in the last 7 days (" + str(len(rows)) + " finished jobs read)"}
-        return {key: True, "reason": str(len(c["success"])) + " backup jobs completed in the last 7 days"}
+        if len(c["unknown"]) > 0:
+            return {key: None, "reason": "Unrecognised job status: " + label(c["unknown"][0])}
+        finished = len(c["success"]) + len(c["failure"])
+        if finished == 0:
+            return {key: None, "reason": "No backup job finished in the last 7 days; the rate is not proven"}
+        rate = round(len(c["success"]) * 100.0 / finished, 2)
+        return {key: rate, "reason": str(len(c["success"])) + " of " + str(finished) + " finished backup jobs in the last 7 days completed",
+                "finishedBackupJobs": finished, "successfulJobs": len(c["success"])}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
