@@ -67,18 +67,57 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def as_int(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def is_rfm(value):
+    """CrowdStrike reports reduced_functionality_mode as "yes"/"no" (not a boolean), so the old
+    `rfm is not True` test counted every RFM sensor as active."""
+    return value is True or str(value).strip().lower() in ("yes", "true")
+
+
 def transform(input):
+    """
+    requiredCoveragePercentage (CrowdStrike, GET /devices/combined/devices/v1).
+
+    Percentage of returned devices whose sensor is active: status "normal", not in reduced
+    functionality mode, an agent_version and a last_seen. Not measured (dataCollection error, shown
+    Unevaluated) on an API error, or when the device list is truncated: meta.pagination.total larger
+    than the devices returned (an unpaged call returns the first 100), or a merged paginated
+    response marked truncated. A percentage of a sample is not the estate's coverage.
+    """
+    if isinstance(input, bytes):
+        input = input.decode("utf-8")
+    if isinstance(input, str):
+        try:
+            input = json.loads(input) if input.strip() else None
+        except ValueError:
+            input = None
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
     api_errors = []
-    if data.get("error") or data.get("errorType") == "internal":
+    if data.get("error") or data.get("errorType") == "internal" or str(data.get("status", "")).lower() == "error":
         msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
         api_errors.append(f"CrowdStrike API returned an error: {msg}")
 
     resources = data.get("resources")
     if not isinstance(resources, list):
         resources = []
+
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    pagination = meta.get("pagination") if isinstance(meta.get("pagination"), dict) else {}
+    reported_total = as_int(pagination.get("total"))
+    truncated_flag = pagination.get("truncated") is True or str(pagination.get("truncated")).strip().lower() == "true"
+    if not api_errors and ((reported_total is not None and reported_total > len(resources)) or truncated_flag):
+        api_errors.append(
+            f"Device list was truncated: {len(resources)} of {reported_total if reported_total is not None else 'unknown'} "
+            "devices returned; coverage not evaluated on a sample (add pagination to the device method)"
+        )
 
     total = len(resources)
     active = 0
@@ -91,7 +130,7 @@ def transform(input):
         agent_version = device.get("agent_version")
         is_active = (
             status == "normal"
-            and rfm is not True
+            and not is_rfm(rfm)
             and bool(agent_version)
             and bool(last_seen)
         )
@@ -107,7 +146,14 @@ def transform(input):
     fail_reasons = []
     recommendations = []
 
-    if total > 0:
+    if api_errors:
+        percentage = 0
+        fail_reasons.append("Not measured: " + "; ".join(api_errors))
+        recommendations.append(
+            "Verify the CrowdStrike API credentials (Hosts: Read) and that the device method pages through the "
+            "whole estate, then re-run the scan."
+        )
+    elif total > 0:
         pass_reasons.append(
             f"{active} of {total} known Falcon-managed devices report status='normal', "
             f"reduced_functionality_mode!=true, a populated agent_version, and a recent last_seen "

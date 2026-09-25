@@ -1,159 +1,131 @@
-"""
-Transformation: isBackupEncrypted
-Vendor: Commvault  |  Category: Backups
-Evaluates: Whether encryption at rest is enabled on at least one active storage pool/policy.
-"""
+# isbackupencrypted.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+#
+# Method: getStorageEncryption (Integration-Service workflow)
+#   1. getDiskStorage        -> GET {serverUrl}/V4/Storage/Disk
+#   2. getDiskStorageDetail  -> GET {serverUrl}/V4/Storage/Disk/{id}, once per pool (iterate diskStorage), under diskStorageDetails
+#   3. getCloudStorage       -> GET {serverUrl}/V4/Storage/Cloud
+#   4. getCloudStorageDetail -> GET {serverUrl}/V4/Storage/Cloud/{id}, once per pool (iterate cloudStorage), under cloudStorageDetails
+# Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
+#         GetDiskStorageDetails / GetCloudStorageById: encryption.encrypt, encryption.cipher (BlowFish, AES, DES3,
+#         GOST, Serpent, Twofish), encryption.keyLength.
+# A pool list whose detail bodies are missing or a different count is refused (part of the estate unread).
+#
+# Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
+
 import json
-from datetime import datetime
-
-
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
-
-
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
-    return {
-        "transformedResponse": result,
-        "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
-            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
-            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
-            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isBackupEncrypted", "vendor": "Commvault", "category": "Backups"}
-        }
-    }
-
-
-def evaluate(data):
-    """Core evaluation logic extracted from doc transform."""
-    try:
-        result = False
-        encrypted_pools = 0
-        total_pools = 0
-
-        # v4 API returns {"storagePoolList": [...]} or {"storagePool": [...]}
-        pools = (
-            data.get("storagePoolList") or
-            data.get("storagePool") or
-            data.get("storagePolicies") or
-            data.get("policies") or
-            []
-        )
-
-        if not isinstance(pools, list):
-            return {"isBackupEncrypted": False, "error": "Unexpected response format — no pool list"}
-
-        total_pools = len(pools)
-
-        UNENCRYPTED_VALUES = {"none", "no_encryption", "", "0", "disabled", "false"}
-
-        for pool in pools:
-            # Check storage pool level encryption
-            encryption = pool.get("encryption", pool.get("encryptionType", pool.get("encryptData", "")))
-
-            if isinstance(encryption, dict):
-                # Nested encryption object: {"encrypt": true, "cipherType": "AES256"}
-                enc_enabled = encryption.get("encrypt", encryption.get("enabled", False))
-                cipher = encryption.get("cipherType", encryption.get("cipher", ""))
-                if (enc_enabled and str(enc_enabled).lower() not in ("false", "0", "no")) or cipher:
-                    encrypted_pools += 1
-                    continue
-
-            elif isinstance(encryption, str):
-                if encryption.strip().lower() not in UNENCRYPTED_VALUES:
-                    encrypted_pools += 1
-                    continue
-
-            elif isinstance(encryption, bool) and encryption:
-                encrypted_pools += 1
-                continue
-
-            # Also check in copy properties if nested
-            copies = pool.get("copyInfo", pool.get("storagePolicyCopies", []))
-            if isinstance(copies, list):
-                for copy in copies:
-                    copy_enc = copy.get("copyEncryption", copy.get("encryptData", copy.get("encryptionType", "")))
-                    if isinstance(copy_enc, str) and copy_enc.strip().lower() not in UNENCRYPTED_VALUES:
-                        encrypted_pools += 1
-                        break
-                    elif isinstance(copy_enc, bool) and copy_enc:
-                        encrypted_pools += 1
-                        break
-
-        result = encrypted_pools > 0
-    except Exception as e:
-        return {"isBackupEncrypted": False, "error": str(e)}
 
 
 def transform(input):
-    criteriaKey = "isBackupEncrypted"
+    """
+    isBackupEncrypted = true when at least one disk or cloud storage pool exists and every one of them has
+    encryption.encrypt true. false on any unencrypted pool, no pool, or a partial or unreadable read.
+    """
+    key = "isBackupEncrypted"
+
+    def parse_input(value):
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("<"):
+                raise ValueError("XML body; the method must send Accept: application/json")
+            return json.loads(text)
+        return value
+
+    def unwrap(value, marker):
+        # Integration-Service may hand the body back under one of its envelopes.
+        for depth in range(3):
+            if not isinstance(value, dict) or marker in value:
+                break
+            moved = False
+            for wrapper in ["apiResponse", "_response_data", "response", "result"]:
+                if isinstance(value.get(wrapper), dict):
+                    value = value[wrapper]
+                    moved = True
+                    break
+            if not moved:
+                break
+        return value
+
+    def vendor_error(d):
+        """A reason string when the body is an Integration-Service or Commvault error, else None.
+        Commvault answers some failures with HTTP 200 and errorCode/errorMessage or errList."""
+        if not isinstance(d, dict):
+            return "Response is not an object"
+        if d.get("error") is True:
+            return "Integration-Service returned an error envelope"
+        code = d.get("errorCode")
+        if code not in (None, 0, "0"):
+            return "Commvault error " + str(code) + ": " + str(d.get("errorMessage") or "")
+        errs = d.get("errList")
+        if isinstance(errs, list) and len(errs) > 0:
+            return "Commvault errList: " + str(errs[0])[:200]
+        err = d.get("error")
+        if isinstance(err, dict) and err.get("errorCode") not in (None, 0, "0"):
+            return "Commvault error " + str(err.get("errorCode")) + ": " + str(err.get("errorString") or err.get("errorMessage") or "")
+        return None
+
+    def as_int(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value.strip())
+        return None
+
+    def pools(data, list_key, detail_key):
+        """(details, None) or (None, reason): the detail body of every pool in data[list_key]."""
+        listed = data.get(list_key)
+        if not isinstance(listed, list):
+            return None, "Response has no " + list_key + " list"
+        if len(listed) == 0:
+            return [], None
+        details = data.get(detail_key)
+        if isinstance(details, dict):
+            details = [details]
+        if not isinstance(details, list) or len(details) != len(listed):
+            n = len(details) if isinstance(details, list) else 0
+            return None, "Read " + str(n) + " " + detail_key + " bodies for " + str(len(listed)) + " pools"
+        out = []
+        for i in range(len(details)):
+            b = unwrap(details[i], "encryption")
+            problem = vendor_error(b)
+            if problem:
+                return None, list_key + " pool " + str(listed[i].get("name") if isinstance(listed[i], dict) else i) + ": " + problem
+            if not isinstance(b.get("encryption"), dict):
+                return None, list_key + " pool " + str(b.get("name") or i) + " detail has no encryption object"
+            out.append(b)
+        return out, None
+
+    def read_all(input):
+        data = unwrap(parse_input(input), "diskStorage")
+        problem = vendor_error(data)
+        if problem:
+            return None, None, problem
+        disk, problem = pools(data, "diskStorage", "diskStorageDetails")
+        if disk is None:
+            return None, None, problem
+        cloud, problem = pools(data, "cloudStorage", "cloudStorageDetails")
+        if cloud is None:
+            return None, None, problem
+        return disk, cloud, None
+
+    def encrypted(b):
+        return b["encryption"].get("encrypt") is True
+
     try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        # Run core evaluation
-        eval_result = evaluate(data)
-
-        # Extract the boolean result and any extra fields
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        if result_value:
-            pass_reasons.append(f"{criteriaKey} check passed")
-            for k, v in extra_fields.items():
-                pass_reasons.append(f"{k}: {v}")
-        else:
-            fail_reasons.append(f"{criteriaKey} check failed")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Commvault configuration for {criteriaKey}")
-
-        return create_response(
-            result={criteriaKey: result_value, **extra_fields},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={criteriaKey: result_value, **extra_fields}
-        )
-
+        disk, cloud, problem = read_all(input)
+        if problem:
+            return {key: False, "reason": problem}
+        allp = disk + cloud
+        if len(allp) == 0:
+            return {key: False, "reason": "No disk or cloud storage pool exists"}
+        bad = [str(b.get("name") or b.get("id")) for b in allp if not encrypted(b)]
+        if bad:
+            return {key: False, "reason": str(len(bad)) + " of " + str(len(allp)) + " storage pools are not encrypted", "unencryptedPools": bad[:25]}
+        return {key: True, "reason": "All " + str(len(allp)) + " disk and cloud storage pools are encrypted"}
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        return {key: False, "error": str(e)}

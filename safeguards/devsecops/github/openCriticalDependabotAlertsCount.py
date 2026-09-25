@@ -67,16 +67,26 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
-
+    alerts = None
     if isinstance(data, list):
         alerts = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or []
-        if not isinstance(alerts, list):
-            alerts = []
-    else:
-        alerts = []
+        for key in ("data", "alerts"):
+            if isinstance(data.get(key), list):
+                alerts = data.get(key)
+                break
+
+    # A body that is not a list of alerts (an error envelope, an unexpected shape) is
+    # a failed read. Counting it as zero open critical alerts would be a false pass.
+    if alerts is None:
+        return create_response(
+            result={"openCriticalDependabotAlertsCount": None},
+            validation=validation,
+            fail_reasons=["The Dependabot alerts response was not a list of alerts, so open critical alerts cannot be counted."],
+            input_summary={"responseIsList": False},
+            api_errors=["Unexpected response shape from /orgs/{org}/dependabot/alerts."],
+            metadata={"transformationId": "openCriticalDependabotAlertsCount", "vendor": "GitHub", "category": "devsecops"},
+        )
 
     open_critical = []
     for a in alerts:

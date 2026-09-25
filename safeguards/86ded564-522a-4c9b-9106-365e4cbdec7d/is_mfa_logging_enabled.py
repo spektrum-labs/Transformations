@@ -1,9 +1,10 @@
 """
-Transformation: isMFALoggingEnabled
+Transformation: isMFALoggingEnabled / isIAMLoggingEnabled
 Vendor: Generic IDP
 Category: Security / Logging
 
-Evaluates if MFA logging is enabled for the given IDP.
+Evaluates if MFA logging is enabled for the given IDP. The Okta definition also points
+isIAMLoggingEnabled at this file (same System Log read), so both keys are emitted.
 """
 
 import json
@@ -79,7 +80,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: False, "isIAMLoggingEnabled": False},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -100,7 +101,7 @@ def transform(input):
             recommendations.append("Enable MFA logging in the IDP")
 
         return create_response(
-            result={criteriaKey: is_enabled},
+            result={criteriaKey: is_enabled, "isIAMLoggingEnabled": is_enabled},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
@@ -110,7 +111,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: False, "isIAMLoggingEnabled": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
@@ -131,6 +132,13 @@ def affirmative_signal(data):
       * a non-empty population of records/settings   -> True
       * anything unrecognised                        -> False  (never True by default)
     """
+    if isinstance(data, list):
+        # A top-level JSON array is a population of records, as {"items": [...]} already is,
+        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
+        for item in data:
+            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
+                return False
+        data = {"items": [item for item in data if item]}
     if not isinstance(data, dict) or not data:
         return False
     for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
