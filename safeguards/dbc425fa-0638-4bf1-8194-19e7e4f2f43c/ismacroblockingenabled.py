@@ -1,31 +1,31 @@
 """
-Transformation: isSSOEnabled
+Transformation: isMacroBlockingEnabled
 Vendor: Google Workspace
 Category: Email Security
 
-Evidence: getIdentityProvider, the Admin Settings API feed
-GET https://apps-apis.google.com/a/feeds/domain/2.0/{domain}/sso/general, whose returnSpec gives
-  idpInfo = entry["apps:property"], a list of {"@name": ..., "@value": ...}, and rawResponse.
+Evidence: getMailPolicies, the Cloud Identity Policy API filtered to gmail.* settings.
+Judged setting: gmail.email_attachment_safety
+Required fields (each must equal "True"): enableAttachmentWithScriptsProtection
 
-Rule (fail closed): true only when the feed is readable AND
-  * enableSSO is present and equals "true" (case-insensitive; the string "false" fails), AND
-  * samlSignonUri is present and is an https URL (SSO switched on with no identity provider
-    sign-in page is not working SSO).
-A missing enableSSO in a readable feed fails. A Google error, an empty idpInfo (the returnSpec
-default when the feed had no entry), or any other unreadable body is reported as a
-data-collection error so Token-Service marks the check unevaluated, never as a pass.
+Gmail has no switch that blocks Office macros as such. The nearest control is "Protect against
+attachments with scripts from untrusted senders" (enableAttachmentWithScriptsProtection), which
+covers macro-bearing Office files. PROXY: it can warn rather than block, and the consequence is
+reported in the evidence, not judged.
 
-Previously: bool(str(value)) was true for every non-empty string, "false" included, so the check
-could not fail (FP-07).
-
-Does not see: SSO profiles created in the newer Cloud Identity inboundSamlSsoProfiles API, or which
-org units a profile is assigned to. A tenant that uses only those reads as not enabled here.
+Rule (fail closed): true only when at least one gmail.email_attachment_safety policy is returned and EVERY one of them
+(Google returns one per org unit or group that sets it) has all required fields "True". A missing
+field, a missing policy or the string "False" fails. A Google error or unreadable body is reported as
+a data-collection error (unevaluated), never as a pass.
 """
 
 import json
 from datetime import datetime
 
-CRITERIA_KEY = "isSSOEnabled"
+CRITERIA_KEY = "isMacroBlockingEnabled"
+SETTING_TYPE = "gmail.email_attachment_safety"
+REQUIRED_FIELDS = ['enableAttachmentWithScriptsProtection']
+CONTROL = "Script-attachment protection"
+ADVICE = "In Admin console > Apps > Google Workspace > Gmail > Safety > Attachments, turn on protection against attachments with scripts from untrusted senders"
 
 
 def extract_input(input_data):
@@ -112,40 +112,6 @@ def is_true(value):
     return value is True or str(value).strip().lower() == "true"
 
 
-def read_properties(data):
-    """(dict name -> value, error or None) from idpInfo, rawResponse.entry, or a bare list."""
-    props = None
-    if isinstance(data, dict):
-        if "idpInfo" in data:
-            props = data.get("idpInfo")
-            if not props and isinstance(data.get("rawResponse"), dict):
-                error = vendor_error(data.get("rawResponse"))
-                if error is not None:
-                    return None, error
-        elif isinstance(data.get("rawResponse"), dict):
-            raw = data.get("rawResponse")
-            error = vendor_error(raw)
-            if error is not None:
-                return None, error
-            entry = raw.get("entry")
-            props = entry.get("apps:property") if isinstance(entry, dict) else None
-        elif isinstance(data.get("entry"), dict):
-            props = data["entry"].get("apps:property")
-    elif isinstance(data, list):
-        props = data
-    if isinstance(props, dict):
-        props = [props]
-    if not isinstance(props, list) or len(props) == 0:
-        return None, "SSO settings feed returned no properties"
-    out = {}
-    for prop in props:
-        if isinstance(prop, dict) and "@name" in prop:
-            out[str(prop.get("@name")).strip().lower()] = prop.get("@value")
-    if len(out) == 0:
-        return None, "SSO settings feed properties could not be read"
-    return out, None
-
-
 def transform(input):
     try:
         if isinstance(input, str):
@@ -154,56 +120,70 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
-        if isinstance(data, dict) and "result" in data and isinstance(data.get("result"), (dict, list)):
-            data = data["result"]
-
         error = vendor_error(data)
-        props = None
-        if error is None:
-            props, error = read_properties(data)
+        if error is None and not isinstance(data, (dict, list)):
+            error = "Response is not a policy list"
         if error is not None:
             return create_response(
                 result={CRITERIA_KEY: False},
                 validation=validation,
                 api_errors=[error],
-                fail_reasons=["Not measured: " + error],
-                recommendations=["Check the Google service account's access to the SSO settings feed and re-evaluate"]
+                fail_reasons=["Not measured: " + error]
             )
 
-        enabled_raw = props.get("enablesso")
-        signon = str(props.get("samlsignonuri") or "").strip()
-        enabled = enabled_raw is not None and str(enabled_raw).strip().lower() == "true"
-        has_idp = signon.lower().startswith("https://")
-        result_value = enabled and has_idp
+        policies = data if isinstance(data, list) else data.get("policies", [])
+        if not isinstance(policies, list):
+            policies = []
 
-        idp_host = signon.split("/")[2] if has_idp and len(signon.split("/")) > 2 else ""
-        findings = [
-            {"metric": "enableSSO", "value": enabled, "reason": "reported %r" % enabled_raw},
-            {"metric": "samlSignonUri", "value": has_idp, "reason": idp_host or "not set"},
-            {"metric": "ssoWhitelist", "value": True, "reason": "reported %r (not judged)" % props.get("ssowhitelist")},
-        ]
+        matched = []
+        for policy in policies:
+            if not isinstance(policy, dict):
+                continue
+            setting = policy.get("setting")
+            if not isinstance(setting, dict) or not str(setting.get("type", "")).endswith(SETTING_TYPE):
+                continue
+            value = setting.get("value")
+            query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
+            matched.append((str(query.get("orgUnit") or query.get("group") or "unknown"), value if isinstance(value, dict) else {}))
+
+        findings = []
+        off_fields = []
+        compliant = 0
+        for org_unit, value in matched:
+            off = [f for f in REQUIRED_FIELDS if not is_true(value.get(f))]
+            for f in off:
+                if f not in off_fields:
+                    off_fields.append(f)
+            if not off:
+                compliant = compliant + 1
+            findings.append({
+                "metric": org_unit,
+                "value": not off,
+                "reason": "all required settings on" if not off else "off or missing: " + ", ".join(off)
+            })
+
+        result_value = len(matched) > 0 and compliant == len(matched)
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         if result_value:
-            pass_reasons.append("SAML SSO is enabled for the domain with identity provider %s" % idp_host)
-        elif enabled_raw is None:
-            fail_reasons.append("SSO settings feed did not report enableSSO; SSO not proven")
-        elif not enabled:
-            fail_reasons.append("SAML SSO is not enabled (enableSSO=%r)" % enabled_raw)
-            recommendations.append("Configure SSO with a third-party identity provider in the Admin console")
+            pass_reasons.append("%s on in all %d %s policies" % (CONTROL, len(matched), SETTING_TYPE))
+        elif len(matched) == 0:
+            fail_reasons.append("No %s policy returned (%d Gmail policies read); %s not proven" % (SETTING_TYPE, len(policies), CONTROL))
+            recommendations.append(ADVICE)
         else:
-            fail_reasons.append("enableSSO is true but no https samlSignonUri is configured")
-            recommendations.append("Set the identity provider sign-in page URL in the SSO profile")
+            fail_reasons.append("%s not fully on in %d of %d %s policies (off: %s)" % (
+                CONTROL, len(matched) - compliant, len(matched), SETTING_TYPE, ", ".join(off_fields)))
+            recommendations.append(ADVICE)
 
         return create_response(
-            result={CRITERIA_KEY: result_value},
+            result={CRITERIA_KEY: result_value, "policiesJudged": len(matched), "policiesCompliant": compliant},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             additional_findings=findings,
-            input_summary={"enableSSO": enabled_raw, "identityProviderHost": idp_host}
+            input_summary={"gmailPolicies": len(policies), "matchingPolicies": len(matched), "compliant": compliant}
         )
 
     except Exception as e:
