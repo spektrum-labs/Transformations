@@ -251,6 +251,13 @@ def affirmative_signal(data):
       * a non-empty population of records/settings   -> True
       * anything unrecognised                        -> False  (never True by default)
     """
+    if isinstance(data, list):
+        # A top-level JSON array is a population of records, as {"items": [...]} already is,
+        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
+        for item in data:
+            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
+                return False
+        data = {"items": [item for item in data if item]}
     if not isinstance(data, dict) or not data:
         return False
     for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):

@@ -16,9 +16,12 @@ before that newest lastSeenAt. 45 days covers one monthly vendor patch cycle plu
 the delay before a reboot. The newest lastSeenAt is the clock, as in the other Sophos
 files, so the verdict does not depend on when the evaluation runs.
 
-Verdict: true when at least one active endpoint exists and every active endpoint
-reports an OS update within 45 days. An active endpoint with no lastOsUpdateAt counts
-as not proven.
+Verdict: true when at least one active endpoint reports an OS update date and every
+endpoint that reports one applied it within 45 days. Sophos reports lastOsUpdateAt for
+Windows only: measured 2026-09-25 on a live full-view payload, 12 of 13 active
+endpoints without it were macOS or Linux. A Windows endpoint with no date still counts
+as not proven; a macOS or Linux endpoint with no date is excluded and listed, not
+failed, since Sophos cannot report it.
 
 What this proves: operating system updates are being applied on every active
 Sophos-managed endpoint (servers included). What it does not prove: that every
@@ -140,34 +143,42 @@ def transform(input):
         patched = []
         outdated = []
         missing = []
+        unreported = []
         for endpoint in active:
             host = str(endpoint.get("hostname") or endpoint.get("id") or "unknown")
             updated = parse_time(endpoint.get("lastOsUpdateAt"))
-            if updated is None or newest is None:
+            platform = str((endpoint.get("os") or {}).get("platform") or "").lower()
+            if updated is None and platform in ("macos", "linux"):
+                unreported.append(host + " (" + platform + ")")
+            elif updated is None or newest is None:
                 missing.append(host)
             elif newest - updated > timedelta(days=MAX_OS_UPDATE_AGE_DAYS):
                 outdated.append(host + " (" + str(endpoint.get("lastOsUpdateAt"))[:10] + ")")
             else:
                 patched.append(host)
 
-        value = len(active) > 0 and len(patched) == len(active)
+        eligible = len(active) - len(unreported)
+        value = eligible > 0 and len(patched) == eligible
         summary = {
             "activeEndpoints": len(active),
             "endpointsPatchedWithinWindow": len(patched),
             "maxOsUpdateAgeDays": MAX_OS_UPDATE_AGE_DAYS,
             "endpointsWithOldOsUpdate": outdated[:20],
             "endpointsWithoutOsUpdateDate": missing[:20],
+            "nonWindowsEndpointsExcluded": unreported[:20],
             "staleEndpointsExcluded": stale,
         }
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-        if not active:
-            fail_reasons.append("No active endpoint was returned, so OS patching could not be confirmed")
-            recommendations.append("Check that the Sophos Central credential can read endpoints")
+        if eligible <= 0:
+            fail_reasons.append("No active endpoint reports an OS update date, so OS patching could not be confirmed")
+            recommendations.append("Check that the Sophos Central credential can read endpoints (Windows endpoints report lastOsUpdateAt)")
         elif value:
-            pass_reasons.append(f"All {len(active)} active endpoint(s) applied an operating system update within {MAX_OS_UPDATE_AGE_DAYS} days")
+            pass_reasons.append(f"All {eligible} active endpoint(s) that report an OS update date applied one within {MAX_OS_UPDATE_AGE_DAYS} days")
+            if unreported:
+                pass_reasons.append(f"{len(unreported)} macOS/Linux endpoint(s) excluded: Sophos does not report their OS update date")
         else:
             if outdated:
                 fail_reasons.append(f"{len(outdated)} of {len(active)} active endpoint(s) have not applied an OS update in over {MAX_OS_UPDATE_AGE_DAYS} days")
