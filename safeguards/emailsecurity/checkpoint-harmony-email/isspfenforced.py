@@ -71,6 +71,14 @@ def transform(input):
             data = nxt
         return None
 
+    def is_domain_or_subdomain(domain, base_domain):
+        """Return True when domain is exactly base_domain or a subdomain of it."""
+        if not isinstance(domain, str):
+            return False
+        d = domain.strip().strip(".").lower()
+        b = base_domain.strip().strip(".").lower()
+        return d == b or d.endswith("." + b)
+
     try:
         body = dns_body(input)
         if body is None:
@@ -86,7 +94,8 @@ def transform(input):
                                    input_summary={"spfRecord": str(spf)})
         terms = record.split()
         includes = [t.split(":", 1)[1].lower() for t in terms if t.lower().startswith("include:") and ":" in t]
-        cp = [d for d in includes if d.endswith("checkpoint-spf.com") or d.endswith("cpmails.com")]
+        cp = [d for d in includes if is_domain_or_subdomain(d, "checkpoint-spf.com") or
+              is_domain_or_subdomain(d, "cpmails.com")]
         alls = [t.lower() for t in terms if re.match(r"^[-~?+]?all$", t.lower())]
         qualifier = alls[-1] if alls else ""
         restrictive = qualifier in ("-all", "~all")
