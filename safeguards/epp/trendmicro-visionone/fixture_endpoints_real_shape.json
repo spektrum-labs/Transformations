@@ -1,0 +1,1930 @@
+{
+ "capturedFrom": "Trend Vision One GET /v3.0/endpointSecurity/endpoints, real tenant response 2026-09-25 (merged pages), 32 of 417 items sampled; names, GUIDs, serials, users and IPs replaced; every status/version/policy field verbatim",
+ "totalCount": "32",
+ "count": "32",
+ "items": [
+  {
+   "endpointName": "SRV-000",
+   "agentGuid": "00000000-0000-4000-8000-000000000000",
+   "type": "server",
+   "displayName": "SRV-000",
+   "osName": "Windows Server 2022",
+   "osVersion": "10.0.20348",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.1",
+   "lastLoggedOnUser": "user000",
+   "ipAddresses": [
+    "198.51.100.1"
+   ],
+   "serialNumber": "SERIAL0000",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "SRV-001",
+   "agentGuid": "00000000-0000-4000-8000-000000000001",
+   "type": "server",
+   "displayName": "SRV-001",
+   "osName": "Windows Server 2025",
+   "osVersion": "10.0.26100",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.2",
+   "lastLoggedOnUser": "user001",
+   "ipAddresses": [
+    "198.51.100.2"
+   ],
+   "serialNumber": "SERIAL0001",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "SRV-002",
+   "agentGuid": "00000000-0000-4000-8000-000000000002",
+   "type": "server",
+   "displayName": "SRV-002",
+   "osName": "Windows Server, version 1809",
+   "osVersion": "10.0.17763",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.3",
+   "lastLoggedOnUser": "user002",
+   "ipAddresses": [
+    "198.51.100.3"
+   ],
+   "serialNumber": "SERIAL0002",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "SRV-003",
+   "agentGuid": "00000000-0000-4000-8000-000000000003",
+   "type": "server",
+   "displayName": "SRV-003",
+   "osName": "Windows Server 2025",
+   "osVersion": "10.0.26100",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.4",
+   "lastLoggedOnUser": "user003",
+   "ipAddresses": [
+    "198.51.100.4"
+   ],
+   "serialNumber": "SERIAL0003",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "SRV-004",
+   "agentGuid": "00000000-0000-4000-8000-000000000004",
+   "type": "server",
+   "displayName": "SRV-004",
+   "osName": "Windows Server 2025",
+   "osVersion": "10.0.26100",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.5",
+   "lastLoggedOnUser": "user004",
+   "ipAddresses": [
+    "198.51.100.5"
+   ],
+   "serialNumber": "SERIAL0004",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "SRV-005",
+   "agentGuid": "00000000-0000-4000-8000-000000000005",
+   "type": "server",
+   "displayName": "SRV-005",
+   "osName": "Windows Server 2022",
+   "osVersion": "10.0.20348",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.6",
+   "lastLoggedOnUser": "user005",
+   "ipAddresses": [
+    "198.51.100.6"
+   ],
+   "serialNumber": "SERIAL0005",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-006",
+   "agentGuid": "00000000-0000-4000-8000-000000000006",
+   "type": "desktop",
+   "displayName": "WS-006",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.7",
+   "lastLoggedOnUser": "user006",
+   "ipAddresses": [
+    "198.51.100.7"
+   ],
+   "serialNumber": "SERIAL0006",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-007",
+   "agentGuid": "00000000-0000-4000-8000-000000000007",
+   "type": "desktop",
+   "displayName": "WS-007",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.8",
+   "lastLoggedOnUser": "user007",
+   "ipAddresses": [
+    "198.51.100.8"
+   ],
+   "serialNumber": "SERIAL0007",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-008",
+   "agentGuid": "00000000-0000-4000-8000-000000000008",
+   "type": "desktop",
+   "displayName": "WS-008",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.9",
+   "lastLoggedOnUser": "user008",
+   "ipAddresses": [
+    "198.51.100.9"
+   ],
+   "serialNumber": "SERIAL0008",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4074",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-009",
+   "agentGuid": "00000000-0000-4000-8000-000000000009",
+   "type": "desktop",
+   "displayName": "WS-009",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.10",
+   "lastLoggedOnUser": "user009",
+   "ipAddresses": [
+    "198.51.100.10"
+   ],
+   "serialNumber": "SERIAL0009",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-010",
+   "agentGuid": "00000000-0000-4000-8000-000000000010",
+   "type": "desktop",
+   "displayName": "WS-010",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.11",
+   "lastLoggedOnUser": "user010",
+   "ipAddresses": [
+    "198.51.100.11"
+   ],
+   "serialNumber": "SERIAL0010",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4201",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-011",
+   "agentGuid": "00000000-0000-4000-8000-000000000011",
+   "type": "desktop",
+   "displayName": "WS-011",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.12",
+   "lastLoggedOnUser": "user011",
+   "ipAddresses": [
+    "198.51.100.12"
+   ],
+   "serialNumber": "SERIAL0011",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-012",
+   "agentGuid": "00000000-0000-4000-8000-000000000012",
+   "type": "desktop",
+   "displayName": "WS-012",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.13",
+   "lastLoggedOnUser": "user012",
+   "ipAddresses": [
+    "198.51.100.13"
+   ],
+   "serialNumber": "SERIAL0012",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-013",
+   "agentGuid": "00000000-0000-4000-8000-000000000013",
+   "type": "desktop",
+   "displayName": "WS-013",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.14",
+   "lastLoggedOnUser": "user013",
+   "ipAddresses": [
+    "198.51.100.14"
+   ],
+   "serialNumber": "SERIAL0013",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4201",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-014",
+   "agentGuid": "00000000-0000-4000-8000-000000000014",
+   "type": "desktop",
+   "displayName": "WS-014",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.15",
+   "lastLoggedOnUser": "user014",
+   "ipAddresses": [
+    "198.51.100.15"
+   ],
+   "serialNumber": "SERIAL0014",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-015",
+   "agentGuid": "00000000-0000-4000-8000-000000000015",
+   "type": "desktop",
+   "displayName": "WS-015",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.16",
+   "lastLoggedOnUser": "user015",
+   "ipAddresses": [
+    "198.51.100.16"
+   ],
+   "serialNumber": "SERIAL0015",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "connected",
+    "lastConnectedDateTime": "2026-09-25T14:52:04",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-016",
+   "agentGuid": "00000000-0000-4000-8000-000000000016",
+   "type": "desktop",
+   "displayName": "WS-016",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.17",
+   "lastLoggedOnUser": "user016",
+   "ipAddresses": [
+    "198.51.100.17"
+   ],
+   "serialNumber": "SERIAL0016",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-25T01:34:48",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-017",
+   "agentGuid": "00000000-0000-4000-8000-000000000017",
+   "type": "desktop",
+   "displayName": "WS-017",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.18",
+   "lastLoggedOnUser": "user017",
+   "ipAddresses": [
+    "198.51.100.18"
+   ],
+   "serialNumber": "SERIAL0017",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-25T00:53:22",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-018",
+   "agentGuid": "00000000-0000-4000-8000-000000000018",
+   "type": "desktop",
+   "displayName": "WS-018",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.19",
+   "lastLoggedOnUser": "user018",
+   "ipAddresses": [
+    "198.51.100.19"
+   ],
+   "serialNumber": "SERIAL0018",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-21T23:08:06",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-019",
+   "agentGuid": "00000000-0000-4000-8000-000000000019",
+   "type": "desktop",
+   "displayName": "WS-019",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.20",
+   "lastLoggedOnUser": "user019",
+   "ipAddresses": [
+    "198.51.100.20"
+   ],
+   "serialNumber": "SERIAL0019",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-24T19:27:29",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-020",
+   "agentGuid": "00000000-0000-4000-8000-000000000020",
+   "type": "desktop",
+   "displayName": "WS-020",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.21",
+   "lastLoggedOnUser": "user020",
+   "ipAddresses": [
+    "198.51.100.21"
+   ],
+   "serialNumber": "SERIAL0020",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-24T23:48:01",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-021",
+   "agentGuid": "00000000-0000-4000-8000-000000000021",
+   "type": "desktop",
+   "displayName": "WS-021",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26100",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.22",
+   "lastLoggedOnUser": "user021",
+   "ipAddresses": [
+    "198.51.100.22"
+   ],
+   "serialNumber": "SERIAL0021",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-24T16:16:42",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-022",
+   "agentGuid": "00000000-0000-4000-8000-000000000022",
+   "type": "desktop",
+   "displayName": "WS-022",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.23",
+   "lastLoggedOnUser": "user022",
+   "ipAddresses": [
+    "198.51.100.23"
+   ],
+   "serialNumber": "SERIAL0022",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202609",
+   "unifiedAgentVersionStatus": "latestVersion",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-25T03:59:06",
+    "version": "1.2.0.7870",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-023",
+   "agentGuid": "00000000-0000-4000-8000-000000000023",
+   "type": "desktop",
+   "displayName": "WS-023",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.24",
+   "lastLoggedOnUser": "user023",
+   "ipAddresses": [
+    "198.51.100.24"
+   ],
+   "serialNumber": "SERIAL0023",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported,",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-23T21:14:39",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-024",
+   "agentGuid": "00000000-0000-4000-8000-000000000024",
+   "type": "desktop",
+   "osName": "Windows 11",
+   "osVersion": "10.0 (Build 26200)",
+   "osArchitecture": "x86_64",
+   "osPlatform": "windows",
+   "isolationStatus": "off",
+   "ipAddresses": [
+    "198.51.100.25"
+   ],
+   "serialNumber": "SERIAL0024",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "",
+    "productNames": [],
+    "policyName": "",
+    "status": "off",
+    "lastConnectedDateTime": "",
+    "version": "",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-09-03T15:06:13",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-025",
+   "agentGuid": "00000000-0000-4000-8000-000000000025",
+   "type": "desktop",
+   "osName": "Windows 11",
+   "osVersion": "10.0 (Build 26200)",
+   "osArchitecture": "x86_64",
+   "osPlatform": "windows",
+   "isolationStatus": "off",
+   "ipAddresses": [
+    "198.51.100.26"
+   ],
+   "serialNumber": "SERIAL0025",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "",
+    "productNames": [],
+    "policyName": "",
+    "status": "off",
+    "lastConnectedDateTime": "",
+    "version": "",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-08-28T14:45:01",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-026",
+   "agentGuid": "00000000-0000-4000-8000-000000000026",
+   "type": "desktop",
+   "osName": "Windows 11",
+   "osVersion": "10.0 (Build 26200)",
+   "osArchitecture": "x86_64",
+   "osPlatform": "windows",
+   "isolationStatus": "off",
+   "ipAddresses": [
+    "198.51.100.27"
+   ],
+   "serialNumber": "SERIAL0026",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "securityPolicy": "Sensor Only General Policy",
+   "securityPolicyOverriddenStatus": "disabled",
+   "unifiedAgentVersion": "202607",
+   "unifiedAgentVersionStatus": "inTolerance",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "",
+    "productNames": [],
+    "policyName": "",
+    "status": "off",
+    "lastConnectedDateTime": "",
+    "version": "",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [
+     "1208222296"
+    ],
+    "patterns": [
+     {
+      "id": "1208222296",
+      "name": "Smart Telemetry Pattern"
+     }
+    ]
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-08-26T17:38:24",
+    "version": "1.2.0.7793",
+    "status": "disabled",
+    "advancedRiskTelemetryStatus": "enabled",
+    "componentUpdatePolicy": "n",
+    "componentUpdateStatus": "onSchedule",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-027",
+   "agentGuid": "00000000-0000-4000-8000-000000000027",
+   "type": "desktop",
+   "osName": "Windows 11",
+   "osVersion": "10.0 (Build 26200)",
+   "osArchitecture": "x86_64",
+   "osPlatform": "windows",
+   "isolationStatus": "off",
+   "ipAddresses": [
+    "198.51.100.28"
+   ],
+   "serialNumber": "SERIAL0027",
+   "serviceGatewayOrProxy": "Direct connect",
+   "versionControlPolicy": "Default",
+   "agentUpdateStatus": "onSchedule",
+   "agentUpdatePolicy": "n",
+   "creditAllocatedLicenses": [],
+   "unifiedAgentVersion": "202608",
+   "unifiedAgentVersionStatus": "agentEndOfLife",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "",
+    "productNames": [],
+    "policyName": "",
+    "status": "off",
+    "lastConnectedDateTime": "",
+    "version": "",
+    "lastScannedDateTime": "",
+    "componentVersion": "latestVersion",
+    "componentUpdatePolicy": "",
+    "componentUpdateStatus": "notSupported",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [],
+    "patterns": []
+   },
+   "edrSensor": {
+    "endpointGroup": "",
+    "productNames": [
+     "Trend Vision One Endpoint Sensor"
+    ],
+    "connectivity": "disconnected",
+    "lastConnectedDateTime": "2026-08-27T16:01:37",
+    "version": "1.2.0.5827",
+    "status": "unknown",
+    "advancedRiskTelemetryStatus": "unknown",
+    "componentUpdatePolicy": "",
+    "componentUpdateStatus": "notSupported",
+    "kernelSupportPackageVersion": "not-supported",
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-028",
+   "agentGuid": "00000000-0000-4000-8000-000000000028",
+   "type": "desktop",
+   "displayName": "WS-028",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.29",
+   "lastLoggedOnUser": "user028",
+   "creditAllocatedLicenses": [],
+   "unifiedAgentVersionStatus": "unknownVersions",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "unknownVersions",
+    "componentUpdatePolicy": "",
+    "componentUpdateStatus": "notSupported",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-029",
+   "agentGuid": "00000000-0000-4000-8000-000000000029",
+   "type": "desktop",
+   "displayName": "WS-029",
+   "osName": "Windows 11",
+   "osVersion": "10.0.22631",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.30",
+   "lastLoggedOnUser": "user029",
+   "creditAllocatedLicenses": [],
+   "unifiedAgentVersionStatus": "unknownVersions",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "unknownVersions",
+    "componentUpdatePolicy": "",
+    "componentUpdateStatus": "notSupported",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-030",
+   "agentGuid": "00000000-0000-4000-8000-000000000030",
+   "type": "desktop",
+   "displayName": "WS-030",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.31",
+   "lastLoggedOnUser": "user030",
+   "creditAllocatedLicenses": [],
+   "unifiedAgentVersionStatus": "unknownVersions",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4194",
+    "lastScannedDateTime": "",
+    "componentVersion": "unknownVersions",
+    "componentUpdatePolicy": "",
+    "componentUpdateStatus": "notSupported",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": []
+   }
+  },
+  {
+   "endpointName": "WS-031",
+   "agentGuid": "00000000-0000-4000-8000-000000000031",
+   "type": "desktop",
+   "displayName": "WS-031",
+   "osName": "Windows 11",
+   "osVersion": "10.0.26200",
+   "osPlatform": "windows",
+   "lastUsedIp": "198.51.100.32",
+   "lastLoggedOnUser": "user031",
+   "creditAllocatedLicenses": [],
+   "unifiedAgentVersionStatus": "unknownVersions",
+   "eppAgent": {
+    "endpointGroup": "",
+    "protectionManager": "Trend Micro Worry-Free Business Security Services",
+    "productNames": [],
+    "policyName": "",
+    "status": "unknown",
+    "lastConnectedDateTime": "",
+    "version": "6.7.4201",
+    "lastScannedDateTime": "",
+    "componentVersion": "unknownVersions",
+    "componentUpdatePolicy": "",
+    "componentUpdateStatus": "notSupported",
+    "kernelSupportPackageVersion": "",
+    "installedComponentIds": [],
+    "virtualMachineDetails": {
+     "cloudInstanceId": "swf-us-0000000"
+    },
+    "patterns": []
+   }
+  }
+ ]
+}
