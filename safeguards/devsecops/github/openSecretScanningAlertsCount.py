@@ -68,17 +68,58 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
+    """Open secret scanning alerts across the organization.
 
+    GET /orgs/{org}/secret-scanning/alerts?state=open, page-number pagination at 100
+    per page (hide_secret=true, so the literal secret is never fetched or stored).
+
+    Two guards stop a partial read from being reported as a confident number:
+      * The body must be a list of alerts. An error envelope or any other shape is a
+        failed read, not zero alerts.
+      * A non-empty result that is an exact multiple of PAGE_SIZE may have been cut
+        off (the paginator's page limit, or a definition that fetches one page), so
+        the count is withheld. A genuine total that is an exact multiple of 100 is
+        also withheld; that is the safe direction.
+
+    Scope: GitHub only raises these alerts on repositories with secret scanning on.
+    Zero here says nothing about repositories where it is off; that is what
+    isSecretScanningPushProtectionEnabled measures, per repository.
+    """
+    PAGE_SIZE = 100
+    data, validation = extract_input(input)
+    meta = {"transformationId": "openSecretScanningAlertsCount", "vendor": "GitHub", "category": "devsecops"}
+
+    alerts = None
     if isinstance(data, list):
         alerts = data
     elif isinstance(data, dict):
-        alerts = data.get("data") or data.get("alerts") or data.get("apiResponse") or []
-        if not isinstance(alerts, list):
-            alerts = []
-    else:
-        alerts = []
+        for key in ("data", "alerts", "apiResponse"):
+            if isinstance(data.get(key), list):
+                alerts = data.get(key)
+                break
+
+    if alerts is None:
+        return create_response(
+            result={"openSecretScanningAlertsCount": None},
+            validation=validation,
+            fail_reasons=["The secret scanning alerts response was not a list of alerts, so open alerts cannot be counted."],
+            input_summary={"responseIsList": False},
+            api_errors=["Unexpected response shape from /orgs/{org}/secret-scanning/alerts."],
+            metadata=meta,
+        )
+
+    if len(alerts) > 0 and len(alerts) % PAGE_SIZE == 0:
+        return create_response(
+            result={"openSecretScanningAlertsCount": None, "truncated": True},
+            validation=validation,
+            fail_reasons=[
+                f"Received {len(alerts)} alerts, an exact multiple of the {PAGE_SIZE}-alert page, so the list may have been cut off and the count cannot be confirmed as complete."
+            ],
+            recommendations=["No customer action required; this is a retrieval limit on our side."],
+            input_summary={"alertsReceived": len(alerts), "pageSize": PAGE_SIZE, "truncated": True},
+            api_errors=["Result set may be truncated at a page boundary."],
+            metadata=meta,
+        )
 
     open_alerts = [a for a in alerts if isinstance(a, dict) and a.get("state") == "open"]
     open_count = len(open_alerts)
@@ -92,11 +133,6 @@ def transform(input):
         repo_name = None
         if isinstance(repo, dict):
             repo_name = repo.get("full_name") or repo.get("name")
-        if not repo_name:
-            url = a.get("url") or ""
-            parts = url.split("/repos/")
-            if len(parts) > 1:
-                repo_name = parts[1].split("/secret-scanning")[0]
         if repo_name:
             repos_affected[repo_name] = repos_affected.get(repo_name, 0) + 1
 
@@ -105,34 +141,28 @@ def transform(input):
         type_summary = ", ".join([f"{name}: {cnt}" for name, cnt in top_types])
         pass_reasons = []
         fail_reasons = [
-            f"{open_count} open secret scanning alerts found across {len(repos_affected)} repositories. Top secret types: {type_summary}."
+            f"{open_count} open secret scanning alerts across {len(repos_affected)} repositories. Top secret types: {type_summary}."
         ]
         recommendations = [
-            "Rotate and revoke all leaked secrets identified in the open alerts.",
-            "Enable secret scanning push protection to prevent future leaks.",
-            "Review and remediate open alerts in affected repositories, prioritizing publicly leaked secrets.",
+            "Rotate and revoke every leaked secret in the open alerts, then close the alerts.",
+            "Enable secret scanning and push protection on every repository.",
         ]
     else:
-        pass_reasons = ["No open secret scanning alerts were found across eligible repositories in the organization."]
+        pass_reasons = ["No open secret scanning alerts on repositories where secret scanning is enabled."]
         fail_reasons = []
         recommendations = []
 
-    result = {
-        "openSecretScanningAlertsCount": open_count,
-        "repositoriesAffectedCount": len(repos_affected),
-        "secretTypeBreakdown": secret_types,
-    }
-
     return create_response(
-        result=result,
+        result={
+            "openSecretScanningAlertsCount": open_count,
+            "repositoriesAffectedCount": len(repos_affected),
+            "secretTypeBreakdown": secret_types,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary={"totalAlertsInResponse": len(alerts), "openAlertsCounted": open_count},
-        metadata={
-            "transformationId": "openSecretScanningAlertsCount",
-            "vendor": "GitHub",
-            "category": "devsecops",
-        },
+        additional_findings=["Counts only repositories with secret scanning enabled; see isSecretScanningPushProtectionEnabled for coverage."],
+        metadata=meta,
     )

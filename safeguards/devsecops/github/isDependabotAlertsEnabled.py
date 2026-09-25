@@ -66,81 +66,93 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    """Dependabot alerts enablement, read from the org code security configurations.
+    """Dependabot alerts enabled on every active repository, read per repository.
 
-    Reads `dependabot_alerts` on GET /orgs/{org}/code-security/configurations.
+    Method listOrgRepositoryVulnerabilityAlerts (POST {serverUrl}/graphql, read-only
+    query) returns organization.repositories.nodes[].hasVulnerabilityAlertsEnabled.
+    That is the repository's effective setting, however it got there (a code security
+    configuration, an org default, or a manual toggle). The REST repository object has
+    no Dependabot-alerts field, and GET /orgs/{org}/code-security/configurations lists
+    configuration definitions, which say nothing about which repositories they are
+    applied to. The previous version read those definitions and passed.
 
-    This criterion previously read security_and_analysis.dependabot_security_updates
-    on the repository list. Those are two different GitHub features: alerts tell you a
-    dependency has a CVE, security updates raise the patch PR. The repository object
-    carries no dependabot_alerts field at all, so the substitution reported alerts as
-    disabled on orgs where they are on -- contradicted by this integration's own
-    openCriticalDependabotAlertsCount, which counts those very alerts.
-
-    Configurations with target_type "global" are GitHub's own built-in templates and
-    are present in every organization with dependabot_alerts already enabled. They are
-    excluded: counting them would pass every customer regardless of configuration.
+    Fails closed on: a GraphQL errors array, a missing organization, no repositories,
+    fewer nodes than totalCount (pagination did not complete), a paginator truncation
+    flag, or any active repository with alerts off or unreported.
     """
     data, validation = extract_input(input)
+    body = data if isinstance(data, dict) else {}
 
-    if isinstance(data, list):
-        configs = data
-    elif isinstance(data, dict):
-        configs = data.get("data") or data.get("configurations") or []
-        if not isinstance(configs, list):
-            configs = []
-    else:
-        configs = []
+    gql_errors = body.get("errors")
+    org = None
+    gdata = body.get("data")
+    if isinstance(gdata, dict):
+        org = gdata.get("organization")
+    conn = org.get("repositories") if isinstance(org, dict) else None
+    nodes = conn.get("nodes") if isinstance(conn, dict) else None
+    page_info = conn.get("pageInfo") if isinstance(conn, dict) else None
+    total_count = conn.get("totalCount") if isinstance(conn, dict) else None
 
-    owned = []
-    for cfg in configs:
-        if isinstance(cfg, dict) and str(cfg.get("target_type", "")).lower() in ("organization", "enterprise"):
-            owned.append(cfg)
+    api_errors = []
+    if isinstance(gql_errors, list) and gql_errors:
+        for e in gql_errors[:5]:
+            api_errors.append(str(e.get("message") if isinstance(e, dict) else e))
+    if not isinstance(nodes, list):
+        nodes = []
+        if not api_errors:
+            api_errors.append("The response has no data.organization.repositories.nodes list.")
+    if isinstance(page_info, dict) and page_info.get("truncated") is True:
+        api_errors.append("The paginator stopped at its page limit, so not every repository was read.")
+    if isinstance(total_count, int) and len(nodes) < total_count:
+        api_errors.append(f"Read {len(nodes)} of {total_count} repositories; pagination did not complete.")
 
-    enabled_names = []
-    disabled_names = []
-    not_set_names = []
-    for cfg in owned:
-        name = cfg.get("name") or "unnamed configuration"
-        status = str(cfg.get("dependabot_alerts", "")).lower()
-        if status == "enabled":
-            enabled_names.append(name)
-        elif status == "disabled":
-            disabled_names.append(name)
+    active = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        if n.get("isArchived") is True or n.get("isDisabled") is True:
+            continue
+        active.append(n)
+
+    enabled = []
+    disabled = []
+    unknown = []
+    for n in active:
+        name = n.get("nameWithOwner") or n.get("name") or "unknown"
+        flag = n.get("hasVulnerabilityAlertsEnabled")
+        if flag is True:
+            enabled.append(name)
+        elif flag is False:
+            disabled.append(name)
         else:
-            not_set_names.append(name)
+            unknown.append(name)
 
-    is_enabled = len(enabled_names) > 0 and len(disabled_names) == 0
-
-    result = {
-        "isDependabotAlertsEnabled": is_enabled,
-        "totalConfigurations": len(configs),
-        "ownedConfigurations": len(owned),
-        "enabledConfigurations": len(enabled_names),
-        "disabledConfigurations": len(disabled_names),
-        "notSetConfigurations": len(not_set_names),
-    }
+    is_enabled = (not api_errors) and len(active) > 0 and not disabled and not unknown
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-
-    if len(configs) == 0:
-        fail_reasons.append("No code security configurations were returned, so Dependabot alert enablement cannot be confirmed.")
-        recommendations.append("Verify the organization name and that the token can read organization code security configurations.")
-    elif len(owned) == 0:
-        fail_reasons.append("Only GitHub's built-in global configuration templates are present; this organization has no code security configuration of its own.")
-        recommendations.append("Create an organization or enterprise code security configuration with Dependabot alerts enabled and apply it to all repositories.")
-    elif disabled_names:
-        fail_reasons.append(f"Dependabot alerts are disabled in {len(disabled_names)} of {len(owned)} code security configurations: {', '.join(disabled_names)}")
-        recommendations.append("Set Dependabot alerts to enabled in every organization and enterprise code security configuration.")
+    if api_errors:
+        fail_reasons.append("Dependabot alert enablement could not be read for every repository: " + " ".join(api_errors))
+        recommendations.append("Give the token read access to the organization's repositories and Dependabot alerts, then re-run.")
+    elif not active:
+        fail_reasons.append("No active (non-archived) repositories were returned, so Dependabot alerts cannot be confirmed on any.")
     elif is_enabled:
-        pass_reasons.append(f"Dependabot alerts are enabled in all {len(enabled_names)} organization and enterprise code security configurations: {', '.join(enabled_names)}")
-        if not_set_names:
-            pass_reasons.append(f"{len(not_set_names)} configuration(s) leave it unset and inherit: {', '.join(not_set_names)}")
+        pass_reasons.append(f"All {len(active)} active repositories report hasVulnerabilityAlertsEnabled=true.")
     else:
-        fail_reasons.append(f"Dependabot alerts are not enabled in any of the {len(owned)} organization or enterprise code security configurations; all leave it unset.")
-        recommendations.append("Set Dependabot alerts to enabled in the configuration applied to your repositories.")
+        if disabled:
+            fail_reasons.append(f"{len(disabled)} of {len(active)} active repositories have Dependabot alerts off (e.g. {', '.join(disabled[:5])}).")
+        if unknown:
+            fail_reasons.append(f"{len(unknown)} active repositories did not report hasVulnerabilityAlertsEnabled (e.g. {', '.join(unknown[:5])}).")
+        recommendations.append("Enable Dependabot alerts on every repository, for example through a code security configuration attached to all repositories.")
+
+    result = {
+        "isDependabotAlertsEnabled": is_enabled,
+        "activeRepositoryCount": len(active),
+        "enabledRepositoryCount": len(enabled),
+        "disabledRepositoryCount": len(disabled),
+        "unknownRepositoryCount": len(unknown),
+    }
 
     return create_response(
         result=result,
@@ -149,10 +161,15 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary={
-            "totalConfigurations": len(configs),
-            "ownedConfigurations": len(owned),
-            "enabledConfigurations": len(enabled_names),
-            "disabledConfigurations": len(disabled_names),
+            "repositoriesRead": len(nodes),
+            "totalCount": total_count,
+            "activeRepositories": len(active),
+            "disabledRepos": disabled[:20],
         },
-        metadata={"transformationId": "isDependabotAlertsEnabled", "vendor": "GitHub", "category": "devsecops"},
+        api_errors=api_errors,
+        metadata={
+            "transformationId": "isDependabotAlertsEnabled",
+            "vendor": "GitHub",
+            "category": "devsecops",
+        },
     )
