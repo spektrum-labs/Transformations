@@ -18,8 +18,9 @@ code-execution egress tests; then 115 after the 26 GitHub effective-state tests;
 then 136 after the 21 OpenAI Administration API tests; then 165 (142 on main
 @551b2b54 plus 23 Trend Vision One inventory-check tests); then 182 after the
 17 Keepit job/retention/schedule/multi-geo tests.
-then 259 after the 77 Check Point Harmony Email tests.
-FLOOR is 259. Raise it when tests are added; lowering it is a claim
+then 208 after the 26 Google - MFA, Mimecast logging and CrowdStrike tests.
+then 285 after the 77 Check Point Harmony Email tests.
+FLOOR is 285. Raise it when tests are added; lowering it is a claim
 that the suite should prove less, and wants a reason in the commit message.
 """
 
@@ -30,7 +31,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Measured 2026-09-22 (see module docstring). The suite may grow, never shrink.
-FLOOR = 259
+FLOOR = 285
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_PATH = "safeguards/"
