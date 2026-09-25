@@ -136,13 +136,13 @@ def transform(input):
                         if score > 0:
                             scores.append(score)
                             if score < WEAK_THRESHOLD:
-                                strength_details["weakPasswords"] += 1
+                                strength_details["weakPasswords"] = strength_details["weakPasswords"] + 1
                             elif score < FAIR_THRESHOLD:
-                                strength_details["fairPasswords"] += 1
+                                strength_details["fairPasswords"] = strength_details["fairPasswords"] + 1
                             elif score < STRONG_THRESHOLD:
-                                strength_details["mediumPasswords"] += 1
+                                strength_details["mediumPasswords"] = strength_details["mediumPasswords"] + 1
                             else:
-                                strength_details["strongPasswords"] += 1
+                                strength_details["strongPasswords"] = strength_details["strongPasswords"] + 1
 
                 if scores:
                     avg_score = sum(scores) / len(scores)
