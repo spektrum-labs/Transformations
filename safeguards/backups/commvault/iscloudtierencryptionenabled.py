@@ -1,4 +1,4 @@
-# isbackupencrypted.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# iscloudtierencryptionenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
 # Method: getStorageEncryption (Integration-Service workflow)
 #   1. getDiskStorage        -> GET {serverUrl}/V4/Storage/Disk
@@ -17,10 +17,10 @@ import json
 
 def transform(input):
     """
-    isBackupEncrypted = true when at least one disk or cloud storage pool exists and every one of them has
-    encryption.encrypt true. false on any unencrypted pool, no pool, or a partial or unreadable read.
+    isCloudTierEncryptionEnabled = true when at least one cloud storage pool exists and every one has
+    encryption.encrypt true. false otherwise (no cloud pool is not evidence of an encrypted cloud tier).
     """
-    key = "isBackupEncrypted"
+    key = "isCloudTierEncryptionEnabled"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -120,12 +120,11 @@ def transform(input):
         disk, cloud, problem = read_all(input)
         if problem:
             return {key: False, "reason": problem}
-        allp = disk + cloud
-        if len(allp) == 0:
-            return {key: False, "reason": "No disk or cloud storage pool exists"}
-        bad = [str(b.get("name") or b.get("id")) for b in allp if not encrypted(b)]
+        if len(cloud) == 0:
+            return {key: False, "reason": "No cloud storage pool exists"}
+        bad = [str(b.get("name") or b.get("id")) for b in cloud if not encrypted(b)]
         if bad:
-            return {key: False, "reason": str(len(bad)) + " of " + str(len(allp)) + " storage pools are not encrypted", "unencryptedPools": bad[:25]}
-        return {key: True, "reason": "All " + str(len(allp)) + " disk and cloud storage pools are encrypted"}
+            return {key: False, "reason": str(len(bad)) + " of " + str(len(cloud)) + " cloud storage pools are not encrypted", "unencryptedPools": bad[:25]}
+        return {key: True, "reason": "All " + str(len(cloud)) + " cloud storage pools are encrypted"}
     except Exception as e:
         return {key: False, "error": str(e)}

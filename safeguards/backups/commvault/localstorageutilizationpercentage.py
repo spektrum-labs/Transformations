@@ -1,22 +1,20 @@
-# confirmedlicensepurchased.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# localstorageutilizationpercentage.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
-# Method: getLicenseInfo -> GET {serverUrl}/V4/License (Accept: application/json)
+# Method: getDiskStorage -> GET {serverUrl}/V4/Storage/Disk (Accept: application/json)
 # Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
-#         operation GetLicenseInfo: licenseMode (EVALUATION, PRODUCTION, DR_PRODUCTION), edition, expiryDate
-#         ("Expiry date of current license in epoch format").
+#         operation GetDiskStorages: diskStorage[].capacity and freeSpace ("Provided in megabytes").
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
-import datetime
 import json
 
 
 def transform(input):
     """
-    confirmedLicensePurchased = true when licenseMode is PRODUCTION or DR_PRODUCTION and expiryDate, when
-    present and non-zero, is in the future. EVALUATION, an expired license or an unreadable body is false.
+    localStorageUtilizationPercentage = (capacity - freeSpace) / capacity x 100 summed over every disk
+    storage pool (2 dp). None on an unreadable body, no disk pool, or a pool without numeric capacity.
     """
-    key = "confirmedLicensePurchased"
+    key = "localStorageUtilizationPercentage"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -73,19 +71,27 @@ def transform(input):
         return None
 
     try:
-        data = unwrap(parse_input(input), "licenseMode")
+        data = unwrap(parse_input(input), "diskStorage")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
-        mode = str(data.get("licenseMode") or "").upper()
-        if not mode:
-            return {key: False, "reason": "Response has no licenseMode"}
-        if mode not in ("PRODUCTION", "DR_PRODUCTION"):
-            return {key: False, "reason": "License mode is " + mode}
-        exp = as_int(data.get("expiryDate"))
-        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        if exp is not None and exp > 0 and exp <= now:
-            return {key: False, "reason": "The " + mode + " license expired (expiryDate " + str(exp) + ")"}
-        return {key: True, "reason": mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), "edition": data.get("edition")}
+            return {key: None, "reason": problem}
+        pools = data.get("diskStorage")
+        if not isinstance(pools, list):
+            return {key: None, "reason": "Response has no diskStorage list"}
+        if len(pools) == 0:
+            return {key: None, "reason": "No disk storage pool exists"}
+        cap = 0
+        free = 0
+        for p in pools:
+            c = as_int(p.get("capacity")) if isinstance(p, dict) else None
+            f = as_int(p.get("freeSpace")) if isinstance(p, dict) else None
+            if c is None or f is None or c < 0 or f < 0:
+                return {key: None, "reason": "A disk pool has no numeric capacity or freeSpace: " + str(p.get("name") if isinstance(p, dict) else p)}
+            cap = cap + c
+            free = free + f
+        if cap <= 0:
+            return {key: None, "reason": "Disk pools report zero total capacity"}
+        pct = round((cap - free) * 100.0 / cap, 2)
+        return {key: pct, "reason": str(len(pools)) + " disk pools: " + str(cap - free) + " of " + str(cap) + " MB used", "poolCount": len(pools)}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}

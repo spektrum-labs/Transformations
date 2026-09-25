@@ -1,22 +1,20 @@
-# confirmedlicensepurchased.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# isssoenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
-# Method: getLicenseInfo -> GET {serverUrl}/V4/License (Accept: application/json)
+# Method: getIdentityServers -> GET {serverUrl}/V4/IdentityServers (Accept: application/json)
 # Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
-#         operation GetLicenseInfo: licenseMode (EVALUATION, PRODUCTION, DR_PRODUCTION), edition, expiryDate
-#         ("Expiry date of current license in epoch format").
+#         operation GetIdentityServers: identityServers[].type (SAML, ACTIVE_DIRECTORY, ...), samlType, configured.
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
-import datetime
 import json
 
 
 def transform(input):
     """
-    confirmedLicensePurchased = true when licenseMode is PRODUCTION or DR_PRODUCTION and expiryDate, when
-    present and non-zero, is in the future. EVALUATION, an expired license or an unreadable body is false.
+    isSSOEnabled = true when at least one identity server of type SAML is present and not marked
+    configured: false. false otherwise, including an unreadable body.
     """
-    key = "confirmedLicensePurchased"
+    key = "isSSOEnabled"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -73,19 +71,16 @@ def transform(input):
         return None
 
     try:
-        data = unwrap(parse_input(input), "licenseMode")
+        data = unwrap(parse_input(input), "identityServers")
         problem = vendor_error(data)
         if problem:
             return {key: False, "reason": problem}
-        mode = str(data.get("licenseMode") or "").upper()
-        if not mode:
-            return {key: False, "reason": "Response has no licenseMode"}
-        if mode not in ("PRODUCTION", "DR_PRODUCTION"):
-            return {key: False, "reason": "License mode is " + mode}
-        exp = as_int(data.get("expiryDate"))
-        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        if exp is not None and exp > 0 and exp <= now:
-            return {key: False, "reason": "The " + mode + " license expired (expiryDate " + str(exp) + ")"}
-        return {key: True, "reason": mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), "edition": data.get("edition")}
+        servers = data.get("identityServers")
+        if not isinstance(servers, list):
+            return {key: False, "reason": "Response has no identityServers list"}
+        saml = [s for s in servers if isinstance(s, dict) and str(s.get("type") or "").upper() == "SAML" and s.get("configured") is not False]
+        if len(saml) == 0:
+            return {key: False, "reason": "No configured SAML identity server (" + str(len(servers)) + " identity servers read)"}
+        return {key: True, "reason": str(len(saml)) + " SAML identity servers configured", "samlApps": [str(s.get("name")) + " (" + str(s.get("samlType")) + ")" for s in saml][:10]}
     except Exception as e:
         return {key: False, "error": str(e)}
