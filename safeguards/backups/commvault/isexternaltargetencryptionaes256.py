@@ -1,4 +1,4 @@
-# isbackupencrypted.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# isexternaltargetencryptionaes256.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
 # Method: getStorageEncryption (Integration-Service workflow)
 #   1. getDiskStorage        -> GET {serverUrl}/V4/Storage/Disk
@@ -17,10 +17,10 @@ import json
 
 def transform(input):
     """
-    isBackupEncrypted = true when at least one disk or cloud storage pool exists and every one of them has
-    encryption.encrypt true. false on any unencrypted pool, no pool, or a partial or unreadable read.
+    isExternalTargetEncryptionAES256 = true when at least one cloud storage pool exists and every one is
+    encrypted with cipher "AES" and keyLength 256. false otherwise.
     """
-    key = "isBackupEncrypted"
+    key = "isExternalTargetEncryptionAES256"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -120,12 +120,15 @@ def transform(input):
         disk, cloud, problem = read_all(input)
         if problem:
             return {key: False, "reason": problem}
-        allp = disk + cloud
-        if len(allp) == 0:
-            return {key: False, "reason": "No disk or cloud storage pool exists"}
-        bad = [str(b.get("name") or b.get("id")) for b in allp if not encrypted(b)]
+        if len(cloud) == 0:
+            return {key: False, "reason": "No cloud storage pool exists"}
+        bad = []
+        for b in cloud:
+            e = b["encryption"]
+            if not encrypted(b) or str(e.get("cipher") or "").upper() != "AES" or as_int(e.get("keyLength")) != 256:
+                bad.append(str(b.get("name") or b.get("id")) + " (" + str(e.get("cipher")) + " " + str(e.get("keyLength")) + ")")
         if bad:
-            return {key: False, "reason": str(len(bad)) + " of " + str(len(allp)) + " storage pools are not encrypted", "unencryptedPools": bad[:25]}
-        return {key: True, "reason": "All " + str(len(allp)) + " disk and cloud storage pools are encrypted"}
+            return {key: False, "reason": str(len(bad)) + " of " + str(len(cloud)) + " cloud storage pools are not AES-256", "pools": bad[:25]}
+        return {key: True, "reason": "All " + str(len(cloud)) + " cloud storage pools use AES-256"}
     except Exception as e:
         return {key: False, "error": str(e)}

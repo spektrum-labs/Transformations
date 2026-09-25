@@ -1,22 +1,21 @@
-# confirmedlicensepurchased.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# isauditlogforwardingenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
-# Method: getLicenseInfo -> GET {serverUrl}/V4/License (Accept: application/json)
+# Method: getSyslogServer -> GET {serverUrl}/V4/syslogServer (Accept: application/json)
 # Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
-#         operation GetLicenseInfo: licenseMode (EVALUATION, PRODUCTION, DR_PRODUCTION), edition, expiryDate
-#         ("Expiry date of current license in epoch format").
+#         operation GetSyslogStatus: hostname, port, enabled, forwardToSyslog.audit ("Forward the system log for
+#         audit trails to the server").
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
-import datetime
 import json
 
 
 def transform(input):
     """
-    confirmedLicensePurchased = true when licenseMode is PRODUCTION or DR_PRODUCTION and expiryDate, when
-    present and non-zero, is in the future. EVALUATION, an expired license or an unreadable body is false.
+    isAuditLogForwardingEnabled = true when syslog forwarding is enabled, has a hostname, and forwards the
+    audit trail (forwardToSyslog.audit true). false otherwise, including an unreadable body.
     """
-    key = "confirmedLicensePurchased"
+    key = "isAuditLogForwardingEnabled"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -73,19 +72,19 @@ def transform(input):
         return None
 
     try:
-        data = unwrap(parse_input(input), "licenseMode")
+        data = unwrap(parse_input(input), "enabled")
         problem = vendor_error(data)
         if problem:
             return {key: False, "reason": problem}
-        mode = str(data.get("licenseMode") or "").upper()
-        if not mode:
-            return {key: False, "reason": "Response has no licenseMode"}
-        if mode not in ("PRODUCTION", "DR_PRODUCTION"):
-            return {key: False, "reason": "License mode is " + mode}
-        exp = as_int(data.get("expiryDate"))
-        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        if exp is not None and exp > 0 and exp <= now:
-            return {key: False, "reason": "The " + mode + " license expired (expiryDate " + str(exp) + ")"}
-        return {key: True, "reason": mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), "edition": data.get("edition")}
+        if "enabled" not in data:
+            return {key: False, "reason": "Response has no syslog enabled flag"}
+        fwd = data.get("forwardToSyslog") if isinstance(data.get("forwardToSyslog"), dict) else {}
+        if data.get("enabled") is not True:
+            return {key: False, "reason": "Syslog forwarding is disabled"}
+        if not str(data.get("hostname") or "").strip():
+            return {key: False, "reason": "Syslog forwarding has no hostname"}
+        if fwd.get("audit") is not True:
+            return {key: False, "reason": "Syslog is enabled but the audit trail is not forwarded"}
+        return {key: True, "reason": "Audit trail is forwarded to syslog (TLS " + ("on" if data.get("secureMessaging") is True else "off") + ")"}
     except Exception as e:
         return {key: False, "error": str(e)}

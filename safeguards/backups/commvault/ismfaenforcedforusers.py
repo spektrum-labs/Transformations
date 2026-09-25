@@ -1,22 +1,21 @@
-# confirmedlicensepurchased.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# ismfaenforcedforusers.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
-# Method: getLicenseInfo -> GET {serverUrl}/V4/License (Accept: application/json)
-# Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
-#         operation GetLicenseInfo: licenseMode (EVALUATION, PRODUCTION, DR_PRODUCTION), edition, expiryDate
-#         ("Expiry date of current license in epoch format").
+# Method: getTwoFactorAuth -> GET {serverUrl}/Commcell/Properties/TwoFactorAuth (Accept: application/json)
+# Docs:   Commvault's official Python SDK, cvpysdk/services.py 'TFA' and
+#         cvpysdk/security/two_factor_authentication.py (https://github.com/Commvault/cvpysdk):
+#         twoFactorAuthenticationInfo.mode 0 = disabled, 1 = all users, 2 = selected user groups (userGroups).
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
-import datetime
 import json
 
 
 def transform(input):
     """
-    confirmedLicensePurchased = true when licenseMode is PRODUCTION or DR_PRODUCTION and expiryDate, when
-    present and non-zero, is in the future. EVALUATION, an expired license or an unreadable body is false.
+    isMFAEnforcedForUsers = true when CommCell two-factor authentication mode is 1 (every user). Mode 2
+    (selected user groups only) and 0 (off) are false, as is an unreadable or error body.
     """
-    key = "confirmedLicensePurchased"
+    key = "isMFAEnforcedForUsers"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -73,19 +72,19 @@ def transform(input):
         return None
 
     try:
-        data = unwrap(parse_input(input), "licenseMode")
+        data = unwrap(parse_input(input), "twoFactorAuthenticationInfo")
         problem = vendor_error(data)
         if problem:
             return {key: False, "reason": problem}
-        mode = str(data.get("licenseMode") or "").upper()
-        if not mode:
-            return {key: False, "reason": "Response has no licenseMode"}
-        if mode not in ("PRODUCTION", "DR_PRODUCTION"):
-            return {key: False, "reason": "License mode is " + mode}
-        exp = as_int(data.get("expiryDate"))
-        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        if exp is not None and exp > 0 and exp <= now:
-            return {key: False, "reason": "The " + mode + " license expired (expiryDate " + str(exp) + ")"}
-        return {key: True, "reason": mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), "edition": data.get("edition")}
+        info = data.get("twoFactorAuthenticationInfo")
+        if not isinstance(info, dict) or "mode" not in info:
+            return {key: False, "reason": "Response has no twoFactorAuthenticationInfo.mode"}
+        mode = as_int(info.get("mode"))
+        if mode == 1:
+            return {key: True, "reason": "Two-factor authentication is enforced for all users"}
+        if mode == 2:
+            groups = [str(g.get("userGroupName")) for g in (info.get("userGroups") or []) if isinstance(g, dict)]
+            return {key: False, "reason": "Two-factor authentication applies only to selected user groups", "userGroups": groups[:25]}
+        return {key: False, "reason": "Two-factor authentication is off (mode " + str(info.get("mode")) + ")"}
     except Exception as e:
         return {key: False, "error": str(e)}

@@ -1,6 +1,6 @@
-# isbackupenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# arebackupstested.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
-# Method: getBackupJobs -> GET {serverUrl}/Job?jobFilter=Backup&jobCategory=Finished&completedJobLookupTime=604800
+# Method: getRestoreJobs -> GET {serverUrl}/Job?jobFilter=Restore&jobCategory=Finished&completedJobLookupTime=7776000
 #         (header limit: 1000; Accept: application/json)
 # Docs:   https://documentation.commvault.com/11.40/software/rest_api_get_job.html
 #         (totalRecordsWithoutPaging; jobs[].jobSummary: jobId, jobType, status, jobStartTime; job status values
@@ -15,11 +15,10 @@ import json
 
 def transform(input):
     """
-    isBackupEnabled = true when at least one backup job ended Completed (or Completed w/ one or more
-    warnings) in the last 7 days. Proves Commvault is actually backing something up, not only that a
-    plan exists. Does not prove every workload is covered.
+    areBackupsTested = true when at least one restore job ended Completed (or with warnings) in the last 90 days:
+    a backup was actually recovered. Does not prove the restore was a planned test or covered every workload.
     """
-    key = "isBackupEnabled"
+    key = "areBackupsTested"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -132,8 +131,9 @@ def transform(input):
         if rows is None:
             return {key: False, "reason": problem}
         c = classify(rows)
-        if len(c["success"]) == 0:
-            return {key: False, "reason": "No backup job completed in the last 7 days (" + str(len(rows)) + " finished jobs read)"}
-        return {key: True, "reason": str(len(c["success"])) + " backup jobs completed in the last 7 days"}
+        ok = [s for s in c["success"] if "restore" in str(s.get("jobType") or "restore").lower()]
+        if len(ok) == 0:
+            return {key: False, "reason": "No restore job completed in the last 90 days (" + str(len(rows)) + " finished restore jobs read)"}
+        return {key: True, "reason": str(len(ok)) + " restore jobs completed in the last 90 days", "latest": label(ok[0])}
     except Exception as e:
         return {key: False, "error": str(e)}

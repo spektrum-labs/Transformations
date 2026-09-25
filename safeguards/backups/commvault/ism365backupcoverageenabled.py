@@ -1,22 +1,22 @@
-# confirmedlicensepurchased.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# ism365backupcoverageenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
-# Method: getLicenseInfo -> GET {serverUrl}/V4/License (Accept: application/json)
+# Method: getPlanSummary -> GET {serverUrl}/V4/Plan/Summary (Accept: application/json)
 # Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
-#         operation GetLicenseInfo: licenseMode (EVALUATION, PRODUCTION, DR_PRODUCTION), edition, expiryDate
-#         ("Expiry date of current license in epoch format").
+#         operation GetPlanSummary: plans[].planType (Server, Laptop, Office365, ...), status (ENABLED, DISABLED,
+#         INCOMPLETE, HIDDEN, BACKUP_DISABLED), associatedEntities, RPO ("RPO in minutes for the plan"); plansCount.
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
-import datetime
 import json
 
 
 def transform(input):
     """
-    confirmedLicensePurchased = true when licenseMode is PRODUCTION or DR_PRODUCTION and expiryDate, when
-    present and non-zero, is in the future. EVALUATION, an expired license or an unreadable body is false.
+    isM365BackupCoverageEnabled = true when at least one ENABLED plan of type Office365 or ExchangeUser has
+    associated entities (mailboxes, OneDrive, SharePoint or Teams content assigned to it). Does not prove every
+    Microsoft 365 user is covered. false on an unreadable or partial body.
     """
-    key = "confirmedLicensePurchased"
+    key = "isM365BackupCoverageEnabled"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -72,20 +72,46 @@ def transform(input):
             return int(value.strip())
         return None
 
+    def server_plans(input):
+        data = unwrap(parse_input(input), "plans")
+        problem = vendor_error(data)
+        if problem:
+            return None, problem
+        plans = data.get("plans")
+        if not isinstance(plans, list):
+            return None, "Response has no plans list"
+        count = as_int(data.get("plansCount"))
+        if count is not None and count > len(plans):
+            return None, "Read " + str(len(plans)) + " of " + str(count) + " plans"
+        used = []
+        for p in plans:
+            if not isinstance(p, dict):
+                return None, "A plan entry is not an object"
+            if str(p.get("planType") or "").lower() != "server":
+                continue
+            if (as_int(p.get("associatedEntities")) or 0) > 0:
+                used.append(p)
+        return used, None
+
+    def pname(p):
+        plan = p.get("plan") if isinstance(p.get("plan"), dict) else {}
+        return str(plan.get("name") or plan.get("id") or "?")
+
     try:
-        data = unwrap(parse_input(input), "licenseMode")
+        data = unwrap(parse_input(input), "plans")
         problem = vendor_error(data)
         if problem:
             return {key: False, "reason": problem}
-        mode = str(data.get("licenseMode") or "").upper()
-        if not mode:
-            return {key: False, "reason": "Response has no licenseMode"}
-        if mode not in ("PRODUCTION", "DR_PRODUCTION"):
-            return {key: False, "reason": "License mode is " + mode}
-        exp = as_int(data.get("expiryDate"))
-        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        if exp is not None and exp > 0 and exp <= now:
-            return {key: False, "reason": "The " + mode + " license expired (expiryDate " + str(exp) + ")"}
-        return {key: True, "reason": mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), "edition": data.get("edition")}
+        plans = data.get("plans")
+        if not isinstance(plans, list):
+            return {key: False, "reason": "Response has no plans list"}
+        count = as_int(data.get("plansCount"))
+        if count is not None and count > len(plans):
+            return {key: False, "reason": "Read " + str(len(plans)) + " of " + str(count) + " plans"}
+        hits = [pname(p) for p in plans if isinstance(p, dict) and str(p.get("planType") or "") in ("Office365", "ExchangeUser")
+                and str(p.get("status") or "").upper() == "ENABLED" and (as_int(p.get("associatedEntities")) or 0) > 0]
+        if len(hits) == 0:
+            return {key: False, "reason": "No enabled Office365 or ExchangeUser plan has associated entities (" + str(len(plans)) + " plans read)"}
+        return {key: True, "reason": str(len(hits)) + " enabled Microsoft 365 plans protect entities", "plans": hits[:10]}
     except Exception as e:
         return {key: False, "error": str(e)}

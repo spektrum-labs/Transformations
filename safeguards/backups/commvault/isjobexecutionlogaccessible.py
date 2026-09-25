@@ -1,4 +1,4 @@
-# isbackupenabled.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+# isjobexecutionlogaccessible.py - Commvault (Command Center REST API, webconsole/commandcenter api)
 #
 # Method: getBackupJobs -> GET {serverUrl}/Job?jobFilter=Backup&jobCategory=Finished&completedJobLookupTime=604800
 #         (header limit: 1000; Accept: application/json)
@@ -15,11 +15,11 @@ import json
 
 def transform(input):
     """
-    isBackupEnabled = true when at least one backup job ended Completed (or Completed w/ one or more
-    warnings) in the last 7 days. Proves Commvault is actually backing something up, not only that a
-    plan exists. Does not prove every workload is covered.
+    isJobExecutionLogAccessible = true when the job history for the last 7 days was read in full and every
+    finished backup job carries its execution record: jobId, status, jobStartTime and an end time
+    (jobEndTime or lastUpdateTime). false otherwise, including an unreadable body or no finished job.
     """
-    key = "isBackupEnabled"
+    key = "isJobExecutionLogAccessible"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -132,8 +132,19 @@ def transform(input):
         if rows is None:
             return {key: False, "reason": problem}
         c = classify(rows)
-        if len(c["success"]) == 0:
-            return {key: False, "reason": "No backup job completed in the last 7 days (" + str(len(rows)) + " finished jobs read)"}
-        return {key: True, "reason": str(len(c["success"])) + " backup jobs completed in the last 7 days"}
+        finished = c["success"] + c["failure"] + c["unknown"]
+        if len(finished) == 0:
+            return {key: False, "reason": "No backup job finished in the last 7 days, so no execution record could be read"}
+        missing = []
+        for s in finished:
+            start = as_int(s.get("jobStartTime"))
+            end = as_int(s.get("jobEndTime"))
+            if end is None:
+                end = as_int(s.get("lastUpdateTime"))
+            if s.get("jobId") in (None, "") or not str(s.get("status") or "").strip() or not start or not end:
+                missing.append(label(s))
+        if missing:
+            return {key: False, "reason": str(len(missing)) + " finished jobs lack an id, status, start or end time", "incompleteRecords": missing[:25]}
+        return {key: True, "reason": "All " + str(len(finished)) + " finished backup jobs in the last 7 days carry id, status, start and end time"}
     except Exception as e:
         return {key: False, "error": str(e)}
