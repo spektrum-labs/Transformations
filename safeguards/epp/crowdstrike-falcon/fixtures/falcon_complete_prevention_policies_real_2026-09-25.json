@@ -1,0 +1,138 @@
+{
+ "resources": [
+  {
+   "name": "NoPreventionWin1",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "CautiousLin",
+   "platform_name": "Linux",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "CautiousWin",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "Support-case policy 1",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Troubleshooting group 1"
+    }
+   ]
+  },
+  {
+   "name": "MeasuredLin",
+   "platform_name": "Linux",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Servers"
+    }
+   ]
+  },
+  {
+   "name": "MeasuredWin",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Servers"
+    }
+   ]
+  },
+  {
+   "name": "ActiveLin",
+   "platform_name": "Linux",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Workstations"
+    }
+   ]
+  },
+  {
+   "name": "Support-case policy 2",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Troubleshooting group 2"
+    }
+   ]
+  },
+  {
+   "name": "ActiveWin",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Workstations"
+    }
+   ]
+  },
+  {
+   "name": "CautiousMac",
+   "platform_name": "Mac",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "MeasuredMac",
+   "platform_name": "Mac",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Servers"
+    }
+   ]
+  },
+  {
+   "name": "ActiveMac",
+   "platform_name": "Mac",
+   "enabled": "True",
+   "groups": [
+    {
+     "name": "Workstations"
+    }
+   ]
+  },
+  {
+   "name": "platform_default",
+   "platform_name": "Android",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "platform_default",
+   "platform_name": "Mac",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "platform_default",
+   "platform_name": "iOS",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "platform_default",
+   "platform_name": "Windows",
+   "enabled": "True",
+   "groups": []
+  },
+  {
+   "name": "platform_default",
+   "platform_name": "Linux",
+   "enabled": "True",
+   "groups": []
+  }
+ ]
+}

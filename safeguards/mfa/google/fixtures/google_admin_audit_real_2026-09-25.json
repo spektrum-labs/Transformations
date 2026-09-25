@@ -1,0 +1,443 @@
+{
+ "kind": "admin#reports#activities",
+ "nextPageToken": "redacted-present",
+ "items": [
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:24:09.439Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "KEY"
+   },
+   "events": [
+    {
+     "type": "SECURITY_CENTER_RULES",
+     "name": "SECURITY_CENTER_RULE_THRESHOLD_TRIGGER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:24:08.510Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "KEY"
+   },
+   "events": [
+    {
+     "type": "SECURITY_CENTER_RULES",
+     "name": "SECURITY_CENTER_RULE_THRESHOLD_TRIGGER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:20:11.196Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "MOVE_USER_TO_ORG_UNIT"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:18:25.146Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "REVOKE_3LO_TOKEN"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:18:24.935Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "REVOKE_3LO_TOKEN"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:18:24.700Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "REVOKE_3LO_TOKEN"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:18:24.483Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "REVOKE_3LO_TOKEN"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:18:19.842Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "MOBILE_SETTINGS",
+     "name": "ACTION_REQUESTED"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:18:19.841Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "MOBILE_SETTINGS",
+     "name": "MOBILE_DEVICE_BLOCK"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:57.456Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:56.313Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:55.213Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:54.102Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:53.047Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:51.912Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:50.739Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "GROUP_SETTINGS",
+     "name": "REMOVE_GROUP_MEMBER"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:47.693Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "TOGGLE_AUTOMATIC_CONTACT_SHARING"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:44.612Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "UNENROLL_USER_FROM_STRONG_AUTH"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:39.287Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "DELETE_2SV_SCRATCH_CODES"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:37.333Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "RESET_SIGNIN_COOKIES"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:35.438Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "CHANGE_PASSWORD"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:17:07.190Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "CHANGE_PASSWORD"
+    },
+    {
+     "type": "USER_SETTINGS",
+     "name": "CHANGE_PASSWORD_ON_NEXT_LOGIN"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T15:16:49.908Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "USER_SETTINGS",
+     "name": "MOVE_USER_TO_ORG_UNIT"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T13:46:39.734Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "APPLICATION_SETTINGS",
+     "name": "CHANGE_APPLICATION_SETTING"
+    },
+    {
+     "type": "APPLICATION_SETTINGS",
+     "name": "CHANGE_APPLICATION_SETTING"
+    }
+   ]
+  },
+  {
+   "kind": "admin#reports#activity",
+   "id": {
+    "time": "2026-09-25T13:45:45.898Z",
+    "applicationName": "admin",
+    "uniqueQualifier": "redacted"
+   },
+   "actor": {
+    "callerType": "USER"
+   },
+   "events": [
+    {
+     "type": "APPLICATION_SETTINGS",
+     "name": "CHANGE_APPLICATION_SETTING"
+    },
+    {
+     "type": "APPLICATION_SETTINGS",
+     "name": "CHANGE_APPLICATION_SETTING"
+    }
+   ]
+  }
+ ]
+}
