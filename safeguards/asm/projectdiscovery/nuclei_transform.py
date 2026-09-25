@@ -91,7 +91,7 @@ def transform(input):
 
         # Extract scan metadata
         scan_status = data.get("status", "unknown")
-        domain = data.get("domain", "unknown")
+        domain = data.get("primaryDomain") or data.get("domain") or "unknown"
         total_findings = data.get("total", 0)
         findings = data.get("findings", [])
         stderr = data.get("stderr", "")
@@ -104,6 +104,35 @@ def transform(input):
                 api_errors=[f"Nuclei scan status: {scan_status}"],
                 fail_reasons=[f"Scan did not complete successfully for {domain}"],
                 input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
+            )
+
+        # A "success" that scanned nothing, or where a domain's scan errored, proves nothing:
+        # zero findings there must not read as "no critical/high findings".
+        domain_results = data.get("domainResults") or []
+        failed_domains = [r.get("domain", "unknown") for r in domain_results
+                          if isinstance(r, dict) and r.get("status") != "success"]
+        scan_errors = data.get("errors") or []
+        domains_scanned = None
+        if "domainsScanned" in data:
+            try:
+                domains_scanned = int(str(data.get("domainsScanned")).strip())
+            except (TypeError, ValueError):
+                domains_scanned = 0
+        if domains_scanned is not None and domains_scanned <= 0:
+            reason = f"Nuclei scanned zero domains for {domain}"
+        elif failed_domains or scan_errors:
+            reason = (f"Nuclei scan failed for {max(len(failed_domains), len(scan_errors))} "
+                      f"domain(s) of {domain}")
+        else:
+            reason = None
+        if reason:
+            return create_response(
+                result={"noCriticalFindings": False, "noHighFindings": False},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                input_summary={"domain": domain, "status": scan_status, "domainsScanned": domains_scanned,
+                               "failedDomains": failed_domains[:20], "errorCount": len(scan_errors)}
             )
 
         # Count findings by severity
