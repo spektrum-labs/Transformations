@@ -24,8 +24,8 @@ def extract_input(input_data):
     # (the `_parse_input` pattern in CLAUDE.md); this one did not.
     # A string that is not JSON raises here and transform()'s handler records a
     # transformation error with the body -- fail closed, never a silent True.
-    if isinstance(input_data, (str, bytes, bytearray)):
-        if isinstance(input_data, (bytes, bytearray)):
+    if isinstance(input_data, (str, bytes)):
+        if isinstance(input_data, bytes):
             input_data = input_data.decode("utf-8")
         input_data = json.loads(input_data)
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
