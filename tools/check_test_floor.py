@@ -13,7 +13,8 @@ assumed.
 Measured on this branch 2026-09-22, Python 3.11.15, pytest 9.1.1:
 `python -m pytest -q safeguards/` -> "71 passed". Same 71 under pytest 8.4.2.
 FLOOR was 71. 2026-09-24: 83 passed under pytest 8.4.2 after the 12 Trend
-Vision One tests; FLOOR is 83. Raise it when tests are added; lowering it is a claim
+Vision One tests; FLOOR is 83.
+2026-09-25: 104 passed after the 21 OpenAI Administration API tests; FLOOR is 104. Raise it when tests are added; lowering it is a claim
 that the suite should prove less, and wants a reason in the commit message.
 """
 
@@ -24,7 +25,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Measured 2026-09-22 (see module docstring). The suite may grow, never shrink.
-FLOOR = 83
+FLOOR = 104
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_PATH = "safeguards/"
