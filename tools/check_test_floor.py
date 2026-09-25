@@ -15,9 +15,10 @@ Measured on this branch 2026-09-22, Python 3.11.15, pytest 9.1.1:
 FLOOR was 71. 2026-09-24: 83 passed under pytest 8.4.2 after the 12 Trend
 Vision One tests; FLOOR was 83. 2026-09-25: 89 after the 6 Anthropic
 code-execution egress tests; then 115 after the 26 GitHub effective-state tests;
-then 136 after the 21 OpenAI Administration API tests. Measured 142 on main
-551b2b54, then 159 after the 17 Keepit job/retention/schedule/multi-geo tests.
-FLOOR is 159. Raise it when tests are added; lowering it is a claim
+then 136 after the 21 OpenAI Administration API tests; then 165 (142 on main
+@551b2b54 plus 23 Trend Vision One inventory-check tests); then 182 after the
+17 Keepit job/retention/schedule/multi-geo tests.
+FLOOR is 182. Raise it when tests are added; lowering it is a claim
 that the suite should prove less, and wants a reason in the commit message.
 """
 
@@ -28,7 +29,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Measured 2026-09-22 (see module docstring). The suite may grow, never shrink.
-FLOOR = 159
+FLOOR = 182
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_PATH = "safeguards/"
