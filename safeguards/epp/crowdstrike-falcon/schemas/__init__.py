@@ -1,5 +1,6 @@
 """Schema registry for this vendor's transformations."""
 
+from .confirmedLicensePurchased import ConfirmedLicensePurchasedInput
 from .isBehavioralMonitoringValid import IsBehavioralMonitoringValidInput
 from .isEDRDeployed import IsEDRDeployedInput
 from .isEPPConfigured import IsEPPConfiguredInput
@@ -9,10 +10,11 @@ from .isEPPEnabledForCriticalSystems import IsEPPEnabledForCriticalSystemsInput
 from .isEPPLoggingEnabled import IsEPPLoggingEnabledInput
 from .isPatchManagementEnabled import IsPatchManagementEnabledInput
 from .isPatchManagementValid import IsPatchManagementValidInput
-from .isRemovableMediaControlled import IsRemovableMediaControlledInput
+from
 from .requiredCoveragePercentage import RequiredCoveragePercentageInput
 
 __all__ = [
+    "ConfirmedLicensePurchasedInput",
     "IsBehavioralMonitoringValidInput",
     "IsEDRDeployedInput",
     "IsEPPConfiguredInput",
