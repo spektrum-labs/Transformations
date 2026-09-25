@@ -15,8 +15,10 @@ Measured on this branch 2026-09-22, Python 3.11.15, pytest 9.1.1:
 FLOOR was 71. 2026-09-24: 83 passed under pytest 8.4.2 after the 12 Trend
 Vision One tests; FLOOR was 83. 2026-09-25: 89 after the 6 Anthropic
 code-execution egress tests; then 115 after the 26 GitHub effective-state tests;
-then 136 after the 21 OpenAI Administration API tests.
-FLOOR is 136. Raise it when tests are added; lowering it is a claim
+then 136 after the 21 OpenAI Administration API tests. Measured 142 on main 551b2b54
+(later merges added tests without raising FLOOR); 168 after the 26 Google - MFA, Mimecast
+logging and CrowdStrike critical-systems/coverage tests.
+FLOOR is 168. Raise it when tests are added; lowering it is a claim
 that the suite should prove less, and wants a reason in the commit message.
 """
 
@@ -27,7 +29,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # Measured 2026-09-22 (see module docstring). The suite may grow, never shrink.
-FLOOR = 136
+FLOOR = 168
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_PATH = "safeguards/"
