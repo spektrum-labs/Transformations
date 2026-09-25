@@ -1,9 +1,7 @@
 """Schema registry for this vendor's transformations."""
 
-from .isDKIMConfigured import IsDKIMConfiguredInput
-from .isMFAEnforcedForUsers import IsMFAEnforcedForUsersInput
+from .isSSOEnabled import IsSSOEnabledInput
 
 __all__ = [
-    "IsDKIMConfiguredInput",
-    "IsMFAEnforcedForUsersInput",
+    "IsSSOEnabledInput",
 ]
