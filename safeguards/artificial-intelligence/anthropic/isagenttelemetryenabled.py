@@ -17,8 +17,8 @@ def extract_input(input_data):
     # criterion is answered from an empty shape. CLAUDE.md's `_parse_input` pattern makes
     # str, bytes and dict equivalent everywhere else in this repo; this family did not.
     # A string that is not JSON raises into each transform's existing handler: fail closed.
-    if isinstance(input_data, (str, bytes, bytearray)):
-        if isinstance(input_data, (bytes, bytearray)):
+    if isinstance(input_data, (str, bytes)):
+        if isinstance(input_data, bytes):
             input_data = input_data.decode("utf-8")
         input_data = json.loads(input_data)
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
