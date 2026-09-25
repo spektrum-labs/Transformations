@@ -19,7 +19,7 @@ def load(name):
 def ep(name, type_="desktop", iso="off", epp="on", ver="latestVersion", edr="enabled", conn="connected"):
     e = {"agentGuid": name, "endpointName": name, "type": type_, "isolationStatus": iso}
     if epp is not None:
-        e["eppAgent"] = {"status": epp, "componentVersion": ver}
+        e["eppAgent"] = {"status": epp, "componentVersion": ver, "version": "6.7.4194"}
     if edr is not None:
         e["edrSensor"] = {"status": edr, "connectivity": conn}
     return e
