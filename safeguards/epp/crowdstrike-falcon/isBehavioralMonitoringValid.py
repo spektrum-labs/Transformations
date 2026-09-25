@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -12,11 +11,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -68,103 +66,121 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 BEHAVIORAL_KEYWORDS = [
-    "ioa", "behavior", "interprocess", "indicatorofattack", "customioa",
-    "extendeduser", "exploit", "cloudantimalware", "adwarepup", "malware"
+    "ioa", "behavior", "additionalusermodedata", "scriptbasedexecutionmonitoring",
+    "cloudantimalware", "onsensormlslider", "adwarepup", "interpreteronly",
+    "sensortamperingprotection", "nextgenav",
 ]
 
 
-def is_behavioral_setting(setting_id, setting_name):
-    text = ((setting_id or "") + " " + (setting_name or "")).lower().replace(" ", "").replace("_", "")
+def is_behavioral_setting(setting_id):
+    sid = (setting_id or "")
+    if not isinstance(sid, str):
+        return False
+    sid = sid.lower()
     for kw in BEHAVIORAL_KEYWORDS:
-        if kw in text:
+        if kw in sid:
             return True
+    return False
+
+
+def setting_is_enabled(value):
+    if isinstance(value, dict):
+        if value.get("enabled") is True:
+            return True
+        detection = value.get("detection")
+        prevention = value.get("prevention")
+        if detection and str(detection).upper() != "DISABLED":
+            return True
+        if prevention and str(prevention).upper() != "DISABLED":
+            return True
+        return False
+    if isinstance(value, bool):
+        return value
     return False
 
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error") or data.get("errorType") or (data.get("statusCode") and data.get("statusCode") != 200):
-        msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
-        api_errors.append(f"Vendor API returned an error: {msg}")
+    if isinstance(data, list):
+        policies = data
+    elif isinstance(data, dict):
+        policies = data.get("resources") or data.get("data") or []
+    else:
+        policies = []
 
-    resources = data.get("resources") or []
-    if not isinstance(resources, list):
-        resources = []
+    total_policies = len(policies) if isinstance(policies, list) else 0
+    enabled_policies = 0
+    assigned_enabled_policies = 0
+    policies_with_behavioral_settings_found = 0
+    policies_with_behavioral_settings_enabled = 0
+    inspected_setting_ids = []
 
-    enabled_policies_with_groups = []
-    behavioral_findings = []
-    total_policies = 0
-
-    for policy in resources:
+    for policy in policies if isinstance(policies, list) else []:
         if not isinstance(policy, dict):
             continue
-        total_policies = total_policies + 1
-        policy_name = policy.get("name") or policy.get("id") or "unnamed-policy"
-        policy_enabled = bool(policy.get("enabled"))
+        is_enabled = policy.get("enabled") is True
         groups = policy.get("groups") or []
-        has_groups = len(groups) > 0
-        prevention_settings = policy.get("prevention_settings") or []
-        if not isinstance(prevention_settings, list):
-            prevention_settings = []
+        has_group = isinstance(groups, list) and len(groups) > 0
+        if is_enabled:
+            enabled_policies = enabled_policies + 1
+        if is_enabled and has_group:
+            assigned_enabled_policies = assigned_enabled_policies + 1
 
-        policy_behavioral_settings = []
-        for group in prevention_settings:
-            if not isinstance(group, dict):
-                continue
-            settings = group.get("settings") or []
-            if not isinstance(settings, list):
-                settings = []
-            for setting in settings:
-                if not isinstance(setting, dict):
-                    continue
-                setting_id = setting.get("id")
-                setting_name = setting.get("name")
-                if is_behavioral_setting(setting_id, setting_name):
-                    value = setting.get("value") or {}
-                    setting_enabled = False
-                    if isinstance(value, dict):
-                        setting_enabled = bool(value.get("enabled"))
-                    elif isinstance(value, bool):
-                        setting_enabled = value
-                    if setting_enabled:
-                        policy_behavioral_settings.append(setting_name or setting_id)
+        settings_groups = policy.get("prevention_settings") or policy.get("settings") or []
+        behavioral_settings_found = []
+        if isinstance(settings_groups, list):
+            for grp in settings_groups:
+                if isinstance(grp, dict) and isinstance(grp.get("settings"), list):
+                    for s in grp["settings"]:
+                        if isinstance(s, dict) and is_behavioral_setting(s.get("id") or s.get("name")):
+                            behavioral_settings_found.append(s)
+                elif isinstance(grp, dict) and is_behavioral_setting(grp.get("id") or grp.get("name")):
+                    behavioral_settings_found.append(grp)
 
-        if policy_enabled and has_groups and len(policy_behavioral_settings) > 0:
-            enabled_policies_with_groups.append(policy_name)
-            behavioral_findings.append(
-                f"Policy '{policy_name}' (enabled=True, assigned to {len(groups)} group(s)) has behavioral settings enabled: {', '.join(policy_behavioral_settings)}."
-            )
+        if behavioral_settings_found:
+            policies_with_behavioral_settings_found = policies_with_behavioral_settings_found + 1
+            for s in behavioral_settings_found:
+                inspected_setting_ids.append(s.get("id") or s.get("name") or "unknown")
+            enabled_behavioral = [s for s in behavioral_settings_found if setting_is_enabled(s.get("value"))]
+            if enabled_behavioral and is_enabled:
+                policies_with_behavioral_settings_enabled = policies_with_behavioral_settings_enabled + 1
 
-    is_valid = len(enabled_policies_with_groups) > 0
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
-    input_summary = {
-        "totalPolicies": total_policies,
-        "validBehavioralPolicies": len(enabled_policies_with_groups),
-    }
-
-    if is_valid:
-        pass_reasons = behavioral_findings
-        fail_reasons = []
-        recommendations = []
+    if total_policies == 0:
+        result_value = False
+        fail_reasons.append("No prevention policies were returned by queryCombinedPreventionPolicies, so behavioral (IOA) detection settings could not be verified.")
+        recommendations.append("Confirm the CrowdStrike API credentials have Prevention Policies: READ scope and that prevention policies exist in the tenant.")
+    elif policies_with_behavioral_settings_found == 0:
+        result_value = False
+        fail_reasons.append(
+            f"Inspected {total_policies} prevention policies ({enabled_policies} enabled, {assigned_enabled_policies} enabled and assigned to a host group), but no behavior-based (IOA) detection settings (e.g. UnknownDetectionRelatedExecutables, SensorTamperingProtection, CloudAntiMalware) were found in the settings payload returned for these policies."
+        )
+        recommendations.append("Verify the prevention policy settings payload includes IOA/behavioral detection toggles and re-check policy configuration in the Falcon console.")
+    elif policies_with_behavioral_settings_enabled > 0:
+        sample_ids = sorted(set(inspected_setting_ids))[:10]
+        result_value = True
+        pass_reasons.append(
+            f"{policies_with_behavioral_settings_enabled} of {assigned_enabled_policies} enabled, host-group-assigned prevention policies have behavior-based (IOA) detection settings enabled (inspected settings include: {', '.join(sample_ids)})."
+        )
     else:
-        pass_reasons = []
-        if total_policies == 0:
-            fail_reasons = ["No prevention policies were returned by getCombinedPreventionPolicies; unable to confirm behavioral/IOA detection configuration."]
-        else:
-            fail_reasons = [
-                f"None of the {total_policies} prevention polic(y/ies) returned have an enabled=True policy assigned to a host group with a behavior-based (IOA/ML) detection setting turned on."
-            ]
-        recommendations = [
-            "Enable the applicable prevention policy and turn on behavior-based detection settings (e.g. Cloud/On-sensor ML, Custom IOA, Adware/PUP detection) and assign the policy to the relevant host group(s)."
-        ]
+        result_value = False
+        fail_reasons.append(
+            f"Found behavior-based (IOA) detection settings on {policies_with_behavioral_settings_found} of {total_policies} prevention policies, but none of the {assigned_enabled_policies} enabled/host-group-assigned policies have those settings turned on (enabled=true or a non-DISABLED detection/prevention level)."
+        )
+        recommendations.append("Enable the IOA/behavioral detection settings (e.g. set detection/prevention level above Disabled) on the prevention policy assigned to production host groups.")
 
     result = {
-        "isBehavioralMonitoringValid": is_valid,
+        "isBehavioralMonitoringValid": result_value,
         "totalPolicies": total_policies,
-        "validBehavioralPolicies": len(enabled_policies_with_groups),
+        "enabledPolicies": enabled_policies,
+        "assignedEnabledPolicies": assigned_enabled_policies,
+        "policiesWithBehavioralSettingsFound": policies_with_behavioral_settings_found,
+        "policiesWithBehavioralSettingsEnabled": policies_with_behavioral_settings_enabled,
     }
 
     return create_response(
@@ -173,11 +189,14 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
+        input_summary={
+            "totalPolicies": total_policies,
+            "enabledPolicies": enabled_policies,
+            "assignedEnabledPolicies": assigned_enabled_policies,
+        },
         metadata={
             "transformationId": "isBehavioralMonitoringValid",
             "vendor": "CrowdStrike Falcon",
             "category": "epp",
         },
-        api_errors=api_errors,
     )
