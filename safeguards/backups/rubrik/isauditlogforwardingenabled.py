@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isAuditLogForwardingEnabled
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: An enabled webhook subscribes to audit events.
+API Source: listWebhooks (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/allWebhooksV2/
+Note: Cluster syslog export needs a clusterUuid per cluster and is not read; syslog-only forwarding fails as not evidenced.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isAuditLogForwardingEnabled"
+METHOD = "listWebhooks"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,31 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+def enabled_webhooks(input):
+    root, validation, failure = read(input, ["allWebhooksV2"], "webhooks (allWebhooksV2)")
     if failure:
         return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+    hooks = root.get("allWebhooksV2")
+    if not isinstance(hooks, list):
+        return None, validation, fail(validation, "allWebhooksV2 is not a list.")
+    return [h for h in hooks if isinstance(h, dict) and h.get("status") == "ENABLED"], validation, None
+
+
+def subscription(hook, kind):
+    st = hook.get("subscriptionType")
+    sub = st.get(kind) if isinstance(st, dict) else None
+    return sub if isinstance(sub, dict) else None
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    hooks, validation, failure = enabled_webhooks(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    fwd = []
+    for h in hooks:
+        a = subscription(h, "auditSubscription")
+        if a and (a.get("isSubscribedToAllAudits") is True or (isinstance(a.get("auditTypes"), list) and len(a.get("auditTypes")) > 0)):
+            fwd.append(str(h.get("name")))
+    summary = {"enabledWebhooks": len(hooks), "auditWebhooks": fwd}
+    if not fwd:
+        return fail(validation, "No enabled webhook forwards RSC audit events.", "Create a webhook (e.g. to the SIEM) subscribed to audit events.", summary)
+    return ok(validation, True, "Audit events are forwarded by enabled webhook(s): " + ", ".join(fwd) + ".", summary)

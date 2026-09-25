@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isRestoreJobPermissionIsolationEnabled
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: A non-admin role grants restore operations, so restore is separable from administration.
+API Source: listRoles (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/getAllRolesInOrgConnection/
+Note: Isolated = a role holds a restore operation and none of MANAGE_ACCESS, MANAGE_USER, MANAGE_ROLE, MANAGE_AUTH_DOMAIN (isOrgAdmin is false for built-ins, so it is not used).
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isRestoreJobPermissionIsolationEnabled"
+METHOD = "listRoles"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,38 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
-    if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+RESTORE_OPS = ("RESTORE", "RESTORE_TO_ORIGIN", "INSTANT_RECOVER", "EXPORT", "EXPORT_SNAPSHOTS", "EXPORT_FILES", "DOWNLOAD",
+               "GRANULAR_RECOVERY", "SELF_SERVICE_RESTORE", "CATEGORY_RECOVERY")
+ACCESS_ADMIN_OPS = ("MANAGE_ACCESS", "MANAGE_USER", "MANAGE_ROLE", "MANAGE_AUTH_DOMAIN")
+
+
+def operations(role):
+    ops = set()
+    perms = role.get("effectiveRbacPermissions") if isinstance(role, dict) else None
+    if not isinstance(perms, list):
+        return None
+    for p in perms:
+        if isinstance(p, dict) and isinstance(p.get("operations"), list):
+            for o in p.get("operations"):
+                ops.add(o)
+    return ops
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    root, validation, failure = read(input, ["getAllRolesInOrgConnection"], "roles (getAllRolesInOrgConnection)")
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    conn = root.get("getAllRolesInOrgConnection")
+    if not page_complete(conn):
+        return fail(validation, "The role list is incomplete (more than one page).")
+    isolated = []
+    for r in conn.get("nodes"):
+        ops = operations(r)
+        if ops is None:
+            return fail(validation, "Role '" + str(r.get("name")) + "' returned no effective permissions.")
+        if any(o in ops for o in RESTORE_OPS) and not any(o in ops for o in ACCESS_ADMIN_OPS):
+            isolated.append(str(r.get("name")))
+    summary = {"roles": len(conn.get("nodes")), "restoreRolesWithoutAccessAdmin": isolated}
+    if not isolated:
+        return fail(validation, "Every role that can restore also administers users and roles: restore is not separated from administration.",
+                    "Create a custom role with restore permissions and without user/role management.", summary)
+    return ok(validation, True, "Restore is granted through role(s) without user/role administration: " + ", ".join(isolated) + ".", summary)

@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isKMSKeyRotationEnabled
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Every encrypted cluster completed a key rotation in the last 365 days.
+API Source: getClusterEncryption (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/clusterEncryptionInfo/
+Note: RSC exposes no rotation schedule; evidence is a completed rotation (CDM_DONE) within 365 days.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isKMSKeyRotationEnabled"
+METHOD = "getClusterEncryption"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,44 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+def clusters(input):
+    root, validation, failure = read(input, ["clusterEncryptionInfo"], "cluster encryption (clusterEncryptionInfo)")
     if failure:
         return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+    conn = root.get("clusterEncryptionInfo")
+    if not page_complete(conn):
+        return None, validation, fail(validation, "clusterEncryptionInfo returned more than one page; the cluster set is incomplete.")
+    nodes = [c for c in conn.get("nodes") if isinstance(c, dict)]
+    if not nodes:
+        return None, validation, fail(validation, "RSC reports no Rubrik clusters, so there is no cluster encryption to evaluate.")
+    return nodes, validation, None
+
+MAX_DAYS = 365
+
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    nodes, validation, failure = clusters(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    enc = [c for c in nodes if c.get("isEncrypted") is True]
+    if not enc:
+        return fail(validation, "No Rubrik cluster is encrypted at rest.", None, {"clusters": len(nodes)})
+    now = datetime.now(timezone.utc)
+    gaps = []
+    for c in enc:
+        r = c.get("latestRotationCompletedInfo")
+        when = r.get("completedAt") if isinstance(r, dict) else None
+        if not isinstance(r, dict) or r.get("state") != "CDM_DONE" or not isinstance(when, str):
+            gaps.append(str(c.get("name")) + " (no completed rotation)")
+            continue
+        t = datetime.fromisoformat(when.replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        age = (now - t).days
+        if age > MAX_DAYS:
+            gaps.append(str(c.get("name")) + " (last rotation " + str(age) + " days ago)")
+    summary = {"encryptedClusters": len(enc), "gaps": gaps}
+    if gaps:
+        return fail(validation, "Key rotation is not evidenced within " + str(MAX_DAYS) + " days for: " + ", ".join(gaps) + ".",
+                    "Rotate cluster encryption keys (RSC > Encryption) at least annually.", summary)
+    return ok(validation, True, "All " + str(len(enc)) + " encrypted clusters completed a key rotation in the last " + str(MAX_DAYS) + " days.", summary)

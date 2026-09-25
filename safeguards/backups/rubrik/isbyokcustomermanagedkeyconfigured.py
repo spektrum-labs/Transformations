@@ -1,10 +1,10 @@
 """
-Transformation: isBackupEnabled
+Transformation: isBYOKCustomerManagedKeyConfigured
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Every encrypted cluster protects its key with an external KMIP key manager.
+API Source: getClusterEncryption (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/clusterEncryptionInfo/
 
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
@@ -12,8 +12,8 @@ unrecognised body is False (booleans) or None (numbers), with the reason. Never 
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isBYOKCustomerManagedKeyConfigured"
+METHOD = "getClusterEncryption"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,32 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+def clusters(input):
+    root, validation, failure = read(input, ["clusterEncryptionInfo"], "cluster encryption (clusterEncryptionInfo)")
     if failure:
         return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+    conn = root.get("clusterEncryptionInfo")
+    if not page_complete(conn):
+        return None, validation, fail(validation, "clusterEncryptionInfo returned more than one page; the cluster set is incomplete.")
+    nodes = [c for c in conn.get("nodes") if isinstance(c, dict)]
+    if not nodes:
+        return None, validation, fail(validation, "RSC reports no Rubrik clusters, so there is no cluster encryption to evaluate.")
+    return nodes, validation, None
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    nodes, validation, failure = clusters(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    enc = [c for c in nodes if c.get("isEncrypted") is True]
+    if not enc:
+        return fail(validation, "No Rubrik cluster is encrypted at rest.", None, {"clusters": len(nodes)})
+    gaps = []
+    for c in enc:
+        k = c.get("totalKmipServers")
+        if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+            gaps.append(str(c.get("name")))
+    summary = {"encryptedClusters": len(enc), "noKmip": gaps}
+    if gaps:
+        return fail(validation, "Encrypted cluster(s) without an external KMIP key manager (keys are Rubrik/TPM-managed): " + ", ".join(gaps) + ".",
+                    "Configure a KMIP key manager for cluster encryption keys.", summary)
+    return ok(validation, True, "All " + str(len(enc)) + " encrypted clusters protect their keys with an external KMIP key manager.", summary)

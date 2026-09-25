@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isSSOEnabled
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: At least one RSC user signs in through SSO (auth domain SSO).
+API Source: getUserAuthDomains (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/usersInCurrentAndDescendantOrganization/
+Note: Reads who signs in via SSO; allCurrentOrgIdentityProviders needs MANAGE_AUTH_DOMAIN, which a read-only service account lacks.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isSSOEnabled"
+METHOD = "getUserAuthDomains"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,14 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
-    if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
-
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    root, validation, failure = read(input, ["allUsers", "ssoUsers"], "users by auth domain (usersInCurrentAndDescendantOrganization)")
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    total, sso = as_count(root.get("allUsers")), as_count(root.get("ssoUsers"))
+    if total is None or sso is None:
+        return fail(validation, "User counts are missing.")
+    summary = {"users": total, "ssoUsers": sso}
+    if sso < 1:
+        return fail(validation, "No RSC user signs in through SSO.", "Configure an identity provider and move users to SSO.", summary)
+    return ok(validation, True, str(sso) + " of " + str(total) + " RSC users sign in through SSO.", summary)

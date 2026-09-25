@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: isQuorumApprovalRequiredForDeletion
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Quorum Authorization is enabled and a policy protects snapshot or backup deletion.
+API Source: getTprSettings (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/customTprPolicies/
+Note: Reads custom TPR policies; RSC default global rules are not read, so a deletion covered only by them fails (not evidenced).
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "isQuorumApprovalRequiredForDeletion"
+METHOD = "getTprSettings"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -202,22 +202,40 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
+DELETE_RULES = ("DELETE_SNAPSHOT", "DELETE_BACKUP_OBJECT")
+
+
+def tpr(input):
+    root, validation, failure = read(input, ["tprConfiguration", "customTprPolicies"], "Quorum Authorization (tprConfiguration, customTprPolicies)")
     if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+        return None, None, validation, failure
+    cfg = root.get("tprConfiguration")
+    conn = root.get("customTprPolicies")
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("isTprEnabled"), bool):
+        return None, None, validation, fail(validation, "tprConfiguration.isTprEnabled is missing.")
+    if not page_complete(conn):
+        return None, None, validation, fail(validation, "customTprPolicies returned more than one page; the policy set is incomplete.")
+    policies = [p for p in conn.get("nodes") if isinstance(p, dict)]
+    return cfg, policies, validation, None
+
+
+def quorum_ok(p):
+    q = p.get("quorumRequirement")
+    return isinstance(q, int) and not isinstance(q, bool) and q >= 1
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    cfg, policies, validation, failure = tpr(input)
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    covering = []
+    for p in policies:
+        acts = p.get("actions") if isinstance(p.get("actions"), list) else []
+        if quorum_ok(p) and any(a in DELETE_RULES for a in acts):
+            covering.append(str(p.get("policyName")))
+    summary = {"isTprEnabled": cfg.get("isTprEnabled"), "customPolicies": len(policies), "deletionPolicies": covering}
+    if cfg.get("isTprEnabled") is not True:
+        return fail(validation, "Quorum Authorization (TPR) is disabled, so deletions need no second approver.", "Enable Quorum Authorization in RSC Settings.", summary)
+    if not covering:
+        return fail(validation, "Quorum Authorization is enabled but no policy protects DELETE_SNAPSHOT or DELETE_BACKUP_OBJECT.",
+                    "Add snapshot and backup-object deletion to a TPR policy.", summary)
+    return ok(validation, True, "Snapshot/backup deletion requires quorum approval under: " + ", ".join(covering) + ".", summary)

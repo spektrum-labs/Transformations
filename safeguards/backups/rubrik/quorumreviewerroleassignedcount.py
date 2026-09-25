@@ -1,19 +1,19 @@
 """
-Transformation: isBackupEnabled
+Transformation: quorumReviewerRoleAssignedCount
 Vendor: Rubrik  |  Category: Backup  |  Product: Rubrik Security Cloud (RSC)
-Evaluates: At least one active object is protected by an SLA domain.
-API Source: getSnappableCompliance (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
+Evaluates: Active users holding a role that can approve TPR requests.
+API Source: listUsersWithRoles (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
-        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/snappableConnection/
-
+        https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/usersInCurrentAndDescendantOrganization/
+Note: Reviewer = holds a role whose effective permissions include APPROVE_TPR_REQUEST; deactivated users excluded.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
 
-KEY = "isBackupEnabled"
-METHOD = "getSnappableCompliance"
+KEY = "quorumReviewerRoleAssignedCount"
+METHOD = "listUsersWithRoles"
 WRAPPERS = ("result", "apiResponse", "api_response", "response", "_response_data", "Output")
 
 
@@ -79,7 +79,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -202,22 +202,39 @@ def transform(input):
         )
 
 
-def snappable_counts(input):
-    root, validation, failure = read(input, ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect'], "protected objects (snappableConnection)")
-    if failure:
-        return None, validation, failure
-    c = {}
-    for f in ['activeObjects', 'protectedObjects', 'inCompliance', 'outOfCompliance', 'noSla', 'doNotProtect']:
-        c[f] = as_count(root.get(f))
-        if c[f] is None:
-            return None, validation, fail(validation, "snappableConnection " + f + " did not return an integer count.", None, {"field": f})
-    return c, validation, None
+RESTORE_OPS = ("RESTORE", "RESTORE_TO_ORIGIN", "INSTANT_RECOVER", "EXPORT", "EXPORT_SNAPSHOTS", "EXPORT_FILES", "DOWNLOAD",
+               "GRANULAR_RECOVERY", "SELF_SERVICE_RESTORE", "CATEGORY_RECOVERY")
+ACCESS_ADMIN_OPS = ("MANAGE_ACCESS", "MANAGE_USER", "MANAGE_ROLE", "MANAGE_AUTH_DOMAIN")
+
+
+def operations(role):
+    ops = set()
+    perms = role.get("effectiveRbacPermissions") if isinstance(role, dict) else None
+    if not isinstance(perms, list):
+        return None
+    for p in perms:
+        if isinstance(p, dict) and isinstance(p.get("operations"), list):
+            for o in p.get("operations"):
+                ops.add(o)
+    return ops
 
 def evaluate(input):
-    c, validation, failure = snappable_counts(input)
+    root, validation, failure = read(input, ["usersInCurrentAndDescendantOrganization"], "users (usersInCurrentAndDescendantOrganization)")
     if failure:
         return failure
-    summary = {"activeObjects": c["activeObjects"], "protectedObjects": c["protectedObjects"]}
-    if c["protectedObjects"] < 1:
-        return fail(validation, "No active object is protected by an SLA domain.", "Assign SLA domains in RSC.", summary, value=False)
-    return ok(validation, True, str(c["protectedObjects"]) + " active objects are protected by an SLA domain.", summary)
+    conn = root.get("usersInCurrentAndDescendantOrganization")
+    if not page_complete(conn):
+        return fail(validation, "The user list is incomplete (more pages than were read), so the reviewer count would be a guess.", None,
+                    {"pageInfo": conn.get("pageInfo") if isinstance(conn, dict) else None})
+    reviewers = 0
+    for u in conn.get("nodes"):
+        if not isinstance(u, dict) or u.get("status") == "DEACTIVATED":
+            continue
+        roles = u.get("roles") if isinstance(u.get("roles"), list) else []
+        for r in roles:
+            ops = operations(r)
+            if ops is not None and "APPROVE_TPR_REQUEST" in ops:
+                reviewers = reviewers + 1
+                break
+    summary = {"users": len(conn.get("nodes")), "reviewers": reviewers}
+    return ok(validation, reviewers, str(reviewers) + " of " + str(len(conn.get("nodes"))) + " users hold a role that can approve Quorum Authorization requests.", summary)
