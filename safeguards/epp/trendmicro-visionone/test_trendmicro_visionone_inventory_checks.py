@@ -72,6 +72,9 @@ CASES = [
      lambda: first(lambda e: e["edrSensor"].update(lastConnectedDateTime=OLD)), 1),
     ("isrecordereventcollectionenabled", "isRecorderEventCollectionEnabled", False, True,
      lambda: first(lambda e: e["edrSensor"].update(connectivity="disconnected")), False),
+    # The capture holds 4 empty eppAgent placeholders (sensor-only endpoints): a live false pass before.
+    ("iseppdeployed", "isEPPDeployed", False, True,
+     lambda: first(lambda e: e["eppAgent"].update(version="", protectionManager="")), False),
 ]
 
 MORE = [
@@ -93,6 +96,10 @@ MORE = [
      lambda: first(lambda e: e.pop("edrSensor")), False),
     ("isdeviceosversionvisible", "isDeviceOSVersionVisible",
      lambda: first(lambda e: e.pop("osName")), False),
+    ("iseppdeployed", "isEPPDeployed", lambda: first(lambda e: e.pop("eppAgent")), False),
+    # Still sees a real agent: a version alone, or a protection manager alone, is an installed agent.
+    ("iseppdeployed", "isEPPDeployed", lambda: first(lambda e: e["eppAgent"].update(protectionManager="")), True),
+    ("iseppdeployed", "isEPPDeployed", lambda: first(lambda e: e["eppAgent"].update(version="")), True),
 ]
 
 BAD_BODIES = [
