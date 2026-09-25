@@ -114,6 +114,8 @@ def is_true(value):
 
 def transform(input):
     try:
+        if isinstance(input, (str, bytes)) and len(input.strip()) == 0:
+            input = None
         if isinstance(input, str):
             input = json.loads(input)
         elif isinstance(input, bytes):
