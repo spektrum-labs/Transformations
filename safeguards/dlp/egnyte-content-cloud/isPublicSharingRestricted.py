@@ -136,6 +136,10 @@ OPEN = "anyone"
 def evaluate(data):
     links = pick_list(data, "links")
     count = data.get("count") if isinstance(data, dict) else None
+    # An empty links array and a 401, a 403 or an unrelated body all look the same.
+    # Only a payload that demonstrably came from the links endpoint - a numeric count,
+    # or at least one link object - is evidence. Anything else is not measured.
+    reached_endpoint = isinstance(count, int) or bool(links)
     public, domain, recipients, password, unreadable = [], [], [], [], []
     for link in links:
         if not isinstance(link, dict):
@@ -154,7 +158,8 @@ def evaluate(data):
             recipients.append(label)
     measured = len(links) - len(unreadable)
     result = {
-        "isPublicSharingRestricted": measured > 0 and not public,
+        "isPublicSharingRestricted": reached_endpoint and not public and (measured > 0 or count == 0),
+        "endpointReached": reached_endpoint,
         "publicLinkCount": len(public),
         "linksEvaluated": measured,
         "restrictedLinkPercentage": pct(measured - len(public), measured),
@@ -165,9 +170,20 @@ def evaluate(data):
         "linksNotMeasured": unreadable,
     }
     passes, fails, recs = [], [], []
-    if not links:
+    if not reached_endpoint:
+        fails.append(
+            "The response carries no link list and no link count, so it is indistinguishable "
+            "from an authentication failure or an unrelated body. Public sharing is not "
+            "measured, and absence of evidence is not treated as a pass."
+        )
+        recs.append(
+            "Confirm the OAuth token carries the Egnyte.link scope and that GET "
+            "/pubapi/v2/links returns a count field for this domain."
+        )
+    elif not links:
         passes.append(
-            "No share links exist on the domain, so there is no public sharing surface."
+            "The domain reported a link count of 0, so no share links exist and there is no "
+            "public sharing surface."
         )
         result["isPublicSharingRestricted"] = True
     elif measured == 0:
