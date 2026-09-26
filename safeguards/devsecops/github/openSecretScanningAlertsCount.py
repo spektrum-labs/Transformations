@@ -78,8 +78,11 @@ def transform(input):
         failed read, not zero alerts.
       * A non-empty result that is an exact multiple of PAGE_SIZE may have been cut
         off (the paginator's page limit, or a definition that fetches one page), so
-        the count is withheld. A genuine total that is an exact multiple of 100 is
-        also withheld; that is the safe direction.
+        the count is only a lower bound. If that lower bound already holds open
+        alerts, the requirement (zero open alerts) has failed whatever the true
+        total is, so the open count is reported as "at least N" and the check
+        FAILS. Only a possibly-truncated page with no open alerts in it (which
+        cannot prove zero) withholds the count.
 
     Scope: GitHub only raises these alerts on repositories with secret scanning on.
     Zero here says nothing about repositories where it is off; that is what
@@ -108,21 +111,22 @@ def transform(input):
             metadata=meta,
         )
 
-    if len(alerts) > 0 and len(alerts) % PAGE_SIZE == 0:
+    open_alerts = [a for a in alerts if isinstance(a, dict) and a.get("state") == "open"]
+    open_count = len(open_alerts)
+    truncated = len(alerts) > 0 and len(alerts) % PAGE_SIZE == 0
+
+    if truncated and open_count == 0:
         return create_response(
             result={"openSecretScanningAlertsCount": None, "truncated": True},
             validation=validation,
             fail_reasons=[
-                f"Received {len(alerts)} alerts, an exact multiple of the {PAGE_SIZE}-alert page, so the list may have been cut off and the count cannot be confirmed as complete."
+                f"Received {len(alerts)} alerts, an exact multiple of the {PAGE_SIZE}-alert page, with none open, so the list may have been cut off and zero open alerts cannot be confirmed."
             ],
             recommendations=["No customer action required; this is a retrieval limit on our side."],
             input_summary={"alertsReceived": len(alerts), "pageSize": PAGE_SIZE, "truncated": True},
             api_errors=["Result set may be truncated at a page boundary."],
             metadata=meta,
         )
-
-    open_alerts = [a for a in alerts if isinstance(a, dict) and a.get("state") == "open"]
-    open_count = len(open_alerts)
 
     secret_types = {}
     repos_affected = {}
@@ -140,9 +144,14 @@ def transform(input):
         top_types = sorted(secret_types.items(), key=lambda kv: kv[1], reverse=True)[:5]
         type_summary = ", ".join([f"{name}: {cnt}" for name, cnt in top_types])
         pass_reasons = []
+        at_least = "At least " if truncated else ""
         fail_reasons = [
-            f"{open_count} open secret scanning alerts across {len(repos_affected)} repositories. Top secret types: {type_summary}."
+            f"{at_least}{open_count} open secret scanning alerts across {len(repos_affected)} repositories. Top secret types: {type_summary}."
         ]
+        if truncated:
+            fail_reasons.append(
+                f"Received {len(alerts)} alerts, an exact multiple of the {PAGE_SIZE}-alert page, so the list may have been cut off; the count is a lower bound and the check fails either way."
+            )
         recommendations = [
             "Rotate and revoke every leaked secret in the open alerts, then close the alerts.",
             "Enable secret scanning and push protection on every repository.",
@@ -157,12 +166,14 @@ def transform(input):
             "openSecretScanningAlertsCount": open_count,
             "repositoriesAffectedCount": len(repos_affected),
             "secretTypeBreakdown": secret_types,
+            "countIsLowerBound": truncated,
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalAlertsInResponse": len(alerts), "openAlertsCounted": open_count},
+        input_summary={"totalAlertsInResponse": len(alerts), "openAlertsCounted": open_count,
+                       "pageSize": PAGE_SIZE, "truncated": truncated},
         additional_findings=["Counts only repositories with secret scanning enabled; see isSecretScanningPushProtectionEnabled for coverage."],
         metadata=meta,
     )

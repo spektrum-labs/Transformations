@@ -46,7 +46,11 @@ CASES = [
     ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, False), False),
     ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, True, total=150), False),
     ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [alert("resolved")], 0, [alert(), alert()], 2),
-    ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [], 0, [alert()] * 100, None),
+    # A full page of open alerts may be truncated, but it already fails "zero open": report the lower bound.
+    ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [], 0, [alert()] * 200, 200),
+    # A full page with nothing open cannot prove zero: withhold.
+    ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [alert("resolved")], 0,
+     [alert("resolved")] * 100, None),
     ("openCriticalDependabotAlertsCount", "openCriticalDependabotAlertsCount", [], 0,
      {"message": "Not Found", "documentation_url": "https://docs.github.com/rest"}, None),
 ]
@@ -72,3 +76,23 @@ def test_booleans_fail_closed(module, body):
 @pytest.mark.parametrize("body", BAD_BODIES)
 def test_counts_withhold_on_non_list(module, body):
     assert load(module).transform(body)["transformedResponse"][module] is None
+
+
+def drilled(body):
+    """What Token-Service hands a legacy-format transform: the GraphQL "data" wrapper drilled away."""
+    return body["data"]
+
+
+def test_dependabot_reads_the_drilled_shape_token_service_sends():
+    t = load("isDependabotAlertsEnabled").transform
+    assert t(drilled(gql(True, True)))["transformedResponse"]["isDependabotAlertsEnabled"] is True
+    assert t(drilled(gql(True, False)))["transformedResponse"]["isDependabotAlertsEnabled"] is False
+    assert t(drilled(gql(True, True, total=150)))["transformedResponse"]["isDependabotAlertsEnabled"] is False
+    assert t({"organization": None})["transformedResponse"]["isDependabotAlertsEnabled"] is False
+
+
+def test_truncated_secret_count_is_flagged_as_lower_bound():
+    tr = load("openSecretScanningAlertsCount").transform([alert()] * 200)["transformedResponse"]
+    assert tr["countIsLowerBound"] is True
+    tr = load("openSecretScanningAlertsCount").transform([alert()] * 3)["transformedResponse"]
+    assert tr["countIsLowerBound"] is False
