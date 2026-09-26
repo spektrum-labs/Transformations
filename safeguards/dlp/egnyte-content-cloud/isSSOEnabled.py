@@ -73,7 +73,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _pick(data, *keys):
+def pick_list(data, *keys):
     """The collection may arrive at a named key, or as the whole payload."""
     if isinstance(data, list):
         return data
@@ -89,13 +89,13 @@ def _pick(data, *keys):
     return []
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
 
 
-def _flag(record, *names):
+def field_value(record, *names):
     """Field casing varies between the REST payload and the BSON projection."""
     for n in names:
         if n in record:
@@ -106,7 +106,7 @@ def _flag(record, *names):
     return None
 
 
-def _parse_dt(value):
+def parse_dt(value):
     if not value or not isinstance(value, str):
         return None
     text = value.strip().replace("Z", "+00:00")
@@ -126,7 +126,7 @@ def _parse_dt(value):
     return parsed
 
 
-def _now():
+def utc_now():
     return datetime.now(timezone.utc)
 
 
@@ -134,7 +134,7 @@ FEDERATED = {"sso", "ad"}
 
 
 def evaluate(data):
-    users = _pick(data, "resources", "Resources")
+    users = pick_list(data, "resources", "Resources")
     active = [u for u in users if u.get("active")]
     federated, local, unreadable = [], [], []
     for u in active:
@@ -149,7 +149,7 @@ def evaluate(data):
     measured = len(federated) + len(local)
     result = {
         "isSSOEnabled": measured > 0 and not local,
-        "ssoCoveragePercentage": _pct(len(federated), measured),
+        "ssoCoveragePercentage": pct(len(federated), measured),
         "activeUsersEvaluated": measured,
         "localAuthUserCount": len(local),
         "localAuthUsers": local[:25],

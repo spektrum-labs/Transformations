@@ -73,7 +73,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _pick(data, *keys):
+def pick_list(data, *keys):
     """The collection may arrive at a named key, or as the whole payload."""
     if isinstance(data, list):
         return data
@@ -89,13 +89,13 @@ def _pick(data, *keys):
     return []
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
 
 
-def _flag(record, *names):
+def field_value(record, *names):
     """Field casing varies between the REST payload and the BSON projection."""
     for n in names:
         if n in record:
@@ -106,7 +106,7 @@ def _flag(record, *names):
     return None
 
 
-def _parse_dt(value):
+def parse_dt(value):
     if not value or not isinstance(value, str):
         return None
     text = value.strip().replace("Z", "+00:00")
@@ -126,17 +126,17 @@ def _parse_dt(value):
     return parsed
 
 
-def _now():
+def utc_now():
     return datetime.now(timezone.utc)
 
 
 def evaluate(data):
-    users = _pick(data, "users", "operators")
-    enabled = [u for u in users if not _flag(u, "IsDisabled")]
+    users = pick_list(data, "users", "operators")
+    enabled = [u for u in users if not field_value(u, "IsDisabled")]
     with_mfa, without_mfa, unreadable = [], [], []
     for u in enabled:
-        value = _flag(u, "TwoFactorEnabled")
-        name = _flag(u, "Username", "CommonName") or _flag(u, "Email") or _flag(u, "Key") or "unnamed"
+        value = field_value(u, "TwoFactorEnabled")
+        name = field_value(u, "Username", "CommonName") or field_value(u, "Email") or field_value(u, "Key") or "unnamed"
         if value is None:
             unreadable.append(name)
         elif bool(value):
@@ -146,7 +146,7 @@ def evaluate(data):
     measured = len(with_mfa) + len(without_mfa)
     result = {
         "isMFAEnabled": measured > 0 and not without_mfa,
-        "mfaCoveragePercentage": _pct(len(with_mfa), measured),
+        "mfaCoveragePercentage": pct(len(with_mfa), measured),
         "operatorsEvaluated": measured,
         "operatorsWithoutMfa": without_mfa[:25],
         "operatorsWithoutMfaCount": len(without_mfa),

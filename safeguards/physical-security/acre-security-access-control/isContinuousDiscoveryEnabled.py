@@ -72,7 +72,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _pick(data, *keys):
+def pick_list(data, *keys):
     """The collection may arrive at a named key, or as the whole payload."""
     if isinstance(data, list):
         return data
@@ -88,13 +88,13 @@ def _pick(data, *keys):
     return []
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
 
 
-def _flag(record, *names):
+def field_value(record, *names):
     """Field casing varies between the REST payload and the BSON projection."""
     for n in names:
         if n in record:
@@ -105,7 +105,7 @@ def _flag(record, *names):
     return None
 
 
-def _parse_dt(value):
+def parse_dt(value):
     if not value or not isinstance(value, str):
         return None
     text = value.strip().replace("Z", "+00:00")
@@ -125,14 +125,14 @@ def _parse_dt(value):
     return parsed
 
 
-def _now():
+def utc_now():
     return datetime.now(timezone.utc)
 
 
 def evaluate(data):
-    controllers = _pick(data, "controllers")
-    readers = _pick(data, "peripherals", "readers") if isinstance(data, dict) else []
-    enabled = [c for c in controllers if not _flag(c, "IsDisabled")]
+    controllers = pick_list(data, "controllers")
+    readers = pick_list(data, "peripherals", "readers") if isinstance(data, dict) else []
+    enabled = [c for c in controllers if not field_value(c, "IsDisabled")]
     result = {
         "isContinuousDiscoveryEnabled": len(controllers) > 0,
         "controllerCount": len(controllers),

@@ -72,7 +72,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _pick(data, *keys):
+def pick_list(data, *keys):
     """The collection may arrive at a named key, or as the whole payload."""
     if isinstance(data, list):
         return data
@@ -88,13 +88,13 @@ def _pick(data, *keys):
     return []
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
 
 
-def _flag(record, *names):
+def field_value(record, *names):
     """Field casing varies between the REST payload and the BSON projection."""
     for n in names:
         if n in record:
@@ -105,7 +105,7 @@ def _flag(record, *names):
     return None
 
 
-def _parse_dt(value):
+def parse_dt(value):
     if not value or not isinstance(value, str):
         return None
     text = value.strip().replace("Z", "+00:00")
@@ -125,27 +125,27 @@ def _parse_dt(value):
     return parsed
 
 
-def _now():
+def utc_now():
     return datetime.now(timezone.utc)
 
 
 def evaluate(data):
-    people = _pick(data, "people", "persons")
-    now = _now()
+    people = pick_list(data, "people", "persons")
+    now = utc_now()
     with_expiry, without_expiry, expired = [], [], []
     total_cards = 0
     for p in people:
-        person = _flag(p, "CommonName") or _flag(p, "GivenName") or _flag(p, "Key") or "unnamed"
-        cards = _flag(p, "CardAssignments") or []
+        person = field_value(p, "CommonName") or field_value(p, "GivenName") or field_value(p, "Key") or "unnamed"
+        cards = field_value(p, "CardAssignments") or []
         if not isinstance(cards, list):
             continue
         for card in cards:
-            if not isinstance(card, dict) or _flag(card, "IsDisabled"):
+            if not isinstance(card, dict) or field_value(card, "IsDisabled"):
                 continue
             total_cards += 1
-            label = "%s/%s" % (person, _flag(card, "DisplayCardNumber") or _flag(card, "Key") or "card")
-            raw = _flag(card, "ExpiresOn")
-            parsed = _parse_dt(raw) if raw else None
+            label = "%s/%s" % (person, field_value(card, "DisplayCardNumber") or field_value(card, "Key") or "card")
+            raw = field_value(card, "ExpiresOn")
+            parsed = parse_dt(raw) if raw else None
             if parsed is None:
                 without_expiry.append(label)
             elif parsed < now:
@@ -155,7 +155,7 @@ def evaluate(data):
     measured = total_cards
     result = {
         "isCredentialExpiryEnforced": measured > 0 and not without_expiry and not expired,
-        "credentialExpiryCoveragePercentage": _pct(len(with_expiry), measured),
+        "credentialExpiryCoveragePercentage": pct(len(with_expiry), measured),
         "activeCredentialCount": measured,
         "credentialsWithoutExpiryCount": len(without_expiry),
         "expiredActiveCredentialCount": len(expired),

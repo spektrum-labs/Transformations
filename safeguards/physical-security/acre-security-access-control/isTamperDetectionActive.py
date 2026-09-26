@@ -71,7 +71,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _pick(data, *keys):
+def pick_list(data, *keys):
     """The collection may arrive at a named key, or as the whole payload."""
     if isinstance(data, list):
         return data
@@ -87,13 +87,13 @@ def _pick(data, *keys):
     return []
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
 
 
-def _flag(record, *names):
+def field_value(record, *names):
     """Field casing varies between the REST payload and the BSON projection."""
     for n in names:
         if n in record:
@@ -104,7 +104,7 @@ def _flag(record, *names):
     return None
 
 
-def _parse_dt(value):
+def parse_dt(value):
     if not value or not isinstance(value, str):
         return None
     text = value.strip().replace("Z", "+00:00")
@@ -124,19 +124,19 @@ def _parse_dt(value):
     return parsed
 
 
-def _now():
+def utc_now():
     return datetime.now(timezone.utc)
 
 
 def evaluate(data):
-    controllers = _pick(data, "controllers")
-    enabled = [c for c in controllers if not _flag(c, "IsDisabled")]
+    controllers = pick_list(data, "controllers")
+    enabled = [c for c in controllers if not field_value(c, "IsDisabled")]
     tampered, faulted, battery_low, clean, unreadable = [], [], [], [], []
     for c in enabled:
-        name = _flag(c, "CommonName") or _flag(c, "Key") or "unnamed"
-        status = _flag(c, "Status") or {}
+        name = field_value(c, "CommonName") or field_value(c, "Key") or "unnamed"
+        status = field_value(c, "Status") or {}
         status = status if isinstance(status, dict) else {}
-        signals = {k: _flag(status, k) for k in ("IsTampered", "IsFaulted", "IsBatteryLow")}
+        signals = {k: field_value(status, k) for k in ("IsTampered", "IsFaulted", "IsBatteryLow")}
         if all(v is None for v in signals.values()):
             unreadable.append(name)
             continue
@@ -158,7 +158,7 @@ def evaluate(data):
         "batteryLowControllerCount": len(battery_low),
         "tamperedControllers": tampered[:25],
         "faultedControllers": faulted[:25],
-        "healthyControllerPercentage": _pct(len(clean), measured),
+        "healthyControllerPercentage": pct(len(clean), measured),
         "controllersNotMeasured": unreadable,
     }
     passes, fails, recs = [], [], []

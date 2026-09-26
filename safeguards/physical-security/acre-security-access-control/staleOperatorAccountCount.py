@@ -72,7 +72,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _pick(data, *keys):
+def pick_list(data, *keys):
     """The collection may arrive at a named key, or as the whole payload."""
     if isinstance(data, list):
         return data
@@ -88,13 +88,13 @@ def _pick(data, *keys):
     return []
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
 
 
-def _flag(record, *names):
+def field_value(record, *names):
     """Field casing varies between the REST payload and the BSON projection."""
     for n in names:
         if n in record:
@@ -105,7 +105,7 @@ def _flag(record, *names):
     return None
 
 
-def _parse_dt(value):
+def parse_dt(value):
     if not value or not isinstance(value, str):
         return None
     text = value.strip().replace("Z", "+00:00")
@@ -125,7 +125,7 @@ def _parse_dt(value):
     return parsed
 
 
-def _now():
+def utc_now():
     return datetime.now(timezone.utc)
 
 
@@ -133,17 +133,17 @@ STALE_DAYS = 90
 
 
 def evaluate(data):
-    users = _pick(data, "users", "operators")
-    enabled = [u for u in users if not _flag(u, "IsDisabled")]
-    now = _now()
+    users = pick_list(data, "users", "operators")
+    enabled = [u for u in users if not field_value(u, "IsDisabled")]
+    now = utc_now()
     stale, active, never, unreadable = [], [], [], []
     for u in enabled:
-        name = _flag(u, "Username", "CommonName") or _flag(u, "Email") or _flag(u, "Key") or "unnamed"
-        raw = _flag(u, "LastLoginOn") or _flag(u, "LastActivityOn")
+        name = field_value(u, "Username", "CommonName") or field_value(u, "Email") or field_value(u, "Key") or "unnamed"
+        raw = field_value(u, "LastLoginOn") or field_value(u, "LastActivityOn")
         if raw is None:
             unreadable.append(name)
             continue
-        parsed = _parse_dt(raw)
+        parsed = parse_dt(raw)
         if parsed is None:
             never.append(name)
             continue
@@ -159,7 +159,7 @@ def evaluate(data):
         "operatorsEvaluated": measured,
         "activeOperatorCount": len(active),
         "neverSignedInOperatorCount": len(never),
-        "staleOperatorPercentage": _pct(stale_total, measured),
+        "staleOperatorPercentage": pct(stale_total, measured),
         "staleOperators": stale[:25],
         "operatorsNotMeasured": unreadable,
         "stalenessThresholdDays": STALE_DAYS,
