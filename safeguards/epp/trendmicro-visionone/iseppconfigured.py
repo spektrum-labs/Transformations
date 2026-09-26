@@ -7,15 +7,18 @@ Evidence: the Endpoint Inventory list (response model: trendmicro/tm-v1-pytv1 En
 EppAgent, EdrSensor; field values: trendmicro/vision-one-mcp-server FilterEndpoints table).
 Confirmed on a real Infraservices payload (417 endpoints, 2026-09-25).
 
-Verdict: true when every endpoint has an installed protection agent that names the policy its
+Value: a whole-number percentage, floor(100 * configured / protected). protected = endpoints with an
+installed protection agent (servers included); configured = those agents that name the policy their
 protection manager applied (eppAgent.policyName, "the name of a policy from your protection
-manager"). A blank policy name, a missing agent or a placeholder agent block fail it.
+manager"). Endpoints without an agent are coverage (requiredCoveragePercentage), not configuration.
+The pass bar lives in the requirement; sensor last-connected age is not read.
 
 What this proves: every agent reports an applied protection policy. What it does not prove:
 what that policy enables.
 
-Fails closed: an error body, an unrecognised body, an empty endpoint list, or a merged
-response that still carries nextLink (pages left unread) return false.
+Not evaluated (dataCollection error, no value): an error body, an unrecognised body, an empty
+endpoint list, no installed protection agent, or a merged response that still carries nextLink
+(pages left unread).
 """
 import json
 from datetime import datetime
@@ -124,7 +127,7 @@ def load_endpoints(criteria_key, input, fail_value):
     if len(items) == 0:
         reason = "Trend Vision One returned no endpoints, so nothing about the estate is proven"
         return None, None, create_response(criteria_key, {criteria_key: fail_value}, validation=validation,
-                                           fail_reasons=[reason],
+                                           api_errors=[reason], fail_reasons=[reason],
                                            recommendations=["Confirm endpoints are managed in Trend Vision One Endpoint Inventory and that the API key's role can see them"])
     return items, validation, None
 
@@ -148,7 +151,7 @@ def has_protection_agent(endpoint):
 def transform(input):
     criteriaKey = "isEPPConfigured"
     try:
-        endpoints, validation, failed = load_endpoints(criteriaKey, input, False)
+        endpoints, validation, failed = load_endpoints(criteriaKey, input, None)
         if failed:
             return failed
         no_agent = []
@@ -163,15 +166,22 @@ def transform(input):
                 policies[policy.strip()] = policies.get(policy.strip(), 0) + 1
             else:
                 no_policy.append(endpoint_name(e))
-        value = len(no_agent) == 0 and len(no_policy) == 0
-        summary = {"totalEndpoints": len(endpoints), "endpointsWithoutPolicy": len(no_policy),
+        protected = len(endpoints) - len(no_agent)
+        configured = protected - len(no_policy)
+        if protected == 0:
+            reason = "No endpoint has an installed protection agent, so there is no configuration to measure"
+            return create_response(criteriaKey, {criteriaKey: None}, validation=validation,
+                                   api_errors=[reason], fail_reasons=[reason])
+        value = (configured * 100) // protected
+        summary = {"totalEndpoints": len(endpoints), "protectedEndpoints": protected,
+                   "configuredEndpoints": configured, "endpointsWithoutPolicy": len(no_policy),
                    "endpointsWithoutProtectionAgent": len(no_agent), "policies": policies,
                    "sampleWithoutPolicy": no_policy[:10], "sampleWithoutProtectionAgent": no_agent[:10]}
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-        if value:
-            pass_reasons.append("All %d endpoints report an applied protection policy" % len(endpoints))
+        if configured == protected:
+            pass_reasons.append("All %d protection agents report an applied protection policy" % protected)
         else:
             if no_agent:
                 fail_reasons.append("%d endpoints have no installed protection agent: %s" % (len(no_agent), ", ".join(no_agent[:10])))
@@ -182,4 +192,4 @@ def transform(input):
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
                                recommendations=recommendations, input_summary=summary)
     except Exception as e:
-        return failure(criteriaKey, False, e)
+        return failure(criteriaKey, None, e)
