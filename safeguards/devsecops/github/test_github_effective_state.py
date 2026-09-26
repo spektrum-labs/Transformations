@@ -46,11 +46,13 @@ CASES = [
     ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, False), False),
     ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, True, total=150), False),
     ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [alert("resolved")], 0, [alert(), alert()], 2),
-    # A full page of open alerts may be truncated, but it already fails "zero open": report the lower bound.
+    # The definition pages to completion, so 200 (an exact multiple of 100) is the full count.
     ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [], 0, [alert()] * 200, 200),
-    # A full page with nothing open cannot prove zero: withhold.
-    ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [alert("resolved")], 0,
-     [alert("resolved")] * 100, None),
+    # At the paginator cap open alerts are a lower bound that already fails "zero open".
+    ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [], 0, [alert()] * 5000, 5000),
+    # At the cap with nothing open, zero cannot be proven: withhold.
+    ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [alert("resolved")] * 100, 0,
+     [alert("resolved")] * 5000, None),
     ("openCriticalDependabotAlertsCount", "openCriticalDependabotAlertsCount", [], 0,
      {"message": "Not Found", "documentation_url": "https://docs.github.com/rest"}, None),
 ]
@@ -92,7 +94,8 @@ def test_dependabot_reads_the_drilled_shape_token_service_sends():
 
 
 def test_truncated_secret_count_is_flagged_as_lower_bound():
-    tr = load("openSecretScanningAlertsCount").transform([alert()] * 200)["transformedResponse"]
+    tr = load("openSecretScanningAlertsCount").transform([alert()] * 5000)["transformedResponse"]
     assert tr["countIsLowerBound"] is True
-    tr = load("openSecretScanningAlertsCount").transform([alert()] * 3)["transformedResponse"]
-    assert tr["countIsLowerBound"] is False
+    for n in (3, 200, 4900):
+        tr = load("openSecretScanningAlertsCount").transform([alert()] * n)["transformedResponse"]
+        assert tr["countIsLowerBound"] is False

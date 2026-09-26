@@ -70,25 +70,27 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def transform(input):
     """Open secret scanning alerts across the organization.
 
-    GET /orgs/{org}/secret-scanning/alerts?state=open, page-number pagination at 100
-    per page (hide_secret=true, so the literal secret is never fetched or stored).
+    GET /orgs/{org}/secret-scanning/alerts?state=open (hide_secret=true, so the literal
+    secret is never fetched or stored). The definition pages it to completion: page-number
+    paging at 100 per page, stopping on a short or empty page, up to IS's default 50 pages.
 
     Two guards stop a partial read from being reported as a confident number:
       * The body must be a list of alerts. An error envelope or any other shape is a
         failed read, not zero alerts.
-      * A non-empty result that is an exact multiple of PAGE_SIZE may have been cut
-        off (the paginator's page limit, or a definition that fetches one page), so
-        the count is only a lower bound. If that lower bound already holds open
-        alerts, the requirement (zero open alerts) has failed whatever the true
-        total is, so the open count is reported as "at least N" and the check
-        FAILS. Only a possibly-truncated page with no open alerts in it (which
-        cannot prove zero) withholds the count.
+      * Only a list that reaches the paginator's cap (50 pages x 100 = 5000 alerts) may
+        have been cut off; IS sets no truncation flag on a bare-array body, so the cap is
+        the only signal. Below the cap the list is complete, even at an exact multiple of
+        100 (the next page came back empty). At the cap, open alerts are reported as
+        "at least N" and the check FAILS: the only requirement shape is isEquals 0, and a
+        lower bound of 1 or more fails it (as it fails any lessThan up to the cap), so it
+        cannot pass falsely. A capped list with nothing open cannot prove zero: withheld.
 
     Scope: GitHub only raises these alerts on repositories with secret scanning on.
     Zero here says nothing about repositories where it is off; that is what
     isSecretScanningPushProtectionEnabled measures, per repository.
     """
     PAGE_SIZE = 100
+    MAX_ALERTS = 50 * PAGE_SIZE  # IS paginate_api_call maxPages default (50) x pageSize
     data, validation = extract_input(input)
     meta = {"transformationId": "openSecretScanningAlertsCount", "vendor": "GitHub", "category": "devsecops"}
 
@@ -113,18 +115,18 @@ def transform(input):
 
     open_alerts = [a for a in alerts if isinstance(a, dict) and a.get("state") == "open"]
     open_count = len(open_alerts)
-    truncated = len(alerts) > 0 and len(alerts) % PAGE_SIZE == 0
+    truncated = len(alerts) >= MAX_ALERTS
 
     if truncated and open_count == 0:
         return create_response(
             result={"openSecretScanningAlertsCount": None, "truncated": True},
             validation=validation,
             fail_reasons=[
-                f"Received {len(alerts)} alerts, an exact multiple of the {PAGE_SIZE}-alert page, with none open, so the list may have been cut off and zero open alerts cannot be confirmed."
+                f"Received {len(alerts)} alerts, the paginator's {MAX_ALERTS}-alert cap, with none open, so the list may have been cut off and zero open alerts cannot be confirmed."
             ],
             recommendations=["No customer action required; this is a retrieval limit on our side."],
-            input_summary={"alertsReceived": len(alerts), "pageSize": PAGE_SIZE, "truncated": True},
-            api_errors=["Result set may be truncated at a page boundary."],
+            input_summary={"alertsReceived": len(alerts), "maxAlerts": MAX_ALERTS, "truncated": True},
+            api_errors=["Result set may be truncated at the paginator cap."],
             metadata=meta,
         )
 
@@ -150,7 +152,7 @@ def transform(input):
         ]
         if truncated:
             fail_reasons.append(
-                f"Received {len(alerts)} alerts, an exact multiple of the {PAGE_SIZE}-alert page, so the list may have been cut off; the count is a lower bound and the check fails either way."
+                f"Received {len(alerts)} alerts, the paginator's {MAX_ALERTS}-alert cap, so the list may have been cut off; the count is a lower bound and the check fails either way."
             )
         recommendations = [
             "Rotate and revoke every leaked secret in the open alerts, then close the alerts.",
@@ -173,7 +175,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary={"totalAlertsInResponse": len(alerts), "openAlertsCounted": open_count,
-                       "pageSize": PAGE_SIZE, "truncated": truncated},
+                       "maxAlerts": MAX_ALERTS, "truncated": truncated},
         additional_findings=["Counts only repositories with secret scanning enabled; see isSecretScanningPushProtectionEnabled for coverage."],
         metadata=meta,
     )
