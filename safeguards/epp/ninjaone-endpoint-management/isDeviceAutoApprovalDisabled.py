@@ -67,6 +67,18 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def devices_in_scope(data):
+    """The device list the workflow put beside the organizations/policies, or None when there is none.
+
+    With the definition's optional organizationFilter set, getDevicesDetailed returns only the devices
+    of the organizations in scope, so this list is what decides which organizations and policies count.
+    Without it (older workflow, or a bare list) the check judges everything it was given, as before.
+    """
+    if isinstance(data, dict) and isinstance(data.get("devices"), list):
+        return [d for d in data["devices"] if isinstance(d, dict)]
+    return None
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
@@ -79,6 +91,14 @@ def transform(input):
             orgs = []
     else:
         orgs = []
+
+    devices = devices_in_scope(data)
+    orgs_out_of_scope = 0
+    if devices is not None:
+        org_ids = set([d.get("organizationId") for d in devices])
+        scoped = [o for o in orgs if isinstance(o, dict) and o.get("id") in org_ids]
+        orgs_out_of_scope = len(orgs) - len(scoped)
+        orgs = scoped
 
     total_orgs = len(orgs)
     automatic_orgs = []
@@ -122,6 +142,7 @@ def transform(input):
         "isDeviceAutoApprovalDisabled": is_disabled,
         "totalOrganizations": total_orgs,
         "automaticApprovalOrganizations": automatic_orgs,
+        "organizationsOutOfScope": orgs_out_of_scope,
     }
 
     return create_response(
