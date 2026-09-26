@@ -72,7 +72,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def _as_list(value):
+def as_list(value):
     """Fan-out steps return a list of per-project responses; single calls return one object."""
     if isinstance(value, list):
         return [v for v in value if isinstance(v, dict)]
@@ -81,7 +81,7 @@ def _as_list(value):
     return []
 
 
-def _unwrap(item, *keys):
+def unwrap_item(item, *keys):
     """Per-project responses may still carry an apiResponse/data envelope."""
     for _ in range(3):
         if not isinstance(item, dict):
@@ -99,11 +99,11 @@ def _unwrap(item, *keys):
     return item if isinstance(item, dict) else {}
 
 
-def _pct(numerator, denominator):
+def pct(numerator, denominator):
     if not denominator:
         return None
     return round((numerator / denominator) * 100, 2)
-def _pick(data, key):
+def pick_list(data, key):
     """The fan-out step may deliver its list at `key`, or as the whole payload."""
     if isinstance(data, list):
         return data
