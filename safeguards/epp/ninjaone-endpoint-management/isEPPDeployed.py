@@ -72,72 +72,75 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        records = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        results = []
+        records = []
 
-    if not isinstance(results, list):
-        results = []
+    total_devices = len(records)
+    deployed_count = 0
+    not_deployed_count = 0
+    sample_deployed = []
+    sample_not_deployed = []
 
-    device_ids_with_epp = set()
-    device_ids_seen = set()
-    product_names_seen = set()
-
-    for row in results:
-        if not isinstance(row, dict):
+    for rec in records:
+        if not isinstance(rec, dict):
             continue
-        device_id = row.get("deviceId")
-        if device_id is None:
-            continue
-        device_ids_seen.add(device_id)
-        product_name = row.get("productName") or ""
-        product_state = row.get("productState") or ""
-        if product_name:
-            product_names_seen.add(product_name)
-        if product_state == "ON":
-            device_ids_with_epp.add(device_id)
+        product_name = rec.get("productName") or "NONE"
+        device_id = rec.get("deviceId")
+        if product_name and product_name != "NONE":
+            deployed_count = deployed_count + 1
+            if len(sample_deployed) < 5:
+                sample_deployed.append(f"device {device_id}: {product_name}")
+        else:
+            not_deployed_count = not_deployed_count + 1
+            if len(sample_not_deployed) < 5:
+                sample_not_deployed.append(f"device {device_id}")
 
-    total_devices_reporting = len(device_ids_seen)
-    devices_with_active_epp = len(device_ids_with_epp)
-
-    is_epp_deployed = devices_with_active_epp > 0
-
-    input_summary = {
-        "totalAntivirusRecords": len(results),
-        "totalDevicesReporting": total_devices_reporting,
-        "devicesWithActiveEPP": devices_with_active_epp,
-        "productNamesSeen": sorted(list(product_names_seen)),
-    }
-
-    if is_epp_deployed:
-        sample_products = ", ".join(sorted(list(product_names_seen))[:3])
-        pass_reasons = [
-            f"Antivirus-status report returned {len(results)} product records across "
-            f"{total_devices_reporting} devices; {devices_with_active_epp} devices have at "
-            f"least one product with productState='ON' (e.g. {sample_products}), confirming "
-            f"an EPP agent is installed and actively reporting."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
+    if total_devices == 0:
+        is_deployed = False
         pass_reasons = []
-        fail_reasons = [
-            f"Antivirus-status report returned {len(results)} records across "
-            f"{total_devices_reporting} devices, but none report productState='ON'. No "
-            f"evidence of an actively reporting EPP product was found."
-        ]
-        recommendations = [
-            "Verify that an endpoint protection product (e.g. CrowdStrike Falcon Sensor, "
-            "Microsoft Defender Antivirus) is installed and enabled on managed devices, and "
-            "confirm the NinjaOne agent is reporting antivirus status correctly."
-        ]
+        fail_reasons = ["No antivirus-status records were returned for any device; cannot confirm EPP deployment."]
+        recommendations = ["Verify the antivirus-status query returns data and that devices are enrolled with an EPP product."]
+    else:
+        deployment_ratio = deployed_count / total_devices
+        is_deployed = deployment_ratio > 0.5
+        if is_deployed:
+            pass_reasons = [
+                f"{deployed_count} of {total_devices} devices report a non-NONE productName in antivirus-status "
+                f"(e.g. {', '.join(sample_deployed) if sample_deployed else 'n/a'}), confirming an EPP product is installed and reporting."
+            ]
+            fail_reasons = []
+            recommendations = []
+            if not_deployed_count > 0:
+                recommendations = [
+                    f"Investigate {not_deployed_count} device(s) reporting productName=NONE "
+                    f"(e.g. {', '.join(sample_not_deployed) if sample_not_deployed else 'n/a'}) to ensure EPP is installed fleet-wide."
+                ]
+        else:
+            pass_reasons = []
+            fail_reasons = [
+                f"Only {deployed_count} of {total_devices} devices report a non-NONE productName in antivirus-status "
+                f"(e.g. {', '.join(sample_not_deployed) if sample_not_deployed else 'n/a'} report NONE), so EPP is not confirmed deployed across the fleet."
+            ]
+            recommendations = [
+                "Deploy an endpoint protection product to the devices reporting productName=NONE in the antivirus-status report."
+            ]
 
     result = {
-        "isEPPDeployed": is_epp_deployed,
-        "totalDevicesReporting": total_devices_reporting,
-        "devicesWithActiveEPP": devices_with_active_epp,
+        "isEPPDeployed": is_deployed,
+        "totalDevices": total_devices,
+        "deployedDeviceCount": deployed_count,
+        "notDeployedDeviceCount": not_deployed_count,
+    }
+
+    input_summary = {
+        "totalDevices": total_devices,
+        "deployedDeviceCount": deployed_count,
+        "notDeployedDeviceCount": not_deployed_count,
     }
 
     return create_response(
@@ -147,9 +150,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isEPPDeployed",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        metadata={"transformationId": "isEPPDeployed", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
     )
