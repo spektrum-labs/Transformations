@@ -94,7 +94,7 @@ def transform(input):
                 fail_reasons=["Input validation failed"]
             )
 
-        def _is_server_obj(candidate):
+        def is_server_obj(candidate):
             return isinstance(candidate, dict) and (
                 "host" in candidate or "server" in candidate
             )
@@ -107,38 +107,38 @@ def transform(input):
         # anywhere" for an estate that had it.
         WRAPPERS = ("servers", "syslogServers", "items", "value")
 
-        def _servers_from_payload(payload, depth=0):
+        def servers_from_payload(payload, depth=0):
             if depth > 4:
                 return []
             if isinstance(payload, dict):
-                if _is_server_obj(payload):
+                if is_server_obj(payload):
                     return [payload]
                 for key in WRAPPERS:
                     if key not in payload:
                         continue
                     inner = payload[key]
-                    if _is_server_obj(inner):
+                    if is_server_obj(inner):
                         return [inner]
                     if isinstance(inner, list):
                         found = []
                         for entry in inner:
-                            if _is_server_obj(entry):
+                            if is_server_obj(entry):
                                 found.append(entry)
                             else:
-                                found.extend(_servers_from_payload(entry, depth + 1))
+                                found.extend(servers_from_payload(entry, depth + 1))
                         return found
                 return []
             if isinstance(payload, list):
                 found = []
                 for entry in payload:
-                    if _is_server_obj(entry):
+                    if is_server_obj(entry):
                         found.append(entry)
                     else:
-                        found.extend(_servers_from_payload(entry, depth + 1))
+                        found.extend(servers_from_payload(entry, depth + 1))
                 return found
             return []
 
-        if isinstance(data, list) and data and all(_is_server_obj(item) for item in data):
+        if isinstance(data, list) and data and all(is_server_obj(item) for item in data):
             network_payloads = [data]
         elif isinstance(data, list):
             network_payloads = data
@@ -150,7 +150,7 @@ def transform(input):
         roles_seen = set()
 
         for payload in network_payloads:
-            servers = _servers_from_payload(payload)
+            servers = servers_from_payload(payload)
 
             if servers:
                 networks_with_servers += 1

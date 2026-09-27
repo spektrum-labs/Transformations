@@ -99,16 +99,12 @@ def transform(input):
             )
 
         modes_seen = {}
-        appliances_evaluated = 0
 
         def collect(obj):
-            nonlocal appliances_evaluated
-
             if isinstance(obj, dict):
                 if "mode" in obj:
                     mode = str(obj.get("mode", "")).lower()
                     modes_seen[mode] = modes_seen.get(mode, 0) + 1
-                    appliances_evaluated += 1
 
                 if "items" in obj:
                     collect(obj["items"])
@@ -117,6 +113,11 @@ def transform(input):
                     collect(item)
 
         collect(data)
+
+        # Derived from modes_seen rather than a closure counter: the sandbox
+        # rejects closure rebinding, and every counted appliance lands in
+        # modes_seen, so the sum is the same number.
+        appliances_evaluated = sum(modes_seen.values())
 
         active_count = modes_seen.get("prevention", 0) + modes_seen.get("detection", 0)
         disabled_count = modes_seen.get("disabled", 0)
