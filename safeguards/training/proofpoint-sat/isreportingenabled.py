@@ -49,15 +49,15 @@ def evaluate(data):
         # non-empty body -- including an auth-error envelope or a body with zero
         # reported messages -- satisfied this criterion and no input could make it
         # false. Resolved from whether PhishAlarm report data actually exists now;
-        # see _phishalarm_data_exists below.
-        result = _phishalarm_data_exists(data)
+        # see phishalarm_data_exists below.
+        result = phishalarm_data_exists(data)
         return {"isReportingEnabled": result}
 
     except Exception as e:
         return {"isReportingEnabled": False, "error": str(e)}
 
 
-def _phishalarm_data_exists(data):
+def phishalarm_data_exists(data):
     """True only when the payload POSITIVELY evidences PhishAlarm report data.
 
     Deliberately conservative: an unreadable/empty/error body, or one with

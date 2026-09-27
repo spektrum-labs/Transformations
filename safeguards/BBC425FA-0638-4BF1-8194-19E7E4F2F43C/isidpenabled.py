@@ -89,7 +89,7 @@ def transform(input):
         # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
         # 2xx body -- including one describing the control as OFF -- satisfied this
         # criterion and no input could make it false. Resolved from the payload now.
-        default_value = _affirmative_signal(data)
+        default_value = affirmative_signal(data)
 
         is_sso_enabled = False
         is_sso_enabled_mdr = False
@@ -150,7 +150,7 @@ def transform(input):
         )
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when the payload POSITIVELY evidences the control.
 
     Replaces `data is not None`, which asked whether a response arrived rather than what

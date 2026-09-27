@@ -48,8 +48,8 @@ def evaluate(data):
         # `bool(data)` asked whether a response arrived, not what it said, so any
         # non-empty body -- including one describing the feature as OFF -- satisfied
         # this criterion and no input could make it false. Resolved from the named
-        # feature flag(s) now; see _affirmative_signal below.
-        result = _affirmative_signal(data, ['anti_spoofing', 'antiSpoofing'], require_all=False)
+        # feature flag(s) now; see affirmative_signal below.
+        result = affirmative_signal(data, ['anti_spoofing', 'antiSpoofing'], require_all=False)
         return {"isAntiPhishingEnabled": result}
 
     except Exception as e:
@@ -112,7 +112,7 @@ def transform(input):
         )
 
 
-def _affirmative_signal(data, feature_keys, require_all=False):
+def affirmative_signal(data, feature_keys, require_all=False):
     """True only when the payload POSITIVELY evidences the named feature(s).
 
     Replaces `result = bool(data)`, which asked whether a response arrived rather than

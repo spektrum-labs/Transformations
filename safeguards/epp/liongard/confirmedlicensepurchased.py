@@ -22,7 +22,7 @@ def transform(input):
         # `input is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
         # 2xx body -- including one describing the control as OFF -- satisfied this
         # criterion and no input could make it false. Resolved from the payload now.
-        default_value = _affirmative_signal(input)
+        default_value = affirmative_signal(input)
 
         # Check if environments were returned (indicates valid subscription)
         has_data = False
@@ -46,7 +46,7 @@ def transform(input):
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when the payload POSITIVELY evidences the control.
 
     Replaces `data is not None`, which asked whether a response arrived rather than what

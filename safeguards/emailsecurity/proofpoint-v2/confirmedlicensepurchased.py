@@ -48,15 +48,15 @@ def evaluate(data):
         # `bool(data)` asked whether a response arrived, not what it said, so any
         # non-empty body -- including an error envelope or a body describing the
         # license as expired/cancelled -- satisfied this criterion and no input could
-        # make it false. Resolved from the payload now; see _affirmative_signal below.
-        result = _affirmative_signal(data)
+        # make it false. Resolved from the payload now; see affirmative_signal below.
+        result = affirmative_signal(data)
         return {"confirmedLicensePurchased": result}
 
     except Exception as e:
         return {"confirmedLicensePurchased": False, "error": str(e)}
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when the payload POSITIVELY evidences an active, purchased license.
 
     Replaces `bool(data)`, which asked whether a response arrived rather than what it

@@ -48,15 +48,15 @@ def evaluate(data):
         # `bool(data)` asked whether a response arrived, not what it said, so any
         # non-empty body -- including one reporting a 0% completion rate -- satisfied
         # this criterion and no input could make it false. Resolved from the completion
-        # rate the payload actually reports now; see _completion_rate_acceptable below.
-        result = _completion_rate_acceptable(data)
+        # rate the payload actually reports now; see completion_rate_acceptable below.
+        result = completion_rate_acceptable(data)
         return {"isCompletionRateAcceptable": result}
 
     except Exception as e:
         return {"isCompletionRateAcceptable": False, "error": str(e)}
 
 
-def _completion_rate_acceptable(data, threshold=80):
+def completion_rate_acceptable(data, threshold=80):
     """True only when the payload POSITIVELY evidences a completion rate >= threshold.
 
     Deliberately conservative: an unreadable/empty/error body, a rate below threshold,

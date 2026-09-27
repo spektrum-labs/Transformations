@@ -54,7 +54,7 @@ def evaluate(data):
             # An EMPTY dict, or one with none of the recognised signals below, used to
             # fall through "no error keyword found" straight to True -- so {} and every
             # unrecognised body were read as a confirmed license. Resolved from the
-            # payload now; see _affirmative_signal below.
+            # payload now; see affirmative_signal below.
             if not data:
                 return {"confirmedLicensePurchased": False, "reason": "Empty response body"}
             # BeyondTrust returns error payloads as dicts with 'Message' or 'error' fields
@@ -64,7 +64,7 @@ def evaluate(data):
             # Non-error dict response — still a valid API call
             if "status" in data and str(data["status"]).lower() == "error" and "message" in data and str(data["message"]).lower() == "authentication failed":
                 return {"confirmedLicensePurchased": False, "reason": "Authentication failed"}
-            return {"confirmedLicensePurchased": _affirmative_signal(data)}
+            return {"confirmedLicensePurchased": affirmative_signal(data)}
 
         # A list response (even empty) confirms a valid license
         if isinstance(data, list):
@@ -132,7 +132,7 @@ def transform(input):
         )
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when a non-error dict POSITIVELY evidences an active license.
 
     The caller has already ruled out an empty body and the BeyondTrust-specific error
