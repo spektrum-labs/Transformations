@@ -75,7 +75,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "additionalFindings": additional_findings
             },
             "metadata": {
-                "evaluatedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "evaluatedAt": datetime.utcnow().isoformat(timespec="microseconds") + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "confirmedLicensePurchased",
                 "vendor": "Microsoft Intune",

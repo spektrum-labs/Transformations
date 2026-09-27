@@ -68,7 +68,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "additionalFindings": additional_findings
             },
             "metadata": {
-                "evaluatedAt": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                "evaluatedAt": datetime.utcnow().isoformat(timespec="microseconds") + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isDeviceInventoryCurrent",
                 "vendor": "Microsoft Intune",
@@ -142,7 +142,7 @@ def transform(input):
                 continue
 
             try:
-                sync_dt = datetime.strptime(last_sync[:19], "%Y-%m-%dT%H:%M:%S")
+                sync_dt = datetime.fromisoformat(last_sync[:19])
                 if sync_dt >= cutoff:
                     current_count += 1
                 else:
