@@ -91,8 +91,34 @@ USABLE_STATES = ("active", "up", "connected", "established")
 DOWN_STATES = ("inactive", "down", "disconnected", "unestablished")
 
 
+# Umbrella answers GET /deployments/v2/tunnels with
+#   403 {"error": "SIG is not enabled, please check with Cisco Support if needed."}
+# on an organisation without Secure Internet Gateway. Network tunnels are a SIG
+# feature, so on such a tenant this check does not apply. Integration-Service
+# hands that one refusal over as data only when the method opts in
+# (vendorErrorAsResponse), nested as
+#   {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <vendor body>}}
+SIG_NOT_ENABLED = "SIG is not enabled"
+SIG_NOT_APPLICABLE_MESSAGE = (
+    "Umbrella SIG is not enabled on this organization; network tunnels are a SIG "
+    "feature, so this check does not apply")
+
+
 def normalise(value):
     return str(value or "").strip().lower()
+
+
+def sig_not_enabled(data):
+    """True only for Integration-Service's marked 403 "SIG is not enabled" refusal."""
+    if not isinstance(data, dict):
+        return False
+    marker = data.get("vendorErrorAsResponse")
+    if not isinstance(marker, dict) or marker.get("status") != 403:
+        return False
+    body = marker.get("body")
+    if isinstance(body, dict):
+        body = body.get("error") or body.get("message") or ""
+    return SIG_NOT_ENABLED in str(body or "")
 
 
 def transform(input):
@@ -100,6 +126,22 @@ def transform(input):
         if isinstance(input, (str, bytes)):
             input = json.loads(input)
         data, validation = extract_input(input)
+        if sig_not_enabled(data):
+            # Not applicable, not a FAIL: the api_errors entry sets
+            # dataCollection.status to "error", which Token-Service reports as
+            # Unevaluated and leaves out of the score.
+            return create_response(
+                result={CRITERIA_KEY: False}, validation=validation,
+                api_errors=[SIG_NOT_APPLICABLE_MESSAGE],
+                input_summary={"sigEnabled": False},
+                metadata={"transformationId": CRITERIA_KEY})
+        if isinstance(data, dict) and "vendorErrorAsResponse" in data:
+            # Any other handed-over vendor error is not tunnel data either.
+            return create_response(
+                result={CRITERIA_KEY: False}, validation=validation,
+                api_errors=["Umbrella returned an error instead of tunnel data: %s"
+                            % str(data.get("vendorErrorAsResponse"))[:300]],
+                metadata={"transformationId": CRITERIA_KEY})
         tunnels = as_list(data)
         tunnels = [t for t in tunnels if isinstance(t, dict)]
 
