@@ -99,21 +99,43 @@ def transform(input):
                 "host" in candidate or "server" in candidate
             )
 
-        def _servers_from_payload(payload):
-            if isinstance(payload, dict):
-                if "servers" in payload:
-                    servers = payload["servers"]
-                    if isinstance(servers, list):
-                        return [s for s in servers if _is_server_obj(s)]
-                    if _is_server_obj(servers):
-                        return [servers]
-                    return []
+        # The platform may deliver an iterated method's results either as a bare
+        # list of per-network responses or wrapped under the workflow step's
+        # `output.key`. The wrapped form nests one level deeper -- the value is
+        # a list of {"servers": [...]} dicts, not of server objects -- so this
+        # recurses rather than filtering, which silently returned "no logging
+        # anywhere" for an estate that had it.
+        WRAPPERS = ("servers", "syslogServers", "items", "value")
 
+        def _servers_from_payload(payload, depth=0):
+            if depth > 4:
+                return []
+            if isinstance(payload, dict):
                 if _is_server_obj(payload):
                     return [payload]
-            elif isinstance(payload, list):
-                return [s for s in payload if _is_server_obj(s)]
-
+                for key in WRAPPERS:
+                    if key not in payload:
+                        continue
+                    inner = payload[key]
+                    if _is_server_obj(inner):
+                        return [inner]
+                    if isinstance(inner, list):
+                        found = []
+                        for entry in inner:
+                            if _is_server_obj(entry):
+                                found.append(entry)
+                            else:
+                                found.extend(_servers_from_payload(entry, depth + 1))
+                        return found
+                return []
+            if isinstance(payload, list):
+                found = []
+                for entry in payload:
+                    if _is_server_obj(entry):
+                        found.append(entry)
+                    else:
+                        found.extend(_servers_from_payload(entry, depth + 1))
+                return found
             return []
 
         if isinstance(data, list) and data and all(_is_server_obj(item) for item in data):
