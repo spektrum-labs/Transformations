@@ -65,8 +65,8 @@ jobs:
       - name: Checker self-test
         run: python tools/check_fail_closed.py --self-test
 
-      # Fails when a transform NOT on contracts/fail-closed-allowlist.json asserts a
-      # satisfaction-style criterion true from {}, an auth-error envelope, null or
+      # Fails when a transform NOT on contracts/fail-closed-allowlist.json returns any
+      # key true (an INVERTED key false) from {}, an auth-error envelope, null or
       # "{}" -- or when any transform cannot be imported. Listed files are reported
       # and do not fail the run; the list may only shrink, and entries that no
       # longer reproduce are reported STALE so the ratchet keeps moving.
@@ -82,6 +82,21 @@ jobs:
 
       - name: No criterion may be incapable of reporting a failure
         run: python tools/check_discriminates.py
+
+      # The third contract. Production does not import these files: it compiles each
+      # one with RestrictedPython, which rejects names starting with "_", `x["k"] += 1`
+      # and `nonlocal` -- all of which plain Python (and so every step above) accepts.
+      # On 2026-09-22 a sweep added `_affirmative_signal` to 73 files and 80 live
+      # transforms stopped compiling in production while every gate here stayed green.
+      # Same job, not a new one, so no new required-check name is created.
+      - name: Install sandbox dependency
+        run: pip install "RestrictedPython>=8.0,<9.0"
+
+      - name: Sandbox-compile checker self-test
+        run: python tools/check_sandbox_compile.py --self-test
+
+      - name: Every transform must compile in the production sandbox
+        run: python tools/check_sandbox_compile.py
 
   # WHY THIS JOB WAS ADDED. Measured 2026-09-22 on this branch: the repo contains
   # 9 pytest files holding 71 tests, and no workflow here ran a single one of them
