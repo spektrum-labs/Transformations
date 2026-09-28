@@ -106,16 +106,16 @@ def transform(input):
         if err:
             return create_response(False, fail_reasons=[err], api_errors=[err])
         records = [r for r in body["responseData"] if isinstance(r, dict)]
-        engine = re.compile(r"entity_type\W{1,6}(avanan_ap_scan|checkpoint_ap_scan)")
-        other = re.compile(r"entity_type\W{1,6}([a-z0-9_]+_scan)")
+        engine = r"entity_type\W{1,6}(avanan_ap_scan|checkpoint_ap_scan)"
+        other = r"entity_type\W{1,6}([a-z0-9_]+_scan)"
         ap = []
         seen_other = {}
         for r in records:
             blob = text(r.get("data")) + " " + json.dumps(r.get("additionalData") or "")
-            if engine.search(blob):
+            if re.search(engine, blob):
                 ap.append(r)
             else:
-                for m in other.findall(blob):
+                for m in re.findall(other, blob):
                     seen_other[m] = seen_other.get(m, 0) + 1
         types = {}
         for r in ap:
