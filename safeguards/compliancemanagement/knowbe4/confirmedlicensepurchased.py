@@ -51,6 +51,9 @@ def evaluate(data):
         is_active = bool(sub_level) and sub_level.lower() != 'free'
         if end_date:
             expiry = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            if expiry.tzinfo is None:
+                # /v1/account documents a date only ("2021-03-06"); naive vs aware comparison raised.
+                expiry = expiry.replace(tzinfo=timezone.utc)
             is_active = is_active and expiry > datetime.now(timezone.utc)
         return {"confirmedLicensePurchased": is_active, "subscriptionLevel": sub_level}
     except Exception as e:
