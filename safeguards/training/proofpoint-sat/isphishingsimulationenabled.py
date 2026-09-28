@@ -48,15 +48,15 @@ def evaluate(data):
         # `bool(data)` asked whether a response arrived, not what it said, so any
         # non-empty body -- including one with zero campaigns -- satisfied this
         # criterion and no input could make it false. Resolved from whether a campaign
-        # was actually launched now; see _phishing_simulation_launched below.
-        result = _phishing_simulation_launched(data)
+        # was actually launched now; see phishing_simulation_launched below.
+        result = phishing_simulation_launched(data)
         return {"isPhishingSimulationEnabled": result}
 
     except Exception as e:
         return {"isPhishingSimulationEnabled": False, "error": str(e)}
 
 
-def _phishing_simulation_launched(data):
+def phishing_simulation_launched(data):
     """True only when the payload POSITIVELY evidences a launched phishing campaign.
 
     Deliberately conservative: an unreadable/empty/error body, an empty campaign list,

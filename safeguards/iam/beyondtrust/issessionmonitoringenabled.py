@@ -57,7 +57,7 @@ def evaluate(data):
             # An EMPTY dict, or one with none of the recognised signals below, used to
             # fall through "no error keyword found" straight to True -- so {} and every
             # unrecognised body were read as session monitoring being enabled. Resolved
-            # from the payload now; see _affirmative_signal below.
+            # from the payload now; see affirmative_signal below.
             if not data:
                 return {
                     "isSessionMonitoringEnabled": False,
@@ -78,7 +78,7 @@ def evaluate(data):
                     "sessionCount": 0,
                     "reason": "Error response from Sessions endpoint"
                 }
-            result = _affirmative_signal(data)
+            result = affirmative_signal(data)
             return {"isSessionMonitoringEnabled": result, "sessionCount": 1 if result else 0}
 
         # A list response confirms session monitoring is active
@@ -163,7 +163,7 @@ def transform(input):
         )
 
 
-def _affirmative_signal(data):
+def affirmative_signal(data):
     """True only when a non-error dict POSITIVELY evidences active session monitoring.
 
     The caller has already ruled out an empty body and the BeyondTrust-specific error

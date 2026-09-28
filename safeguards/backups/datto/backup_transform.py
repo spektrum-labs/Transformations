@@ -176,7 +176,7 @@ def transform(input):
                 backup_status.get("status", "").lower() in ["protected", "active", "ok", "success"]
             )
             if backup_enabled:
-                safeguard_counters["Backup Enabled"] += 1
+                safeguard_counters["Backup Enabled"] = safeguard_counters["Backup Enabled"] + 1
 
             # 2. Backup Encrypted
             encryption = device.get("encryption", device.get("encryptionStatus", {}))
@@ -187,7 +187,7 @@ def transform(input):
             else:
                 is_encrypted = str(encryption).lower() in ["true", "enabled", "encrypted"]
             if is_encrypted:
-                safeguard_counters["Backup Encrypted"] += 1
+                safeguard_counters["Backup Encrypted"] = safeguard_counters["Backup Encrypted"] + 1
 
             # 3. Backup Immutable
             immutable = (
@@ -197,7 +197,7 @@ def transform(input):
                 device.get("retentionLock", False)
             )
             if immutable:
-                safeguard_counters["Backup Immutable"] += 1
+                safeguard_counters["Backup Immutable"] = safeguard_counters["Backup Immutable"] + 1
 
             # 4. Backup Tested
             screenshot_verified = device.get("screenshotVerification", device.get("lastScreenshotStatus", {}))
@@ -217,7 +217,7 @@ def transform(input):
                 tested = True
 
             if tested:
-                safeguard_counters["Backup Tested"] += 1
+                safeguard_counters["Backup Tested"] = safeguard_counters["Backup Tested"] + 1
 
             # 5. Backup Scheduled
             schedule = device.get("schedule", device.get("backupSchedule", {}))
@@ -228,7 +228,7 @@ def transform(input):
             else:
                 scheduled = device.get("scheduledBackup", False)
             if scheduled:
-                safeguard_counters["Backup Scheduled"] += 1
+                safeguard_counters["Backup Scheduled"] = safeguard_counters["Backup Scheduled"] + 1
 
             # 6. Backup Logging
             logging_enabled = (
@@ -237,7 +237,7 @@ def transform(input):
                 device.get("notifications", {}).get("enabled", False)
             )
             if logging_enabled or backup_enabled:
-                safeguard_counters["Backup Logging"] += 1
+                safeguard_counters["Backup Logging"] = safeguard_counters["Backup Logging"] + 1
 
             # 7. Critical Systems Protected
             is_critical = (
@@ -246,7 +246,7 @@ def transform(input):
                 device_type in ["server", "windows_server", "linux_server", "virtual_server"]
             )
             if is_critical and backup_enabled:
-                safeguard_counters["Critical Systems Protected"] += 1
+                safeguard_counters["Critical Systems Protected"] = safeguard_counters["Critical Systems Protected"] + 1
 
             # 8. Cloud Backup
             cloud_backup = (
@@ -255,7 +255,7 @@ def transform(input):
                 device.get("cloudSync", {}).get("enabled", False)
             )
             if cloud_backup:
-                safeguard_counters["Cloud Backup"] += 1
+                safeguard_counters["Cloud Backup"] = safeguard_counters["Cloud Backup"] + 1
 
             # 9. Local Backup
             local_backup = (
@@ -264,7 +264,7 @@ def transform(input):
                 backup_enabled
             )
             if local_backup:
-                safeguard_counters["Local Backup"] += 1
+                safeguard_counters["Local Backup"] = safeguard_counters["Local Backup"] + 1
 
         # Calculate scores as percentages
         coverage_scores = {}

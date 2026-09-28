@@ -73,6 +73,18 @@ jobs:
       - name: No transform may answer from a body that proves nothing
         run: python tools/check_fail_closed.py
 
+      # RestrictedPython, not CPython. The step above imports each transform with
+      # importlib; the pipeline compiles it with RestrictedPython, and the two disagree
+      # -- a leading-underscore helper or `x[k] += n` imports cleanly and is rejected
+      # outright by the sandbox, so the file never returns a verdict. Measured on
+      # b357ddde: 51 of 1148 transforms could not compile, every one of them judged and
+      # passed by the import-based checker above. Listed files are reported and do not
+      # fail the run; the list may only shrink.
+      - name: Every transform must compile in the sandbox the pipeline uses
+        run: |
+          pip install 'RestrictedPython>=8.0,<9.0'
+          python tools/check_sandbox_compiles.py
+
       # The second contract, and a genuinely different question. A transform hard-wired
       # to `true` passes the gate above, because it answers the same way from
       # everything; only this one asks whether ANY input makes it say no. Its self-test
