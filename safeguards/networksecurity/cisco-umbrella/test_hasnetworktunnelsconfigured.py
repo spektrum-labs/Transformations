@@ -2,9 +2,10 @@
 
 On an org without Secure Internet Gateway, Umbrella answers the tunnels endpoint with
 403 {"error": "SIG is not enabled, ..."}. Integration-Service hands that one refusal
-over as data (method opt-in vendorErrorAsResponse), and this transform reports it as
-not applicable: a dataCollection error, which Token-Service shows as Unevaluated and
-keeps out of the score. It is neither a PASS nor a FAIL.
+over as data (method opt-in vendorErrorAsResponse). No SIG means no network tunnels
+through Umbrella, so this transform reports it as a measured FAIL: false with
+dataCollection "success", exactly like an empty tunnel list. Any other handed-over
+error stays a dataCollection error (Unevaluated).
 """
 import importlib.util
 import json
@@ -74,31 +75,32 @@ class UmbrellaNetworkTunnelsTests(unittest.TestCase):
                                        "statusCode": 401, "message": "Authentication Failed"})
         self.assertIs(response["transformedResponse"][KEY], False)
 
-    # --- SIG not enabled: not applicable ---------------------------------------
+    # --- SIG not enabled: a measured FAIL -------------------------------------
 
-    def assert_not_applicable(self, response):
+    def assert_measured_fail(self, response):
         self.assertIs(response["transformedResponse"][KEY], False)
+        self.assertEqual(response["transformedResponse"]["totalTunnels"], 0)
         collection = self.collection(response)
-        self.assertEqual(collection["status"], "error")
-        self.assertEqual(len(collection["errors"]), 1)
-        self.assertIn("SIG is not enabled", collection["errors"][0])
-        self.assertIn("does not apply", collection["errors"][0])
-        self.assertEqual(response["additionalInfo"]["transformation"]["inputSummary"], {"sigEnabled": False})
-        # Not a FAIL: no fail reason for the requirement to be judged on.
-        self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], [])
+        # Measured, not Unevaluated: no data-collection error.
+        self.assertEqual(collection["status"], "success")
+        self.assertEqual(collection["errors"], [])
+        self.assertEqual(response["additionalInfo"]["transformation"]["inputSummary"]["sigEnabled"], False)
+        fail_reasons = response["additionalInfo"]["evaluation"]["failReasons"]
+        self.assertEqual(len(fail_reasons), 1)
+        self.assertIn("SIG is not enabled", fail_reasons[0])
 
-    def test_sig_not_enabled_is_not_applicable(self):
-        self.assert_not_applicable(self.run_transform(SIG_MARKED))
+    def test_sig_not_enabled_is_a_measured_fail(self):
+        self.assert_measured_fail(self.run_transform(SIG_MARKED))
 
     def test_sig_not_enabled_as_json_string(self):
-        self.assert_not_applicable(self.run_transform(json.dumps(SIG_MARKED)))
+        self.assert_measured_fail(self.run_transform(json.dumps(SIG_MARKED)))
 
     def test_sig_not_enabled_in_enriched_input(self):
-        self.assert_not_applicable(self.run_transform(
+        self.assert_measured_fail(self.run_transform(
             {"data": SIG_MARKED, "validation": {"status": "valid", "errors": [], "warnings": []}}))
 
     def test_sig_not_enabled_under_api_response_wrapper(self):
-        self.assert_not_applicable(self.run_transform({"apiResponse": SIG_MARKED}))
+        self.assert_measured_fail(self.run_transform({"apiResponse": SIG_MARKED}))
 
     def test_other_handed_over_error_is_a_data_collection_error_not_sig(self):
         other = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Forbidden",
@@ -106,14 +108,15 @@ class UmbrellaNetworkTunnelsTests(unittest.TestCase):
         response = self.run_transform(other)
         self.assertIs(response["transformedResponse"][KEY], False)
         self.assertEqual(self.collection(response)["status"], "error")
-        self.assertNotIn("does not apply", self.collection(response)["errors"][0])
+        self.assertNotIn("SIG is not enabled", self.collection(response)["errors"][0])
 
     def test_sig_text_with_wrong_status_is_not_treated_as_sig(self):
         wrong = {"vendorErrorAsResponse": {"status": 500, "bodyContains": "SIG is not enabled",
                                            "body": SIG_BODY}}
         response = self.run_transform(wrong)
         self.assertIs(response["transformedResponse"][KEY], False)
-        self.assertNotIn("does not apply", self.collection(response)["errors"][0])
+        self.assertEqual(self.collection(response)["status"], "error")
+        self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], [])
 
     def test_bare_error_body_without_marker_is_not_treated_as_sig(self):
         # Only Integration-Service's marked shape counts; a bare body is not tunnel data.

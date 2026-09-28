@@ -94,14 +94,15 @@ DOWN_STATES = ("inactive", "down", "disconnected", "unestablished")
 # Umbrella answers GET /deployments/v2/tunnels with
 #   403 {"error": "SIG is not enabled, please check with Cisco Support if needed."}
 # on an organisation without Secure Internet Gateway. Network tunnels are a SIG
-# feature, so on such a tenant this check does not apply. Integration-Service
+# feature, so such a tenant has no network tunnels through Umbrella: a measured
+# FAIL, reported exactly like an empty tunnel list. Integration-Service
 # hands that one refusal over as data only when the method opts in
 # (vendorErrorAsResponse), nested as
 #   {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <vendor body>}}
 SIG_NOT_ENABLED = "SIG is not enabled"
-SIG_NOT_APPLICABLE_MESSAGE = (
+SIG_NOT_ENABLED_MESSAGE = (
     "Umbrella SIG is not enabled on this organization; network tunnels are a SIG "
-    "feature, so this check does not apply")
+    "feature, so no network tunnels carry traffic through Umbrella")
 
 
 def normalise(value):
@@ -127,13 +128,18 @@ def transform(input):
             input = json.loads(input)
         data, validation = extract_input(input)
         if sig_not_enabled(data):
-            # Not applicable, not a FAIL: the api_errors entry sets
-            # dataCollection.status to "error", which Token-Service reports as
-            # Unevaluated and leaves out of the score.
+            # A measured FAIL, not Unevaluated: no api_errors, so dataCollection
+            # stays "success" and the false counts, as for an empty tunnel list.
             return create_response(
-                result={CRITERIA_KEY: False}, validation=validation,
-                api_errors=[SIG_NOT_APPLICABLE_MESSAGE],
-                input_summary={"sigEnabled": False},
+                result={CRITERIA_KEY: False, "totalTunnels": 0, "usableTunnels": 0,
+                        "downTunnels": 0, "tunnelsWithoutState": 0},
+                validation=validation,
+                fail_reasons=[SIG_NOT_ENABLED_MESSAGE],
+                recommendations=[
+                    "Enable Umbrella Secure Internet Gateway and configure at least one "
+                    "encrypted network tunnel from a branch site under Deployments > "
+                    "Network Tunnels."],
+                input_summary={"sigEnabled": False, "totalTunnels": 0, "usableTunnels": 0},
                 metadata={"transformationId": CRITERIA_KEY})
         if isinstance(data, dict) and "vendorErrorAsResponse" in data:
             # Any other handed-over vendor error is not tunnel data either.
