@@ -1,9 +1,9 @@
-
 import json
 from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -66,16 +67,23 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-EDR_KEYWORDS = [
-    "edr",
-    "endpoint defense",
+EDR_PRODUCT_KEYWORDS = [
     "crowdstrike",
     "sentinelone",
-    "defender for endpoint",
+    "sentinel one",
+    "bitdefender",
     "carbon black",
-    "cortex",
-    "xdr",
     "cylance",
+    "cortex xdr",
+    "cortex",
+    "sophos intercept",
+    "trend micro apex",
+    "trellix",
+    "fireeye",
+    "mandiant",
+    "microsoft defender for endpoint",
+    "elastic endpoint",
+    "vmware carbon black",
     "cybereason",
 ]
 
@@ -85,72 +93,98 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        records = data
+        results = data
     elif isinstance(data, dict):
-        records = data.get("results") or data.get("data") or []
-        if not isinstance(records, list):
-            records = []
+        results = data.get("results") or data.get("data") or []
     else:
-        records = []
+        results = []
 
-    total_devices = set()
+    if not isinstance(results, list):
+        results = []
+
     edr_devices = set()
-    edr_product_names = set()
-    non_edr_devices = set()
+    edr_active_devices = set()
+    edr_products_seen = set()
+    total_devices = set()
 
-    for rec in records:
-        if not isinstance(rec, dict):
+    for row in results:
+        if not isinstance(row, dict):
             continue
-        device_id = rec.get("deviceId")
+        device_id = row.get("deviceId")
         if device_id is not None:
             total_devices.add(device_id)
-        product_name = rec.get("productName") or ""
+        product_name = row.get("productName") or ""
         product_name_lower = product_name.lower()
-        is_edr_product = False
-        for kw in EDR_KEYWORDS:
+        is_edr = False
+        for kw in EDR_PRODUCT_KEYWORDS:
             if kw in product_name_lower:
-                is_edr_product = True
+                is_edr = True
                 break
-        if is_edr_product:
+        if is_edr:
+            edr_products_seen.add(product_name)
             if device_id is not None:
                 edr_devices.add(device_id)
-            edr_product_names.add(product_name)
-        else:
-            if device_id is not None and product_name and product_name != "NONE":
-                non_edr_devices.add(device_id)
+            product_state = (row.get("productState") or "").upper()
+            if product_state == "ON" and device_id is not None:
+                edr_active_devices.add(device_id)
 
     total_device_count = len(total_devices)
     edr_device_count = len(edr_devices)
-    is_edr_deployed = edr_device_count > 0
+    edr_active_count = len(edr_active_devices)
 
-    input_summary = {
-        "totalDevicesInReport": total_device_count,
-        "edrCapableDeviceCount": edr_device_count,
-        "edrProductNamesFound": sorted(list(edr_product_names)),
-    }
+    is_deployed = edr_active_count > 0
 
-    if is_edr_deployed:
-        pass_reasons = [
-            f"Found {edr_device_count} of {total_device_count} reporting devices with an "
-            f"EDR-capable product installed (productName values: {sorted(list(edr_product_names))}).",
-        ]
-        fail_reasons = []
-        recommendations = []
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+
+    if is_deployed:
+        product_list = ", ".join(sorted(edr_products_seen))
+        pass_reasons.append(
+            f"Found {edr_active_count} device(s) reporting an active (productState=ON) third-party EDR "
+            f"product via getAntivirusStatusReport, out of {edr_device_count} device(s) with an EDR "
+            f"product record at all (products seen: {product_list})."
+        )
     else:
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_device_count} devices in the antivirus status report report an "
-            f"EDR-capable productName; only traditional AV products or 'NONE' were observed.",
-        ]
-        recommendations = [
-            "Deploy an EDR-capable agent (native NinjaOne EDR integration or a supported third-party "
-            "EDR product such as CrowdStrike, SentinelOne, or Sophos Endpoint Defense) to managed devices.",
-        ]
+        if edr_device_count > 0:
+            fail_reasons.append(
+                f"{edr_device_count} device(s) have an EDR product record ({', '.join(sorted(edr_products_seen))}) "
+                f"but none report productState=ON; the EDR agent may be installed but not active."
+            )
+            recommendations.append(
+                "Investigate why the detected EDR product(s) are not reporting an active state and "
+                "re-enable or reinstall the agent as needed."
+            )
+        else:
+            fail_reasons.append(
+                f"No rows in the antivirus-status report (out of {len(results)} rows across "
+                f"{total_device_count} devices) match a known third-party EDR product name "
+                "(e.g. CrowdStrike, SentinelOne, Bitdefender)."
+            )
+            recommendations.append(
+                "Deploy and enroll a supported third-party EDR product (e.g. CrowdStrike, SentinelOne, "
+                "Bitdefender) so it reports through NinjaOne's antivirus-status telemetry."
+            )
 
     result = {
-        "isEDRDeployed": is_edr_deployed,
+        "isEDRDeployed": is_deployed,
+        "edrActiveDeviceCount": edr_active_count,
+        "edrDeviceCount": edr_device_count,
+        "totalDevicesReported": total_device_count,
+    }
+
+    input_summary = {
+        "totalRows": len(results),
         "totalDevices": total_device_count,
         "edrDeviceCount": edr_device_count,
+        "edrActiveDeviceCount": edr_active_count,
+        "edrProductsSeen": sorted(edr_products_seen),
+    }
+
+    metadata = {
+        "transformationId": "isEDRDeployed",
+        "vendor": "NinjaOne Endpoint Management",
+        "category": "epp",
     }
 
     return create_response(
@@ -160,9 +194,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isEDRDeployed",
-            "vendor": "NinjaOne Endpoint management",
-            "category": "epp",
-        },
+        metadata=metadata,
     )
