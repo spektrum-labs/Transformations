@@ -9,7 +9,9 @@ rule, so a rule-count check can never fail and would pass this control vacuously
 
 Passes when at least one appliance reports mode 'prevention' or 'detection' and
 none reports 'disabled'. Handles the org-scoped {'items': [...]} shape, a single
-{'mode': ...}, and a list produced by iterating across networks.
+{'mode': ...}, and a list produced by iterating across networks. A network the
+definition reports as {'vendorErrorAsResponse': ...} (400 "Intrusion detection is not
+supported by this network") counts as unprotected.
 """
 
 import json
@@ -102,6 +104,10 @@ def transform(input):
 
         def collect(obj):
             if isinstance(obj, dict):
+                if isinstance(obj.get("vendorErrorAsResponse"), dict):
+                    # 400 "Intrusion detection is not supported by this network", handed over as
+                    # data by the definition: that network has no next-gen protection.
+                    modes_seen["not supported"] = modes_seen.get("not supported", 0) + 1
                 if "mode" in obj:
                     mode = str(obj.get("mode", "")).lower()
                     modes_seen[mode] = modes_seen.get(mode, 0) + 1
@@ -120,7 +126,7 @@ def transform(input):
         appliances_evaluated = sum(modes_seen.values())
 
         active_count = modes_seen.get("prevention", 0) + modes_seen.get("detection", 0)
-        disabled_count = modes_seen.get("disabled", 0)
+        disabled_count = modes_seen.get("disabled", 0) + modes_seen.get("not supported", 0)
         enabled = active_count > 0 and disabled_count == 0
 
         if enabled:
@@ -136,7 +142,7 @@ def transform(input):
             pass_reasons = []
             if disabled_count > 0:
                 fail_reasons = [
-                    f"Intrusion prevention/detection is disabled on {disabled_count} appliance(s); no active next-gen firewall protection detected."
+                    f"Intrusion prevention/detection is disabled or not supported on {disabled_count} appliance network(s); no active next-gen firewall protection detected."
                 ]
                 recommendations = [
                     "Enable intrusion prevention or detection on all Meraki MX appliances."
