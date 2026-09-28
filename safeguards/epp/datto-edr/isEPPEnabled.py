@@ -79,14 +79,14 @@ LAST_SCAN_FIELD_CANDIDATES = ["lastScanDate", "lastScan", "lastCheckin", "lastSe
 NAME_FIELD_CANDIDATES = ["hostname", "name", "targetName", "computerName"]
 
 
-def _first_present(d, candidates):
+def first_present(d, candidates):
     for key in candidates:
         if isinstance(d, dict) and key in d and d[key] is not None:
             return d[key]
     return None
 
 
-def _extract_hosts(data):
+def extract_hosts(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -104,7 +104,7 @@ def transform(input):
     if isinstance(data, dict) and data.get("error"):
         api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
 
-    hosts = _extract_hosts(data)
+    hosts = extract_hosts(data)
 
     total = len(hosts)
     protected = []
@@ -114,8 +114,8 @@ def transform(input):
     for h in hosts:
         if not isinstance(h, dict):
             continue
-        name = _first_present(h, NAME_FIELD_CANDIDATES) or "unknown"
-        enrolled = _first_present(h, ENROLLED_FIELD_CANDIDATES)
+        name = first_present(h, NAME_FIELD_CANDIDATES) or "unknown"
+        enrolled = first_present(h, ENROLLED_FIELD_CANDIDATES)
         if enrolled is None:
             unknown.append(name)
         elif enrolled is True or str(enrolled).strip().lower() in ("true", "1", "yes"):
