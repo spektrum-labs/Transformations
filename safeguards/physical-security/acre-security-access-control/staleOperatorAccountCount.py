@@ -6,6 +6,7 @@ Measures: enabled operator accounts that have not signed in for 90 days, or have
 signed in. A dormant operator account is an unreviewed key to the building.
 """
 import json
+import re
 from datetime import datetime, timezone
 
 
@@ -106,20 +107,27 @@ def field_value(record, *names):
 
 
 def parse_dt(value):
+    """Parse an ISO 8601 timestamp using fromisoformat only.
+
+    strptime is unusable here: it imports _strptime inside CPython, which the
+    transformation sandbox blocks, and the ImportError is not a ValueError, so it
+    escapes a normal except and fails the whole check. .NET serialises DateTime
+    with seven fractional digits and a trailing Z, which older fromisoformat
+    rejects, so both are normalised first. Anything still unparseable returns
+    None, and callers treat None as not measured.
+    """
     if not value or not isinstance(value, str):
         return None
-    text = value.strip().replace("Z", "+00:00")
+    text = value.strip()
+    if len(text) > 10 and text[10] == " ":
+        text = text[:10] + "T" + text[11:]
+    if text.endswith("Z") or text.endswith("z"):
+        text = text[:-1] + "+00:00"
+    text = re.sub(r"(\.\d{6})\d+", r"\1", text)
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError:
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-            try:
-                parsed = datetime.strptime(value[:19], fmt)
-                break
-            except ValueError:
-                continue
-        else:
-            return None
+        return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
@@ -145,6 +153,11 @@ def evaluate(data):
             continue
         parsed = parse_dt(raw)
         if parsed is None:
+            # Unparseable is not measured. It is not evidence the account is dormant.
+            unreadable.append(name)
+            continue
+        if parsed.year <= 1:
+            # DateTime.MinValue: the account exists and has never signed in.
             never.append(name)
             continue
         age_days = (now - parsed).days

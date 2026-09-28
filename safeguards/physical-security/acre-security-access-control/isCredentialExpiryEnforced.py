@@ -6,7 +6,8 @@ Pass: every enabled card assignment carries a future ExpiresOn date. A credentia
 no expiry outlives the person's need for it.
 """
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
 
 
 def extract_input(input_data):
@@ -106,20 +107,27 @@ def field_value(record, *names):
 
 
 def parse_dt(value):
+    """Parse an ISO 8601 timestamp using fromisoformat only.
+
+    strptime is unusable here: it imports _strptime inside CPython, which the
+    transformation sandbox blocks, and the ImportError is not a ValueError, so it
+    escapes a normal except and fails the whole check. .NET serialises DateTime
+    with seven fractional digits and a trailing Z, which older fromisoformat
+    rejects, so both are normalised first. Anything still unparseable returns
+    None, and callers treat None as not measured.
+    """
     if not value or not isinstance(value, str):
         return None
-    text = value.strip().replace("Z", "+00:00")
+    text = value.strip()
+    if len(text) > 10 and text[10] == " ":
+        text = text[:10] + "T" + text[11:]
+    if text.endswith("Z") or text.endswith("z"):
+        text = text[:-1] + "+00:00"
+    text = re.sub(r"(\.\d{6})\d+", r"\1", text)
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError:
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-            try:
-                parsed = datetime.strptime(value[:19], fmt)
-                break
-            except ValueError:
-                continue
-        else:
-            return None
+        return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
@@ -132,7 +140,12 @@ def utc_now():
 def evaluate(data):
     people = pick_list(data, "people", "persons")
     now = utc_now()
-    with_expiry, without_expiry, expired = [], [], []
+    # ExpiresOn is a non-nullable .NET DateTime, so "never expires" is stored as a
+    # sentinel - DateTime.MinValue or a far-future date such as MaxValue. acre's own
+    # reports treat anything beyond UtcNow.AddYears(25) as not a real expiry; so do we.
+    horizon = now + timedelta(days=365 * 25 + 6)
+    with_expiry, without_expiry, expired, unreadable = [], [], [], []
+    sentinel_count = 0
     total_cards = 0
     for p in people:
         person = field_value(p, "CommonName") or field_value(p, "GivenName") or field_value(p, "Key") or "unnamed"
@@ -145,14 +158,20 @@ def evaluate(data):
             total_cards += 1
             label = "%s/%s" % (person, field_value(card, "DisplayCardNumber") or field_value(card, "Key") or "card")
             raw = field_value(card, "ExpiresOn")
-            parsed = parse_dt(raw) if raw else None
-            if parsed is None:
+            if not raw:
                 without_expiry.append(label)
+                continue
+            parsed = parse_dt(raw)
+            if parsed is None:
+                unreadable.append(label)
+            elif parsed.year <= 1 or parsed > horizon:
+                without_expiry.append(label)
+                sentinel_count = sentinel_count + 1
             elif parsed < now:
                 expired.append(label)
             else:
                 with_expiry.append(label)
-    measured = total_cards
+    measured = total_cards - len(unreadable)
     result = {
         "isCredentialExpiryEnforced": measured > 0 and not without_expiry and not expired,
         "credentialExpiryCoveragePercentage": pct(len(with_expiry), measured),
@@ -162,6 +181,9 @@ def evaluate(data):
         "credentialsWithoutExpiry": without_expiry[:25],
         "expiredActiveCredentials": expired[:25],
         "peopleEvaluated": len(people),
+        "neverExpiringSentinelCount": sentinel_count,
+        "credentialsNotMeasured": unreadable[:25],
+        "expiryHorizonYears": 25,
     }
     passes, fails, recs = [], [], []
     if measured == 0:
