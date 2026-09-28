@@ -62,8 +62,10 @@ CASES = [
      lambda: first(lambda e: e.update(osVersion="")), False),
     ("iseppenabled", "isEPPEnabled", False, True,
      lambda: first(lambda e: e["eppAgent"].update(status="unknown")), False),
-    ("iseppconfigured", "isEPPConfigured", False, True,
-     lambda: first(lambda e: e["eppAgent"].update(policyName="")), False),
+    # isEPPConfigured is a whole-number percentage of protection agents with an applied policy
+    # (the capture: 0 of 28 agents; healthy: 32 of 32; one flipped: 31 of 32).
+    ("iseppconfigured", "isEPPConfigured", 0, 100,
+     lambda: first(lambda e: e["eppAgent"].update(policyName="")), 96),
     ("endpointoperationalstatusunprotectedcount", "endpointOperationalStatusUnprotectedCount", None, 0,
      lambda: first(lambda e: e["eppAgent"].update(version="", protectionManager="")), 1),
     ("contentversiondriftcount", "contentVersionDriftCount", None, 0,
@@ -133,6 +135,6 @@ def test_more_legs(name, key, body, expected):
 
 @pytest.mark.parametrize("name,key,on_real,on_healthy,flip,on_flip", CASES)
 def test_fail_closed(name, key, on_real, on_healthy, flip, on_flip):
-    fail_value = None if key.endswith("Count") else False
+    fail_value = None if key.endswith("Count") or key == "isEPPConfigured" else False
     for bad in BAD_BODIES + [dict(healthy(), nextLink="https://api.xdr.trendmicro.com/v3.0/endpointSecurity/endpoints?skipToken=x")]:
         assert verdict(name, key, copy.deepcopy(bad)) is fail_value

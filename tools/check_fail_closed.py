@@ -1,16 +1,25 @@
 """INVARIANT: no transformation asserts a control is satisfied from a body that proves nothing.
 
-THE RULE. Every `transform()` in safeguards/ is handed four inputs that contain no evidence
-about any customer's estate -- an empty object, an authentication-error envelope, a body
-that is null, and the string "{}" -- and no SATISFACTION-STYLE criterion it returns may be
-`true` for any of them.
+THE RULE. Every `transform()` in safeguards/ is handed the NO_EVIDENCE battery below --
+bodies that contain no evidence about any customer's estate -- and NO boolean it returns may
+assert the safe answer for any of them: no key may come back `true`, and no INVERTED key may
+come back `false`.
 
-"Satisfaction-style" means a key whose `true` asserts the control IS in place
-(`confirmedLicensePurchased`, `isBackupEncrypted`, `isMFAEnforcedForUsers`, ...). Keys whose
-`true` denotes the INSECURE condition are the opposite case: for those, `true` on unknown
-input is the safe direction, so they are listed in INVERTED and exempted. Getting that
-backwards would turn a correct fail-closed transform into a finding, so the list is
-explicit rather than inferred from the name.
+EVERY KEY IS JUDGED, not a name pattern. This checker used to judge only keys matching
+`^(confirmed|is|are|has)[A-Z]`, on the theory that those are the ones whose `true` asserts a
+control. That is an allowlist of key SHAPES, and it failed open by construction: measured
+2026-09-24 on Transformations main 6a2abf70, ten live transforms passed on `{}` under keys
+it never looked at -- `authTypesAllowed` (3 files), `confirmPasswordPolicyEnforced` (2:
+"confirm", not "confirmed"), `criticalOpenFindingsCount`, `unencryptedStorageResourceCount`,
+`certificatesHaveValidityPeriod`, `keysHaveExpirationDate` -- while this gate reported 0.
+Under the key-agnostic rule the same tree reports exactly those ten.
+
+INVERTED keys are those whose `true` denotes the INSECURE condition. For them `true` on
+unknown input is the safe direction, and `false` -- "not exposed", "no gap" -- is the
+rubber stamp. They used to be exempted outright, which meant an inverted key reporting "not
+exposed" from `{}` was never judged at all (`isPublicStorageBucketExposed` did exactly that).
+They are now judged the other way round. The set is named rather than inferred from the key,
+because guessing polarity from a name is how a correct transform gets "fixed" into a defect.
 
 WHY THIS EXISTS. Measured 2026-09-21 across 802 loadable transforms: 120 asserted a
 satisfaction-style criterion true for an empty or error body, and 18 did so for `null`.
@@ -64,7 +73,9 @@ ALLOWLIST = ROOT / "contracts" / "fail-closed-allowlist.json"
 #: set well below that: it is here to catch a collapse, not to track the population.
 MIN_JUDGED_TRANSFORMS = 400
 
-#: a key whose True asserts the control IS in place
+#: The OLD scope of this checker, kept because check_discriminates.py still imports it for
+#: its own (different) question. check_fail_closed no longer uses it: see the module
+#: docstring -- judging only keys of this shape let ten live rubber stamps through.
 SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
 
 #: keys whose True denotes the INSECURE condition -- True on unknown input is fail-CLOSED
@@ -124,7 +135,10 @@ NO_EVIDENCE = {
 
 
 def satisfaction_keys_true(response) -> list[str]:
-    """Satisfaction-style keys this response asserts True.
+    """Keys this response sets to the SAFE answer: `true`, or `false` for an INVERTED key.
+
+    Every boolean is judged, whatever its name; see the module docstring for why a name
+    pattern was the wrong scope.
 
     Transforms use two envelopes: the 5-section shape with `transformedResponse`, and a
     flat dict of criteria. Read both -- crashplan/isbackupencrypted.py returns the flat
@@ -138,7 +152,7 @@ def satisfaction_keys_true(response) -> list[str]:
         return []
     return sorted(
         k for k, v in inner.items()
-        if v is True and SATISFACTION.match(k) and k not in INVERTED
+        if (v is True and k not in INVERTED) or (v is False and k in INVERTED)
     )
 
 
@@ -268,8 +282,8 @@ def emit_allowlist() -> dict:
     instances = sorted(result["findings"])
     out = {
         "contract": "fail-closed",
-        "why": "no transformation may assert a satisfaction-style criterion true from a "
-               "body that proves nothing; this list may only shrink",
+        "why": "no transformation may return a criterion's safe answer (true, or false for "
+               "an INVERTED key) from a body that proves nothing; this list may only shrink",
         "generated_by": "tools/check_fail_closed.py --emit-allowlist",
         "count": len(instances),
         "instances": instances,
@@ -301,6 +315,19 @@ def self_test() -> int:
         inverted.write_text(
             "def transform(input):\n"
             "    return {'localLoginAllowed': True}\n"
+        )
+        # a rubber stamp under a key the OLD name pattern never judged
+        offpattern = d / "authtypesplanted.py"
+        offpattern.write_text(
+            "def transform(input):\n"
+            "    data = input if isinstance(input, dict) else {}\n"
+            "    return {'authTypesAllowed': data.get('x', data is not None)}\n"
+        )
+        # an INVERTED key answering "not exposed" from nothing: the inverted rubber stamp
+        invstamp = d / "invertedstamp.py"
+        invstamp.write_text(
+            "def transform(input):\n"
+            "    return {'isPublicStorageBucketExposed': False}\n"
         )
         # a genuine pytest module: imports a sibling the way the sonicwall suite does,
         # defines no transform, and must be excluded rather than reported UNLOADABLE
@@ -335,6 +362,12 @@ def self_test() -> int:
             failures.append("a clean fail-closed transform was wrongly flagged")
         if "isinvertedkey.py" in found:
             failures.append("an INVERTED key (true == insecure) was wrongly flagged")
+        if "authtypesplanted.py" not in found:
+            failures.append("a rubber stamp under a key outside the old name pattern "
+                            "(`authTypesAllowed`) was NOT caught")
+        if "invertedstamp.py" not in found:
+            failures.append("an INVERTED key returning false (\"not exposed\") from no "
+                            "evidence was NOT caught")
         if "test_something.py" in walked or "conftest.py" in walked:
             failures.append("a pytest module was walked as a transform")
         if unloadable:
@@ -436,7 +469,7 @@ def main() -> int:
     # transform and were run against the battery. Printing only the first would let a
     # tree full of unjudgeable files read as a clean one.
     print(f"{result['examined']} transform file(s) examined, {result['judged']} judged; "
-          f"{len(findings)} assert a satisfaction-style criterion true from a body that "
+          f"{len(findings)} return a criterion's safe answer from a body that "
           f"proves nothing ({len(new)} outside the allowlist)")
     if unloadable:
         print(f"\nUNLOADABLE ({len(unloadable)}) -- cannot be judged, and cannot run in the pipeline either:")

@@ -22,10 +22,13 @@ Sophos GET /endpoint/v1/endpoints returns:
 Token-Service preprocessing may hand the transform the bare items list instead
 of the wrapper, so both shapes are accepted.
 
-Verdict: passes when there is at least one computer with endpointProtection
-installed AND every such computer is healthy (health.overall == "good" and all
-protection services running). The raw counts are returned alongside so the
-threshold can be reviewed against real estates.
+Value: a whole-number percentage, floor(100 * configured / protected).
+protected = computers AND servers with endpointProtection installed; configured =
+those reporting healthy protection (health.overall == "good", services running,
+tamper protection not off). The pass bar lives in the requirement. Endpoints are
+counted by their reported health however long ago they were last seen: staleness
+is not held against them. No protected endpoint, or a device list the paginator
+marked truncated, is not evaluated (dataCollection error, no value).
 """
 import json
 from datetime import datetime
@@ -117,7 +120,7 @@ def evaluate(data):
         for endpoint in items:
             if not isinstance(endpoint, dict):
                 continue
-            if endpoint.get("type") != "computer":
+            if endpoint.get("type") not in ("computer", "server"):
                 continue
             if not has_endpoint_protection(endpoint):
                 continue
@@ -128,13 +131,20 @@ def evaluate(data):
                 host = endpoint.get("hostname") or endpoint.get("id") or "unknown"
                 unhealthy_hosts = unhealthy_hosts + [host]
 
-        configured_pct = round((total_configured / total_protected) * 100) if total_protected > 0 else 0
+        pages = data.get("pages") if isinstance(data, dict) else None
+        if isinstance(pages, dict) and str(pages.get("truncated")).lower() == "true":
+            return {"isEPPConfigured": None, "dataProblem": True,
+                    "reason": "Endpoint list was truncated by pagination; percentage not evaluated on a sample"}
+        if total_protected == 0:
+            return {"isEPPConfigured": None, "dataProblem": True, "protectedComputers": 0,
+                    "reason": "No computer or server has Sophos endpoint protection installed; nothing to measure"}
+
+        configured_pct = (total_configured * 100) // total_protected
 
         # Return the coverage percentage as the evaluated value. The pass bar
         # lives in the requirement token (greaterThan: 90), mirroring how AWS
         # compliancePercentage works - so the threshold can be tuned without a
-        # transform redeploy. A tenant with zero protected computers scores 0
-        # and also fails isEPPEnabled, so this is not the only signal there.
+        # transform redeploy.
         return {
             "isEPPConfigured": configured_pct,
             "protectedComputers": total_protected,
@@ -191,7 +201,7 @@ def transform(input):
             fail_reasons.append("No computer has Sophos endpoint protection installed")
             recommendations.append("Deploy the Sophos endpoint agent to computers")
         else:
-            pass_reasons.append(f"{configured} of {protected} protected computer(s) report healthy protection ({pct}%)")
+            pass_reasons.append(f"{configured} of {protected} protected endpoint(s) (computers and servers) report healthy protection ({pct}%)")
             if unhealthy:
                 recommendations.append(f"Endpoints with degraded/stopped protection services: {', '.join(str(h) for h in unhealthy)}")
 
