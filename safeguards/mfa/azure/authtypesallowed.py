@@ -1,9 +1,9 @@
 """
 Transformation: authTypesAllowed
-Vendor: Generic IDP
+Vendor: Microsoft
 Category: Identity / Authentication
 
-Returns a list of Authenticator Types that are active and evaluates if only FIDO/OTP types are allowed.
+Evaluates if only secure authentication types are allowed (FIDO2, Microsoft Authenticator, or properly configured Temporary Access Pass).
 """
 
 import json
@@ -20,11 +20,6 @@ def extract_input(input_data):
             unwrapped = False
             for key in wrapper_keys:
                 if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-                # Handle list in response wrapper
-                if key in data and isinstance(data.get(key), list):
                     data = data[key]
                     unwrapped = True
                     break
@@ -64,7 +59,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "authTypesAllowed",
-                "vendor": "Generic",
+                "vendor": "Microsoft",
                 "category": "Identity"
             }
         }
@@ -82,74 +77,119 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if validation.get("status") == "failed":
+        # A body that decodes to nothing carries no evidence either way.
+        if data in (None, {}, [], ""):
             return create_response(
-                result={criteriaKey: False, "authTypes": []},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+                result={criteriaKey: False},
+                validation={"status": "error", "errors": ["the vendor returned no data to evaluate"], "warnings": []},
+                api_errors=["the vendor returned no data to evaluate"],
             )
 
+        legacy_status = data.get("status", "unknown").lower()
 
-        # NO PASS ON AN EMPTY READ (contract: no-pass-on-empty-read). "No insecure
-        # authentication types found" is vacuously true of an empty factor list, and the
-        # `else: items = []` branch below produces exactly that for ANY non-list body,
-        # including the empty read `{}`. Require the vendor's own array: an empty list is the
-        # directory answering "no factors configured", a non-list is no answer at all, and
-        # that routes to dataCollection.status="error" (Unevaluated).
-        if not isinstance(data, list):
+        if validation.get("status") == "failed" or legacy_status in ["failed", "error"]:
+            if legacy_status in ["failed", "error"] and isinstance(data, dict) and data.get("message"):
+                fail_msg = str(data["message"])
+            elif legacy_status in ["failed", "error"]:
+                fail_msg = "Input indicated failure or error"
+            else:
+                fail_msg = "Input validation failed"
             return create_response(
                 result={criteriaKey: False, "authTypes": []},
                 validation=validation,
-                api_errors=[("the authentication factor response was not a list: the factors "
-                             "query cannot be shown to have run, so 'no insecure types' is "
-                             "not evidence")])
+                fail_reasons=[fail_msg]
+            )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        # Handle list input
-        if isinstance(data, list):
-            items = data
+        # FAIL CLOSED ON A BODY THAT IS NOT THE POLICY. This used to default
+        # `authenticationMethodConfigurations` to `[]`, and "no insecure authentication
+        # method is enabled" is vacuously true of the empty set -- so a Graph error envelope,
+        # a 401/403, or a response to some other call produced zero enabled methods and
+        # reported the criterion satisfied.
+        #
+        # The shape read is Microsoft Graph GET /v1.0/policies/authenticationMethodsPolicy,
+        # whose 200 body carries `authenticationMethodConfigurations` as an array of
+        # configuration objects, each with `id` and `state` ("enabled"/"disabled")
+        # (https://learn.microsoft.com/en-us/graph/api/authenticationmethodspolicy-get).
+        # Graph returns a configuration object for every method it knows about, enabled or
+        # not, so an empty array means this is not the policy. Anything without a non-empty
+        # array routes to dataCollection.status="error": the policy was never read, so the
+        # absence of an insecure method is not evidence that none is enabled.
+        auth_configs = data.get('authenticationMethodConfigurations') if isinstance(data, dict) else None
+        if not isinstance(auth_configs, list) or not auth_configs:
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                api_errors=[("no authenticationMethodConfigurations array in the "
+                             "authenticationMethodsPolicy response: the authentication "
+                             "methods policy was never read, so the absence of an insecure "
+                             "method is not evidence that none is enabled")])
+
+        # Find enabled authentication methods
+        enabled_methods = [obj for obj in auth_configs if obj.get('state', '').lower() == "enabled"]
+
+        # Secure methods that are always allowed
+        secure_methods = ['fido2', 'microsoftauthenticator', 'softwareoath']
+
+        # Filter to find non-secure auth types
+        other_auth_types = [
+            auth_type for auth_type in enabled_methods
+            if auth_type.get('id', '').lower() not in secure_methods
+        ]
+
+        # Check for temporary access pass configuration
+        temp_access_obj = None
+        for auth_type in enabled_methods:
+            if auth_type.get('id', '').lower() == 'temporaryaccesspass':
+                temp_access_obj = auth_type
+                break
+        has_temporary_access = temp_access_obj is not None
+        temp_access_timeout = False
+        if temp_access_obj:
+            max_lifetime = temp_access_obj.get('maximumLifetimeInMinutes')
+            try:
+                if max_lifetime is not None and int(max_lifetime) > 0:
+                    temp_access_timeout = True
+            except (ValueError, TypeError):
+                pass
+
+        # Check for presence of FIDO2 or Microsoft Authenticator
+        has_fido2 = any(auth_type.get('id', '').lower() == 'fido2' for auth_type in enabled_methods)
+        has_ms_auth = any(auth_type.get('id', '').lower() == 'microsoftauthenticator' for auth_type in enabled_methods)
+
+        # Determine if auth types are allowed
+        if len(other_auth_types) > 0:
+            # Allow if only temp access pass with proper timeout and FIDO2/MS Auth present
+            if (len(other_auth_types) == 1 and
+                has_temporary_access and
+                temp_access_timeout and
+                (has_fido2 or has_ms_auth)):
+                is_allowed = True
+            else:
+                is_allowed = False
         else:
-            items = []
-
-        authTypes = []
-        for item in items:
-            if isinstance(item, dict) and item.get('status', '').lower() == 'active':
-                factor_type = item.get('factorType', '')
-                if factor_type.lower() != 'sms':
-                    if factor_type.lower() == 'token:software:totp':
-                        authTypes.append('OTP')
-                    else:
-                        authTypes.append(factor_type)
-
-        # Filter to keep only auth types that are NOT FIDO or OTP
-        otherAuthTypes = [auth_type for auth_type in authTypes if auth_type.lower() not in ['fido', 'otp']]
-
-        # Pass if only FIDO/OTP types are allowed (no other types)
-        is_allowed = len(otherAuthTypes) == 0
+            is_allowed = True
 
         if is_allowed:
-            if authTypes:
-                pass_reasons.append(f"Only secure authentication types are allowed: {', '.join(authTypes)}")
-            else:
-                pass_reasons.append("No insecure authentication types found")
+            secure_enabled = [m.get('id') for m in enabled_methods if m.get('id', '').lower() in secure_methods]
+            pass_reasons.append(f"Only secure authentication methods enabled: {', '.join(secure_enabled)}")
+            if has_temporary_access and temp_access_timeout:
+                pass_reasons.append("Temporary Access Pass configured with proper lifetime limit")
         else:
-            fail_reasons.append(f"Non-FIDO/OTP authentication types found: {', '.join(otherAuthTypes)}")
-            recommendations.append("Restrict authentication to FIDO and OTP methods only")
+            insecure_names = [m.get('id', 'unknown') for m in other_auth_types]
+            fail_reasons.append(f"Insecure authentication methods enabled: {', '.join(insecure_names)}")
+            recommendations.append("Disable legacy authentication methods and use only FIDO2, Microsoft Authenticator, or properly configured Temporary Access Pass")
 
         return create_response(
-            result={criteriaKey: is_allowed, "authTypes": authTypes},
+            result={criteriaKey: is_allowed, "authTypes": other_auth_types},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
-                "totalAuthTypes": len(authTypes),
-                "secureAuthTypes": len([a for a in authTypes if a.lower() in ['fido', 'otp']]),
-                "insecureAuthTypes": len(otherAuthTypes)
-            }
+            input_summary={"totalEnabledMethods": len(enabled_methods), "insecureMethods": len(other_auth_types), "hasFido2": has_fido2, "hasMsAuth": has_ms_auth}
         )
 
     except Exception as e:
