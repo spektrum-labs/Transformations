@@ -69,66 +69,60 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
-    settings = []
-    if isinstance(data, dict):
-        settings = data.get("settings") or []
-    elif isinstance(data, list):
-        settings = data
-
-    hipaa_row = None
-    for row in settings:
-        if isinstance(row, dict) and row.get("name") == "hipaa_compliance_enabled":
-            hipaa_row = row
-            break
-
-    transformation_errors = []
-    if hipaa_row is None:
-        is_hipaa_enabled = False
-        transformation_errors.append(
-            "Setting row 'hipaa_compliance_enabled' not found in effective_organization_settings.settings array"
-        )
+    if isinstance(data, list):
+        users = data
+        total_objects = len(users)
+    elif isinstance(data, dict):
+        users = data.get("response") or data.get("data") or []
+        if not isinstance(users, list):
+            users = []
+        metadata_block = data.get("metadata") or {}
+        total_objects = metadata_block.get("total_objects") if isinstance(metadata_block, dict) else None
+        if not isinstance(total_objects, int):
+            total_objects = len(users)
     else:
-        is_hipaa_enabled = bool(hipaa_row.get("value"))
+        users = []
+        total_objects = 0
+
+    locked_out_users = []
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        status = u.get("status") or ""
+        if isinstance(status, str) and status.strip().lower() == "locked out":
+            locked_out_users.append(u)
+
+    locked_out_count = len(locked_out_users)
+
+    sample_usernames = []
+    for u in locked_out_users[:5]:
+        uname = u.get("username") or u.get("user_id") or "unknown"
+        sample_usernames.append(uname)
 
     input_summary = {
-        "totalSettingsReturned": len(settings),
-        "hipaaSettingFound": hipaa_row is not None,
-        "hipaaComplianceEnabledValue": hipaa_row.get("value") if hipaa_row else None,
+        "totalUsersEvaluated": len(users),
+        "totalObjectsReported": total_objects,
+        "lockedOutUsersCount": locked_out_count,
     }
 
-    if hipaa_row is not None and is_hipaa_enabled:
+    if locked_out_count > 0:
         pass_reasons = [
-            "Setting row name='hipaa_compliance_enabled', type='boolean' has value=true in the "
-            "organization's effective_organization_settings, indicating HIPAA-readiness data-handling "
-            "mode is active and the API will reject non-HIPAA-eligible feature requests."
+            f"Found {locked_out_count} user(s) with status='Locked Out' out of {len(users)} users evaluated (fleet total_objects={total_objects}). Examples: {', '.join([str(s) for s in sample_usernames])}."
+        ]
+        fail_reasons = []
+        recommendations = [
+            "Review the locked-out accounts in the Duo Admin Panel and either unlock legitimate users or investigate potential brute-force/credential-stuffing activity that triggered the lockout."
+        ]
+    else:
+        pass_reasons = [
+            f"No users report status='Locked Out' among {len(users)} users evaluated (fleet total_objects={total_objects})."
         ]
         fail_reasons = []
         recommendations = []
-    elif hipaa_row is not None and not is_hipaa_enabled:
-        pass_reasons = []
-        fail_reasons = [
-            "Setting row name='hipaa_compliance_enabled' in effective_organization_settings has "
-            "value=false, meaning HIPAA-readiness mode is not active and the API will not reject "
-            "non-HIPAA-eligible feature usage."
-        ]
-        recommendations = [
-            "Enable HIPAA compliance mode for this organization via the compliance settings so that "
-            "requests using features ineligible under HIPAA are rejected with a 400 error."
-        ]
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            "No 'hipaa_compliance_enabled' setting row was present in the "
-            f"{len(settings)} settings returned by the effective organization settings endpoint."
-        ]
-        recommendations = [
-            "Verify the compliance API key has access to organization settings and that HIPAA "
-            "compliance has been configured for this organization."
-        ]
 
     result = {
-        "isHIPAAReadinessEnabled": is_hipaa_enabled,
-        "totalSettingsReturned": len(settings),
+        "lockedOutUsersCount": locked_out_count,
+        "totalUsersEvaluated": len(users),
     }
 
     return create_response(
@@ -138,10 +132,9 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        transformation_errors=transformation_errors,
         metadata={
-            "transformationId": "isHIPAAReadinessEnabled",
-            "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "artificial-intelligence",
+            "transformationId": "lockedOutUsersCount",
+            "vendor": "Duo",
+            "category": "iam",
         },
     )

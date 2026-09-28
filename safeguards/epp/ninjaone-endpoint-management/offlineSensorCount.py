@@ -72,54 +72,44 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        devices = data.get("data") or data.get("devices") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
-    total_devices = 0
+    total_devices = len(devices)
     offline_count = 0
     offline_names = []
-    transform_errors = []
-
     for d in devices:
         if not isinstance(d, dict):
             continue
-        total_devices = total_devices + 1
         if d.get("offline") is True:
             offline_count = offline_count + 1
-            name = d.get("systemName") or ("device-%s" % str(d.get("id")))
+            name = d.get("systemName") or d.get("displayName") or str(d.get("id"))
             if len(offline_names) < 5:
                 offline_names.append(name)
 
+    sample_str = ", ".join(offline_names) if offline_names else "none"
+
     if total_devices == 0:
         pass_reasons = []
-        fail_reasons = ["No device records were present in the getDevicesDetailed response; offline count could not be determined."]
-        recommendations = ["Verify the NinjaOne getDevicesDetailed integration is returning device inventory data."]
+        fail_reasons = ["No device records were returned by getDevicesDetailed; unable to confirm offline sensor count from an empty inventory."]
+        recommendations = ["Verify the getDevicesDetailed endpoint is returning device inventory data for this tenant."]
     else:
-        sample = ", ".join(offline_names) if offline_names else "none"
-        pass_reasons = [
-            "Counted %d offline device(s) out of %d total managed devices in getDevicesDetailed (offline=true). Sample offline devices: %s" % (offline_count, total_devices, sample)
-        ]
+        pass_reasons = [f"{offline_count} of {total_devices} devices report offline=true in the device inventory returned by getDevicesDetailed (examples: {sample_str})."]
         fail_reasons = []
-        recommendations = []
-        if offline_count > 0:
-            recommendations = ["Investigate offline devices (e.g. %s) to confirm they are decommissioned or restore connectivity." % sample]
-
-    result = {
-        "offlineSensorCount": offline_count,
-        "totalDevices": total_devices,
-    }
+        recommendations = [f"Investigate offline devices such as {sample_str} to restore connectivity."] if offline_count > 0 else []
 
     return create_response(
-        result=result,
+        result={
+            "offlineSensorCount": offline_count,
+            "totalDevices": total_devices,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total_devices, "offlineCount": offline_count},
-        metadata={
-            "transformationId": "offlineSensorCount",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        input_summary={"totalDevices": total_devices, "offlineDevices": offline_count},
+        metadata={"transformationId": "offlineSensorCount", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
     )

@@ -1,5 +1,28 @@
 > 📚 **Documentation: start at [`docs2/`](docs2/README.md)** — the code-verified core documentation for this repo. Critical context it carries: **a merge to `main` is an instant, ungated production deploy** (Token-Service fetches and executes these files live from raw GitHub), the repo is public, and `docs2/14-known-issues.md` inventories the transform files currently broken in production. View as a site: `pip install -r requirements-docs.txt && mkdocs serve` → http://127.0.0.1:8304. Sync: `docs-drift`/`docs-sync` workflows + the `/docs-sync` skill (map: `docs2/.docmap.yml`).
 
+## ⚙️ Engineering automation (GitHub Actions)
+
+Six workflows live in `.github/workflows/` and are byte-identical across Token-Service, Integration-Service, Transformations, flux and fusion-api. They connect pull requests to the **ENG** JIRA board and keep `docs2/` honest.
+
+| Workflow | Runs when | What it does |
+|---|---|---|
+| `claude-code-review` | PR opened or updated (not drafts) | Claude reviews the diff and posts inline comments. Critical/high findings become ENG **Bugs** linked to the story named in the branch (labels `claude-review`, `severity-*`, `fp-*`, `pr-*`, `repo-*`). A later push that no longer shows a finding **auto-resolves** its Bug. |
+| `pr-description` | PR opened with an empty body | Writes the PR description and posts it as a comment on the linked ENG ticket. Never overwrites text a human wrote. |
+| `jira-transition` | PR opened / merged | Moves the ENG card: opened → **In Development** (and into the board's active sprint), merged into `develop` → **Ready for QA**, into `staging` → **In Stage (Demo)**, into `main` → **Merged/Deployed**. Promotion PRs harvest every ENG key from their commit messages. |
+| `jira-audit` | Manual (Actions tab → Run workflow) | Whole-repo audit; files Bugs/Tasks under the epic named in the repo variable `AUDIT_EPIC_KEY`. |
+| `docs-drift` | Every PR | Comments which `docs2/` pages cite code the PR changes. Report-only, never blocks. |
+| `docs-sync` | Weekday mornings + manual | If the code has drifted from the commit the docs were verified at, Claude repairs `docs2/` and opens a `docs:` PR for human review. |
+
+**Rules of the road**
+
+- **Put the ticket key in the branch name**: `ENG-123-short-description` (any position, any case). No key means the JIRA automation does nothing and stays green.
+- **Draft PRs** are skipped by the review and description workflows. Mark ready when you want them.
+- **`on-hold`** label on a JIRA card freezes it: no workflow will move it.
+- **Reviews**: the people in [`.github/CODEOWNERS`](.github/CODEOWNERS) are requested automatically on every PR, and `develop`/`staging` require one code-owner approval to merge.
+- **Secrets** (`ANTHROPIC_API_KEY`, `JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`) are **organization-level**; nothing to configure per repo. GitHub registers scheduled/dispatch workflows from the default branch only.
+- **This repo is public**, so the organization secrets are not visible to it and the three credentialed workflows fail until it is made private (planned; see the Transformations private cutover plan). `docs-drift` works regardless.
+- The JIRA labels above are load-bearing: the workflows key off them. Don't rename them.
+
 # Transformations
 
 The **Transformations** repository contains logic used to transform third-party API responses into values that can be evaluated by a Third Party Requirements token within the **Spektrum** network. This repository is designed to standardize the process of transforming various API responses into a format that Spektrum can understand and use.

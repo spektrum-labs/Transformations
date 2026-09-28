@@ -1,9 +1,11 @@
 import json
 from datetime import datetime
 
+STALE_THRESHOLD_DAYS = 14
+SECONDS_PER_DAY = 86400
+
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +31,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -67,9 +68,6 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-STALE_THRESHOLD_SECONDS = 14 * 24 * 60 * 60
-
-
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
@@ -77,33 +75,32 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or []
+        devices = data.get("data") or data.get("apiResponse") or data.get("results") or []
         if not isinstance(devices, list):
             devices = []
     else:
         devices = []
 
-    now_ts = datetime.utcnow().timestamp()
+    now_epoch = datetime.utcnow().timestamp()
+    stale_threshold_epoch = now_epoch - (STALE_THRESHOLD_DAYS * SECONDS_PER_DAY)
 
+    total_devices = len(devices)
     stale_devices = []
-    total_devices = 0
-    missing_lastcontact = 0
+    missing_last_contact = 0
 
     for device in devices:
         if not isinstance(device, dict):
             continue
-        total_devices = total_devices + 1
         last_contact = device.get("lastContact")
         if last_contact is None:
-            missing_lastcontact = missing_lastcontact + 1
+            missing_last_contact = missing_last_contact + 1
             continue
         try:
             last_contact_val = float(last_contact)
         except (TypeError, ValueError):
-            missing_lastcontact = missing_lastcontact + 1
+            missing_last_contact = missing_last_contact + 1
             continue
-        age_seconds = now_ts - last_contact_val
-        if age_seconds > STALE_THRESHOLD_SECONDS:
+        if last_contact_val < stale_threshold_epoch:
             stale_devices.append({
                 "id": device.get("id"),
                 "systemName": device.get("systemName"),
@@ -112,59 +109,53 @@ def transform(input):
 
     stale_count = len(stale_devices)
 
-    sample_names = [d.get("systemName") for d in stale_devices[:5] if d.get("systemName")]
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if total_devices == 0:
-        fail_reasons.append("No device records were returned by getDevicesDetailed; staleSensorCount could not be computed.")
-        recommendations.append("Verify the getDevicesDetailed endpoint is returning the enrolled device fleet.")
-    else:
-        if stale_count > 0:
-            names_str = ", ".join(sample_names) if sample_names else "N/A"
-            fail_reasons.append(
-                f"{stale_count} of {total_devices} devices have lastContact older than 14 days (threshold {STALE_THRESHOLD_SECONDS} seconds). Sample stale devices: {names_str}."
-            )
-            recommendations.append(
-                "Investigate and remediate devices with stale lastContact timestamps (agent connectivity, decommissioned hosts, or network issues) and re-approve or remove non-reporting endpoints."
-            )
-        else:
-            pass_reasons.append(
-                f"All {total_devices} devices report lastContact within the 14-day staleness threshold ({STALE_THRESHOLD_SECONDS} seconds)."
-            )
-
-    if missing_lastcontact > 0:
-        fail_reasons.append(
-            f"{missing_lastcontact} of {total_devices} devices had a missing or unparsable lastContact value and were excluded from the stale calculation."
-        )
-
-    result = {
-        "staleSensorCount": stale_count,
-        "totalDevices": total_devices,
-        "missingLastContact": missing_lastcontact,
-    }
-
     input_summary = {
         "totalDevices": total_devices,
-        "staleDevices": stale_count,
-        "missingLastContact": missing_lastcontact,
-        "staleThresholdSeconds": STALE_THRESHOLD_SECONDS,
+        "staleThresholdDays": STALE_THRESHOLD_DAYS,
+        "devicesMissingLastContact": missing_last_contact,
+        "staleDeviceCount": stale_count,
     }
 
-    metadata = {
-        "transformationId": "staleSensorCount",
-        "vendor": "NinjaOne Endpoint Management",
-        "category": "epp",
-    }
+    if total_devices == 0:
+        return create_response(
+            result={"staleSensorCount": stale_count, "totalDevices": total_devices},
+            validation=validation,
+            fail_reasons=["No device records were returned by getDevicesDetailed; unable to evaluate staleness."],
+            recommendations=["Verify the NinjaOne integration is returning device inventory data."],
+            input_summary=input_summary,
+            metadata={"transformationId": "staleSensorCount", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
+        )
+
+    sample_names = [d.get("systemName") or str(d.get("id")) for d in stale_devices[:5]]
+
+    if stale_count > 0:
+        pass_reasons = [
+            f"{stale_count} of {total_devices} devices have lastContact older than {STALE_THRESHOLD_DAYS} days "
+            f"(examples: {', '.join([n for n in sample_names if n])})."
+        ]
+    else:
+        pass_reasons = [
+            f"All {total_devices} devices have lastContact within the last {STALE_THRESHOLD_DAYS} days; {stale_count} stale sensors detected."
+        ]
+
+    fail_reasons = []
+    recommendations = []
+    if stale_count > 0:
+        recommendations = [
+            "Investigate and re-enroll or decommission devices that have not checked in for 14+ days: "
+            + ", ".join([n for n in sample_names if n])
+        ]
 
     return create_response(
-        result=result,
+        result={
+            "staleSensorCount": stale_count,
+            "totalDevices": total_devices,
+            "devicesMissingLastContact": missing_last_contact,
+        },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata=metadata,
+        metadata={"transformationId": "staleSensorCount", "vendor": "NinjaOne Endpoint Management", "category": "epp"},
     )

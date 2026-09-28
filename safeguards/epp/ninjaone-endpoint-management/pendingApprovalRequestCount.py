@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -74,41 +72,62 @@ def transform(input):
     if isinstance(data, list):
         devices = data
     elif isinstance(data, dict):
-        devices = data.get("data") or data.get("results") or data.get("devices") or []
+        devices = data.get("data") or data.get("results") or []
+        if not isinstance(devices, list):
+            devices = []
     else:
         devices = []
 
     total_devices = len(devices)
-    pending_devices = [
-        d for d in devices
-        if isinstance(d, dict) and d.get("approvalStatus") == "PENDING"
-    ]
+    pending_devices = []
+    for d in devices:
+        if not isinstance(d, dict):
+            continue
+        status = d.get("approvalStatus")
+        if isinstance(status, str) and status.upper() == "PENDING":
+            pending_devices.append(d)
+
     pending_count = len(pending_devices)
 
-    sample_names = [
-        d.get("systemName", "unknown") for d in pending_devices[:5]
-    ]
+    pending_names = []
+    for d in pending_devices[:5]:
+        name = d.get("systemName") or d.get("displayName") or str(d.get("id"))
+        pending_names.append(name)
 
-    if pending_count > 0:
+    if total_devices == 0:
+        fail_reasons = ["No device records were returned by getDevicesDetailed; cannot determine pending approval count."]
         pass_reasons = []
-        fail_reasons = [
-            f"{pending_count} of {total_devices} devices report approvalStatus=PENDING, "
-            f"including: {', '.join(sample_names) if sample_names else 'n/a'}."
+        recommendations = ["Verify the getDevicesDetailed endpoint is returning device inventory data."]
+    elif pending_count > 0:
+        sample = ", ".join(pending_names)
+        pass_reasons = [
+            f"Found {pending_count} of {total_devices} devices with approvalStatus=PENDING awaiting technician review (e.g. {sample})."
         ]
+        fail_reasons = []
         recommendations = [
-            "Review pending devices in the NinjaOne console under Devices > Approvals "
-            "and approve or reject each to keep the managed fleet accurate."
+            "Review and approve or reject the pending devices in the NinjaOne console to bring them into the managed fleet."
         ]
     else:
         pass_reasons = [
-            f"No devices report approvalStatus=PENDING out of {total_devices} devices scanned."
+            f"No devices are pending approval; all {total_devices} scanned devices have a non-PENDING approvalStatus."
         ]
         fail_reasons = []
         recommendations = []
 
     result = {
         "pendingApprovalRequestCount": pending_count,
-        "totalDevices": total_devices,
+        "totalDevicesScanned": total_devices,
+    }
+
+    input_summary = {
+        "totalDevicesScanned": total_devices,
+        "pendingApprovalRequestCount": pending_count,
+    }
+
+    metadata = {
+        "transformationId": "pendingApprovalRequestCount",
+        "vendor": "NinjaOne Endpoint Management",
+        "category": "epp",
     }
 
     return create_response(
@@ -117,10 +136,6 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total_devices, "pendingDevices": pending_count},
-        metadata={
-            "transformationId": "pendingApprovalRequestCount",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        input_summary=input_summary,
+        metadata=metadata,
     )

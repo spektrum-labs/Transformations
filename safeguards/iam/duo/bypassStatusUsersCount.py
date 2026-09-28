@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -70,61 +72,60 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        groups = data
+        users = data
+        total_objects = len(users)
     elif isinstance(data, dict):
-        groups = data.get("data") or []
-        if not isinstance(groups, list):
-            groups = []
+        users = data.get("response") or []
+        if not isinstance(users, list):
+            users = []
+        metadata = data.get("metadata") or {}
+        total_objects = metadata.get("total_objects")
+        if not isinstance(total_objects, int):
+            total_objects = len(users)
     else:
-        groups = []
+        users = []
+        total_objects = 0
 
-    total_groups = len(groups)
-    groups_with_roles = 0
-    scim_groups = 0
-    group_names = []
-
-    for g in groups:
-        if not isinstance(g, dict):
+    bypass_users = []
+    for u in users:
+        if not isinstance(u, dict):
             continue
-        roles = g.get("roles") or []
-        name = g.get("name") or g.get("id") or "unnamed"
-        if isinstance(roles, list) and len(roles) > 0:
-            groups_with_roles = groups_with_roles + 1
-            group_names.append(name)
-        if g.get("source_type") == "scim":
-            scim_groups = scim_groups + 1
+        status = u.get("status")
+        if isinstance(status, str) and status.strip().lower() == "bypass":
+            bypass_users.append(u.get("username") or u.get("user_id") or "unknown")
 
-    is_enabled = groups_with_roles > 0
+    bypass_count = len(bypass_users)
+    total_users = len(users)
 
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    transformation_errors = []
+    if total_users == 0:
+        transformation_errors.append("No user records found in response")
 
-    if is_enabled:
-        sample = ", ".join(group_names[:5])
-        pass_reasons.append(
-            f"Found {groups_with_roles} of {total_groups} compliance group(s) with non-empty role mappings "
-            f"(e.g. {sample}), indicating access is managed via enterprise groups rather than per-user role assignment."
-        )
-        if scim_groups > 0:
-            pass_reasons.append(
-                f"{scim_groups} of {total_groups} groups have source_type='scim', confirming directory-driven group sync."
-            )
+    if bypass_count > 0:
+        sample = bypass_users[:5]
+        pass_reasons = [
+            f"Found {bypass_count} of {total_users} Duo user accounts with status='bypass' "
+            f"(sample usernames: {', '.join([str(s) for s in sample])})."
+        ]
+        fail_reasons = []
+        recommendations = [
+            "Review each bypass-status user account and confirm the exemption from second-factor "
+            "authentication is still required; revert to enforced status when no longer needed."
+        ]
     else:
-        fail_reasons.append(
-            f"listComplianceGroups returned {total_groups} group(s), none of which carry a non-empty roles array. "
-            "No evidence that access is managed via enterprise groups with role attachments."
-        )
-        recommendations.append(
-            "Create enterprise groups (via SCIM/directory sync or the Compliance Groups API) and attach organization "
-            "roles to those groups instead of assigning roles directly to individual users."
-        )
+        pass_reasons = [f"No users among the {total_users} retrieved have status='bypass'."]
+        fail_reasons = []
+        recommendations = []
 
     result = {
-        "isGroupBasedAccessControlEnabled": is_enabled,
-        "totalGroups": total_groups,
-        "groupsWithRoles": groups_with_roles,
-        "scimSourcedGroups": scim_groups,
+        "bypassStatusUsersCount": bypass_count,
+        "totalUsers": total_users,
+    }
+
+    input_summary = {
+        "totalUsersRetrieved": total_users,
+        "totalObjectsReported": total_objects,
+        "bypassStatusUsersCount": bypass_count,
     }
 
     return create_response(
@@ -133,10 +134,11 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalGroups": total_groups, "groupsWithRoles": groups_with_roles},
+        input_summary=input_summary,
+        transformation_errors=transformation_errors,
         metadata={
-            "transformationId": "isGroupBasedAccessControlEnabled",
-            "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "artificial-intelligence",
+            "transformationId": "bypassStatusUsersCount",
+            "vendor": "Duo",
+            "category": "iam",
         },
     )

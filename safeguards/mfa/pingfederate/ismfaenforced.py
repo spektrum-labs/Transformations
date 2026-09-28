@@ -70,7 +70,7 @@ def evaluate(data):
 
                 root_node = tree.get("rootNode")
                 if root_node:
-                    _walk_node(root_node, found_mfa_refs)
+                    walk_node(root_node, found_mfa_refs)
 
         result = len(found_mfa_refs) > 0
 

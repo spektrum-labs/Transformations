@@ -3,6 +3,7 @@ from datetime import datetime
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +29,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -69,60 +71,81 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
-    settings_list = []
-    if isinstance(data, dict):
-        settings_list = data.get("settings") or []
-    if not isinstance(settings_list, list):
-        settings_list = []
+    if isinstance(data, list):
+        activities = data
+    elif isinstance(data, dict):
+        activities = data.get("activities") or data.get("data") or []
+        if not isinstance(activities, list):
+            activities = []
+    else:
+        activities = []
 
-    settings_by_name = {}
-    for row in settings_list:
-        if isinstance(row, dict) and row.get("name"):
-            settings_by_name[row["name"]] = row.get("value")
+    total_activities = len(activities)
 
-    provisioning_mode = settings_by_name.get("sso_provisioning_mode")
-    directory_sync_enabled = settings_by_name.get("directory_sync_enabled")
+    admin_action_status_codes = [
+        "USER_LOGGED_IN",
+        "USER_LOGGED_OUT",
+        "SYSTEM_REBOOTED",
+        "SOFTWARE_UPDATED",
+        "SOFTWARE_ADDED",
+    ]
 
-    is_scim = False
-    if isinstance(provisioning_mode, str) and provisioning_mode.strip().lower() == "scim":
-        is_scim = True
-    if directory_sync_enabled is True:
-        is_scim = True
+    admin_action_count = 0
+    activity_type_counts = {}
+    user_attributed_count = 0
 
-    transformation_errors = []
-    if not settings_list:
-        transformation_errors.append("No settings array found in effective_organization_settings response")
+    for activity in activities:
+        if not isinstance(activity, dict):
+            continue
+        status_code = activity.get("statusCode")
+        activity_type = activity.get("activityType") or "UNKNOWN"
+        activity_type_counts[activity_type] = activity_type_counts.get(activity_type, 0) + 1
+        if status_code in admin_action_status_codes:
+            admin_action_count = admin_action_count + 1
+        if activity.get("userId") is not None:
+            user_attributed_count = user_attributed_count + 1
+
+    distinct_activity_types = len(activity_type_counts)
+
+    is_enabled = total_activities > 0 and distinct_activity_types > 0
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if is_scim:
+    if is_enabled:
+        sample_types = list(activity_type_counts.keys())[:5]
         pass_reasons.append(
-            f"Organization settings report sso_provisioning_mode='{provisioning_mode}' and "
-            f"directory_sync_enabled={directory_sync_enabled}, indicating SCIM directory sync provisions users."
+            "GET /v2/activities returned %d retrievable audit log entries spanning %d distinct activityType values (sample: %s), including %d records with recognizable administrative/status events (e.g. USER_LOGGED_IN, SYSTEM_REBOOTED) and %d records attributed to a userId, confirming console/API actions are recorded and retrievable."
+            % (total_activities, distinct_activity_types, sample_types, admin_action_count, user_attributed_count)
         )
     else:
         fail_reasons.append(
-            f"Organization settings report sso_provisioning_mode='{provisioning_mode}' and "
-            f"directory_sync_enabled={directory_sync_enabled}, neither of which indicates active SCIM provisioning."
+            "GET /v2/activities returned %d activity records with %d distinct activityType values, so no retrievable administrator/technician action log evidence was found."
+            % (total_activities, distinct_activity_types)
         )
         recommendations.append(
-            "Enable SCIM directory sync (set sso_provisioning_mode to 'scim' and enable directory_sync_enabled) "
-            "in the organization's SSO/provisioning settings so user accounts are provisioned/deprovisioned "
-            "automatically rather than via manual invites."
+            "Verify the NinjaOne activities feed is populating for this tenant, and confirm the OAuth client has permission to read /v2/activities."
         )
 
     result = {
-        "isSCIMProvisioningEnabled": is_scim,
-        "ssoProvisioningMode": provisioning_mode,
-        "directorySyncEnabled": directory_sync_enabled,
+        "isApiAuditLoggingEnabled": is_enabled,
+        "totalActivityRecords": total_activities,
+        "distinctActivityTypes": distinct_activity_types,
+        "adminActionRecordCount": admin_action_count,
+        "userAttributedRecordCount": user_attributed_count,
     }
 
     input_summary = {
-        "totalSettings": len(settings_list),
-        "ssoProvisioningMode": provisioning_mode,
-        "directorySyncEnabled": directory_sync_enabled,
+        "totalActivityRecords": total_activities,
+        "distinctActivityTypes": distinct_activity_types,
+        "adminActionRecordCount": admin_action_count,
+    }
+
+    metadata = {
+        "transformationId": "isApiAuditLoggingEnabled",
+        "vendor": "NinjaOne",
+        "category": "epp",
     }
 
     return create_response(
@@ -132,10 +155,5 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isSCIMProvisioningEnabled",
-            "vendor": "Anthropic Claude Developer Platform Claude API",
-            "category": "artificial-intelligence",
-        },
-        transformation_errors=transformation_errors,
+        metadata=metadata,
     )

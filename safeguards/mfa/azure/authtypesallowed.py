@@ -89,6 +89,21 @@ def transform(input):
                 fail_reasons=["Input validation failed"]
             )
 
+
+        # NO PASS ON AN EMPTY READ (contract: no-pass-on-empty-read). "No insecure
+        # authentication types found" is vacuously true of an empty factor list, and the
+        # `else: items = []` branch below produces exactly that for ANY non-list body,
+        # including the empty read `{}`. Require the vendor's own array: an empty list is the
+        # directory answering "no factors configured", a non-list is no answer at all, and
+        # that routes to dataCollection.status="error" (Unevaluated).
+        if not isinstance(data, list):
+            return create_response(
+                result={criteriaKey: False, "authTypes": []},
+                validation=validation,
+                api_errors=[("the authentication factor response was not a list: the factors "
+                             "query cannot be shown to have run, so 'no insecure types' is "
+                             "not evidence")])
+
         pass_reasons = []
         fail_reasons = []
         recommendations = []

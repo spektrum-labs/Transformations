@@ -70,67 +70,56 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        items = data
+        records = data
     elif isinstance(data, dict):
-        items = data.get("results") or data.get("data") or []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        items = []
-
-    if not isinstance(items, list):
-        items = []
+        records = []
 
     failed_device_ids = set()
-    pending_count = 0
-    rejected_count = 0
-    total_records = len(items)
+    failed_record_count = 0
+    total_records = len(records)
+    status_counts = {}
 
-    for item in items:
-        if not isinstance(item, dict):
+    for rec in records:
+        if not isinstance(rec, dict):
             continue
-        status = item.get("status") or ""
-        status_upper = str(status).upper()
-        device_id = item.get("deviceId")
-        if status_upper == "FAILED":
+        status = rec.get("status") or "UNKNOWN"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status == "FAILED":
+            failed_record_count = failed_record_count + 1
+            device_id = rec.get("deviceId")
             if device_id is not None:
                 failed_device_ids.add(device_id)
-            else:
-                failed_device_ids.add(len(failed_device_ids))
-        elif status_upper == "PENDING":
-            pending_count = pending_count + 1
-        elif status_upper == "REJECTED":
-            rejected_count = rejected_count + 1
 
     scan_failure_count = len(failed_device_ids)
+
+    transformation_errors = []
+    if total_records == 0:
+        transformation_errors.append("No OS patch records found in report")
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if total_records == 0:
-        fail_reasons.append(
-            "No OS patch install records were returned by the os-patch-installs report; "
-            "scanFailureCount could not be derived from this scan cycle's data."
-        )
-        recommendations.append(
-            "Verify the OS patch scan cycle has executed recently and that devices are reporting patch install status."
+    if scan_failure_count == 0:
+        pass_reasons.append(
+            f"No devices reported a FAILED status across {total_records} patch records in the Pending/Failed/Rejected OS Patches report (status distribution: {status_counts})."
         )
     else:
-        if scan_failure_count > 0:
-            pass_reasons.append(
-                f"Identified {scan_failure_count} distinct device(s) with status=FAILED across "
-                f"{total_records} OS patch install records ({pending_count} PENDING, {rejected_count} REJECTED)."
-            )
-        else:
-            pass_reasons.append(
-                f"No devices reported status=FAILED across {total_records} OS patch install records "
-                f"({pending_count} PENDING, {rejected_count} REJECTED) in the current scan cycle."
-            )
+        fail_reasons.append(
+            f"{scan_failure_count} distinct device(s) reported a FAILED status ({failed_record_count} failed patch records) out of {total_records} total patch records (status distribution: {status_counts})."
+        )
+        recommendations.append(
+            "Investigate devices with FAILED patch status and re-trigger the OS patch scan/install cycle for those devices."
+        )
 
     result = {
         "scanFailureCount": scan_failure_count,
-        "totalPatchInstallRecords": total_records,
-        "pendingCount": pending_count,
-        "rejectedCount": rejected_count,
+        "totalPatchRecords": total_records,
+        "failedPatchRecords": failed_record_count,
     }
 
     return create_response(
@@ -140,11 +129,12 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary={
-            "totalPatchInstallRecords": total_records,
-            "failedDeviceCount": scan_failure_count,
-            "pendingCount": pending_count,
-            "rejectedCount": rejected_count,
+            "totalPatchRecords": total_records,
+            "failedPatchRecords": failed_record_count,
+            "distinctFailedDevices": scan_failure_count,
+            "statusCounts": status_counts,
         },
+        transformation_errors=transformation_errors,
         metadata={
             "transformationId": "scanFailureCount",
             "vendor": "NinjaOne",

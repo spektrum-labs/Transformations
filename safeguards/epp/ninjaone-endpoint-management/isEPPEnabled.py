@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,80 +70,80 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        records = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        results = []
+        records = []
 
-    if not isinstance(results, list):
-        results = []
-
-    # Build per-device set of product states.
     device_states = {}
-    for row in results:
-        if not isinstance(row, dict):
+    for rec in records:
+        if not isinstance(rec, dict):
             continue
-        device_id = row.get("deviceId")
-        product_state = row.get("productState")
+        device_id = rec.get("deviceId")
         if device_id is None:
             continue
-        existing = device_states.get(device_id) or []
-        existing = existing + [product_state]
-        device_states[device_id] = existing
+        product_name = rec.get("productName") or "NONE"
+        product_state = rec.get("productState")
+        if device_id not in device_states:
+            device_states[device_id] = {"has_product": False, "enabled": False}
+        if product_name != "NONE":
+            device_states[device_id]["has_product"] = True
+            if product_state == "ON":
+                device_states[device_id]["enabled"] = True
 
-    total_devices = len(device_states)
-    devices_with_active_av = 0
-    device_ids_active = []
-    device_ids_inactive = []
-    for device_id, states in device_states.items():
-        has_on = False
-        for s in states:
-            if isinstance(s, str) and s.strip().upper() == "ON":
-                has_on = True
-                break
-        if has_on:
-            devices_with_active_av = devices_with_active_av + 1
-            device_ids_active.append(device_id)
-        else:
-            device_ids_inactive.append(device_id)
+    protected_device_ids = [d for d, s in device_states.items() if s["has_product"]]
+    enabled_device_ids = [d for d in protected_device_ids if device_states[d]["enabled"]]
 
-    is_epp_enabled = total_devices > 0 and devices_with_active_av == total_devices
+    total_protected = len(protected_device_ids)
+    total_enabled = len(enabled_device_ids)
+
+    is_epp_enabled = total_protected > 0 and total_enabled == total_protected
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if total_devices == 0:
+    if total_protected == 0:
         fail_reasons.append(
-            "The antivirus-status report returned zero device rows, so no device could be confirmed to have an AV/EPP product in the ON (enabled) state."
+            "No devices in the antivirus status report have a reporting AV/EPP product (all productName values are 'NONE')."
         )
         recommendations.append(
-            "Verify the NinjaOne antivirus-status query is scoped to the correct organizations and that agents are reporting AV status."
+            "Deploy and enable an endpoint protection product on managed devices so productState can be reported."
         )
     elif is_epp_enabled:
         pass_reasons.append(
-            f"All {total_devices} device(s) observed in the antivirus-status report have at least one AV/EPP product reporting productState='ON' (e.g. deviceIds sample: {device_ids_active[:5]})."
+            "All %d devices with a reporting AV/EPP product have productState=ON (device ids: %s)." % (
+                total_protected, ", ".join([str(d) for d in enabled_device_ids])
+            )
         )
     else:
+        disabled_ids = [d for d in protected_device_ids if d not in enabled_device_ids]
         fail_reasons.append(
-            f"{len(device_ids_inactive)} of {total_devices} device(s) have no AV/EPP product in productState='ON' in the antivirus-status report (sample inactive deviceIds: {device_ids_inactive[:5]})."
+            "%d of %d devices with a reporting AV/EPP product do not have productState=ON (disabled/snoozed/unknown device ids: %s)." % (
+                len(disabled_ids), total_protected, ", ".join([str(d) for d in disabled_ids])
+            )
         )
         recommendations.append(
-            "Investigate devices with no active AV/EPP product state and enable or reinstall the endpoint protection agent on those endpoints."
+            "Investigate and re-enable the AV/EPP product on devices reporting productState=OFF or missing state."
         )
 
+    result = {
+        "isEPPEnabled": is_epp_enabled,
+        "protectedDeviceCount": total_protected,
+        "activeDeviceCount": total_enabled,
+    }
+
     input_summary = {
-        "totalDevicesObserved": total_devices,
-        "devicesWithActiveAV": devices_with_active_av,
+        "totalRecords": len(records),
+        "devicesWithProduct": total_protected,
+        "devicesWithProductOn": total_enabled,
     }
 
     return create_response(
-        result={
-            "isEPPEnabled": is_epp_enabled,
-            "totalDevicesObserved": total_devices,
-            "devicesWithActiveAV": devices_with_active_av,
-        },
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
@@ -153,7 +151,7 @@ def transform(input):
         input_summary=input_summary,
         metadata={
             "transformationId": "isEPPEnabled",
-            "vendor": "NinjaOne Endpoint Management",
+            "vendor": "NinjaOne",
             "category": "epp",
         },
     )

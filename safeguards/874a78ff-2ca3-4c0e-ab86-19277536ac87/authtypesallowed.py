@@ -109,6 +109,14 @@ def transform(input):
 
         data, validation = extract_input(input)
 
+        # A body that decodes to nothing carries no evidence either way.
+        if data in (None, {}, [], ""):
+            return create_response(
+                result={criteriaKey: False, "authTypes": []},
+                validation={"status": "error", "errors": ["the vendor returned no data to evaluate"], "warnings": []},
+                api_errors=["the vendor returned no data to evaluate"],
+            )
+
         if validation.get("status") == "failed":
             return create_response(
                 result={criteriaKey: False, "authTypes": []},
@@ -132,7 +140,29 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        auth_configs = data.get('authenticationMethodConfigurations', [])
+        # FAIL CLOSED ON A BODY THAT IS NOT THE POLICY. This used to default
+        # `authenticationMethodConfigurations` to `[]`, and "no insecure authentication
+        # method is enabled" is vacuously true of the empty set -- so a Graph error envelope,
+        # a 401/403, or a response to some other call produced zero enabled methods and
+        # reported the criterion satisfied.
+        #
+        # The shape read is Microsoft Graph GET /v1.0/policies/authenticationMethodsPolicy,
+        # whose 200 body carries `authenticationMethodConfigurations` as an array of
+        # configuration objects, each with `id` and `state` ("enabled"/"disabled")
+        # (https://learn.microsoft.com/en-us/graph/api/authenticationmethodspolicy-get).
+        # Graph returns a configuration object for every method it knows about, enabled or
+        # not, so an empty array means this is not the policy. Anything without a non-empty
+        # array routes to dataCollection.status="error": the policy was never read, so the
+        # absence of an insecure method is not evidence that none is enabled.
+        auth_configs = data.get('authenticationMethodConfigurations') if isinstance(data, dict) else None
+        if not isinstance(auth_configs, list) or not auth_configs:
+            return create_response(
+                result={criteriaKey: False, "authTypes": []},
+                validation=validation,
+                api_errors=[("no authenticationMethodConfigurations array in the "
+                             "authenticationMethodsPolicy response: the authentication "
+                             "methods policy was never read, so the absence of an insecure "
+                             "method is not evidence that none is enabled")])
 
         # Find enabled authentication methods
         enabled_methods = [

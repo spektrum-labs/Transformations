@@ -11,6 +11,14 @@ def transform(input):
     """
 
     try:
+        # The production executor passes this transform the ENRICHED envelope
+        # {"data": <body>, "validation": {...}}, because it classifies any source that reads
+        # `input.get('data'` as new-format. Unwrap it first: otherwise the envelope's own
+        # non-empty `data` key reads as evidence, and any non-empty body -- an auth error,
+        # an unrelated payload -- reports the license purchased.
+        if isinstance(input, dict) and 'data' in input and 'validation' in input:
+            input = input['data']
+
         # Handle nested response structure
         if 'response' in input:
             input = input['response']

@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -72,60 +70,81 @@ def transform(input):
     data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
-        results = data
+        records = data
     elif isinstance(data, dict):
-        results = data.get("results") or data.get("data") or []
+        records = data.get("results") or data.get("data") or []
+        if not isinstance(records, list):
+            records = []
     else:
-        results = []
+        records = []
 
-    if not isinstance(results, list):
-        results = []
-
-    # Group AV product rows by deviceId, tracking whether any product
-    # for that device reports an active/on state.
-    device_active = {}
-    for row in results:
-        if not isinstance(row, dict):
+    device_protected = {}
+    device_seen = {}
+    for rec in records:
+        if not isinstance(rec, dict):
             continue
-        device_id = row.get("deviceId")
+        device_id = rec.get("deviceId")
         if device_id is None:
             continue
-        product_state = row.get("productState") or ""
-        is_on = isinstance(product_state, str) and product_state.strip().upper() == "ON"
-        if device_id not in device_active:
-            device_active[device_id] = False
+        device_seen[device_id] = True
+        product_state = rec.get("productState")
+        product_name = rec.get("productName")
+        is_on = product_state == "ON"
         if is_on:
-            device_active[device_id] = True
+            device_protected[device_id] = True
+        else:
+            if device_id not in device_protected:
+                device_protected[device_id] = False
 
-    total_devices = len(device_active)
-    unprotected_devices = [dev_id for dev_id, active in device_active.items() if not active]
-    unprotected_count = len(unprotected_devices)
+    total_devices = len(device_seen)
+    unprotected_ids = [d for d, protected in device_protected.items() if not protected]
+    unprotected_count = len(unprotected_ids)
+    protected_count = total_devices - unprotected_count
+
+    sample_ids = unprotected_ids[:10]
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
 
     if total_devices == 0:
-        pass_reasons = []
-        fail_reasons = ["No antivirus-status records were returned by getAntivirusStatusReport, so no device coverage could be confirmed."]
-        recommendations = ["Verify the antivirus-status query endpoint is returning data for the tenant's managed devices."]
-    elif unprotected_count == 0:
-        pass_reasons = [
-            "All %d devices reporting in the antivirus-status feed have at least one product with productState=ON." % total_devices
-        ]
-        fail_reasons = []
-        recommendations = []
+        fail_reasons.append(
+            "Antivirus status report returned no device records; unable to determine unprotected endpoint count."
+        )
+        recommendations.append(
+            "Verify the antivirus status report endpoint is returning data for managed devices."
+        )
     else:
-        pass_reasons = []
-        sample_ids = unprotected_devices[:5]
-        fail_reasons = [
-            "%d of %d devices in the antivirus-status feed report no product with productState=ON (unprotected device IDs include: %s)." % (
-                unprotected_count, total_devices, ", ".join([str(x) for x in sample_ids])
+        if unprotected_count > 0:
+            fail_reasons.append(
+                f"{unprotected_count} of {total_devices} devices report no active AV/EPP protection "
+                f"(productState != 'ON', or product missing/NONE, or state unreported); example deviceIds: {sample_ids}."
             )
-        ]
-        recommendations = [
-            "Investigate and remediate the AV agent on the unprotected devices, e.g. reinstall or re-enable the AV product so productState reports ON."
-        ]
+            recommendations.append(
+                "Investigate and remediate unprotected devices: reinstall or re-enable the endpoint protection "
+                "agent and confirm productState reports 'ON'."
+            )
+        else:
+            pass_reasons.append(
+                f"All {total_devices} devices report at least one AV/EPP product with productState='ON'."
+            )
 
     result = {
         "endpointOperationalStatusUnprotectedCount": unprotected_count,
-        "totalDevicesReporting": total_devices,
+        "totalDevicesReported": total_devices,
+        "protectedDeviceCount": protected_count,
+    }
+
+    input_summary = {
+        "recordsInResponse": len(records),
+        "totalDevicesReported": total_devices,
+        "unprotectedDeviceCount": unprotected_count,
+    }
+
+    metadata = {
+        "transformationId": "endpointOperationalStatusUnprotectedCount",
+        "vendor": "NinjaOne",
+        "category": "epp",
     }
 
     return create_response(
@@ -134,10 +153,6 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevicesReporting": total_devices, "unprotectedCount": unprotected_count},
-        metadata={
-            "transformationId": "endpointOperationalStatusUnprotectedCount",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        input_summary=input_summary,
+        metadata=metadata,
     )
