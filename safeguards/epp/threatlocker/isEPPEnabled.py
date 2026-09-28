@@ -81,14 +81,14 @@ MODE_FIELD_CANDIDATES = ["mode", "Mode", "computerMode", "protectionMode"]
 NAME_FIELD_CANDIDATES = ["computerName", "ComputerName", "name", "hostname"]
 
 
-def _first_present(d, candidates):
+def first_present(d, candidates):
     for key in candidates:
         if isinstance(d, dict) and key in d and d[key] is not None:
             return d[key]
     return None
 
 
-def _extract_computers(data):
+def extract_computers(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -106,7 +106,7 @@ def transform(input):
     if isinstance(data, dict) and data.get("error"):
         api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
 
-    computers = _extract_computers(data)
+    computers = extract_computers(data)
 
     total = len(computers)
     secure = []
@@ -116,8 +116,8 @@ def transform(input):
     for c in computers:
         if not isinstance(c, dict):
             continue
-        mode = _first_present(c, MODE_FIELD_CANDIDATES)
-        name = _first_present(c, NAME_FIELD_CANDIDATES) or "unknown"
+        mode = first_present(c, MODE_FIELD_CANDIDATES)
+        name = first_present(c, NAME_FIELD_CANDIDATES) or "unknown"
         if mode is None:
             unknown_mode.append(name)
             continue

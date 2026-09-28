@@ -166,7 +166,14 @@ def transform(input):
 
         server_count = len(all_servers)
         roles_seen_list = sorted(roles_seen)
-        enabled = server_count > 0
+        networks_evaluated = len(network_payloads)
+        # Every network must forward to syslog. One logging network out of four
+        # is a coverage gap, not an enabled control.
+        enabled = server_count > 0 and networks_with_servers == networks_evaluated
+        coverage = (
+            round(networks_with_servers / networks_evaluated * 100, 2)
+            if networks_evaluated else None
+        )
 
         if enabled:
             role_summary = ", ".join(roles_seen_list) if roles_seen_list else "None"
@@ -176,6 +183,14 @@ def transform(input):
             ]
             fail_reasons = []
             recommendations = []
+        elif server_count > 0:
+            pass_reasons = []
+            fail_reasons = [
+                f"Only {networks_with_servers} of {networks_evaluated} Meraki MX network(s) forward to a syslog server."
+            ]
+            recommendations = [
+                "Configure a syslog server on every appliance network so configuration and change events are captured everywhere."
+            ]
         else:
             pass_reasons = []
             fail_reasons = [
@@ -189,6 +204,8 @@ def transform(input):
             criteriaKey: enabled,
             "serverCount": server_count,
             "networksWithServers": networks_with_servers,
+            "networksEvaluated": networks_evaluated,
+            "syslogCoveragePercentage": coverage,
             "rolesSeen": roles_seen_list,
         }
 
