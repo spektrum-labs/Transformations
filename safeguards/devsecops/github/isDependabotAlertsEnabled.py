@@ -85,9 +85,15 @@ def transform(input):
 
     gql_errors = body.get("errors")
     org = None
+    # This is a legacy-format transform, so Token-Service drills the envelope
+    # (response -> result -> apiResponse -> Output -> data) before calling it and the
+    # GraphQL "data" wrapper is already gone: the body is {"organization": ...}.
+    # Accept that drilled shape, and the undrilled {"data": {"organization": ...}} too.
     gdata = body.get("data")
-    if isinstance(gdata, dict):
+    if isinstance(gdata, dict) and "organization" in gdata:
         org = gdata.get("organization")
+    elif "organization" in body:
+        org = body.get("organization")
     conn = org.get("repositories") if isinstance(org, dict) else None
     nodes = conn.get("nodes") if isinstance(conn, dict) else None
     page_info = conn.get("pageInfo") if isinstance(conn, dict) else None
