@@ -1,4 +1,10 @@
+"""Transformation: isEPPConfigured (NinjaOne, GET /v2/devices-detailed).
 
+Value: a whole-number percentage, floor(100 * devices with an assigned policyId / devices returned). The pass bar
+lives in the requirement. Device last-contact age is not read, so staleness is not held against a device. No devices
+returned is not evaluated (dataCollection error, no value). The device list is a bare array, so a paginator cut-off
+cannot be seen here. policyId is NinjaOne's general device policy, a weaker signal than an AV product state.
+"""
 import json
 from datetime import datetime
 
@@ -99,15 +105,20 @@ def transform(input):
             if len(sample_systems) < 5:
                 sample_systems.append(device.get("systemName") or str(device.get("id")))
 
+    # Whole-number percentage of devices with an assigned policy; the pass bar lives in the requirement.
+    # No devices returned is not evaluated (dataCollection error, no value), never a 0.
+    configured_pct = (configured_count * 100) // total_devices if total_devices else None
     is_configured = configured_count > 0
+    api_errors = []
 
     if total_devices == 0:
         fail_reasons = ["No device records were returned by getDevicesDetailed, so EPP policy assignment could not be verified."]
         recommendations = ["Verify NinjaOne device inventory API connectivity and confirm devices are enrolled."]
         pass_reasons = []
+        api_errors = fail_reasons
     elif is_configured:
         pass_reasons = [
-            f"{configured_count} of {total_devices} devices report a non-empty policyId, indicating an endpoint protection policy is assigned. Sample devices: {sample_systems}."
+            f"{configured_count} of {total_devices} devices ({configured_pct}%) report a non-empty policyId, indicating an endpoint protection policy is assigned. Sample devices: {sample_systems}."
         ]
         fail_reasons = []
         recommendations = []
@@ -121,7 +132,7 @@ def transform(input):
         ]
 
     result = {
-        "isEPPConfigured": is_configured,
+        "isEPPConfigured": configured_pct,
         "totalDevices": total_devices,
         "devicesWithAssignedPolicy": configured_count,
     }
@@ -132,6 +143,7 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
+        api_errors=api_errors,
         input_summary={"totalDevices": total_devices, "devicesWithAssignedPolicy": configured_count},
         metadata={
             "transformationId": "isEPPConfigured",
