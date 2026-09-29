@@ -44,7 +44,14 @@ def report_records(data):
     Documented envelope: {"data": [...], "lastSyncTimestamp": "...", "filters": {...},
     "nextPageToken": "..."}. Anything else (error envelope, null, unrelated JSON) returns
     None, which every caller treats as NO EVIDENCE.
+
+    This is a legacy-format transform, so Token-Service drills the envelope
+    (response -> result -> apiResponse -> Output -> data) before calling it: the body
+    normally arrives as the bare "data" row list. Accept that drilled list, and the
+    undrilled envelope too.
     """
+    if isinstance(data, list):
+        return [r for r in data if isinstance(r, dict)]
     if not isinstance(data, dict):
         return None
     rows = data.get("data")
