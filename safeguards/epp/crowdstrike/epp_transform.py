@@ -126,6 +126,7 @@ def transform(endpoints_response, debug=False):
         total_servers = 0
         total_mobile_devices = 0
         total_cloud_endpoints = 0
+        mdr_configured_count = 0
 
         safeguard_counters = {
             "Endpoint Protection": 0,
@@ -231,6 +232,9 @@ def transform(endpoints_response, debug=False):
             if has_mdr:
                 safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
 
+            if device_mdr_configured(device):
+                mdr_configured_count = mdr_configured_count + 1
+
         coverage_scores = {}
         coverage_scores["Endpoint Protection"] = round((safeguard_counters["Endpoint Protection"] / total_computers) * 100 if total_computers > 0 else 0)
         coverage_scores["Endpoint Security"] = round((safeguard_counters["Endpoint Security"] / total_computers) * 100 if total_computers > 0 else 0)
@@ -252,7 +256,18 @@ def transform(endpoints_response, debug=False):
         coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
-        coverage_scores["isMDRConfigured"] = coverage_scores["MDR"] > 0
+        # isMDRConfigured is a measurement, not a copy of isMDREnabled (rtr_state alone counts
+        # every host): the share of hosts on which Falcon Complete / OverWatch can actually act --
+        # a live sensor with the prevention AND remote-response policies applied -- against the
+        # threshold. Unanswered (None) when nothing was measured: no device list, or a list
+        # shorter than meta.pagination.total (a sample is not the estate).
+        reported_total = reported_device_total(data)
+        if total_endpoints == 0 or (reported_total is not None and reported_total > total_endpoints):
+            coverage_scores["mdrConfiguredPercentage"] = None
+            coverage_scores["isMDRConfigured"] = None
+        else:
+            coverage_scores["mdrConfiguredPercentage"] = round(mdr_configured_count * 100.0 / total_endpoints, 2)
+            coverage_scores["isMDRConfigured"] = coverage_scores["mdrConfiguredPercentage"] >= MDR_CONFIGURED_THRESHOLD
         # Alerting is active whenever at least one endpoint is actively protected
         # (sensor + prevention policy) or covered by MDR, since those devices
         # generate and forward detections/alerts. Server- or MDR-only fleets must
@@ -277,6 +292,24 @@ def transform(endpoints_response, debug=False):
 
         if coverage_scores["isMDREnabled"]:
             pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
+
+        if coverage_scores["isMDRConfigured"] is True:
+            pass_reasons.append(
+                f"MDR configured: {mdr_configured_count} of {total_endpoints} hosts have a live sensor with prevention "
+                f"and remote-response policies applied ({coverage_scores['mdrConfiguredPercentage']}%)"
+            )
+        elif coverage_scores["isMDRConfigured"] is False:
+            fail_reasons.append(
+                f"MDR not fully configured: {mdr_configured_count} of {total_endpoints} hosts have a live sensor with "
+                f"prevention and remote-response policies applied ({coverage_scores['mdrConfiguredPercentage']}%, "
+                f"threshold {MDR_CONFIGURED_THRESHOLD}%)"
+            )
+            recommendations.append(
+                "Apply a prevention policy and a Real Time Response policy to every host group, and bring hosts in "
+                "reduced functionality mode or not reporting back to a normal sensor state"
+            )
+        else:
+            fail_reasons.append("isMDRConfigured not measured: no device list, or the device list was truncated")
 
         if coverage_scores["isAlertingEnabled"]:
             pass_reasons.append("Alerting enabled: protected endpoints/servers/MDR generate detections")
@@ -304,6 +337,43 @@ def transform(endpoints_response, debug=False):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+#: share of hosts that must be ready for MDR response for isMDRConfigured to hold
+MDR_CONFIGURED_THRESHOLD = 95.0
+
+
+def flag_true(value):
+    """CrowdStrike policy flags arrive as booleans or as the strings "True"/"False"."""
+    return value is True or str(value).strip().lower() == "true"
+
+
+def device_mdr_configured(device):
+    """A live sensor (status normal, not reduced functionality mode, agent_version and last_seen
+    present) with both the prevention and the remote_response policy applied."""
+    if not isinstance(device, dict):
+        return False
+    rfm = str(device.get("reduced_functionality_mode") or "").strip().lower()
+    if device.get("status") != "normal" or rfm in ("yes", "true") or not device.get("agent_version") or not device.get("last_seen"):
+        return False
+    policies = device.get("device_policies")
+    if not isinstance(policies, dict):
+        return False
+    prevention = policies.get("prevention") if isinstance(policies.get("prevention"), dict) else {}
+    response = policies.get("remote_response") if isinstance(policies.get("remote_response"), dict) else {}
+    return flag_true(prevention.get("applied")) and flag_true(response.get("applied"))
+
+
+def reported_device_total(data):
+    """meta.pagination.total as an int, or None when the response does not carry one."""
+    meta = data.get("meta") if isinstance(data, dict) else None
+    pagination = meta.get("pagination") if isinstance(meta, dict) else None
+    if not isinstance(pagination, dict):
+        return None
+    try:
+        return int(str(pagination.get("total")).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def epp_coverage_observed(data):

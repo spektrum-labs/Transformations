@@ -68,6 +68,35 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+#: share of enrolled endpoints Red Canary must report as monitored for MDR to count as configured
+MDR_CONFIGURED_THRESHOLD = 95.0
+
+
+def mdr_monitoring(endpoints):
+    """(monitored, enrolled, reporting) over endpoints that are not decommissioned.
+
+    Red Canary returns attributes.monitoring_status "monitored" or "unmonitored" per endpoint
+    (booleans and counts can arrive as strings). An endpoint enrolled but not monitored, e.g.
+    endpoint_status "suspended", is exactly the misconfiguration this measures.
+    """
+    monitored = 0
+    enrolled = 0
+    reporting = 0
+    for ep in endpoints:
+        attrs = ep.get("attributes") if isinstance(ep, dict) else None
+        if not isinstance(attrs, dict):
+            continue
+        if str(attrs.get("is_decommissioned")).strip().lower() == "true":
+            continue
+        enrolled = enrolled + 1
+        status = str(attrs.get("monitoring_status") or "").strip().lower()
+        if status:
+            reporting = reporting + 1
+        if status == "monitored":
+            monitored = monitored + 1
+    return monitored, enrolled, reporting
+
+
 def transform(input):
     data, validation = extract_input(input)
 
@@ -78,8 +107,10 @@ def transform(input):
     elif isinstance(data, dict):
         endpoints = data.get("data") or []
         meta = data.get("meta") or {}
-        total_items = meta.get("total_items")
-        if total_items is None:
+        try:
+            total_items = int(str(meta.get("total_items")).strip())
+        except (TypeError, ValueError):
+            # absent or unreadable ("96" arrives as a string and used to raise on "> 0")
             total_items = len(endpoints)
     else:
         endpoints = []
@@ -88,6 +119,17 @@ def transform(input):
 
     page_count = len(endpoints)
     is_mdr_enabled = total_items > 0
+
+    # isMDRConfigured is a measurement, not a copy of isMDREnabled: the share of enrolled
+    # endpoints Red Canary is actually monitoring, judged against the threshold. Unanswered
+    # (None) when no endpoint reports a monitoring_status, because then nothing was measured.
+    monitored, enrolled, reporting = mdr_monitoring(endpoints)
+    if reporting > 0 and enrolled > 0:
+        monitored_pct = round(monitored * 100.0 / enrolled, 2)
+        is_mdr_configured = monitored_pct >= MDR_CONFIGURED_THRESHOLD
+    else:
+        monitored_pct = None
+        is_mdr_configured = None
 
     pass_reasons = []
     fail_reasons = []
@@ -110,10 +152,33 @@ def transform(input):
             "tenant connectivity and sensor deployment."
         )
 
+    if is_mdr_configured is True:
+        pass_reasons.append(
+            f"Red Canary MDR is configured: {monitored} of {enrolled} enrolled endpoint(s) are monitored "
+            f"({monitored_pct}%, threshold {MDR_CONFIGURED_THRESHOLD}%)."
+        )
+    elif is_mdr_configured is False:
+        fail_reasons.append(
+            f"Red Canary MDR is not fully configured: {monitored} of {enrolled} enrolled endpoint(s) are "
+            f"monitored ({monitored_pct}%, threshold {MDR_CONFIGURED_THRESHOLD}%); "
+            f"{enrolled - monitored} are enrolled but unmonitored."
+        )
+        recommendations.append(
+            "Return the unmonitored endpoints to monitoring in the Red Canary portal (Endpoints, filter "
+            "monitoring status: unmonitored), or decommission those no longer in service."
+        )
+    else:
+        fail_reasons.append(
+            "isMDRConfigured not measured: no endpoint in the response reports a monitoring_status."
+        )
+
     return create_response(
         result={
             "isMDREnabled": is_mdr_enabled,
-            "isMDRConfigured": is_mdr_enabled,
+            "isMDRConfigured": is_mdr_configured,
+            "mdrMonitoredPercentage": monitored_pct,
+            "mdrMonitoredEndpoints": monitored,
+            "mdrEnrolledEndpoints": enrolled,
             "totalEndpoints": total_items,
             "pageEndpoints": page_count,
         },

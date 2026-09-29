@@ -106,9 +106,13 @@ def transform(input):
             # Check meta for total count
             meta = data.get('meta', {})
             if isinstance(meta, dict):
-                total_from_meta = meta.get('total_count', meta.get('total', 0))
-                if isinstance(total_from_meta, (int, float)) and total_from_meta > 0:
-                    total_endpoints = int(total_from_meta)
+                total_from_meta = meta.get('total_items', meta.get('total_count', meta.get('total', 0)))
+                try:
+                    total_from_meta = int(str(total_from_meta).strip())
+                except (TypeError, ValueError):
+                    total_from_meta = 0
+                if total_from_meta > 0:
+                    total_endpoints = total_from_meta
         elif isinstance(data, list):
             endpoints = data
 
@@ -117,18 +121,20 @@ def transform(input):
 
             for endpoint in endpoints:
                 if isinstance(endpoint, dict):
-                    # Check monitoring status
-                    is_monitored = endpoint.get('is_monitored', endpoint.get('monitored',
-                                   endpoint.get('sensor_installed', None)))
-                    status = str(endpoint.get('status', endpoint.get('state', ''))).lower()
+                    # Red Canary v3 nests fields under "attributes": monitoring_status is
+                    # "monitored"/"unmonitored". Flat shapes are still read.
+                    attrs = endpoint.get('attributes') if isinstance(endpoint.get('attributes'), dict) else endpoint
+                    is_monitored = attrs.get('is_monitored', attrs.get('monitored',
+                                   attrs.get('sensor_installed', None)))
+                    status = str(attrs.get('monitoring_status') or attrs.get('status') or attrs.get('state') or '').lower()
 
                     if is_monitored is True or status in ('active', 'monitored', 'online', 'healthy'):
                         monitored_endpoints += 1
                     elif is_monitored is False or status in ('inactive', 'unmonitored', 'offline', 'unhealthy'):
                         unmonitored_endpoints += 1
-                    else:
-                        # No explicit status - assume monitored if endpoint exists in Red Canary
-                        monitored_endpoints += 1
+                    # No readable status: NOT counted as monitored. The old branch assumed
+                    # monitored, so every Red Canary v3 endpoint (status lives under
+                    # attributes.monitoring_status) read as covered, suspended ones included.
 
         if total_endpoints > 0:
             coverage_percentage = round((monitored_endpoints / total_endpoints) * 100, 1)
