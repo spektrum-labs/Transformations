@@ -1,19 +1,19 @@
 import json
 from datetime import datetime
 
-# isRBACImplemented -- does the Duo tenant delegate administration through roles?
+# isMFAEnforcedForUsers -- is Duo MFA enforced for every active user?
 #
-# Source: GET /admin/v1/admins (method getAdmins, returnSpec {"response": [...]}). Each
-# admin carries a role: Owner, Administrator, Application Manager, User Manager, Security
-# Analyst, Help Desk, Billing, Phishing Manager or Read-only.
+# Source: GET /admin/v1/users (method getUsers, returnSpec {"response": [...]}). A Duo user
+# is held to MFA when it is enrolled (is_enrolled true) and its status is not "bypass"
+# (bypass skips the second factor). Disabled, locked-out and pending-deletion users are
+# not active and are left out of the denominator.
 #
-# Verdict: true when at least one admin holds a role other than Owner, i.e. administration
-# is split into least-privilege roles rather than every admin holding full control.
-# ownerAdminPercentage is the measure. A body with no admin object (admin_id) proves
-# nothing and is reported as a data-collection error, never judged. An Admin API
-# credential without "Grant administrators" gets a 403 from Duo; that never reaches here.
+# Verdict: true when every active user is enrolled and none is in bypass.
+# mfaEnforcedUserPercentage is the measure. A body with no user object (user_id) proves
+# nothing -- an error collapses to the returnSpec default [] -- and is reported as a
+# data-collection error, never judged.
 
-KEY = "isRBACImplemented"
+KEY = "isMFAEnforcedForUsers"
 
 
 def extract_input(input_data):
@@ -103,49 +103,52 @@ def pct(part, whole):
 
 def transform(input):
     data, validation = load(input)
-    admins = objects_with(data, "admin_id")
-    if admins is None:
+    users = objects_with(data, "user_id")
+    if users is None:
         return create_response(
-            result={KEY: False, "adminCount": 0, "ownerAdminPercentage": 0.0},
+            result={KEY: False, "mfaEnforcedUserPercentage": 0.0, "activeUsers": 0},
             validation=validation,
-            api_errors=["No Duo administrator objects (admin_id) in the getAdmins response."],
+            api_errors=["No Duo user objects (user_id) in the getUsers response."],
         )
 
-    roles = {}
-    owners = 0
-    unroled = 0
-    for a in admins:
-        role = str(a.get("role") or "").strip()
-        if not role:
-            unroled = unroled + 1
+    active = 0
+    enforced = 0
+    bypass = 0
+    unenrolled = 0
+    for u in users:
+        status = str(u.get("status") or "").lower()
+        if status in INACTIVE_STATUSES:
             continue
-        roles[role] = roles.get(role, 0) + 1
-        if role.lower() == "owner":
-            owners = owners + 1
+        active = active + 1
+        if status == "bypass":
+            bypass = bypass + 1
+        elif u.get("is_enrolled") is not True:
+            unenrolled = unenrolled + 1
+        else:
+            enforced = enforced + 1
 
-    delegated = sum(roles[r] for r in roles if r.lower() != "owner")
     summary = {
-        "adminCount": len(admins),
-        "ownerAdminCount": owners,
-        "delegatedRoleAdminCount": delegated,
-        "ownerAdminPercentage": pct(owners, len(admins)),
-        "distinctRoleCount": len(roles),
-        "adminsByRole": roles,
-        "adminsWithoutRole": unroled,
+        "usersReturned": len(users),
+        "activeUsers": active,
+        "mfaEnforcedUsers": enforced,
+        "mfaEnforcedUserPercentage": pct(enforced, active),
+        "bypassUserCount": bypass,
+        "unenrolledUserCount": unenrolled,
     }
-    result = {KEY: delegated > 0}
+    result = {KEY: active > 0 and enforced == active}
     result.update(summary)
 
     if result[KEY]:
         return create_response(
             result=result, validation=validation, input_summary=summary,
-            pass_reasons=["%d of %d Duo administrators hold a delegated role other than Owner (roles in use: %s)."
-                          % (delegated, len(admins), ", ".join(sorted(roles)))],
+            pass_reasons=["All %d active Duo users are enrolled in MFA and none is in bypass status." % active],
         )
+    if active == 0:
+        reasons = ["Duo returned %d users and none is active, so MFA enforcement covers no one." % len(users)]
+    else:
+        reasons = ["%d of %d active Duo users (%.1f%%) are held to MFA: %d in bypass status, %d not enrolled."
+                   % (enforced, active, summary["mfaEnforcedUserPercentage"], bypass, unenrolled)]
     return create_response(
-        result=result, validation=validation, input_summary=summary,
-        fail_reasons=["No Duo administrator holds a role other than Owner: %d of %d are Owners, %d carry no role."
-                      % (owners, len(admins), unroled)],
-        recommendations=["Assign least-privilege Duo admin roles (Administrator, User Manager, Help Desk, "
-                         "Read-only) and keep Owner for the few who need full control."],
+        result=result, validation=validation, input_summary=summary, fail_reasons=reasons,
+        recommendations=["Take users out of bypass status and have unenrolled users complete Duo enrollment."],
     )
