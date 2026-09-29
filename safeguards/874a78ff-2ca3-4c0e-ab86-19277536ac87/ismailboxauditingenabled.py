@@ -205,8 +205,12 @@ def transform(input):
             fail_reasons.append("Microsoft Secure Score data not available - verify API permissions")
             recommendations.append("Verify the Microsoft Graph API integration is returning Secure Score data")
 
+        # The same Secure Score control answers the email-logging criteria that are pointed at this file
+        # (isEmailSecurityLoggingEnabled, isEmailLoggingEnabled): mailbox auditing for every mailbox.
         result = {
             criteriaKey: is_enabled,
+            "isEmailSecurityLoggingEnabled": is_enabled,
+            "isEmailLoggingEnabled": is_enabled,
             "scoreInPercentage": score_in_percentage,
             "count": count,
             "total": total

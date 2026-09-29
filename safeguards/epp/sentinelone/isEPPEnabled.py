@@ -69,81 +69,83 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
+    """isEPPEnabled (SentinelOne, GET /web/api/v2.1/agents).
+
+    An agent has endpoint protection ENABLED when its mitigationMode is "protect" or "detect"
+    (the engine is running; "none" disables it) AND it reports a non-empty activeProtection list.
+    True only when at least one agent is returned and every returned agent is enabled; the
+    percentage is emitted as eppEnabledPercentage. Enrolment alone (the old totalItems > 0 rule)
+    is not evidence: an agent with mitigationMode "none" is enrolled and unprotected.
+    Fails closed on an error body, an unreadable agent list and an empty fleet.
+    """
     data, validation = extract_input(input)
-
-    # Token-Service preprocessing may unwrap to a bare list of agents (when API
-    # response's `data` field is a list) or leave a dict containing `data`/`pagination`.
+    if isinstance(data, dict) and (data.get("errors") or data.get("error")):
+        reason = "SentinelOne returned an error instead of an agent list"
+        return create_response(
+            result={"isEPPEnabled": False, "eppEnabledPercentage": 0, "totalAgents": 0, "enabledAgents": 0},
+            validation=validation, api_errors=[reason], fail_reasons=[reason],
+            metadata={"transformationId": "isEPPEnabled", "vendor": "SentinelOne", "category": "epp"},
+        )
+    total_items = 0
     if isinstance(data, list):
-        items = data
-        total_items = len(items)
+        agents = data
     elif isinstance(data, dict):
-        items = data.get("data") or []
-        if not isinstance(items, list):
-            items = []
-        pagination = data.get("pagination") or {}
-        total_items = pagination.get("totalItems") or len(items)
+        agents = data.get("data")
+        pagination = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
+        total_items = pagination.get("totalItems") or 0
     else:
-        items = []
-        total_items = 0
+        agents = None
+    if not isinstance(agents, list):
+        agents = []
+    agents = [a for a in agents if isinstance(a, dict)]
+    sampled = len(agents)
+    total_items = int(total_items) if total_items else sampled
 
-    # Count agents in the sample with active protection entries
-    agents_with_protection = 0
-    protection_names = []
-    for agent in items:
-        if isinstance(agent, dict):
-            ap = agent.get("activeProtection") or []
-            if ap:
-                agents_with_protection = agents_with_protection + 1
-                for p in ap:
-                    if p not in protection_names:
-                        protection_names.append(p)
+    enabled = 0
+    disabled_names = []
+    for agent in agents:
+        mode = str(agent.get("mitigationMode") or "").lower()
+        active = agent.get("activeProtection")
+        has_protection = isinstance(active, list) and len(active) > 0
+        if mode in ("protect", "detect") and has_protection:
+            enabled = enabled + 1
+        else:
+            disabled_names.append(str(agent.get("computerName") or agent.get("uuid") or "unknown"))
 
-    is_epp_enabled = total_items > 0
-
+    pct = (enabled * 100) // sampled if sampled else 0
+    is_enabled = sampled > 0 and enabled == sampled
+    summary = (
+        str(enabled) + " of " + str(sampled) + " returned agents (" + str(pct) + "%) run protection "
+        "(mitigationMode protect or detect, activeProtection reported)"
+    )
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-
-    if is_epp_enabled:
-        prot_str = ", ".join(protection_names) if protection_names else "not captured in sample"
-        pass_reasons.append(
-            f"SentinelOne reports {total_items} enrolled agents (pagination.totalItems={total_items}), "
-            f"confirming EPP is deployed across the fleet."
-        )
-        if agents_with_protection > 0:
-            pass_reasons.append(
-                f"{agents_with_protection} of {len(items)} sampled agents have activeProtection entries: [{prot_str}], "
-                f"indicating active endpoint protection modules are running."
-            )
+    findings = []
+    if sampled == 0:
+        fail_reasons.append("No SentinelOne agents were returned; endpoint protection is not evidenced")
+        recommendations.append("Deploy the SentinelOne agent and confirm the siteId setting")
+    elif is_enabled:
+        pass_reasons.append(summary)
     else:
-        fail_reasons.append(
-            "No enrolled agents found (pagination.totalItems=0). "
-            "EPP cannot be considered enabled if no agents are deployed."
-        )
-        recommendations.append(
-            "Deploy the SentinelOne agent to endpoints to establish EPP coverage. "
-            "Verify that the API token has sufficient scope to read agent data."
-        )
-
+        fail_reasons.append(summary)
+        findings.append("Agents without protection: " + ", ".join(disabled_names[:5]) + ("..." if len(disabled_names) > 5 else ""))
+        recommendations.append("Set mitigationMode to protect (or detect) in the agent policy for every agent")
+    if total_items > sampled:
+        findings.append("Judged on the " + str(sampled) + " agents returned of " + str(total_items) + " enrolled")
     return create_response(
         result={
-            "isEPPEnabled": is_epp_enabled,
+            "isEPPEnabled": is_enabled,
+            "eppEnabledPercentage": pct,
             "totalAgents": total_items,
-            "sampledAgents": len(items),
-            "sampledAgentsWithActiveProtection": agents_with_protection,
+            "sampledAgents": sampled,
+            "enabledAgents": enabled,
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalItems": total_items,
-            "sampleSize": len(items),
-            "agentsWithActiveProtection": agents_with_protection,
-        },
-        metadata={
-            "transformationId": "isEPPEnabled",
-            "vendor": "SentinelOne",
-            "category": "epp",
-        },
+        additional_findings=findings,
+        input_summary={"totalAgents": total_items, "sampledAgents": sampled, "enabledAgents": enabled},
+        metadata={"transformationId": "isEPPEnabled", "vendor": "SentinelOne", "category": "epp"},
     )
