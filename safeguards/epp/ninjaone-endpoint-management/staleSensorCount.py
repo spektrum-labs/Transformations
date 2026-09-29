@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 STALE_THRESHOLD_DAYS = 15
 SECONDS_PER_DAY = 86400
@@ -90,7 +90,10 @@ def transform(input):
                 contacts.append(float(d.get("lastContact")))
             except (TypeError, ValueError):
                 pass
-    now_epoch = max(contacts) if contacts else datetime.utcnow().timestamp()
+    wall_epoch = datetime.now(timezone.utc).timestamp()
+    now_epoch = max(contacts) if contacts else wall_epoch
+    if now_epoch < wall_epoch - STALE_THRESHOLD_DAYS * SECONDS_PER_DAY:
+        now_epoch = wall_epoch   # dark fleet: the newest contact is itself stale, so judge by the wall clock
     stale_threshold_epoch = now_epoch - (STALE_THRESHOLD_DAYS * SECONDS_PER_DAY)
 
     total_devices = len(devices)

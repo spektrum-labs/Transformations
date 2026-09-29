@@ -2,11 +2,13 @@
 
 protected = endpoints with the vendor's protection installed (computers and servers); configured = those
 enforcing and healthy by the vendor's own signal. floor(100 * configured / protected). Staleness is not held
-against an endpoint. No protected endpoint, or a truncated list, is not evaluated: dataCollection error and no
+against an endpoint, except on Sophos and NinjaOne, which judge only endpoints seen within 15 days of the newest
+check-in (endpoint rules 2026-09-29, see test_endpoint_rules.py). No protected endpoint, or a truncated list, is not evaluated: dataCollection error and no
 value. Synthetic bodies in each vendor's documented shape; no customer data."""
 import copy
 import importlib.util
 import pathlib
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -33,7 +35,10 @@ FALCON = "epp/crowdstrike-falcon/isEPPConfiguredFromHosts.py"
 MDE = "7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_iseppconfigured.py"
 
 
-def sophos_endpoint(kind, healthy=True, last_seen="2026-06-01T00:00:00Z"):
+RECENT = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sophos_endpoint(kind, healthy=True, last_seen=RECENT):
     return {"type": kind, "lastSeenAt": last_seen, "tamperProtectionEnabled": True,
             "assignedProducts": [{"code": "endpointProtection", "status": "installed"}],
             "health": {"overall": "good" if healthy else "bad",
@@ -41,7 +46,7 @@ def sophos_endpoint(kind, healthy=True, last_seen="2026-06-01T00:00:00Z"):
 
 
 def sophos_body():
-    # 2 computers (1 unhealthy) and 8 servers, all last seen months ago: 9 of 10 = 90.
+    # 2 computers (1 unhealthy) and 8 servers, all seen yesterday (Sophos applies the 15-day window): 9 of 10 = 90.
     return {"items": [sophos_endpoint("computer"), sophos_endpoint("computer", healthy=False)]
             + [sophos_endpoint("server") for _ in range(8)], "pages": {"nextKey": None}}
 

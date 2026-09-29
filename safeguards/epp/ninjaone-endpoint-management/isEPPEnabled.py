@@ -1,10 +1,11 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # Endpoint rules (2026-09-29), shared by every NinjaOne antivirus-status check:
 #   1. Judge a device only when its newest row is within ACTIVE_WINDOW_DAYS of the newest row
-#      in the report. A device whose rows carry no timestamp is judged.
+#      in the report. A device whose rows carry no timestamp is judged. If the newest row is itself
+#      more than ACTIVE_WINDOW_DAYS before evaluation time, the whole fleet is dark and every device is stale.
 #   2. Phones and tablets are left out (needs the device list beside the report).
 #   3. A Mac whose only products are third-party ones not reporting ON is unreadable, not
 #      unprotected: NinjaOne cannot read third-party AV state on macOS, so coverage there is
@@ -46,6 +47,11 @@ def endpoint_rows(rows, data, mac_unreadable):
         newest[device_id] = max(stamps) if stamps else None
     known = [s for s in newest.values() if s is not None]
     cutoff = max(known) - ACTIVE_WINDOW_DAYS * 86400 if known else None
+    wall_cutoff = datetime.now(timezone.utc).timestamp() - ACTIVE_WINDOW_DAYS * 86400
+    dark = bool(known) and max(known) < wall_cutoff
+    if dark:
+        # Dark fleet: the newest check-in is itself older than the window, so every device is stale.
+        cutoff = wall_cutoff
     kept = []
     stale = 0
     mobile = 0
@@ -72,6 +78,7 @@ def endpoint_rows(rows, data, mac_unreadable):
         "devicesLeftOutMobile": mobile,
         "macDevicesUnreadable": unreadable,
         "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "fleetDark": dark,
     }
     return kept, scope
 

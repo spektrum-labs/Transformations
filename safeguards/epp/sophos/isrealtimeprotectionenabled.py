@@ -107,6 +107,10 @@ def active_endpoints(items):
     if not known:
         return endpoints, 0
     cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        # Dark fleet: the newest check-in is itself older than the window, so every endpoint is stale.
+        cutoff = wall_cutoff
     active = []
     stale = 0
     for endpoint, when in zip(endpoints, seen):

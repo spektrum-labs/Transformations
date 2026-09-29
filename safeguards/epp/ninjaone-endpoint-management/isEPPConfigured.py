@@ -6,12 +6,13 @@ tablets left out (endpoint rules 2026-09-29). No devices judged is not evaluated
 cannot be seen here. policyId is NinjaOne's general device policy, a weaker signal than an AV product state.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # Endpoint rules (2026-09-29): judge a device only when its lastContact is within
 # ACTIVE_WINDOW_DAYS of the newest lastContact in the list, and leave phones and tablets out of
-# the percentage. A device with no readable lastContact is judged.
+# the percentage. A device with no readable lastContact is judged. If the newest lastContact is itself more
+# than ACTIVE_WINDOW_DAYS before evaluation time, the whole fleet is dark and every device is stale.
 ACTIVE_WINDOW_DAYS = 15
 MOBILE_NODE_CLASSES = ("APPLE_IOS", "APPLE_IPADOS", "ANDROID")
 
@@ -29,6 +30,11 @@ def judged_devices(devices):
     known = [epoch(d.get("lastContact")) for d in records]
     known = [s for s in known if s is not None]
     cutoff = max(known) - ACTIVE_WINDOW_DAYS * 86400 if known else None
+    wall_cutoff = datetime.now(timezone.utc).timestamp() - ACTIVE_WINDOW_DAYS * 86400
+    dark = bool(known) and max(known) < wall_cutoff
+    if dark:
+        # Dark fleet: the newest check-in is itself older than the window, so every device is stale.
+        cutoff = wall_cutoff
     kept = []
     stale = 0
     mobile = 0
@@ -47,6 +53,7 @@ def judged_devices(devices):
         "devicesLeftOutStale": stale,
         "devicesLeftOutMobile": mobile,
         "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "fleetDark": dark,
     }
     return kept, scope
 
