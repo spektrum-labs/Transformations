@@ -66,7 +66,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def transform_evidence(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -94,13 +94,14 @@ def transform(input):
         mfa_obj = u.get("mfa") or {}
         mfa_enrollment = u.get("mfaEnrollment") or {}
         has_mfa_factor = False
-        if isinstance(mfa_obj, dict):
-            for v in mfa_obj.values():
-                if v:
-                    has_mfa_factor = True
+        # mfa is {configured, exclusion, exclusionUntil, ...}: only configured is evidence
+        # (exclusion true means the user is EXEMPT from MFA). mfaEnrollment values are
+        # status strings such as "NOT_ENROLLED", which are truthy: only "ENROLLED" counts.
+        if isinstance(mfa_obj, dict) and mfa_obj.get("configured") is True:
+            has_mfa_factor = True
         if isinstance(mfa_enrollment, dict):
             for v in mfa_enrollment.values():
-                if v:
+                if isinstance(v, str) and v.upper() == "ENROLLED":
                     has_mfa_factor = True
 
         if totp:
@@ -162,3 +163,50 @@ def transform(input):
             "category": "identity-and-access-management",
         },
     )
+
+
+# ---- fail-closed guard (2026-09-29) ------------------------------------------------------------
+# A body that is not a JumpCloud systemusers response proves nothing, so the key is returned as None with
+# dataCollection.status "error": the check reads Unevaluated, never a pass and never a 0.
+def unevaluated(problem, validation):
+    return create_response(
+        result={"isMFAEnabled": None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": "isMFAEnabled", "vendor": "JumpCloud",
+                  "category": "identity-and-access-management"},
+    )
+
+
+def record_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return data["results"]
+    return None
+
+
+def evidence_problem(data):
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        return "No JumpCloud systemusers envelope (results list) in the response; nothing to evaluate."
+    users = data["results"]
+    total = data.get("totalCount")
+    if not isinstance(total, int) or isinstance(total, bool):
+        return "The JumpCloud systemusers response has no totalCount, so a complete read cannot be shown."
+    if total < 1 or len(users) == 0:
+        return "JumpCloud reported no users; nothing to evaluate."
+    if len(users) < total:
+        return ("Read " + str(len(users)) + " of " + str(total) +
+                " JumpCloud users; a partial read is not scored.")
+    if not all(isinstance(u, dict) for u in users):
+        return "The JumpCloud systemusers results are not user records."
+    return None
+
+
+def transform(input):
+    data, validation = extract_input(input)
+    problem = evidence_problem(data)
+    if problem:
+        return unevaluated(problem, validation)
+    return transform_evidence(input)

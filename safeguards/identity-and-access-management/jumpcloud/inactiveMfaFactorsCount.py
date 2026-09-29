@@ -70,7 +70,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 FACTOR_STATUS_FIELDS = ["totpStatus", "webAuthnStatus", "pushStatus", "smsStatus", "jcGoStatus"]
 
 
-def transform(input):
+def transform_evidence(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -184,3 +184,50 @@ def transform(input):
             "category": "identity-and-access-management",
         },
     )
+
+
+# ---- fail-closed guard (2026-09-29) ------------------------------------------------------------
+# A body that is not a JumpCloud systemusers response proves nothing, so the key is returned as None with
+# dataCollection.status "error": the check reads Unevaluated, never a pass and never a 0.
+def unevaluated(problem, validation):
+    return create_response(
+        result={"inactiveMfaFactorsCount": None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": "inactiveMfaFactorsCount", "vendor": "JumpCloud",
+                  "category": "identity-and-access-management"},
+    )
+
+
+def record_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return data["results"]
+    return None
+
+
+def evidence_problem(data):
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        return "No JumpCloud systemusers envelope (results list) in the response; nothing to evaluate."
+    users = data["results"]
+    total = data.get("totalCount")
+    if not isinstance(total, int) or isinstance(total, bool):
+        return "The JumpCloud systemusers response has no totalCount, so a complete read cannot be shown."
+    if total < 1 or len(users) == 0:
+        return "JumpCloud reported no users; nothing to evaluate."
+    if len(users) < total:
+        return ("Read " + str(len(users)) + " of " + str(total) +
+                " JumpCloud users; a partial read is not scored.")
+    if not all(isinstance(u, dict) for u in users):
+        return "The JumpCloud systemusers results are not user records."
+    return None
+
+
+def transform(input):
+    data, validation = extract_input(input)
+    problem = evidence_problem(data)
+    if problem:
+        return unevaluated(problem, validation)
+    return transform_evidence(input)
