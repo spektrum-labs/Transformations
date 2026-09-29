@@ -69,115 +69,78 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    data, validation = extract_input(input)
+    """isEPPLoggingEnabled (SentinelOne, GET /web/api/v2.1/agents).
 
-    # Token-Service preprocessing may unwrap to a bare list of agents (when API
-    # response's `data` field is a list) or leave a dict containing `data`/`pagination`.
+    An agent streams EDR telemetry when "edr" is in its activeProtection list. True only when at
+    least one agent is returned and every returned agent reports "edr"; the percentage is emitted
+    as eppLoggingPercentage. Enrolment alone (the old `agents_with_edr > 0 or totalItems > 0`
+    rule) is not evidence of logging. Fails closed on an error body, an unreadable agent list
+    and an empty fleet.
+    """
+    data, validation = extract_input(input)
+    if isinstance(data, dict) and (data.get("errors") or data.get("error")):
+        reason = "SentinelOne returned an error instead of an agent list"
+        return create_response(
+            result={"isEPPLoggingEnabled": False, "eppLoggingPercentage": 0, "totalAgents": 0, "agentsWithEdrLogging": 0},
+            validation=validation, api_errors=[reason], fail_reasons=[reason],
+            metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
+        )
+    total_items = 0
     if isinstance(data, list):
         agents = data
-        total_items = len(agents)
     elif isinstance(data, dict):
-        agents = data.get("data") or []
-        if not isinstance(agents, list):
-            agents = []
-        pagination = data.get("pagination") or {}
-        total_items = pagination.get("totalItems") or len(agents)
+        agents = data.get("data")
+        pagination = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
+        total_items = pagination.get("totalItems") or 0
     else:
+        agents = None
+    if not isinstance(agents, list):
         agents = []
-        total_items = 0
+    agents = [a for a in agents if isinstance(a, dict)]
+    sampled = len(agents)
+    total_items = int(total_items) if total_items else sampled
 
-    if not agents and total_items == 0:
-        return create_response(
-            result={
-                "isEPPLoggingEnabled": False,
-                "totalAgents": 0,
-                "agentsWithEdrLogging": 0,
-                "agentsWithActiveScan": 0,
-                "sampleSize": 0,
-            },
-            validation=validation,
-            pass_reasons=[],
-            fail_reasons=["No agents found in the fleet; EPP logging cannot be confirmed as enabled."],
-            recommendations=["Deploy SentinelOne agents to endpoints and verify EDR logging is active."],
-            input_summary={"totalAgents": 0, "sampleSize": 0},
-            metadata={
-                "transformationId": "isEPPLoggingEnabled",
-                "vendor": "SentinelOne",
-                "category": "epp",
-            },
-        )
-
-    sample_size = len(agents)
-
-    agents_with_edr = 0
-    agents_with_active_scan = 0
-    agents_with_protect_mode = 0
-
+    with_edr = 0
+    missing_names = []
     for agent in agents:
-        active_protection = agent.get("activeProtection") or []
-        if "edr" in active_protection:
-            agents_with_edr = agents_with_edr + 1
+        active = agent.get("activeProtection")
+        modules = [str(m).lower() for m in active] if isinstance(active, list) else []
+        if "edr" in modules:
+            with_edr = with_edr + 1
+        else:
+            missing_names.append(str(agent.get("computerName") or agent.get("uuid") or "unknown"))
 
-        scan_status = agent.get("scanStatus") or ""
-        if scan_status in ("finished", "started", "none"):
-            agents_with_active_scan = agents_with_active_scan + 1
-
-        mitigation_mode = agent.get("mitigationMode") or ""
-        if mitigation_mode in ("protect", "detect"):
-            agents_with_protect_mode = agents_with_protect_mode + 1
-
-    logging_enabled = agents_with_edr > 0 or total_items > 0
-
+    pct = (with_edr * 100) // sampled if sampled else 0
+    is_enabled = sampled > 0 and with_edr == sampled
+    summary = str(with_edr) + " of " + str(sampled) + " returned agents (" + str(pct) + "%) report the edr module in activeProtection"
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-
-    if logging_enabled:
-        if agents_with_edr > 0:
-            pass_reasons.append(
-                f"{agents_with_edr} of {sample_size} sampled agents have 'edr' in activeProtection, "
-                f"confirming the EDR logging and telemetry pipeline is active across the fleet of {total_items} total agents."
-            )
-        if agents_with_protect_mode > 0:
-            pass_reasons.append(
-                f"{agents_with_protect_mode} of {sample_size} sampled agents have mitigationMode set to 'protect' or 'detect', "
-                f"indicating threat-detection logging is configured."
-            )
-        if agents_with_edr == 0 and total_items > 0:
-            pass_reasons.append(
-                f"Fleet contains {total_items} enrolled agents. Sample of {sample_size} did not surface activeProtection data, "
-                f"but agent enrollment itself confirms the logging infrastructure is operational."
-            )
+    findings = []
+    if sampled == 0:
+        fail_reasons.append("No SentinelOne agents were returned; EDR logging is not evidenced")
+        recommendations.append("Deploy the SentinelOne agent and confirm the siteId setting")
+    elif is_enabled:
+        pass_reasons.append(summary)
     else:
-        fail_reasons.append(
-            f"No agents found with 'edr' in activeProtection in the sampled {sample_size} agents "
-            f"(total fleet: {total_items}). EPP logging cannot be confirmed."
-        )
-        recommendations.append(
-            "Review SentinelOne policy configuration to ensure EDR telemetry is enabled on all agent policies."
-        )
-
+        fail_reasons.append(summary)
+        findings.append("Agents without edr: " + ", ".join(missing_names[:5]) + ("..." if len(missing_names) > 5 else ""))
+        recommendations.append("Enable EDR telemetry in the SentinelOne policy applied to every agent")
+    if total_items > sampled:
+        findings.append("Judged on the " + str(sampled) + " agents returned of " + str(total_items) + " enrolled")
     return create_response(
         result={
-            "isEPPLoggingEnabled": logging_enabled,
+            "isEPPLoggingEnabled": is_enabled,
+            "eppLoggingPercentage": pct,
             "totalAgents": total_items,
-            "agentsWithEdrLogging": agents_with_edr,
-            "agentsWithActiveScan": agents_with_active_scan,
-            "sampleSize": sample_size,
+            "sampledAgents": sampled,
+            "agentsWithEdrLogging": with_edr,
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={
-            "totalAgents": total_items,
-            "sampleSize": sample_size,
-            "agentsWithEdrLogging": agents_with_edr,
-            "agentsWithActiveScan": agents_with_active_scan,
-        },
-        metadata={
-            "transformationId": "isEPPLoggingEnabled",
-            "vendor": "SentinelOne",
-            "category": "epp",
-        },
+        additional_findings=findings,
+        input_summary={"totalAgents": total_items, "sampledAgents": sampled, "agentsWithEdrLogging": with_edr},
+        metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
     )
