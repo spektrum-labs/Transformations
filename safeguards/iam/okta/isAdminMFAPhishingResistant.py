@@ -1,9 +1,23 @@
-
 """
 Transformation: isAdminMFAPhishingResistant
-Checks whether phish-resistant MFA factor types (FIDO2/WebAuthn, FIDO U2F hardware)
-are ACTIVE at the Okta org level — a necessary gate condition for admins to use
-phish-resistant MFA.
+Vendor: Okta   Method: GET /api/v1/org/factors (listOrgFactors: every factor the org can enroll, with status)
+
+Requirement asked: "Only phishing-resistant factors for admins are permitted."
+
+What the org factor list can and cannot prove:
+- No phishing-resistant factor ACTIVE  -> admins cannot be limited to phishing-resistant MFA: False.
+- Phishing-resistant factors ACTIVE and NO phishable factor ACTIVE -> the org permits only
+  phishing-resistant factors, so admins too: True.
+- Phishing-resistant AND phishable factors ACTIVE -> whether admins are restricted is decided by the
+  Admin Console authentication policy, which this response does not carry: None (not evaluated).
+- Anything that is not a factor list (null, {}, [], an error envelope, unrelated JSON): None, with
+  additionalInfo.dataCollection.status "error", so a failed read is never scored.
+
+Phishing-resistant factor types (Okta "Factors" API factorType values): webauthn (FIDO2 / WebAuthn),
+u2f (FIDO U2F security key), signed_nonce (Okta FastPass), smart_card (PIV / CAC). Every other type
+(push, sms, call, email, question, token:software:totp, token:hotp, token, token:hardware OTP, web)
+can be relayed by a real-time phishing proxy.
+Numbers: phishResistantActiveCount, phishableActiveCount.
 """
 import json
 from datetime import datetime
@@ -74,112 +88,85 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-# Factor types and provider combinations considered phish-resistant
-PHISH_RESISTANT_TYPES = ["webauthn"]
-PHISH_RESISTANT_COMBOS = [("token:hardware", "FIDO")]
+PHISH_RESISTANT_TYPES = ["webauthn", "u2f", "signed_nonce", "smart_card"]
+FACTOR_STATUSES = ["ACTIVE", "INACTIVE", "NOT_SETUP", "PENDING_ACTIVATION"]
+KEY = "isAdminMFAPhishingResistant"
+
+
+def factor_list(data):
+    """Return the org factor list, or None when the body is not one."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return None
+    if isinstance(data, dict):
+        for k in ("apiResponse", "factors", "rawResponse", "data"):
+            if isinstance(data.get(k), list):
+                data = data[k]
+                break
+    if not isinstance(data, list) or not data:
+        return None
+    for f in data:
+        if not isinstance(f, dict) or not f.get("factorType") or f.get("status") not in FACTOR_STATUSES:
+            return None
+    return data
+
+
+def unevaluated_response(validation, message, summary=None):
+    return create_response(
+        result={KEY: None, "phishResistantActiveCount": None, "phishableActiveCount": None},
+        validation=validation,
+        api_errors=[message],
+        fail_reasons=[message],
+        input_summary=summary or {},
+        metadata={"transformationId": KEY, "vendor": "Okta", "category": "iam"},
+    )
 
 
 def transform(input):
     data, validation = extract_input(input)
+    factors = factor_list(data)
+    if factors is None:
+        return unevaluated_response(validation, "No Okta org factor list in the response (GET /api/v1/org/factors); "
+                                        "phishing-resistant MFA for admins cannot be judged.")
 
-    # Handle plain list (raw API returns array), dict wrapper, or empty input
-    if isinstance(data, list):
-        factors = data
-    elif isinstance(data, dict):
-        factors = data.get("apiResponse") or data.get("factors") or []
+    active = [f for f in factors if f.get("status") == "ACTIVE"]
+    resistant = [f"{f.get('factorType')}/{f.get('provider') or ''}" for f in active
+                 if f.get("factorType") in PHISH_RESISTANT_TYPES]
+    phishable = [f"{f.get('factorType')}/{f.get('provider') or ''}" for f in active
+                 if f.get("factorType") not in PHISH_RESISTANT_TYPES]
+    summary = {"totalFactors": len(factors), "activeFactorCount": len(active),
+               "phishResistantActiveCount": len(resistant), "phishableActiveCount": len(phishable)}
+
+    if resistant and phishable:
+        return unevaluated_response(
+            validation,
+            f"Phishing-resistant factor(s) {', '.join(resistant)} and phishable factor(s) {', '.join(phishable)} "
+            f"are both ACTIVE. Whether admins are limited to the phishing-resistant ones is set by the Admin "
+            f"Console authentication policy, which the org factor list does not show.",
+            summary,
+        )
+
+    passed = bool(resistant)
+    pass_reasons, fail_reasons, recommendations = [], [], []
+    if passed:
+        pass_reasons.append(f"Only phishing-resistant factors are ACTIVE in the org ({', '.join(resistant)}), "
+                            f"so admins can authenticate only with phishing-resistant MFA.")
     else:
-        factors = []
-
-    if not isinstance(factors, list):
-        factors = []
-
-    total_factors = len(factors)
-    active_phish_resistant = []
-    all_active_labels = []
-    transformation_errors = []
-
-    for factor in factors:
-        if not isinstance(factor, dict):
-            continue
-        factor_type = factor.get("factorType") or ""
-        provider = factor.get("provider") or ""
-        status = factor.get("status") or ""
-        label = f"{factor_type}/{provider}"
-
-        if status == "ACTIVE":
-            all_active_labels.append(label)
-
-        is_pr = False
-        if factor_type in PHISH_RESISTANT_TYPES and status == "ACTIVE":
-            is_pr = True
-        for pr_type, pr_provider in PHISH_RESISTANT_COMBOS:
-            if factor_type == pr_type and provider == pr_provider and status == "ACTIVE":
-                is_pr = True
-
-        if is_pr:
-            active_phish_resistant.append(label)
-
-    has_phish_resistant = len(active_phish_resistant) > 0
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-    additional_findings = []
-
-    if total_factors == 0:
-        transformation_errors.append(
-            "No factor entries returned by listOrgFactors — cannot determine phish-resistant MFA status."
-        )
-
-    if has_phish_resistant:
-        active_list = ", ".join(active_phish_resistant)
-        pass_reasons.append(
-            f"The following phish-resistant factor type(s) are ACTIVE at the org level: "
-            f"{active_list}. FIDO2/WebAuthn or hardware FIDO keys are available for admin enrollment, "
-            f"satisfying the phish-resistant MFA gate condition."
-        )
-    else:
-        active_str = ", ".join(all_active_labels) if all_active_labels else "none"
-        fail_reasons.append(
-            f"No phish-resistant factor types (webauthn/FIDO2 or token:hardware/FIDO) are ACTIVE "
-            f"at the org level. Inspected {total_factors} org factor(s); currently active types: "
-            f"{active_str}. Admins cannot enroll phish-resistant MFA when no qualifying factor is enabled."
-        )
-        recommendations.append(
-            "Enable FIDO2 WebAuthn (passkeys) in Security > Multifactor > Factor Types, "
-            "set its status to ACTIVE, and enforce it on admin sign-on policy rules via "
-            "an authenticator constraint targeting privileged groups."
-        )
-        if all_active_labels:
-            active_str2 = ", ".join(all_active_labels)
-            additional_findings.append(
-                f"Active factor types detected: {active_str2}. These are phishable (SMS OTP, "
-                f"TOTP, email OTP, and standard push notifications are susceptible to real-time "
-                f"phishing proxies). Only FIDO2/WebAuthn and hardware FIDO U2F keys qualify as "
-                f"phish-resistant under NIST SP 800-63B AAL3 and CISA phishing-resistant MFA guidance."
-            )
+        fail_reasons.append(f"No phishing-resistant factor (FIDO2/WebAuthn, FIDO U2F, Okta FastPass, smart card) is "
+                            f"ACTIVE; active factors: {', '.join(phishable) or 'none'}. Admins cannot be limited to "
+                            f"phishing-resistant MFA.")
+        recommendations.append("Activate FIDO2 (WebAuthn) or Okta FastPass and require a phishing-resistant "
+                               "authenticator in the Okta Admin Console authentication policy.")
 
     return create_response(
-        result={
-            "isAdminMFAPhishingResistant": has_phish_resistant,
-            "activePhishResistantFactors": active_phish_resistant,
-            "totalOrgFactors": total_factors,
-            "activeFactorTypes": all_active_labels,
-        },
+        result={KEY: passed, "phishResistantActiveCount": len(resistant), "phishableActiveCount": len(phishable),
+                "activePhishResistantFactors": resistant, "activeFactorTypes": resistant + phishable},
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        additional_findings=additional_findings,
-        transformation_errors=transformation_errors if transformation_errors else None,
-        input_summary={
-            "totalFactors": total_factors,
-            "activePhishResistantCount": len(active_phish_resistant),
-            "activeFactorCount": len(all_active_labels),
-        },
-        metadata={
-            "transformationId": "isAdminMFAPhishingResistant",
-            "vendor": "Okta",
-            "category": "iam",
-        },
+        input_summary=summary,
+        metadata={"transformationId": KEY, "vendor": "Okta", "category": "iam"},
     )
