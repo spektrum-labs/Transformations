@@ -23,6 +23,11 @@ a real-time scanning state. The value is true when at least one endpoint is judg
 judged endpoint is "Protected". Values are compared case- and separator-insensitively
 ("Scan Only", "scan_only" and "scanonly" are the same status).
 
+Also returns, from the same read (the RTA points these criteria at this file):
+  isEPPEnabled               the same verdict: endpoint protection is active on every judged endpoint.
+  requiredCoveragePercentage whole-number percentage of judged endpoints in Protected status,
+                             rounded DOWN (199 of 200 is 99, never 100); 0 when none is judged.
+
 Proves: the ThreatDown real-time Endpoint Protection engine is installed and running on every
 active desktop/server endpoint in the Nebula account.
 Does not prove: each individual policy toggle (web, exploit, ransomware), or anything about
@@ -142,14 +147,14 @@ def transform(input):
 
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation,
+            return create_response(result={criteriaKey: False, "isEPPEnabled": False, "requiredCoveragePercentage": 0}, validation=validation,
                                    fail_reasons=["Input validation failed"])
 
         error = api_error_message(data)
         endpoints = endpoint_list(data)
         if error or endpoints is None:
             reason = error or "Endpoints response not recognised - no endpoints list present"
-            return create_response(result={criteriaKey: False}, validation=validation,
+            return create_response(result={criteriaKey: False, "isEPPEnabled": False, "requiredCoveragePercentage": 0}, validation=validation,
                                    api_errors=[reason], fail_reasons=[reason],
                                    recommendations=["Verify the ThreatDown endpoint search (POST /nebula/v1/endpoints) is reachable with the accountid header"])
 
@@ -162,10 +167,12 @@ def transform(input):
             if normalise(status) != PROTECTED:
                 not_protected.append(endpoint_name(endpoint) + " (" + status + ")")
         value = len(judged) > 0 and len(not_protected) == 0
+        protected = len(judged) - len(not_protected)
+        coverage = (protected * 100) // len(judged) if judged else 0
 
         summary = {
             "judgedEndpoints": len(judged),
-            "protectedEndpoints": len(judged) - len(not_protected),
+            "protectedEndpoints": protected,
             "protectionStatusCounts": statuses,
             "endpointsNotProtected": not_protected[:20],
             "mobileEndpointsNotJudged": mobile,
@@ -184,10 +191,12 @@ def transform(input):
             fail_reasons.append(f"{len(not_protected)} of {len(judged)} active endpoint(s) are not in Protected status")
             recommendations.append("Enable Malware protection in the endpoint's policy (Scan Only), reinstall the agent (Unprotected/Unknown), or grant macOS Full Disk Access: " + ", ".join(not_protected[:20]))
 
-        return create_response(result={criteriaKey: value, **summary}, validation=validation,
+        result = {criteriaKey: value, "isEPPEnabled": value, "requiredCoveragePercentage": coverage}
+        result.update(summary)
+        return create_response(result=result, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
                                recommendations=recommendations, input_summary={criteriaKey: value, **summary})
     except Exception as e:
-        return create_response(result={criteriaKey: False},
+        return create_response(result={criteriaKey: False, "isEPPEnabled": False, "requiredCoveragePercentage": 0},
                                validation={"status": "error", "errors": [], "warnings": []},
                                transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {str(e)}"])
