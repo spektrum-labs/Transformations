@@ -24,6 +24,9 @@ ASSESSED = {
 }
 UNASSESSED = {"txid": "b", "result": "success", "factor": "duo_push", "user": {"key": "DU2", "name": "b@example.com"}}
 META = {"next_offset": None, "total_objects": 2}
+FORBIDDEN_BODY = {"code": 40301, "message": "Access forbidden", "stat": "FAIL"}
+FORBIDDEN_MARKED = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Access forbidden",
+                                              "body": FORBIDDEN_BODY}}
 
 
 def load_transformation():
@@ -79,6 +82,32 @@ class DuoHighRiskUserDetectionTests(unittest.TestCase):
                         {"error": "Unauthorized", "code": 401}, {"stat": "FAIL", "code": 40301}):
             with self.subTest(payload=payload):
                 out = self.run_transform(payload)
+                self.assertIs(out["transformedResponse"][KEY], False)
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
+
+    # --- Integration-Service vendorErrorAsResponse marker (getAuthLogs opt-in) ---
+    def test_access_forbidden_is_a_measured_fail(self):
+        body_as_string = {"vendorErrorAsResponse": dict(FORBIDDEN_MARKED["vendorErrorAsResponse"],
+                                                        body=json.dumps(FORBIDDEN_BODY))}
+        for payload in (FORBIDDEN_MARKED, json.dumps(FORBIDDEN_MARKED), body_as_string,
+                        {"apiResponse": FORBIDDEN_MARKED},
+                        {"data": FORBIDDEN_MARKED, "validation": {"status": "valid", "errors": [], "warnings": []}}):
+            with self.subTest(payload=str(payload)[:60]):
+                out = self.run_transform(payload)
+                info = out["additionalInfo"]
+                self.assertIs(out["transformedResponse"][KEY], False)
+                self.assertEqual(info["dataCollection"]["status"], "success")
+                self.assertIn("admin API key lacks Grant read log permission", info["evaluation"]["failReasons"][0])
+                self.assertIn("Grant read log", info["evaluation"]["recommendations"][0])
+
+    def test_other_marker_stays_not_evaluated(self):
+        for marker in ({"status": 403, "bodyContains": "Access forbidden", "body": {"code": 40300, "message": "Access forbidden"}},
+                       {"status": 401, "bodyContains": "Access forbidden", "body": FORBIDDEN_BODY},
+                       {"status": 403, "bodyContains": "Access forbidden", "body": "Access forbidden"},
+                       None):
+            with self.subTest(marker=str(marker)[:60]):
+                out = self.run_transform({"vendorErrorAsResponse": marker})
                 self.assertIs(out["transformedResponse"][KEY], False)
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
                 self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
