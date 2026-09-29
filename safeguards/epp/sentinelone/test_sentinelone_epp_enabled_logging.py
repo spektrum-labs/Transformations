@@ -43,10 +43,11 @@ class EppEnabled(unittest.TestCase):
     def test_agent_without_active_protection_fails(self):
         self.assertIs(self.res(body([agent("a", "protect", ())]))["isEPPEnabled"], False)
 
-    def test_empty_fleet_and_error_fail(self):
+    def test_empty_fleet_fails_and_error_is_not_evaluated(self):
         self.assertIs(self.res(body([]))["isEPPEnabled"], False)
-        self.assertIs(self.res({"errors": [{"code": 4010010, "title": "Authentication Failed"}]})["isEPPEnabled"], False)
-        self.assertIs(self.res({})["isEPPEnabled"], False)
+        # An error or an empty body is not a read: None with a dataCollection error (2026-09-29 complete-read guard).
+        self.assertIsNone(self.res({"errors": [{"code": 4010010, "title": "Authentication Failed"}]})["isEPPEnabled"])
+        self.assertIsNone(self.res({})["isEPPEnabled"])
 
 
 class EppLogging(unittest.TestCase):
@@ -65,8 +66,9 @@ class EppLogging(unittest.TestCase):
         self.assertIs(r["isEPPLoggingEnabled"], False)
         self.assertEqual(r["agentsWithEdrLogging"], 1)
 
-    def test_enrolment_count_alone_fails(self):
-        self.assertIs(self.res({"data": [], "pagination": {"totalItems": 40}})["isEPPLoggingEnabled"], False)
+    def test_enrolment_count_alone_never_passes(self):
+        # 0 agents read of 40 enrolled is a partial read: not scored (None), never a pass.
+        self.assertIsNone(self.res({"data": [], "pagination": {"totalItems": 40}})["isEPPLoggingEnabled"])
 
 
 if __name__ == "__main__":
