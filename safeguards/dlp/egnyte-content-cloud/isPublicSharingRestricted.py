@@ -139,6 +139,26 @@ def utc_now():
 
 
 OPEN = "anyone"
+FULL_PAGE_SIZES = (100, 500)
+
+
+def links_truncated(data, links):
+    """True when the body cannot show it holds every link.
+
+    A total (total_count on v1, or any total the collector adds) larger than the rows
+    read is a partial read. GET /pubapi/v2/links carries no total: its count is the
+    number of links in this response, at most 500 per call. A response whose count
+    equals its rows and is exactly a full page (100 or 500) may have more behind it.
+    """
+    if not isinstance(data, dict):
+        return False
+    for key in ("total_count", "totalResults", "total"):
+        total = data.get(key)
+        if isinstance(total, int) and not isinstance(total, bool):
+            return total > len(links)
+    count = data.get("count")
+    return (isinstance(count, int) and not isinstance(count, bool)
+            and count == len(links) and len(links) in FULL_PAGE_SIZES)
 
 
 def evaluate(data):
@@ -219,6 +239,14 @@ def evaluate(data):
             "The link list is paginated: %d of %d links were read. Page through offset so "
             "the count covers the whole domain." % (len(links), count)
         )
+    if links_truncated(data, links):
+        result["isPublicSharingRestricted"] = None
+        passes = []
+        fails = [
+            "%d links were read and the response does not show that this is every link in "
+            "the domain. Public sharing is not measured on a partial read." % len(links)
+        ]
+        recs = ["Page through offset so every link is read."]
     return result, passes, fails, recs, {"linksReturned": len(links), "reportedCount": count},
 
 
