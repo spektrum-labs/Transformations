@@ -1,4 +1,4 @@
-"""Transformation: isPatchManagementValid (CrowdStrike Falcon Spotlight, numbers read across every page).
+"""Transformation: overdueCriticalHighVulnerabilitiesCount (CrowdStrike Falcon Spotlight, numbers read across every page).
 
 Input: getSpotlightVulnerabilitiesCombined, GET /spotlight/combined/vulnerabilities/v1 with the FQL filter
 status:['open','reopen']+cve.severity:['CRITICAL','HIGH'], paged by IS on meta.pagination.after (limit 5000). IS merges
@@ -21,7 +21,7 @@ envelope); Spotlight cannot tell us from this call how many hosts it assessed.
 import json
 from datetime import datetime
 
-KEY = "isPatchManagementValid"
+KEY = "overdueCriticalHighVulnerabilitiesCount"
 CRITICAL_DAYS = 15
 HIGH_DAYS = 30
 OPEN_STATUSES = ["open", "reopen"]
