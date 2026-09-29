@@ -39,13 +39,15 @@ class ExchangeLicence(unittest.TestCase):
         self.assertIs(self.res({}), False)
 
 
-class MailboxAuditEmitsEmailLogging(unittest.TestCase):
-    spec = importlib.util.spec_from_file_location("mbx", Path(__file__).with_name("ismailboxauditingenabled.py"))
+class AuditLogSearchEmitsEmailLogging(unittest.TestCase):
+    # J.J. 2026-09-29: the email-logging criteria read Purview audit log search (mip_search_auditlog),
+    # not mailbox auditing (exo_mailboxaudit), which now answers isMailboxAuditingEnabled only.
+    spec = importlib.util.spec_from_file_location("als", Path(__file__).with_name("isauditlogsearchenabled.py"))
     mb = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mb)
 
     def res(self, score):
-        body = {"value": [{"controlScores": [{"controlName": "exo_mailboxaudit", "scoreInPercentage": score, "count": 1, "total": 1}]}]}
+        body = {"value": [{"controlScores": [{"controlName": "mip_search_auditlog", "scoreInPercentage": score}]}]}
         return self.mb.transform(body)["transformedResponse"]
 
     def test_full_score_passes_both_keys(self):
@@ -59,7 +61,6 @@ class MailboxAuditEmitsEmailLogging(unittest.TestCase):
     def test_sign_in_log_body_fails(self):
         body = {"value": [{"id": "s1", "createdDateTime": "2026-09-28T00:00:00Z", "userPrincipalName": "a@b.c"}]}
         self.assertIs(self.mb.transform(body)["transformedResponse"]["isEmailSecurityLoggingEnabled"], False)
-
 
 if __name__ == "__main__":
     unittest.main()
