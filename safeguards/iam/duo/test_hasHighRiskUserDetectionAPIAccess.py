@@ -1,4 +1,4 @@
-"""hasHighRiskUserDetectionAPIAccess: Duo v2 authentication logs carrying adaptive_trust_assessments.
+"""hasHighRiskUserDetectionAPIAccess: Duo v2 authentication logs reachable (200 true, 403/40301 false, else null).
 
 Shapes follow the Duo Admin API v2 authentication log example (getAuthLogs returnSpec
 {"authlogs": [...], "metadata": {"next_offset": ..., "total_objects": n}}).
@@ -44,30 +44,38 @@ class DuoHighRiskUserDetectionTests(unittest.TestCase):
     def run_transform(self, payload):
         return self.t.transform(payload)
 
-    def test_assessed_events_pass_with_percentage(self):
+    def test_200_with_risk_scored_events_is_true(self):
         out = self.run_transform({"authlogs": [ASSESSED, UNASSESSED], "metadata": META})
         tr = out["transformedResponse"]
         self.assertIs(tr[KEY], True)
+        self.assertEqual(tr["riskScoredEventCount"], 1)
         self.assertEqual(tr["riskAssessedAuthPercentage"], 50.0)
         self.assertEqual(tr["lowTrustAuthCount"], 1)
         self.assertEqual(tr["riskAssessedUserCount"], 1)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        self.assertEqual(out["additionalInfo"]["evaluation"]["recommendations"], [])
 
-    def test_flip_no_assessments_fails(self):
+    def test_200_with_zero_risk_scored_events_is_true(self):
+        # access = log API reachable: a 200 with no trust assessments still proves access.
         out = self.run_transform({"authlogs": [UNASSESSED, dict(UNASSESSED, txid="c")], "metadata": META})
-        self.assertIs(out["transformedResponse"][KEY], False)
-        self.assertEqual(out["transformedResponse"]["riskAssessedAuthPercentage"], 0.0)
-        self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
+        tr = out["transformedResponse"]
+        self.assertIs(tr[KEY], True)
+        self.assertEqual(tr["riskScoredEventCount"], 0)
+        self.assertEqual(tr["riskAssessedAuthPercentage"], 0.0)
+        self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
+        self.assertIn("Risk-Based Authentication", out["additionalInfo"]["evaluation"]["recommendations"][0])
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
     def test_assessment_without_trust_level_does_not_count(self):
         hollow = dict(UNASSESSED, adaptive_trust_assessments={"more_secure_auth": {}, "remember_me": None})
         out = self.run_transform({"authlogs": [hollow], "metadata": META})
-        self.assertIs(out["transformedResponse"][KEY], False)
+        self.assertIs(out["transformedResponse"][KEY], True)
+        self.assertEqual(out["transformedResponse"]["riskScoredEventCount"], 0)
 
-    def test_genuine_zero_is_a_measured_fail(self):
+    def test_genuine_zero_is_reachable(self):
         out = self.run_transform({"authlogs": [], "metadata": {"next_offset": None, "total_objects": 0}})
-        self.assertIs(out["transformedResponse"][KEY], False)
+        self.assertIs(out["transformedResponse"][KEY], True)
+        self.assertEqual(out["transformedResponse"]["riskScoredEventCount"], 0)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
     def test_wrapped_and_string_inputs(self):
@@ -77,14 +85,22 @@ class DuoHighRiskUserDetectionTests(unittest.TestCase):
             with self.subTest(payload=str(payload)[:40]):
                 self.assertIs(self.run_transform(payload)["transformedResponse"][KEY], True)
 
-    def test_no_evidence_is_not_judged(self):
+    def test_no_evidence_is_null(self):
+        # empty, None, other errors (401/429/500 bodies) and unrelated bodies: null, not judged.
         for payload in (None, {}, [], "", "{}", "not json", {"authlogs": [], "metadata": {}},
-                        {"error": "Unauthorized", "code": 401}, {"stat": "FAIL", "code": 40301}):
+                        {"error": "Unauthorized", "code": 401},
+                        {"stat": "FAIL", "code": 42901, "message": "Too Many Requests"},
+                        {"stat": "FAIL", "code": 50000, "message": "Internal Server Error"},
+                        {"stat": "FAIL", "code": 40301},
+                        {"users": [{"user_id": "DU3"}], "metadata": META},
+                        {"authlogs": "not a list", "metadata": META}):
             with self.subTest(payload=payload):
                 out = self.run_transform(payload)
-                self.assertIs(out["transformedResponse"][KEY], False)
+                self.assertIsNone(out["transformedResponse"][KEY])
+                self.assertIsNone(out["transformedResponse"]["riskScoredEventCount"])
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
                 self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
+                self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
 
     # --- Integration-Service vendorErrorAsResponse marker (getAuthLogs opt-in) ---
     def test_access_forbidden_is_a_measured_fail(self):
@@ -97,6 +113,7 @@ class DuoHighRiskUserDetectionTests(unittest.TestCase):
                 out = self.run_transform(payload)
                 info = out["additionalInfo"]
                 self.assertIs(out["transformedResponse"][KEY], False)
+                self.assertIsNone(out["transformedResponse"]["riskScoredEventCount"])
                 self.assertEqual(info["dataCollection"]["status"], "success")
                 self.assertIn("admin API key lacks Grant read log permission", info["evaluation"]["failReasons"][0])
                 self.assertIn("Grant read log", info["evaluation"]["recommendations"][0])
@@ -105,10 +122,14 @@ class DuoHighRiskUserDetectionTests(unittest.TestCase):
         for marker in ({"status": 403, "bodyContains": "Access forbidden", "body": {"code": 40300, "message": "Access forbidden"}},
                        {"status": 401, "bodyContains": "Access forbidden", "body": FORBIDDEN_BODY},
                        {"status": 403, "bodyContains": "Access forbidden", "body": "Access forbidden"},
+                       {"status": 429, "bodyContains": "Too Many Requests",
+                        "body": {"code": 42901, "message": "Too Many Requests", "stat": "FAIL"}},
+                       {"status": 500, "bodyContains": "Internal Server Error", "body": "Internal Server Error"},
                        None):
             with self.subTest(marker=str(marker)[:60]):
                 out = self.run_transform({"vendorErrorAsResponse": marker})
-                self.assertIs(out["transformedResponse"][KEY], False)
+                self.assertIsNone(out["transformedResponse"][KEY])
+                self.assertIsNone(out["transformedResponse"]["riskScoredEventCount"])
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
                 self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
 
