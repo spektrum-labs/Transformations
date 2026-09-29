@@ -2,6 +2,7 @@ name: Claude Code Review
 
 # ---------------------------------------------------------------------------
 # AI code review on PRs targeting develop/staging/main.
+# Skipped on promotion PRs (head = develop or staging): every commit in them was already reviewed on its own PR.
 #
 # Behavior:
 #   1. Claude reviews the PR DIFF and posts inline comments (all severities).
@@ -66,7 +67,7 @@ jobs:
   review:
     # changeset-release/* = the changesets bot's auto "Version Packages" PRs -
     # mechanical version bumps that must not burn a review or file bugs.
-    if: github.event.pull_request.draft == false && !startsWith(github.event.pull_request.head.ref, 'changeset-release/')
+    if: github.event.pull_request.draft == false && !startsWith(github.event.pull_request.head.ref, 'changeset-release/') && github.event.pull_request.head.ref != 'develop' && github.event.pull_request.head.ref != 'staging'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
