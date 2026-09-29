@@ -65,7 +65,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def transform_evidence(input):
     data, validation = extract_input(input)
 
     if isinstance(data, list):
@@ -154,3 +154,42 @@ def transform(input):
             "category": "identity-and-access-management",
         },
     )
+
+
+# ---- fail-closed guard (2026-09-29) ------------------------------------------------------------
+# A body that is not a JumpCloud authentication policy list proves nothing, so the key is returned as None with
+# dataCollection.status "error": the check reads Unevaluated, never a pass and never a 0.
+def unevaluated(problem, validation):
+    return create_response(
+        result={"isMFAConfiguredForSecurityAdmins": None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": "isMFAConfiguredForSecurityAdmins", "vendor": "JumpCloud",
+                  "category": "identity-and-access-management"},
+    )
+
+
+def record_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return data["results"]
+    return None
+
+
+def evidence_problem(data):
+    policies = record_list(data)
+    if policies is None:
+        return "No JumpCloud authentication policy list in the response; nothing to evaluate."
+    if not all(isinstance(p, dict) and ("effect" in p or "type" in p) for p in policies):
+        return "The response is not a list of JumpCloud authentication policies."
+    return None
+
+
+def transform(input):
+    data, validation = extract_input(input)
+    problem = evidence_problem(data)
+    if problem:
+        return unevaluated(problem, validation)
+    return transform_evidence(input)
