@@ -25,13 +25,42 @@ of the wrapper, so both shapes are accepted.
 Value: a whole-number percentage, floor(100 * configured / protected).
 protected = computers AND servers with endpointProtection installed; configured =
 those reporting healthy protection (health.overall == "good", services running,
-tamper protection not off). The pass bar lives in the requirement. Endpoints are
-counted by their reported health however long ago they were last seen: staleness
-is not held against them. No protected endpoint, or a device list the paginator
+tamper protection not off). The pass bar lives in the requirement. Only endpoints
+seen within 15 days of the newest lastSeenAt in the response are judged (endpoint
+rules 2026-09-29); the rest are reported as staleEndpointCount. No protected endpoint, or a device list the paginator
 marked truncated, is not evaluated (dataCollection error, no value).
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def active_endpoints(items):
+    """Split endpoints into (active, stale_count) using the newest lastSeenAt as the clock."""
+    endpoints = [e for e in items if isinstance(e, dict)]
+    seen = [parse_seen(e.get("lastSeenAt")) for e in endpoints]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return endpoints, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    active = []
+    stale = 0
+    for endpoint, when in zip(endpoints, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            active.append(endpoint)
+    return active, stale
 
 
 def extract_input(input_data):
@@ -113,6 +142,7 @@ def evaluate(data):
             return {"isEPPConfigured": 0, "dataProblem": True,
                     "reason": "Endpoints response not recognised"}
 
+        items, stale_endpoints = active_endpoints(items)
         total_protected = 0
         total_configured = 0
         unhealthy_hosts = []
@@ -137,6 +167,7 @@ def evaluate(data):
                     "reason": "Endpoint list was truncated by pagination; percentage not evaluated on a sample"}
         if total_protected == 0:
             return {"isEPPConfigured": None, "dataProblem": True, "protectedComputers": 0,
+                    "staleEndpointCount": stale_endpoints,
                     "reason": "No computer or server has Sophos endpoint protection installed; nothing to measure"}
 
         configured_pct = (total_configured * 100) // total_protected
@@ -151,6 +182,7 @@ def evaluate(data):
             "configuredComputers": total_configured,
             "configuredPercentage": configured_pct,
             "unhealthyHosts": unhealthy_hosts[:20],
+            "staleEndpointCount": stale_endpoints,
         }
     except Exception as e:
         return {"isEPPConfigured": 0, "dataProblem": True, "error": str(e)}

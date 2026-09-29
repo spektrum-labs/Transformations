@@ -15,7 +15,7 @@ installed, reports at least one scanner service, and every scanner service it re
 is "running". A protected endpoint that reports no scanner service is NOT counted as
 protected: absence of evidence is not evidence.
 
-Only endpoints seen within 7 days of the newest lastSeenAt in the response are judged,
+Only endpoints seen within 15 days of the newest lastSeenAt in the response are judged,
 because a service report is only as current as the endpoint's last check-in. Stale
 endpoints are counted and returned, not silently dropped.
 
@@ -37,7 +37,7 @@ SCANNER_SERVICES = (
     "Sophos Anti-Virus",
     "Sophos Linux AntiVirus",
 )
-ACTIVE_WINDOW_DAYS = 7
+ACTIVE_WINDOW_DAYS = 15
 
 
 def extract_input(input_data):

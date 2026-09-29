@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-STALE_THRESHOLD_DAYS = 14
+STALE_THRESHOLD_DAYS = 15
 SECONDS_PER_DAY = 86400
 
 
@@ -81,7 +81,16 @@ def transform(input):
     else:
         devices = []
 
-    now_epoch = datetime.utcnow().timestamp()
+    # Clock = the newest lastContact in the list (endpoint rules 2026-09-29), so a delayed
+    # evaluation does not age the whole fleet; the wall clock only when none is readable.
+    contacts = []
+    for d in devices:
+        if isinstance(d, dict):
+            try:
+                contacts.append(float(d.get("lastContact")))
+            except (TypeError, ValueError):
+                pass
+    now_epoch = max(contacts) if contacts else datetime.utcnow().timestamp()
     stale_threshold_epoch = now_epoch - (STALE_THRESHOLD_DAYS * SECONDS_PER_DAY)
 
     total_devices = len(devices)
