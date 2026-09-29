@@ -7,17 +7,17 @@ True only when the threat detail shows Abnormal ACTING on phishing for this tena
 at least one message in the threat is classified with a phishing-family attackType
 (Phishing: Credential / Phishing: Sensitive Data / Social Engineering / Invoice/Payment
 Fraud (BEC) / Scam / Extortion), carries a remediated remediationStatus, and was
-remediated (or sent) within the last 30 days. Everything else fails closed: an empty or
+remediated (or sent) within the last 90 days. Everything else fails closed: an empty or
 missing messages list, an error envelope, a detect-only status (Not Remediated, No Action
 Done, Remediation Attempted, Marked Safe), a non-phishing type (Malware, Spam, Other), or
-a threat older than 30 days.
+a threat older than 90 days.
 """
 
 import json
 import re
 from datetime import datetime
 
-WINDOW_DAYS = 30
+WINDOW_DAYS = 90
 PHISHING_FAMILY = ["phishing", "social engineering", "invoice/payment fraud", "bec", "scam", "extortion"]
 TS_PATTERN = r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})"
 
