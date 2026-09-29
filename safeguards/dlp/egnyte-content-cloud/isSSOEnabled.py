@@ -141,6 +141,19 @@ def utc_now():
 FEDERATED = {"sso", "ad"}
 
 
+def rows_short_of_total(data, rows):
+    """True when the body reports more users than it carries.
+
+    GET /pubapi/v2/users returns at most 100 users per call with totalResults for the
+    whole domain. A verdict over one page is a verdict over part of the estate, so a
+    short read is not measured rather than judged.
+    """
+    if not isinstance(data, dict):
+        return False
+    total = data.get("totalResults")
+    return isinstance(total, int) and not isinstance(total, bool) and total > len(rows)
+
+
 def evaluate(data):
     users = pick_list(data, "resources", "Resources")
     active = [u for u in users if u.get("active")]
@@ -184,6 +197,15 @@ def evaluate(data):
             "Migrate the listed accounts to SSO or AD authentication so identity-provider "
             "offboarding closes Egnyte access too."
         )
+    if rows_short_of_total(data, users):
+        result["isSSOEnabled"] = None
+        passes = []
+        fails = [
+            "The response reports %d users but carries %d, so only part of the domain was "
+            "read. Federated authentication is not measured on a partial read."
+            % (data.get("totalResults"), len(users))
+        ]
+        recs = ["Page through startIndex so every user is read."]
     return result, passes, fails, recs, {"activeUsersEvaluated": measured},
 
 
