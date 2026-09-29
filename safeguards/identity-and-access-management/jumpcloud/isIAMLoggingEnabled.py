@@ -65,7 +65,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def transform_evidence(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -140,3 +140,53 @@ def transform(input):
             "category": "identity-and-access-management",
         },
     )
+
+
+# ---- fail-closed guard (2026-09-29) ------------------------------------------------------------
+# A body that is not a JumpCloud Directory Insights event list proves nothing, so the key is returned as
+# None with dataCollection.status "error": the check reads Unevaluated, never a pass and never a fail.
+# IS searchDirectoryAuditEvents asks for PAGE_LIMIT rows (JumpCloud's per-query maximum) and cannot follow
+# the X-Search_after header, so a read of PAGE_LIMIT rows may be missing older events in the window.
+PAGE_LIMIT = 10000
+
+
+def unevaluated(problem, validation):
+    return create_response(
+        result={"isIAMLoggingEnabled": None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": "isIAMLoggingEnabled", "vendor": "JumpCloud",
+                  "category": "identity-and-access-management"},
+    )
+
+
+def event_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for k in ("apiResponse", "data", "results"):
+            if isinstance(data.get(k), list):
+                return data[k]
+    return None
+
+
+def evidence_problem(data):
+    events = event_list(data)
+    if events is None:
+        return "No JumpCloud Directory Insights event list in the response; nothing to evaluate."
+    if len(events) == 0:
+        return ("JumpCloud returned no Directory Insights events for the window; an empty read cannot tell "
+                "logging off from a failed or filtered query, so it is not scored.")
+    for e in events:
+        if not isinstance(e, dict) or not e.get("event_type") or not e.get("timestamp"):
+            return "The response items are not Directory Insights event records (event_type, timestamp)."
+    return None
+
+
+def transform(input):
+    data, validation = extract_input(input)
+    problem = evidence_problem(data)
+    if problem:
+        return unevaluated(problem, validation)
+    return transform_evidence(input)

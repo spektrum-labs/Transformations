@@ -65,7 +65,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def transform_evidence(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -80,7 +80,10 @@ def transform(input):
 
     total_events = len(events)
 
-    group_keywords = ["group_membership", "group_member", "association", "membership_change", "user_group"]
+    # A membership change is an association_change whose connection joins a user and a user_group
+    # (JumpCloud: association.connection.from/to.type). Any populated association used to count, which
+    # included user -> system and application bindings.
+    group_keywords = ["group_membership", "group_member", "membership_change"]
 
     matching_events = []
     for ev in events:
@@ -88,7 +91,13 @@ def transform(input):
             continue
         event_type = ev.get("event_type") or ""
         event_type_lower = event_type.lower() if isinstance(event_type, str) else ""
-        has_association_field = isinstance(ev.get("association"), dict) and len(ev.get("association") or {}) > 0
+        assoc = ev.get("association") if isinstance(ev.get("association"), dict) else {}
+        conn = assoc.get("connection") if isinstance(assoc.get("connection"), dict) else {}
+        side_types = []
+        for side in ("from", "to"):
+            node = conn.get(side) if isinstance(conn.get(side), dict) else {}
+            side_types.append(node.get("type"))
+        has_association_field = "user_group" in side_types and "user" in side_types
         matches_keyword = False
         for kw in group_keywords:
             if kw in event_type_lower:
@@ -98,6 +107,10 @@ def transform(input):
             matching_events.append(ev)
 
     matching_count = len(matching_events)
+    if matching_count == 0 and total_events >= PAGE_LIMIT:
+        return unevaluated(
+            "Read " + str(total_events) + " Directory Insights events, the per-query cap, and none matched; "
+            "older events in the window were not read, so absence is not scored.", validation)
     is_audited = matching_count > 0
 
     sample_event_types = []
@@ -151,3 +164,53 @@ def transform(input):
             "category": "identity-and-access-management",
         },
     )
+
+
+# ---- fail-closed guard (2026-09-29) ------------------------------------------------------------
+# A body that is not a JumpCloud Directory Insights event list proves nothing, so the key is returned as
+# None with dataCollection.status "error": the check reads Unevaluated, never a pass and never a fail.
+# IS searchDirectoryAuditEvents asks for PAGE_LIMIT rows (JumpCloud's per-query maximum) and cannot follow
+# the X-Search_after header, so a read of PAGE_LIMIT rows may be missing older events in the window.
+PAGE_LIMIT = 10000
+
+
+def unevaluated(problem, validation):
+    return create_response(
+        result={"isGroupMembershipChangeAudited": None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": "isGroupMembershipChangeAudited", "vendor": "JumpCloud",
+                  "category": "identity-and-access-management"},
+    )
+
+
+def event_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for k in ("apiResponse", "data", "results"):
+            if isinstance(data.get(k), list):
+                return data[k]
+    return None
+
+
+def evidence_problem(data):
+    events = event_list(data)
+    if events is None:
+        return "No JumpCloud Directory Insights event list in the response; nothing to evaluate."
+    if len(events) == 0:
+        return ("JumpCloud returned no Directory Insights events for the window; an empty read cannot tell "
+                "logging off from a failed or filtered query, so it is not scored.")
+    for e in events:
+        if not isinstance(e, dict) or not e.get("event_type") or not e.get("timestamp"):
+            return "The response items are not Directory Insights event records (event_type, timestamp)."
+    return None
+
+
+def transform(input):
+    data, validation = extract_input(input)
+    problem = evidence_problem(data)
+    if problem:
+        return unevaluated(problem, validation)
+    return transform_evidence(input)
