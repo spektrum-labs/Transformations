@@ -113,6 +113,7 @@ def transform(input):
     return create_response(
         result={
             "isMDREnabled": is_mdr_enabled,
+            "isMDRConfigured": is_mdr_enabled,
             "totalEndpoints": total_items,
             "pageEndpoints": page_count,
         },

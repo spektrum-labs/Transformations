@@ -252,6 +252,7 @@ def transform(endpoints_response, debug=False):
         coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
+        coverage_scores["isMDRConfigured"] = coverage_scores["MDR"] > 0
         # Alerting is active whenever at least one endpoint is actively protected
         # (sensor + prevention policy) or covered by MDR, since those devices
         # generate and forward detections/alerts. Server- or MDR-only fleets must
