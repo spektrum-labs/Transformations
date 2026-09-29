@@ -79,13 +79,13 @@ def evaluate(data):
                         end_str = sim["end"]
                         # Handle both date and datetime strings
                         if len(end_str) == 10:
-                            end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                            end_dt = datetime.fromisoformat(end_str)
                         else:
                             # Try ISO datetime with and without 'Z'
                             try:
                                 end_dt = datetime.fromisoformat(end_str.replace("Z", ""))
                             except Exception:
-                                end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+                                end_dt = datetime.fromisoformat(end_str)
                         if end_dt >= datetime.now():
                             active_count += 1
                     except Exception:
