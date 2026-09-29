@@ -5,10 +5,46 @@ Category: Endpoint Security
 
 Evaluates safeguard types coverage based on endpoints response data
 and assigns a score from 0 to 100 for each safeguard type.
+
+Only endpoints seen within 15 days of the newest lastSeenAt in the response are
+scored (endpoint rules 2026-09-29); the rest are reported as staleEndpointCount.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def active_endpoints(items):
+    """Split endpoints into (active, stale_count) using the newest lastSeenAt as the clock."""
+    endpoints = [e for e in items if isinstance(e, dict)]
+    seen = [parse_seen(e.get("lastSeenAt")) for e in endpoints]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return endpoints, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        # Dark fleet: the newest check-in is itself older than the window, so every endpoint is stale.
+        cutoff = wall_cutoff
+    active = []
+    stale = 0
+    for endpoint, when in zip(endpoints, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            active.append(endpoint)
+    return active, stale
 
 
 def transform(input):
@@ -101,6 +137,7 @@ def transform(input):
         else:
             items = []
             explicit_configured = None
+        items, stale_endpoints = active_endpoints(items)
         total_endpoints = len(items)
         total_computers = 0
         total_servers = 0
@@ -270,6 +307,8 @@ def transform(input):
         # Endpoint Security
         coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
 
+        coverage_scores["staleEndpointCount"] = stale_endpoints
+
         # MDR
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
@@ -317,6 +356,7 @@ def transform(input):
             recommendations=recommendations,
             input_summary={
                 "totalEndpoints": total_endpoints,
+                "staleEndpoints": stale_endpoints,
                 "totalComputers": total_computers,
                 "totalServers": total_servers,
                 "totalMobileDevices": total_mobile_devices,

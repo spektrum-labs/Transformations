@@ -8,7 +8,7 @@ version each endpoint reports in assignedProducts. Versions are "<year>.<release
 (measured 2026-09-24 on 174 live endpoints across two production tenants: 2026.2.1.3.0
 on Windows, 2026.2.0.8 on macOS, 2026.2.0.2 on Linux for every endpoint seen that week).
 
-An active endpoint (seen within 7 days of the newest lastSeenAt in the response) counts
+An active endpoint (seen within 15 days of the newest lastSeenAt in the response) counts
 as updating when its coreAgent release line (<year>.<release>) equals the newest release
 line reported for its platform in the tenant. The newest line must also be no more than
 one calendar year behind the newest lastSeenAt, so a fleet frozen together on an old
@@ -25,7 +25,7 @@ import json
 from datetime import datetime, timedelta
 
 
-ACTIVE_WINDOW_DAYS = 7
+ACTIVE_WINDOW_DAYS = 15
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -94,6 +94,10 @@ def active_endpoints(items):
     if not known:
         return endpoints, 0
     cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        # Dark fleet: the newest check-in is itself older than the window, so every endpoint is stale.
+        cutoff = wall_cutoff
     active = []
     stale = 0
     for endpoint, when in zip(endpoints, seen):

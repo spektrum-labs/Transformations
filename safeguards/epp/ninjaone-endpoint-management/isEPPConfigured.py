@@ -1,12 +1,61 @@
 """Transformation: isEPPConfigured (NinjaOne, GET /v2/devices-detailed).
 
-Value: a whole-number percentage, floor(100 * devices with an assigned policyId / devices returned). The pass bar
-lives in the requirement. Device last-contact age is not read, so staleness is not held against a device. No devices
-returned is not evaluated (dataCollection error, no value). The device list is a bare array, so a paginator cut-off
+Value: a whole-number percentage, floor(100 * devices with an assigned policyId / devices judged). The pass bar
+lives in the requirement. Devices judged: lastContact within 15 days of the newest lastContact in the list, phones and
+tablets left out (endpoint rules 2026-09-29). No devices judged is not evaluated (dataCollection error, no value). The device list is a bare array, so a paginator cut-off
 cannot be seen here. policyId is NinjaOne's general device policy, a weaker signal than an AV product state.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+# Endpoint rules (2026-09-29): judge a device only when its lastContact is within
+# ACTIVE_WINDOW_DAYS of the newest lastContact in the list, and leave phones and tablets out of
+# the percentage. A device with no readable lastContact is judged. If the newest lastContact is itself more
+# than ACTIVE_WINDOW_DAYS before evaluation time, the whole fleet is dark and every device is stale.
+ACTIVE_WINDOW_DAYS = 15
+MOBILE_NODE_CLASSES = ("APPLE_IOS", "APPLE_IPADOS", "ANDROID")
+
+
+def epoch(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def judged_devices(devices):
+    """Apply the endpoint rules to device records. Returns (devices to judge, scope counts)."""
+    records = [d for d in devices if isinstance(d, dict)]
+    known = [epoch(d.get("lastContact")) for d in records]
+    known = [s for s in known if s is not None]
+    cutoff = max(known) - ACTIVE_WINDOW_DAYS * 86400 if known else None
+    wall_cutoff = datetime.now(timezone.utc).timestamp() - ACTIVE_WINDOW_DAYS * 86400
+    dark = bool(known) and max(known) < wall_cutoff
+    if dark:
+        # Dark fleet: the newest check-in is itself older than the window, so every device is stale.
+        cutoff = wall_cutoff
+    kept = []
+    stale = 0
+    mobile = 0
+    for d in records:
+        if str(d.get("nodeClass") or "").upper() in MOBILE_NODE_CLASSES:
+            mobile = mobile + 1
+            continue
+        seen = epoch(d.get("lastContact"))
+        if cutoff is not None and seen is not None and seen < cutoff:
+            stale = stale + 1
+            continue
+        kept.append(d)
+    scope = {
+        "devicesReported": len(records),
+        "devicesJudged": len(kept),
+        "devicesLeftOutStale": stale,
+        "devicesLeftOutMobile": mobile,
+        "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "fleetDark": dark,
+    }
+    return kept, scope
 
 
 def extract_input(input_data):
@@ -87,6 +136,7 @@ def transform(input):
     else:
         devices = []
 
+    devices, scope = judged_devices(devices)
     total_devices = len(devices)
     configured_count = 0
     sample_systems = []
@@ -132,6 +182,7 @@ def transform(input):
         ]
 
     result = {
+        **scope,
         "isEPPConfigured": configured_pct,
         "totalDevices": total_devices,
         "devicesWithAssignedPolicy": configured_count,

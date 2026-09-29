@@ -11,7 +11,7 @@ managed by Sophos Device Encryption carry no encryption block, or an empty volum
 
 Scope is workstations (type == "computer"): the requirement is encryption of data on
 media that leaves the building, which is laptops and desktops, not servers. Only
-computers seen within 7 days of the newest lastSeenAt in the response are judged.
+computers seen within 15 days of the newest lastSeenAt in the response are judged.
 
 A computer counts as encrypted only when Sophos reports at least one volume and every
 reported volume is "encrypted". A computer with no Sophos encryption report is NOT
@@ -25,7 +25,7 @@ import json
 from datetime import datetime, timedelta
 
 
-ACTIVE_WINDOW_DAYS = 7
+ACTIVE_WINDOW_DAYS = 15
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -94,6 +94,10 @@ def active_endpoints(items):
     if not known:
         return endpoints, 0
     cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        # Dark fleet: the newest check-in is itself older than the window, so every endpoint is stale.
+        cutoff = wall_cutoff
     active = []
     stale = 0
     for endpoint, when in zip(endpoints, seen):

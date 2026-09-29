@@ -1,5 +1,86 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+# Endpoint rules (2026-09-29), shared by every NinjaOne antivirus-status check:
+#   1. Judge a device only when its newest row is within ACTIVE_WINDOW_DAYS of the newest row
+#      in the report. A device whose rows carry no timestamp is judged. If the newest row is itself
+#      more than ACTIVE_WINDOW_DAYS before evaluation time, the whole fleet is dark and every device is stale.
+#   2. Phones and tablets are left out (needs the device list beside the report).
+#   3. A Mac whose only products are third-party ones not reporting ON is unreadable, not
+#      unprotected: NinjaOne cannot read third-party AV state on macOS, so coverage there is
+#      the EDR vendor's to prove. A Mac reporting productName NONE is still judged.
+ACTIVE_WINDOW_DAYS = 15
+MOBILE_NODE_CLASSES = ("APPLE_IOS", "APPLE_IPADOS", "ANDROID")
+
+
+def epoch(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def device_classes(data):
+    """deviceId -> nodeClass from a device list riding beside the report (workflow key "devices")."""
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(devices, dict):
+        devices = devices.get("data") or devices.get("results")
+    classes = {}
+    for device in devices if isinstance(devices, list) else []:
+        if isinstance(device, dict) and device.get("id") is not None:
+            classes[str(device.get("id"))] = str(device.get("nodeClass") or "").upper()
+    return classes
+
+
+def endpoint_rows(rows, data, mac_unreadable):
+    """Apply the endpoint rules to antivirus-status rows. Returns (rows to judge, scope counts)."""
+    classes = device_classes(data)
+    by_device = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("deviceId") is not None:
+            by_device.setdefault(str(row.get("deviceId")), []).append(row)
+    newest = {}
+    for device_id, device_rows in by_device.items():
+        stamps = [epoch(r.get("timestamp")) for r in device_rows]
+        stamps = [s for s in stamps if s is not None]
+        newest[device_id] = max(stamps) if stamps else None
+    known = [s for s in newest.values() if s is not None]
+    cutoff = max(known) - ACTIVE_WINDOW_DAYS * 86400 if known else None
+    wall_cutoff = datetime.now(timezone.utc).timestamp() - ACTIVE_WINDOW_DAYS * 86400
+    dark = bool(known) and max(known) < wall_cutoff
+    if dark:
+        # Dark fleet: the newest check-in is itself older than the window, so every device is stale.
+        cutoff = wall_cutoff
+    kept = []
+    stale = 0
+    mobile = 0
+    unreadable = 0
+    for device_id, device_rows in by_device.items():
+        node_class = classes.get(device_id, "")
+        if node_class in MOBILE_NODE_CLASSES:
+            mobile = mobile + 1
+            continue
+        if cutoff is not None and newest[device_id] is not None and newest[device_id] < cutoff:
+            stale = stale + 1
+            continue
+        if mac_unreadable and node_class == "MAC":
+            named = [r for r in device_rows if str(r.get("productName") or "NONE").upper() != "NONE"]
+            running = [r for r in device_rows if str(r.get("productState") or "").upper() == "ON"]
+            if named and not running:
+                unreadable = unreadable + 1
+                continue
+        kept.extend(device_rows)
+    scope = {
+        "devicesReported": len(by_device),
+        "devicesJudged": len(by_device) - stale - mobile - unreadable,
+        "devicesLeftOutStale": stale,
+        "devicesLeftOutMobile": mobile,
+        "macDevicesUnreadable": unreadable,
+        "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "fleetDark": dark,
+    }
+    return kept, scope
 
 
 def extract_input(input_data):
@@ -75,7 +156,7 @@ def transform(input):
     with no product appears as {deviceId, productName: "NONE"}. A device counts as covered when
     at least one of its rows has productState == "ON".
 
-    The denominator is the set of devices the report lists. The percentage is floored, so 99.6%
+    The denominator is the devices the endpoint rules judge (see endpoint_rows). The percentage is floored, so 99.6%
     reports 99, never 100. An empty, unreadable or error body observes no devices and reports 0.
     """
     if isinstance(input, (str, bytes)):
@@ -97,6 +178,12 @@ def transform(input):
 
     devices_seen = set()
     devices_covered = set()
+    results, scope = endpoint_rows(results, data, True)
+    if scope["devicesReported"] and not scope["devicesJudged"]:
+        nothing = ("Every device in the antivirus-status report was left out (stale, phone or tablet, or a Mac "
+                   "whose third-party AV NinjaOne cannot read), so this is not evaluated here.")
+        return create_response(result=dict(scope, requiredCoveragePercentage=None), validation=validation,
+                               api_errors=[nothing], fail_reasons=[nothing])
     for row in results:
         if not isinstance(row, dict):
             continue
@@ -142,6 +229,7 @@ def transform(input):
 
     return create_response(
         result={
+            **scope,
             "requiredCoveragePercentage": percentage,
             "devicesWithActiveEPP": covered,
             "totalDevicesReporting": total,
