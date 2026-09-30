@@ -86,6 +86,14 @@ def transform(input):
         users = []
         total_objects = 0
 
+    if not users:
+        return create_response(
+            result={"bypassStatusUsersCount": None, "totalUsers": 0},
+            validation=validation,
+            api_errors=["No Duo user records in the getUsers response, so bypass-status users cannot be counted."],
+            metadata={"transformationId": "bypassStatusUsersCount", "vendor": "Duo", "category": "iam"},
+        )
+
     bypass_users = []
     for u in users:
         if not isinstance(u, dict):
@@ -96,10 +104,6 @@ def transform(input):
 
     bypass_count = len(bypass_users)
     total_users = len(users)
-
-    transformation_errors = []
-    if total_users == 0:
-        transformation_errors.append("No user records found in response")
 
     if bypass_count > 0:
         sample = bypass_users[:5]
@@ -135,7 +139,6 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        transformation_errors=transformation_errors,
         metadata={
             "transformationId": "bypassStatusUsersCount",
             "vendor": "Duo",
