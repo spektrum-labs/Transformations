@@ -79,6 +79,15 @@ def transform(input):
     if not isinstance(users, list):
         users = []
 
+    if not users:
+        return create_response(
+            result={"smsFactorEnabledUsersCount": None, "totalUsersEvaluated": 0},
+            validation=validation,
+            api_errors=["No users were returned in the Duo getUsers response, so SMS factor enrollment cannot be evaluated."],
+            metadata={"transformationId": "smsFactorEnabledUsersCount", "vendor": "Duo",
+                      "category": "Multifactor Authentication"},
+        )
+
     sms_enabled_count = 0
     total_users = len(users)
     sample_usernames = []
@@ -109,10 +118,7 @@ def transform(input):
     fail_reasons = []
     recommendations = []
 
-    if total_users == 0:
-        fail_reasons.append("No users were returned in the Duo getUsers response, so SMS factor enrollment cannot be evaluated.")
-        recommendations.append("Verify the Duo Admin API credential has permission to list users and that the tenant has enrolled users.")
-    elif sms_enabled_count > 0:
+    if sms_enabled_count > 0:
         pass_reasons.append(
             f"{sms_enabled_count} of {total_users} users have at least one phone entry with 'sms' listed in its capabilities array (sample usernames: {sample_usernames})."
         )
