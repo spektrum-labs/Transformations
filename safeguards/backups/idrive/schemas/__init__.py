@@ -1,7 +1,13 @@
 """Schema registry for this vendor's transformations."""
 
-from .isBackupClientVersionCurrent import IsBackupClientVersionCurrentInput
+from .isBareMetalRecoveryEnabled import IsBareMetalRecoveryEnabledInput
+from .isJobExecutionLogAccessible import IsJobExecutionLogAccessibleInput
+from .isPrivateKeyEncryptionEnforced import IsPrivateKeyEncryptionEnforcedInput
+from .isSubCompanyDataIsolationEnforced import IsSubCompanyDataIsolationEnforcedInput
 
 __all__ = [
-    "IsBackupClientVersionCurrentInput",
+    "IsBareMetalRecoveryEnabledInput",
+    "IsJobExecutionLogAccessibleInput",
+    "IsPrivateKeyEncryptionEnforcedInput",
+    "IsSubCompanyDataIsolationEnforcedInput",
 ]
