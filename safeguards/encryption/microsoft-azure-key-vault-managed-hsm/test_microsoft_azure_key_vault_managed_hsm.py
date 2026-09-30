@@ -1,11 +1,16 @@
-"""Microsoft Azure Key Vault Managed HSM (Encryption): isPurgeProtectionEnabled, isPublicNetworkAccessDisabled.
+"""Microsoft Azure Key Vault Managed HSM (Encryption) over one Azure Resource Graph summarize row: isPurgeProtectionEnabled, isPublicNetworkAccessDisabled.
 
-Fixtures follow the list response on https://learn.microsoft.com/en-us/rest/api/keyvault/managedhsm/managed-hsms/list-by-subscription?view=rest-keyvault-managedhsm-2024-11-01 .
+Fixture shape follows https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources?view=rest-azureresourcegraph-resourcegraph-2022-10-01
+("Summarize" / "Basic tenant query" samples).
 """
 import importlib.util
 from pathlib import Path
 
 import pytest
+
+TOTAL = "resourceCount"
+FIELDS = ["resourceCount", "purgeProtectedCount", "publicAccessDisabledCount"]
+KEYS = {"isPurgeProtectionEnabled": ["purgeProtectedCount", "all"], "isPublicNetworkAccessDisabled": ["publicAccessDisabledCount", "all"]}
 
 
 def load(name):
@@ -15,42 +20,13 @@ def load(name):
     return module
 
 
-KEYS = {
-    "isPurgeProtectionEnabled": [
-        "properties.enablePurgeProtection",
-        True,
-        False
-    ],
-    "isPublicNetworkAccessDisabled": [
-        "properties.publicNetworkAccess",
-        "Disabled",
-        "Enabled"
-    ]
-}
 MODULES = {k: load(k) for k in KEYS}
 
 
-def set_path(target, path, value):
-    parts = path.split(".")
-    for part in parts[:-1]:
-        target = target.setdefault(part, {})
-    target[parts[-1]] = value
-
-
-def resource(i, overrides=None):
-    r = {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers/Microsoft.KeyVault/managedHSMs/r%d" % i,
-         "name": "r%d" % i, "type": "Microsoft.KeyVault/managedHSMs", "location": "eastus", "properties": {}}
-    for key, (path, good, bad) in KEYS.items():
-        set_path(r, path, good)
-    for path, value in (overrides or {}).items():
-        set_path(r, path, value)
-    return r
-
-
-def listing(*items, **extra):
-    body = {"value": list(items)}
-    body.update(extra)
-    return body
+def summary(total, **counts):
+    row = {name: counts.get(name, total) for name in FIELDS}
+    row[TOTAL] = total
+    return {"totalRecords": 1, "count": 1, "resultTruncated": "false", "facets": [], "data": [row]}
 
 
 def run(key, payload):
@@ -60,25 +36,36 @@ def run(key, payload):
 
 @pytest.mark.parametrize("key", sorted(KEYS))
 def test_every_resource_compliant(key):
-    assert run(key, listing(resource(1), resource(2))) == (True, "success")
+    assert run(key, summary(3)) == (True, "success")
 
 
 @pytest.mark.parametrize("key", sorted(KEYS))
-def test_one_non_compliant_resource_fails(key):
-    path, good, bad = KEYS[key]
-    body = listing(resource(1), resource(2, {path: bad}))
-    assert run(key, body) == (False, "success")
-    assert MODULES[key].transform(body)["transformedResponse"]["resourceCount"] == 2
+def test_partial_compliance(key):
+    field, kind = KEYS[key]
+    expected = False if kind == "all" else True
+    assert run(key, summary(3, **{field: 1})) == (expected, "success")
+    assert MODULES[key].transform(summary(3, **{field: 1}))["transformedResponse"][TOTAL] == 3
+
+
+@pytest.mark.parametrize("key", sorted(KEYS))
+def test_no_compliant_resource_fails(key):
+    field, kind = KEYS[key]
+    assert run(key, summary(2, **{field: 0})) == (False, "success")
 
 
 NO_EVIDENCE = {
     "null": None,
     "empty_dict": {},
     "empty_string": "",
-    "arm_403": {"error": {"code": "AuthorizationFailed", "message": "does not have authorization to perform action"}},
+    "arm_403": {"error": {"code": "AuthorizationFailed", "message": "no authorization"}},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"hello": "world"},
-    "no_resources": {"value": []},
+    "zero_resources_or_no_reader": summary(0),
+    "truncated": dict(summary(3), resultTruncated="true"),
+    "two_rows": {"totalRecords": 2, "count": 2, "data": [summary(1)["data"][0], summary(1)["data"][0]]},
+    "missing_count": {"totalRecords": 1, "count": 1, "data": [{TOTAL: 3}]},
+    "bool_count": summary(True),
+    "inconsistent": summary(2, **{name: 5 for name in FIELDS[1:]}),
 }
 
 
@@ -86,21 +73,3 @@ NO_EVIDENCE = {
 @pytest.mark.parametrize("key", sorted(KEYS))
 def test_no_evidence_is_unevaluated(key, name):
     assert run(key, NO_EVIDENCE[name]) == (None, "error")
-
-
-@pytest.mark.parametrize("key", sorted(KEYS))
-def test_paged_list_is_unevaluated(key):
-    body = listing(resource(1), nextLink="https://management.azure.com/next?$skiptoken=x")
-    assert run(key, body) == (None, "error")
-
-
-@pytest.mark.parametrize("key", sorted(KEYS))
-def test_missing_field_is_unevaluated(key):
-    path, good, bad = KEYS[key]
-    r = resource(1)
-    node = r
-    parts = path.split(".")
-    for part in parts[:-1]:
-        node = node[part]
-    del node[parts[-1]]
-    assert run(key, listing(r)) == (None, "error")

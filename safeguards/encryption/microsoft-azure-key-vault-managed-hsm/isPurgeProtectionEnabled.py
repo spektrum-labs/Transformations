@@ -2,17 +2,22 @@
 Transformation: isPurgeProtectionEnabled
 Vendor: Microsoft Azure Key Vault Managed HSM  |  Category: Encryption
 
-Criterion: purge protection is enabled on every managed HSM pool, so deleted keys cannot be purged before the retention period.
+Criterion: purge protection is enabled on every managed HSM pool.
 
-Data source: getManagedHsms --
-GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.KeyVault/managedHSMs?api-version=2024-11-01
-(https://learn.microsoft.com/en-us/rest/api/keyvault/managedhsm/managed-hsms/list-by-subscription?view=rest-keyvault-managedhsm-2024-11-01,
-Azure RBAC Reader on the subscription). Returns {value: [ManagedHsm], nextLink}.
+Data source: getManagedHsmSummary --
+POST https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01
+body {"query": "resources | where type =~ 'microsoft.keyvault/managedhsms' | summarize resourceCount = count(), purgeProtectedCount = countif(tobool(properties.enablePurgeProtection) == true), publicAccessDisabledCount = countif(tostring(properties.publicNetworkAccess) =~ 'Disabled')"}
+(https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources?view=rest-azureresourcegraph-resourcegraph-2022-10-01).
+Signed in with the Spektrum One-Click certificate app (management.azure.com scope). With no subscriptions in the
+body Resource Graph searches every subscription the app's service principal can read (Azure RBAC Reader), and the
+summarize returns exactly one row of counts, so there is no paging.
 
-  isPurgeProtectionEnabled = the list holds at least one of the managed HSM pools AND every one has properties.enablePurgeProtection == true.
+Resource Graph answers an app with no Reader role anywhere with ZERO rows counted, not an error. Zero managed HSM pools
+therefore means "not measured" (None), never compliant and never a measured false.
+Fails closed: an error body, a body without totalRecords/data, resultTruncated "true", a row without integer
+counts, a count above the total, or zero managed HSM pools returns None.
 
-Returns resourceCount and purgeProtectedCount. Fails closed: an error body, no value list, a paged list (nextLink present),
-zero resources, or a resource missing the field returns None.
+  isPurgeProtectionEnabled = true when every one of them is counted in purgeProtectedCount.
 """
 import json
 from datetime import datetime
@@ -95,49 +100,53 @@ def load(input):
     return extract_input(input)
 
 
-FIELD_PATH = ["properties", "enablePurgeProtection"]
-EXPECT = True
+TOTAL_FIELD = "resourceCount"
+COUNT_FIELD = "purgeProtectedCount"
+RULE = "all"
 LABEL = "managed HSM pools"
+COUNT_FIELDS = ["resourceCount", "purgeProtectedCount", "publicAccessDisabledCount"]
 
 
-def field(resource):
-    node = resource
-    for part in FIELD_PATH:
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    return node
+def summary_row(data):
+    if not isinstance(data, dict) or as_count(data.get("totalRecords")) is None:
+        return None
+    rows = data.get("data")
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        return None
+    if str(data.get("resultTruncated") or "").lower() == "true":
+        return None
+    return rows[0]
 
 
 def transform(input):
     try:
         data, validation = load(input)
         if is_error_body(data):
-            return not_measured("Azure Resource Manager returned an error for the " + LABEL + " list", validation)
-        resources = data.get("value") if isinstance(data, dict) else None
-        if not isinstance(resources, list) or data.get("nextLink"):
-            return not_measured("No complete " + LABEL + " list was returned", validation)
-        items = [r for r in resources if isinstance(r, dict) and r.get("id")]
-        if not items:
-            return not_measured("The subscription has no " + LABEL + " to evaluate", validation)
-        matching = 0
-        failing = []
-        for resource in items:
-            value = field(resource)
+            return not_measured("Azure Resource Graph returned an error", validation)
+        row = summary_row(data)
+        if row is None:
+            return not_measured("No single Resource Graph summary row was returned", validation)
+        counts = {}
+        for name in COUNT_FIELDS:
+            value = as_count(row.get(name))
             if value is None:
-                return not_measured(LABEL + " " + str(resource.get("name")) + " does not report " + ".".join(FIELD_PATH),
-                                    validation)
-            if value == EXPECT:
-                matching = matching + 1
-            else:
-                failing.append(str(resource.get("name") or resource.get("id")))
-        total = len(items)
-        result = {KEY: matching == total, "resourceCount": total, "purgeProtectedCount": matching}
-        line = str(matching) + " of " + str(total) + " " + LABEL + " have " + ".".join(FIELD_PATH) + " = " + str(EXPECT)
-        if matching == total:
-            return create_response(result=result, validation=validation, pass_reasons=[line], input_summary=result)
-        return create_response(result=result, validation=validation, input_summary=result,
-                               fail_reasons=[line + "; not set on: " + ", ".join(failing)],
+                return not_measured("The Resource Graph summary is missing " + name, validation)
+            counts[name] = value
+        total = counts[TOTAL_FIELD]
+        matching = counts[COUNT_FIELD]
+        if total <= 0:
+            return not_measured("Resource Graph counts no " + LABEL + " the app can read; grant Reader or none exist",
+                                validation)
+        if matching > total:
+            return not_measured("The Resource Graph summary is inconsistent", validation)
+        passed = matching == total if RULE == "all" else matching > 0
+        result = {KEY: passed}
+        for name in COUNT_FIELDS:
+            result[name] = counts[name]
+        line = str(matching) + " of " + str(total) + " " + LABEL + " counted in " + COUNT_FIELD
+        if passed:
+            return create_response(result=result, validation=validation, pass_reasons=[line], input_summary=counts)
+        return create_response(result=result, validation=validation, fail_reasons=[line], input_summary=counts,
                                recommendations=["Enable purge protection on every managed HSM pool (irreversible)"])
     except Exception as e:
         return create_response(result={KEY: None}, transformation_errors=[str(e)],
