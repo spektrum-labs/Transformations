@@ -13,13 +13,13 @@ from datetime import datetime
 # Prompt. The Trust Monitor events endpoint is not used: Duo closed it to customers
 # created after 2025-09-29 and ends its support on 2027-01-31.
 #
-# Verdict ("access = log API reachable"): true when Duo answers the authentication logs
-# call with log data (HTTP 200: an authlogs list, or an empty one with Duo's paging
-# metadata), whether or not any event carries a trust assessment. riskScoredEventCount
-# counts the events that do; riskAssessedAuthPercentage reports how much of the window
-# was assessed. No authlogs key, or an empty authlogs list without Duo's paging metadata,
-# proves nothing (an error body collapses to the returnSpec defaults) and is reported as
-# a data-collection error with a null verdict, never judged.
+# Verdict (risk events required): true only when Duo answers the authentication logs call
+# (an authlogs list with Duo's paging metadata) and at least one event carries a trust
+# assessment (riskScoredEventCount > 0); false when events are returned and none carries
+# one. riskAssessedAuthPercentage reports how much of the window was assessed. No authlogs
+# key, no paging metadata, or an empty window proves nothing (an error body collapses to
+# the returnSpec defaults) and is reported as a data-collection error with a null verdict,
+# never judged.
 #
 # Duo answers 403 {"code": 40301, "message": "Access forbidden"} when the Admin API
 # application lacks "Grant read log". Integration-Service hands that one refusal over
@@ -139,22 +139,20 @@ def transform(input):
 
     records = data.get("authlogs") if isinstance(data, dict) else None
     metadata = data.get("metadata") if isinstance(data, dict) else None
-    genuine_zero = isinstance(records, list) and not records and isinstance(metadata, dict) \
-        and "total_objects" in metadata
-    if not isinstance(records, list) or (not records and not genuine_zero):
+    complete = isinstance(records, list) and isinstance(metadata, dict) and "total_objects" in metadata
+    events = [rec for rec in records if isinstance(rec, dict)] if complete else []
+    if not events:
         return create_response(
             result={KEY: None, "riskScoredEventCount": None},
             validation=validation,
-            api_errors=["No Duo v2 authentication log data (authlogs with paging metadata) in the response."],
+            api_errors=["No Duo v2 authentication log events (authlogs with paging metadata) in the response."],
         )
 
     total = 0
     assessed = 0
     low_trust = 0
     users = []
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
+    for rec in events:
         total = total + 1
         levels = trust_levels(rec)
         if levels:
@@ -175,19 +173,23 @@ def transform(input):
         "lowTrustAuthCount": low_trust,
         "riskAssessedUserCount": len(users),
     }
-    result = {KEY: True}
+    result = {KEY: assessed > 0}
     result.update(summary)
-    reason = ("Duo Admin API v2 authentication logs (/admin/v2/logs/authentication) are reachable: %d events "
+    if assessed == 0:
+        return create_response(
+            result=result, validation=validation, input_summary=summary,
+            fail_reasons=["Duo Admin API v2 authentication logs (/admin/v2/logs/authentication) returned %d events "
+                          "and none carries a Risk-Based Authentication trust assessment "
+                          "(adaptive_trust_assessments), so no per-user risk scoring is surfaced." % total],
+            recommendations=[
+                "Duo surfaces per-event risk scoring through Risk-Based Authentication (Premier or Advantage plan) "
+                "on applications using the Universal Prompt; enable it so authentication logs carry trust assessments."
+            ],
+        )
+    reason = ("Duo Admin API v2 authentication logs (/admin/v2/logs/authentication) surface risk scoring: %d events "
               "returned, %d (%.1f%%) carry Risk-Based Authentication trust assessments "
               "(adaptive_trust_assessments), across %d users; %d rated LOW trust."
               % (total, assessed, pct, len(users), low_trust))
-    recommendations = []
-    if assessed == 0:
-        recommendations = [
-            "Duo surfaces per-event risk scoring through Risk-Based Authentication (Premier or Advantage plan) "
-            "on applications using the Universal Prompt; enable it so authentication logs carry trust assessments."
-        ]
     return create_response(
-        result=result, validation=validation, input_summary=summary,
-        pass_reasons=[reason], recommendations=recommendations,
+        result=result, validation=validation, input_summary=summary, pass_reasons=[reason],
     )

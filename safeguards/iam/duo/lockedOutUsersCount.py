@@ -84,6 +84,14 @@ def transform(input):
         users = []
         total_objects = 0
 
+    if not users:
+        return create_response(
+            result={"lockedOutUsersCount": None, "totalUsersEvaluated": 0},
+            validation=validation,
+            api_errors=["No Duo user records in the getUsers response, so locked-out users cannot be counted."],
+            metadata={"transformationId": "lockedOutUsersCount", "vendor": "Duo", "category": "iam"},
+        )
+
     locked_out_users = []
     for u in users:
         if not isinstance(u, dict):
