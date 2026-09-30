@@ -1,40 +1,56 @@
-"""Microsoft Azure Payment HSM (Encryption): confirmedLicensePurchased.
+"""Microsoft Azure Payment HSM (Encryption) over one Azure Resource Graph summarize row: confirmedLicensePurchased.
 
-Payment HSMs are Microsoft.HardwareSecurityModules/dedicatedHSMs resources with a payShield10K_* SKU
-(https://learn.microsoft.com/en-us/azure/payment-hsm/quickstart-cli).
+Fixture shape follows https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources?view=rest-azureresourcegraph-resourcegraph-2022-10-01
+("Summarize" / "Basic tenant query" samples).
 """
 import importlib.util
 from pathlib import Path
 
 import pytest
 
-spec = importlib.util.spec_from_file_location("phsm_clp", Path(__file__).with_name("confirmedLicensePurchased.py"))
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
+TOTAL = "paymentHsmCount"
+FIELDS = ["paymentHsmCount", "provisionedPaymentHsmCount"]
+KEYS = {"confirmedLicensePurchased": ["provisionedPaymentHsmCount", "any"]}
 
 
-def hsm(i, sku="payShield10K_LMK1_CPS60", state="Succeeded"):
-    return {"id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.HardwareSecurityModules/dedicatedHSMs/h%d" % i,
-            "name": "h%d" % i, "type": "Microsoft.HardwareSecurityModules/dedicatedHSMs", "sku": {"name": sku},
-            "properties": {"provisioningState": state, "stampId": "stamp1"}}
+def load(name):
+    spec = importlib.util.spec_from_file_location("phsm_" + name, Path(__file__).with_name(name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def run(payload):
-    out = m.transform(payload)
-    return out["transformedResponse"]["confirmedLicensePurchased"], out["additionalInfo"]["dataCollection"]["status"]
+MODULES = {k: load(k) for k in KEYS}
 
 
-def test_provisioned_payment_hsm():
-    body = {"value": [hsm(1), hsm(2, state="Provisioning")]}
-    assert run(body) == (True, "success")
-    out = m.transform(body)["transformedResponse"]
-    assert (out["paymentHsmCount"], out["provisionedPaymentHsmCount"]) == (2, 1)
+def summary(total, **counts):
+    row = {name: counts.get(name, total) for name in FIELDS}
+    row[TOTAL] = total
+    return {"totalRecords": 1, "count": 1, "resultTruncated": "false", "facets": [], "data": [row]}
 
 
-def test_only_safenet_or_unprovisioned_is_false():
-    assert run({"value": [hsm(1, sku="SafeNet Luna Network HSM A790")]}) == (False, "success")
-    assert run({"value": [hsm(1, state="Failed")]}) == (False, "success")
-    assert run({"value": []}) == (False, "success")
+def run(key, payload):
+    out = MODULES[key].transform(payload)
+    return out["transformedResponse"][key], out["additionalInfo"]["dataCollection"]["status"]
+
+
+@pytest.mark.parametrize("key", sorted(KEYS))
+def test_every_resource_compliant(key):
+    assert run(key, summary(3)) == (True, "success")
+
+
+@pytest.mark.parametrize("key", sorted(KEYS))
+def test_partial_compliance(key):
+    field, kind = KEYS[key]
+    expected = False if kind == "all" else True
+    assert run(key, summary(3, **{field: 1})) == (expected, "success")
+    assert MODULES[key].transform(summary(3, **{field: 1}))["transformedResponse"][TOTAL] == 3
+
+
+@pytest.mark.parametrize("key", sorted(KEYS))
+def test_no_compliant_resource_fails(key):
+    field, kind = KEYS[key]
+    assert run(key, summary(2, **{field: 0})) == (False, "success")
 
 
 NO_EVIDENCE = {
@@ -44,10 +60,16 @@ NO_EVIDENCE = {
     "arm_403": {"error": {"code": "AuthorizationFailed", "message": "no authorization"}},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"hello": "world"},
-    "paged": {"value": [hsm(1)], "nextLink": "https://management.azure.com/next"},
+    "zero_resources_or_no_reader": summary(0),
+    "truncated": dict(summary(3), resultTruncated="true"),
+    "two_rows": {"totalRecords": 2, "count": 2, "data": [summary(1)["data"][0], summary(1)["data"][0]]},
+    "missing_count": {"totalRecords": 1, "count": 1, "data": [{TOTAL: 3}]},
+    "bool_count": summary(True),
+    "inconsistent": summary(2, **{name: 5 for name in FIELDS[1:]}),
 }
 
 
 @pytest.mark.parametrize("name", sorted(NO_EVIDENCE))
-def test_no_evidence_is_unevaluated(name):
-    assert run(NO_EVIDENCE[name]) == (None, "error")
+@pytest.mark.parametrize("key", sorted(KEYS))
+def test_no_evidence_is_unevaluated(key, name):
+    assert run(key, NO_EVIDENCE[name]) == (None, "error")

@@ -2,20 +2,22 @@
 Transformation: confirmedLicensePurchased
 Vendor: Microsoft Azure Payment HSM  |  Category: Encryption
 
-Criterion: the organization has a provisioned Azure Payment HSM (Thales payShield 10K) in service.
+Criterion: the organization has a provisioned Azure Payment HSM (Thales payShield 10K) in service. LMK, key and PCI settings live in payShield Manager and are not read.
 
-Data source: getPaymentHsms --
-GET https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.HardwareSecurityModules/dedicatedHSMs?api-version=2021-11-30
-(Payment HSMs are dedicatedHSMs resources with a payShield10K_* SKU,
-https://learn.microsoft.com/en-us/azure/payment-hsm/quickstart-cli ; Azure RBAC Reader on the resource group).
-Returns {value: [DedicatedHsm], nextLink}.
+Data source: getPaymentHsmSummary --
+POST https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01
+body {"query": "resources | where type =~ 'microsoft.hardwaresecuritymodules/dedicatedhsms' and tostring(sku.name) startswith 'payShield10K' | summarize paymentHsmCount = count(), provisionedPaymentHsmCount = countif(tostring(properties.provisioningState) =~ 'Succeeded')"}
+(https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources?view=rest-azureresourcegraph-resourcegraph-2022-10-01).
+Signed in with the Spektrum One-Click certificate app (management.azure.com scope). With no subscriptions in the
+body Resource Graph searches every subscription the app's service principal can read (Azure RBAC Reader), and the
+summarize returns exactly one row of counts, so there is no paging.
 
-  confirmedLicensePurchased = at least one resource with sku.name starting payShield10K and
-  properties.provisioningState == "Succeeded".
+Resource Graph answers an app with no Reader role anywhere with ZERO rows counted, not an error. Zero payment HSMs
+therefore means "not measured" (None), never compliant and never a measured false.
+Fails closed: an error body, a body without totalRecords/data, resultTruncated "true", a row without integer
+counts, a count above the total, or zero payment HSMs returns None.
 
-Returns paymentHsmCount and provisionedPaymentHsmCount. SafeNet Dedicated HSMs in the same resource group are not
-counted. A valid list with no payment HSM is a measured false. What ARM cannot show: LMK, key and PCI settings,
-which live in payShield Manager. Fails closed: an error body, no value list, or a paged list returns None.
+  confirmedLicensePurchased = true when at least one of them is counted in provisionedPaymentHsmCount.
 """
 import json
 from datetime import datetime
@@ -98,31 +100,54 @@ def load(input):
     return extract_input(input)
 
 
-def is_payment_hsm(resource):
-    sku = resource.get("sku") if isinstance(resource.get("sku"), dict) else {}
-    return str(sku.get("name") or "").lower().startswith("payshield10k")
+TOTAL_FIELD = "paymentHsmCount"
+COUNT_FIELD = "provisionedPaymentHsmCount"
+RULE = "any"
+LABEL = "payment HSMs"
+COUNT_FIELDS = ["paymentHsmCount", "provisionedPaymentHsmCount"]
+
+
+def summary_row(data):
+    if not isinstance(data, dict) or as_count(data.get("totalRecords")) is None:
+        return None
+    rows = data.get("data")
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        return None
+    if str(data.get("resultTruncated") or "").lower() == "true":
+        return None
+    return rows[0]
 
 
 def transform(input):
     try:
         data, validation = load(input)
         if is_error_body(data):
-            return not_measured("Azure Resource Manager returned an error for the dedicated HSM list", validation)
-        resources = data.get("value") if isinstance(data, dict) else None
-        if not isinstance(resources, list) or data.get("nextLink"):
-            return not_measured("No complete dedicated HSM list was returned", validation)
-        payment = [r for r in resources if isinstance(r, dict) and r.get("id") and is_payment_hsm(r)]
-        provisioned = 0
-        for resource in payment:
-            props = resource.get("properties") if isinstance(resource.get("properties"), dict) else {}
-            if props.get("provisioningState") == "Succeeded":
-                provisioned = provisioned + 1
-        result = {KEY: provisioned > 0, "paymentHsmCount": len(payment), "provisionedPaymentHsmCount": provisioned}
-        line = str(provisioned) + " of " + str(len(payment)) + " payment HSMs are provisioned"
-        if provisioned > 0:
-            return create_response(result=result, validation=validation, pass_reasons=[line], input_summary=result)
-        return create_response(result=result, validation=validation, fail_reasons=[line], input_summary=result,
-                               recommendations=["Confirm the Payment HSM resource group and that its payShield HSMs are provisioned"])
+            return not_measured("Azure Resource Graph returned an error", validation)
+        row = summary_row(data)
+        if row is None:
+            return not_measured("No single Resource Graph summary row was returned", validation)
+        counts = {}
+        for name in COUNT_FIELDS:
+            value = as_count(row.get(name))
+            if value is None:
+                return not_measured("The Resource Graph summary is missing " + name, validation)
+            counts[name] = value
+        total = counts[TOTAL_FIELD]
+        matching = counts[COUNT_FIELD]
+        if total <= 0:
+            return not_measured("Resource Graph counts no " + LABEL + " the app can read; grant Reader or none exist",
+                                validation)
+        if matching > total:
+            return not_measured("The Resource Graph summary is inconsistent", validation)
+        passed = matching == total if RULE == "all" else matching > 0
+        result = {KEY: passed}
+        for name in COUNT_FIELDS:
+            result[name] = counts[name]
+        line = str(matching) + " of " + str(total) + " " + LABEL + " counted in " + COUNT_FIELD
+        if passed:
+            return create_response(result=result, validation=validation, pass_reasons=[line], input_summary=counts)
+        return create_response(result=result, validation=validation, fail_reasons=[line], input_summary=counts,
+                               recommendations=["Confirm the payShield HSMs are provisioned"])
     except Exception as e:
         return create_response(result={KEY: None}, transformation_errors=[str(e)],
                                api_errors=["Transformation error: " + str(e)],
