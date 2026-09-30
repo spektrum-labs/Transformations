@@ -140,10 +140,15 @@ def transform(input):
     if not configuration_id:
         transformation_errors.append("Missing configuration_id in response")
 
-    # is_restricted is derived directly from the decoded field. When the field
-    # is unreadable/absent we still derive a value (bool(desktop_app_status) is
-    # False when desktop_app_status is None), never a hardcoded literal.
-    is_restricted = not bool(desktop_app_status)
+    # is_restricted is only derived when the token was actually decoded. With no
+    # configuration_id, or a configuration_id that failed to decode, there is no
+    # evidence of the desktop app's status, so the result is None (no answer)
+    # rather than a hardcoded literal or a value derived from a falsy default --
+    # that previously made a missing/undecodable token read as "restricted"
+    # (the safe/passing answer) via `not bool(None)`.
+    is_restricted = None
+    if decoded_ok:
+        is_restricted = not bool(desktop_app_status)
 
     if not configuration_id:
         pass_reasons = []
