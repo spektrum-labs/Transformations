@@ -6,11 +6,13 @@ Criterion: public network access is disabled on every managed HSM pool.
 
 Data source: getManagedHsmSummary --
 POST https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01
-body {"query": "resources | where type =~ 'microsoft.keyvault/managedhsms' | summarize resourceCount = count(), purgeProtectedCount = countif(tobool(properties.enablePurgeProtection) == true), publicAccessDisabledCount = countif(tostring(properties.publicNetworkAccess) =~ 'Disabled')"}
+body {"query": "resources | where type =~ 'microsoft.keyvault/managedhsms' | summarize subscriptionCount = dcount(subscriptionId), resourceCount = count(), purgeProtectedCount = countif(tobool(properties.enablePurgeProtection) == true), publicAccessDisabledCount = countif(tostring(properties.publicNetworkAccess) =~ 'Disabled')"}
 (https://learn.microsoft.com/en-us/rest/api/azureresourcegraph/resourcegraph/resources/resources?view=rest-azureresourcegraph-resourcegraph-2022-10-01).
 Signed in with the Spektrum One-Click certificate app (management.azure.com scope). With no subscriptions in the
 body Resource Graph searches every subscription the app's service principal can read (Azure RBAC Reader), and the
-summarize returns exactly one row of counts, so there is no paging.
+summarize returns exactly one row of counts, so there is no paging. subscriptionCount (dcount of subscriptionId) is
+returned with every result: Resource Graph only sees subscriptions where the app holds Reader, so a pass covers exactly
+that many subscriptions and no more. Assign Reader at the root management group to cover the whole tenant.
 
 Resource Graph answers an app with no Reader role anywhere with ZERO rows counted, not an error. Zero managed HSM pools
 therefore means "not measured" (None), never compliant and never a measured false.
@@ -104,7 +106,7 @@ TOTAL_FIELD = "resourceCount"
 COUNT_FIELD = "publicAccessDisabledCount"
 RULE = "all"
 LABEL = "managed HSM pools"
-COUNT_FIELDS = ["resourceCount", "purgeProtectedCount", "publicAccessDisabledCount"]
+COUNT_FIELDS = ["resourceCount", "purgeProtectedCount", "publicAccessDisabledCount", "subscriptionCount"]
 
 
 def summary_row(data):
@@ -143,7 +145,8 @@ def transform(input):
         result = {KEY: passed}
         for name in COUNT_FIELDS:
             result[name] = counts[name]
-        line = str(matching) + " of " + str(total) + " " + LABEL + " counted in " + COUNT_FIELD
+        line = (str(matching) + " of " + str(total) + " " + LABEL + " counted in " + COUNT_FIELD + ", across "
+                + str(counts["subscriptionCount"]) + " subscriptions the Spektrum app can read")
         if passed:
             return create_response(result=result, validation=validation, pass_reasons=[line], input_summary=counts)
         return create_response(result=result, validation=validation, fail_reasons=[line], input_summary=counts,
