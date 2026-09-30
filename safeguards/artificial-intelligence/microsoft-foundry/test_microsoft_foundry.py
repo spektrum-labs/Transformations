@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 TOTAL = "resourceCount"
+COVERAGE = "subscriptionCount"
 FIELDS = ["resourceCount", "localAuthDisabledCount", "publicAccessDisabledCount"]
 KEYS = {"isLocalAuthDisabled": ["localAuthDisabledCount", "all"], "isPublicNetworkAccessDisabled": ["publicAccessDisabledCount", "all"]}
 
@@ -26,6 +27,7 @@ MODULES = {k: load(k) for k in KEYS}
 def summary(total, **counts):
     row = {name: counts.get(name, total) for name in FIELDS}
     row[TOTAL] = total
+    row[COVERAGE] = counts.get(COVERAGE, 2)
     return {"totalRecords": 1, "count": 1, "resultTruncated": "false", "facets": [], "data": [row]}
 
 
@@ -48,6 +50,13 @@ def test_partial_compliance(key):
 
 
 @pytest.mark.parametrize("key", sorted(KEYS))
+def test_subscription_coverage_is_reported(key):
+    out = MODULES[key].transform(summary(3, **{COVERAGE: 4}))
+    assert out["transformedResponse"][COVERAGE] == 4
+    assert "across 4 subscriptions" in " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+
+
+@pytest.mark.parametrize("key", sorted(KEYS))
 def test_no_compliant_resource_fails(key):
     field, kind = KEYS[key]
     assert run(key, summary(2, **{field: 0})) == (False, "success")
@@ -65,6 +74,7 @@ NO_EVIDENCE = {
     "two_rows": {"totalRecords": 2, "count": 2, "data": [summary(1)["data"][0], summary(1)["data"][0]]},
     "missing_count": {"totalRecords": 1, "count": 1, "data": [{TOTAL: 3}]},
     "bool_count": summary(True),
+    "missing_coverage": {"totalRecords": 1, "count": 1, "data": [{name: 3 for name in FIELDS}]},
     "inconsistent": summary(2, **{name: 5 for name in FIELDS[1:]}),
 }
 
