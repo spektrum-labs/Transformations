@@ -1,6 +1,6 @@
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def extract_input(input_data):
@@ -127,6 +127,44 @@ def complete_agent_read(raw):
         return None, "Read " + str(len(agents)) + " of " + str(total) + " agents; a partial read is not scored."
     return agents, None
 
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def fresh_agents(agents):
+    """(agents judged, stale count): endpoint rules 2026-09-29, the 15-day window on the newest check-in.
+
+    An agent whose lastActiveDate is more than 15 days before the newest lastActiveDate in the response is
+    stale: left out of the judgement and reported as staleAgentCount. When the newest check-in is itself
+    more than 15 days old the fleet is dark and every dated agent is stale. An agent with no readable
+    lastActiveDate is judged, not dropped.
+    """
+    agents = [a for a in agents if isinstance(a, dict)]
+    seen = [parse_seen(a.get("lastActiveDate")) for a in agents]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return agents, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        cutoff = wall_cutoff
+    fresh = []
+    stale = 0
+    for agent, when in zip(agents, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            fresh.append(agent)
+    return fresh, stale
+
+
 def transform(input):
     """isEPPLoggingEnabled (SentinelOne, GET /web/api/v2.1/agents).
 
@@ -149,7 +187,7 @@ def transform(input):
             api_errors=[problem],
             metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
         )
-    data = agents
+    data, stale_count = fresh_agents(agents)
     if isinstance(data, dict) and (data.get("errors") or data.get("error")):
         reason = "SentinelOne returned an error instead of an agent list"
         return create_response(
@@ -198,6 +236,9 @@ def transform(input):
         fail_reasons.append(summary)
         findings.append("Agents without edr: " + ", ".join(missing_names[:5]) + ("..." if len(missing_names) > 5 else ""))
         recommendations.append("Enable EDR telemetry in the SentinelOne policy applied to every agent")
+    if stale_count:
+        findings.append(str(stale_count) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)
+                        + " days before the newest check-in and are not judged (staleAgentCount)")
     if total_items > sampled:
         findings.append("Judged on the " + str(sampled) + " agents returned of " + str(total_items) + " enrolled")
     return create_response(
@@ -206,6 +247,7 @@ def transform(input):
             "eppLoggingPercentage": pct,
             "totalAgents": total_items,
             "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
             "agentsWithEdrLogging": with_edr,
         },
         validation=validation,

@@ -2,13 +2,14 @@
 
 Value: a whole-number percentage, floor(100 * configured / protected). protected = agents returned (each is an
 installed agent, servers included); configured = agents enforcing protection: mitigationMode "protect" (detect-only
-does not block) with a non-empty activeProtection list. The pass bar lives in the requirement. Agent last-seen age is
-not read, so staleness is never held against an agent. Not evaluated (dataCollection error, no value) when no agent
+does not block) with a non-empty activeProtection list. The pass bar lives in the requirement. Only agents whose
+lastActiveDate is within 15 days of the newest one in the response are judged (endpoint rules 2026-09-29); the rest
+are reported as staleAgentCount, and a fleet with no agent inside the window is not evaluated. Not evaluated (dataCollection error, no value) when no agent
 is returned or when the agent list is a truncated page (pagination.totalItems larger than the agents returned, or a
 nextCursor still present): a percentage of a sample is not the fleet's.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def extract_input(input_data):
@@ -76,6 +77,44 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def fresh_agents(agents):
+    """(agents judged, stale count): endpoint rules 2026-09-29, the 15-day window on the newest check-in.
+
+    An agent whose lastActiveDate is more than 15 days before the newest lastActiveDate in the response is
+    stale: left out of the judgement and reported as staleAgentCount. When the newest check-in is itself
+    more than 15 days old the fleet is dark and every dated agent is stale. An agent with no readable
+    lastActiveDate is judged, not dropped.
+    """
+    agents = [a for a in agents if isinstance(a, dict)]
+    seen = [parse_seen(a.get("lastActiveDate")) for a in agents]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return agents, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        cutoff = wall_cutoff
+    fresh = []
+    stale = 0
+    for agent, when in zip(agents, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            fresh.append(agent)
+    return fresh, stale
+
+
 def transform(input):
     # New input format: TS hands {"data": <raw response>, "validation": ...} to a transform that reads
     # input.get("data"), so pagination.totalItems and nextCursor stay visible. The legacy format drills
@@ -107,18 +146,26 @@ def transform(input):
 
     sampled = len(agents)
     truncated = total_items > sampled or str(next_cursor).strip() not in ("", "None", "null")
+    stale_count = 0
+    if not truncated:
+        agents, stale_count = fresh_agents(agents)
+        sampled = len(agents)
 
     # No agents, or a truncated page: not evaluated (no value), never a percentage of a sample
     if sampled == 0 or truncated:
         reason = (
             f"Agent list is truncated: {sampled} of {total_items} agents returned; configuration not evaluated on a sample"
-            if sampled and truncated else "No SentinelOne agents were returned; there is nothing to measure"
+            if sampled and truncated else
+            f"All {stale_count} SentinelOne agents last checked in more than {ACTIVE_WINDOW_DAYS} days ago; there is nothing to measure"
+            if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
         )
         return create_response(
             result={
                 "isEPPConfigured": None,
                 "totalAgents": total_items,
                 "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
+                "staleAgentCount": stale_count,
                 "protectModeCount": 0,
                 "detectModeCount": 0,
                 "noneModeCount": 0,
@@ -210,6 +257,7 @@ def transform(input):
             "configuredAgents": configured_count,
             "totalAgents": total_items,
             "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
             "protectModeCount": protect_count,
             "detectModeCount": detect_count,
             "noneModeCount": none_count,
@@ -222,6 +270,7 @@ def transform(input):
         input_summary={
             "totalAgents": total_items,
             "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
             "protectModeCount": protect_count,
             "detectModeCount": detect_count,
             "noneModeCount": none_count,
