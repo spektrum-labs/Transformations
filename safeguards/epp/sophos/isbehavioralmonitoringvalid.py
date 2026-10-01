@@ -2,7 +2,7 @@
 Transformation: isBehavioralMonitoringValid
 Vendor: Sophos Central (Intercept X / Endpoint)  |  Category: Endpoint Security
 Method: getThreatProtectionPolicies (proposed)
-        GET /endpoint/v1/policies?policyType=threat-protection&pageTotal=true
+        GET /endpoint/v1/policies?policyType=threat-protection&pageTotal=true&pageSize=200
         The unfiltered getPolicies body (GET /endpoint/v1/policies) is also accepted:
         only items whose type is "threat-protection" are judged.
 
@@ -40,8 +40,8 @@ that each endpoint's agent is healthy or has received the policy (that is endpoi
 health in /endpoint/v1/endpoints, not read here), or devices Sophos does not manage.
 
 Fails closed: an error response, an empty, None or unrecognised body, a policy list that
-spans more than one page (only page 1 is read), no Threat Protection policy, or no Base
-Policy all return false.
+spans more than one page (only page 1 is read) or whose full first page carries no page
+total, no Threat Protection policy, or no Base Policy all return false.
 """
 import json
 from datetime import datetime
@@ -131,16 +131,22 @@ def policy_items(data):
     return None
 
 
-def extra_pages(data):
-    """Number of pages beyond the first that were not read, or 0."""
+def extra_pages(data, item_count):
+    """Pages beyond the first that were not read: 0 when the list is complete, -1 when
+    completeness cannot be shown (no page total and the first page is full)."""
     if not isinstance(data, dict):
         return 0
     pages = data.get("pages")
     if not isinstance(pages, dict):
         return 0
     total = pages.get("total")
-    if isinstance(total, int) and not isinstance(total, bool) and total > 1:
-        return total - 1
+    if isinstance(total, int) and not isinstance(total, bool):
+        if total > 1:
+            return total - 1
+        return 0
+    size = pages.get("size")
+    if isinstance(size, int) and not isinstance(size, bool) and size > 0 and item_count >= size:
+        return -1
     return 0
 
 
@@ -237,9 +243,12 @@ def transform(input):
                 api_errors=[reason], fail_reasons=[reason],
                 recommendations=["Verify the Sophos policies API (/endpoint/v1/policies) is reachable and the credential can read endpoint policies"])
 
-        unread = extra_pages(data)
-        if unread > 0:
-            reason = "The policy list spans " + str(unread + 1) + " pages and only the first was read"
+        unread = extra_pages(data, len(items))
+        if unread != 0:
+            if unread > 0:
+                reason = "The policy list spans " + str(unread + 1) + " pages and only the first was read"
+            else:
+                reason = "The first page of policies is full and no page total was returned, so the list may be incomplete"
             return create_response(
                 result={criteriaKey: False}, validation=validation,
                 api_errors=[reason], fail_reasons=[reason],

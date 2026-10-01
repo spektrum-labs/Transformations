@@ -151,6 +151,14 @@ def test_multi_page_fails_closed():
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
+def test_full_first_page_without_total_fails_closed():
+    items = [policy("Base Policy", 0)] + [policy("P%d" % i, i) for i in range(1, 50)]
+    no_total = {"items": items, "pages": {"current": 1, "size": 50, "maxSize": 200}}
+    assert run(no_total)[0] is False
+    no_total["items"] = items[:3]
+    assert run(no_total)[0] is True
+
+
 def test_unfiltered_getpolicies_body_judges_only_threat_protection():
     mixed = copy.deepcopy(GOOD)
     mixed["items"].append({"id": "p", "name": "Base Policy", "type": "peripheral-control", "priority": 0,
