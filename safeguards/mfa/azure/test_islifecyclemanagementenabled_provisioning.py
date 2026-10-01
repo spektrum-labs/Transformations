@@ -90,6 +90,11 @@ class PassCases(unittest.TestCase):
         value, _ = run({"data": body([event()]), "validation": {"status": "passed", "errors": [], "warnings": []}})
         self.assertIs(value, True)
 
+    def test_echoed_app_name_is_length_capped(self):
+        _, out = run(body([event(app="<img src=x onerror=alert(1)>" + "A" * 500)]))
+        names = out["additionalInfo"]["transformation"]["inputSummary"]["deprovisioningApps"]
+        self.assertEqual(len(names[0]), 80)
+
     def test_mixed_feed_one_qualifier_is_enough(self):
         value, out = run(body([event(action="create"), event(status="failure"), event(days_ago=2)]))
         self.assertIs(value, True)

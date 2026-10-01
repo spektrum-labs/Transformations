@@ -182,8 +182,9 @@ def is_person(record):
 
 def app_name(record):
     sp = record.get("servicePrincipal")
-    if isinstance(sp, dict) and isinstance(sp.get("displayName"), str) and sp.get("displayName"):
-        return sp.get("displayName")
+    # Tenant-admin-controlled text that is echoed into reasons: length-capped.
+    if isinstance(sp, dict) and isinstance(sp.get("displayName"), str) and sp.get("displayName").strip():
+        return sp.get("displayName").strip()[:80]
     return "unnamed provisioning app"
 
 
