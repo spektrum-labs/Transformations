@@ -217,6 +217,25 @@ class EntraSSOTests(unittest.TestCase):
             self.assert_fail_with_error(response)
             self.assertEqual(self.info(response)["dataCollection"]["status"], "error", body)
 
+    def test_string_false_account_enabled_does_not_count(self):
+        app = sp("Old SAML App", "saml")
+        app["accountEnabled"] = "false"
+        response = self.t.transform(combined([app], MANAGED_DOMAINS))
+        self.assertIs(response["transformedResponse"][KEY], False)
+
+    def test_string_status_code_is_an_error(self):
+        self.assert_fail_with_error(self.t.transform({"statusCode": "403", "message": "Forbidden"}))
+
+    def test_tenant_supplied_names_are_bounded(self):
+        response = self.t.transform(combined([sp("A" * 5000, "saml")], MANAGED_DOMAINS))
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertLess(len(self.info(response)["evaluation"]["passReasons"][0]), 300)
+
+    def test_unknown_sso_mode_values_are_bucketed(self):
+        response = self.t.transform(combined([sp("X", "x" * 500), sp("Y", "saml")], MANAGED_DOMAINS))
+        modes = self.info(response)["transformation"]["inputSummary"]["singleSignOnModes"]
+        self.assertEqual(modes, {"other": 1, "saml": 1})
+
     def test_malformed_json_fails(self):
         self.assert_fail_with_error(self.t.transform("{not-json"))
 

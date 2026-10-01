@@ -117,6 +117,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 CRITERIA_KEY = "isSSOEnabled"
 SOURCE = "Microsoft Graph"
 SSO_MODES = ["saml", "oidc", "password"]
+KNOWN_MODES = ["saml", "oidc", "password", "notsupported", "none"]
 #: tenants that own Microsoft first-party applications (Microsoft Services, Microsoft corp)
 MICROSOFT_OWNER_TENANTS = [
     "f8cdef31-a31e-4b4a-93e4-5f571e91255a",
@@ -126,6 +127,12 @@ WRAPPER_KEYS = ["api_response", "apiResponse", "response", "result", "Output", "
 ERROR_STATUSES = ["error", "failure", "failed", "not available"]
 #: providers every Entra tenant lists under /identity/identityProviders
 BUILT_IN_PROVIDERS = ["AADSignup", "MicrosoftAccount", "EmailOTP", "Facebook", "Google"]
+
+
+def short(value, limit=100):
+    """Bound tenant-supplied names before they are echoed into evaluation reasons."""
+    text = str(value)
+    return text[:limit] + "..." if len(text) > limit else text
 
 
 def unwrap(data):
@@ -194,7 +201,9 @@ def error_text(body):
         return (str(code) + " " + err).strip()
     for key in ["statusCode", "status_code"]:
         code = body.get(key)
-        if isinstance(code, int) and code >= 400:
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
             return str(code) + " " + str(body.get("message") or "")
     status = body.get("status")
     if isinstance(status, str) and status.lower() in ERROR_STATUSES:
@@ -241,7 +250,7 @@ def sso_apps(rows):
         mode = str(row.get("preferredSingleSignOnMode") or "").lower()
         if mode not in SSO_MODES:
             continue
-        if row.get("accountEnabled") is False:
+        if str(row.get("accountEnabled")).lower() == "false":
             continue
         owner = str(row.get("appOwnerOrganizationId") or "").lower()
         if owner in MICROSOFT_OWNER_TENANTS:
@@ -381,12 +390,12 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         if len(apps) > 0:
-            names = [str(app.get("displayName") or app.get("appId") or "unnamed") for app in apps[:5]]
+            names = [short(app.get("displayName") or app.get("appId") or "unnamed") for app in apps[:5]]
             pass_reasons.append(
                 f"{len(apps)} enterprise application(s) use Entra ID single sign-on: {', '.join(names)}"
             )
         if len(federated) > 0:
-            names = [str(row.get("id") or "unnamed") for row in federated[:5]]
+            names = [short(row.get("id") or "unnamed") for row in federated[:5]]
             pass_reasons.append(
                 f"{len(federated)} domain(s) federated to an external identity provider: {', '.join(names)}"
             )
@@ -408,6 +417,8 @@ def transform(input):
         for row in sp_list:
             if is_service_principal(row):
                 mode = str(row.get("preferredSingleSignOnMode") or "none").lower()
+                if mode not in KNOWN_MODES:
+                    mode = "other"
                 modes[mode] = modes.get(mode, 0) + 1
 
         return create_response(
