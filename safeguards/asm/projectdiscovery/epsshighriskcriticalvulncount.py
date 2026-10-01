@@ -1,26 +1,34 @@
 """
-Transformation: knownExploitedVulnCount
+Transformation: epssHighRiskCriticalVulnCount
 Vendor: Project Discovery (Nuclei, run by Spektrum)  |  Category: Attack Surface Management
-Evaluates: Count of live-matched findings from nuclei templates tagged as CISA Known Exploited Vulnerabilities
-(tag kev), within the critical-severity scan. Its sibling knownExploitedHighVulnCount reads the high-severity
-scan; together they cover critical and high. Pass rule: count == 0.
+Evaluates: Count of live-matched findings whose CVE has an EPSS percentile at or above 0.95, within the
+critical-severity scan. Its sibling epssHighRiskHighVulnCount reads the high-severity scan; together they cover
+critical and high. Pass rule: count == 0. Each counted finding is listed in additionalFindings.
 
 Input: the runParallelASMScan response the noCriticalFindings workflow already fetches (subfinder discovery of the
-passport domain, then nuclei critical-severity templates across up to 25 discovered hosts). No extra scan.
-Each finding is a nuclei -jsonl ResultEvent passed through unchanged by the nuclei-scanner Lambda; the kev tag
-is in info.tags (a lower-cased list in nuclei's JSON output).
-Fails closed (None, reason in dataCollection.errors and transformation.errors): a scan that did not complete,
-scanned zero hosts or zero templates, reports a failed host or an error, carries no findings list, or whose
-findings list is shorter or longer than its own total. A capped scan (more hosts discovered than scanned) that
-found nothing returns None too: zero on a partial estate is not a clean estate. A capped scan that did find a
-KEV finding still returns the count, because that finding is a real failure.
+passport domain, then nuclei critical-severity templates across up to 25 discovered hosts). No extra scan, and no
+network: EPSS comes from the finding itself. nuclei copies the template's classification block into every
+ResultEvent (info.classification: cve-id, cvss-score, epss-score, epss-percentile), and the nuclei-templates
+project stamps EPSS onto CVE templates. The values are the snapshot baked into the scanner image's templates,
+not a live FIRST lookup.
+
+Threshold 0.95: in the nuclei-templates tree EPSS percentile 0.95 is where the EPSS score crosses 0.10 (a 10%
+modelled chance of exploitation in the next 30 days). 0.90 corresponds to a score near 0.04 and takes in 84% of
+critical CVE templates, which would make this key a near-copy of criticalVulnerabilityCount.
+
+Fails closed (None, reason in dataCollection.errors and transformation.errors): everything knownExploitedVulnCount
+fails on (incomplete, empty, error-envelope, failed-host, truncated or capped-and-clean scans), and also a scan where
+no finding reaches the threshold but some CVE finding carries no usable EPSS percentile, since that finding's risk is
+unknown rather than low. A finding with no CVE (default login, exposure, takeover) has no EPSS by definition; it is
+listed as not EPSS-scored and does not block the answer.
 """
 
 import json
 from datetime import datetime
 
-CRITERIA_KEY = "knownExploitedVulnCount"
+CRITERIA_KEY = "epssHighRiskCriticalVulnCount"
 SCAN_SCOPE = "critical"
+EPSS_PERCENTILE_THRESHOLD = 0.95
 
 
 def extract_input(input_data):
@@ -169,10 +177,32 @@ def is_live_match(finding):
     return isinstance(finding, dict) and finding.get("matcher-status") is not False
 
 
-def describe(finding):
+def to_unit(value):
+    """A probability-like number in [0, 1], else None (missing, non-numeric, negative or above 1)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if number != number or number < 0 or number > 1:
+        return None
+    return number
+
+
+def finding_epss(finding):
+    """(percentile, score) from info.classification; either may be None."""
+    classification = finding_info(finding).get("classification")
+    if not isinstance(classification, dict):
+        return None, None
+    return to_unit(classification.get("epss-percentile")), to_unit(classification.get("epss-score"))
+
+
+def describe(finding, percentile, score):
     cves = finding_cves(finding)
     label = finding_name(finding) + (" (" + ", ".join(cves) + ")" if cves else "")
-    return "KEV " + finding_severity(finding).upper() + ": " + label + " at " + finding_where(finding)
+    epss = "EPSS percentile " + str(percentile) + (", score " + str(score) if score is not None else "")
+    return "EPSS " + finding_severity(finding).upper() + ": " + label + " at " + finding_where(finding) + " [" + epss + "]"
 
 
 def failed(reason, validation, summary):
@@ -201,27 +231,47 @@ def transform(input):
             return failed(problem, validation, summary)
         findings = [f for f in data.get("findings") if is_live_match(f)
                     and finding_severity(f) in ("critical", "high")]
-        kev = [f for f in findings if "kev" in finding_tags(f)]
-        count = len(kev)
+        risky = []
+        unscored = []
+        no_cve = []
+        for f in findings:
+            percentile, score = finding_epss(f)
+            if not finding_cves(f):
+                no_cve.append(f)
+            elif percentile is None:
+                unscored.append(f)
+            elif percentile >= EPSS_PERCENTILE_THRESHOLD:
+                risky.append(describe(f, percentile, score))
+        count = len(risky)
         summary["liveFindings"] = len(findings)
+        summary["cveFindingsWithoutEpss"] = len(unscored)
+        summary["findingsWithoutCve"] = len(no_cve)
+        notes = (["No EPSS percentile on CVE finding: " + finding_name(f) + " at " + finding_where(f) for f in unscored[:20]]
+                 + ["Not EPSS-scored (no CVE): " + finding_name(f) + " at " + finding_where(f) for f in no_cve[:20]])
+        threshold = str(EPSS_PERCENTILE_THRESHOLD)
+        if count == 0 and unscored:
+            return failed(str(len(unscored)) + " live " + SCAN_SCOPE + "-severity CVE finding(s) for " + str(domain)
+                          + " carry no usable EPSS percentile, so none can be shown to be below " + threshold,
+                          validation, summary)
         capped = capped_note(data)
         if capped and count == 0:
-            return failed(capped + "; zero KEV findings on a partial scan is not a clean estate", validation, summary)
-        result = {CRITERIA_KEY: count, "severityScope": SCAN_SCOPE, "hostsScanned": to_int(data.get("domainsScanned"))}
-        lines = [describe(f) for f in kev[:50]]
+            return failed(capped + "; zero high-EPSS findings on a partial scan is not a clean estate", validation, summary)
+        result = {CRITERIA_KEY: count, "severityScope": SCAN_SCOPE, "epssPercentileThreshold": EPSS_PERCENTILE_THRESHOLD,
+                  "hostsScanned": to_int(data.get("domainsScanned"))}
         if count == 0:
             return create_response(
                 result=result, validation=validation,
-                pass_reasons=["No live KEV-tagged finding among " + SCAN_SCOPE + "-severity templates across "
-                              + str(summary["domainsScanned"]) + " host(s) of " + str(domain)],
-                input_summary=summary)
-        fails = [str(count) + " live KEV-tagged finding(s) among " + SCAN_SCOPE + "-severity templates for " + str(domain)]
+                pass_reasons=["No live " + SCAN_SCOPE + "-severity finding with EPSS percentile >= " + threshold
+                              + " across " + str(summary["domainsScanned"]) + " host(s) of " + str(domain)],
+                additional_findings=notes, input_summary=summary)
+        fails = [str(count) + " live " + SCAN_SCOPE + "-severity finding(s) with EPSS percentile >= " + threshold
+                 + " for " + str(domain)]
         if capped:
             fails.append(capped)
         return create_response(
             result=result, validation=validation, fail_reasons=fails,
-            recommendations=["Patch or take offline every host matching a CISA KEV template; these are being exploited in the wild"],
-            additional_findings=lines, input_summary=summary)
+            recommendations=["Remediate these first: EPSS rates them among the CVEs most likely to be exploited in the next 30 days"],
+            additional_findings=risky[:50] + notes, input_summary=summary)
     except Exception as e:
         return create_response(result={CRITERIA_KEY: None},
                                validation={"status": "error", "errors": [], "warnings": []},

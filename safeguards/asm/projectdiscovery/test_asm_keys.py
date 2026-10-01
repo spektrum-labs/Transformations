@@ -32,6 +32,8 @@ def scan(**overrides):
         "timestamp": datetime.utcnow().isoformat(),
     }
     body.update(overrides)
+    if "findings" in overrides and "total" not in overrides:
+        body["total"] = str(len(body["findings"]) if isinstance(body["findings"], list) else 0)
     return body
 
 
@@ -55,6 +57,9 @@ KEYS = {
     "vulnerabilityscanfrequency": ("vulnerabilityScanFrequency", False),
     "criticalvulnerabilitycount": ("criticalVulnerabilityCount", None),
     "knownexploitedvulncount": ("knownExploitedVulnCount", None),
+    "knownexploitedhighvulncount": ("knownExploitedHighVulnCount", None),
+    "epsshighriskcriticalvulncount": ("epssHighRiskCriticalVulnCount", None),
+    "epsshighriskhighvulncount": ("epssHighRiskHighVulnCount", None),
 }
 
 
