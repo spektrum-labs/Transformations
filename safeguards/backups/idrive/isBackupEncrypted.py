@@ -133,30 +133,37 @@ def transform(input):
     if isinstance(decoded_json, dict):
         encryption_required = decoded_json.get("encryptionRequired")
 
+    # IDrive 360 encrypts every backup with AES-256 on transfer and storage; the only
+    # choice is the key: the default key (IDrive-managed) or a private key known only to
+    # the customer (https://www.idrive360.com/help/360/Backup/encryption_key.htm). The
+    # decoded configuration_id therefore states the key mode, not whether backups are
+    # encrypted: encryptionRequired=false is the default key, still AES-256. Private-key
+    # enforcement is judged separately by isPrivateKeyEncryptionEnforced.
+    # No readable flag is no evidence, so the result is None (fail closed), never True.
     if encryption_required is True:
         is_backup_encrypted = True
         pass_reasons = [
-            f"Company '{company_name}' configuration_id decodes to encryptionRequired=true, "
-            f"indicating client backup configurations are pushed with encryption required."
+            f"Company '{company_name}' configuration_id decodes to encryptionRequired=true: "
+            f"backups are AES-256 encrypted with a private encryption key."
         ]
         fail_reasons = []
         recommendations = []
     elif encryption_required is False:
-        is_backup_encrypted = False
-        pass_reasons = []
-        fail_reasons = [
-            f"Company '{company_name}' configuration_id decodes to encryptionRequired=false, "
-            f"indicating client backup configurations are NOT pushed with encryption required."
+        is_backup_encrypted = True
+        pass_reasons = [
+            f"Company '{company_name}' configuration_id decodes to encryptionRequired=false: "
+            f"backups are AES-256 encrypted with the IDrive 360 default key (private key not required)."
         ]
+        fail_reasons = []
         recommendations = [
-            "Enable private encryption when generating client configuration IDs "
-            "(set private_encryption parameter) so backups are encrypted."
+            "For customer-held keys, require private-key encryption when generating client "
+            "configuration IDs (see isPrivateKeyEncryptionEnforced)."
         ]
     else:
-        is_backup_encrypted = False
+        is_backup_encrypted = None
         pass_reasons = []
         fail_reasons = [
-            f"Could not determine encryptionRequired flag for company '{company_name}'; "
+            f"Could not determine the encryption mode for company '{company_name}'; "
             f"configuration_id was missing, empty, or failed to decode."
         ]
         recommendations = [
