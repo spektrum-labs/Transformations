@@ -67,23 +67,81 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# ---- fail-closed guard (2026-10-01) ------------------------------------------------------------
+# A body that does not show a measured answer proves nothing either way, so the criterion is
+# returned as None with dataCollection.status "error". Token-Service reads that as Unevaluated:
+# never a pass and never a finding. It covers a missing or empty body, a vendor or platform error
+# envelope, a payload this transformation does not recognise, and a transformation exception.
+
+
+def parse_body(data):
+    """A JSON string or bytes body parsed; anything else unchanged. Unparseable text stays text."""
+    if isinstance(data, bytes):
+        try:
+            data = data.decode("utf-8")
+        except Exception:
+            return data
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except Exception:
+            return data
+    return data
+
+
+def error_problem(data):
+    """Describe why `data` is a vendor or platform error rather than evidence, or return None."""
+    if data is None:
+        return "Red Canary returned no body"
+    if isinstance(data, (str, bytes)):
+        return "Red Canary returned a body that is not JSON"
+    if not isinstance(data, dict):
+        return None
+    for name in ("statusCode", "status_code", "httpStatus", "vendorStatus"):
+        code = data.get(name)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Red Canary returned HTTP " + str(code)
+    err = data.get("error") or data.get("errors") or data.get("vendorError")
+    if err:
+        if isinstance(err, list):
+            err = err[0]
+        if isinstance(err, dict):
+            err = err.get("message") or err.get("detail") or err.get("title") or err.get("type") or "error"
+        return "Red Canary returned an error: " + str(err)[:200]
+    if str(data.get("status", "")).strip().lower() == "error":
+        return "the integration reported an error status"
+    return None
+
+
+def unevaluated(keys, problem, validation=None, input_summary=None, transformation_errors=None):
+    """Every key as None plus a dataCollection error: reads Unevaluated, never True or False."""
+    result = {}
+    for key in keys:
+        result[key] = None
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        transformation_errors=transformation_errors,
+        input_summary=input_summary,
+    )
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
 
     try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
+        data, validation = extract_input(parse_body(input))
 
-        data, validation = extract_input(input)
+        if isinstance(validation, dict) and validation.get("status") == "failed":
+            return unevaluated([criteriaKey], "Input validation failed: nothing was measured", validation)
 
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+        problem = error_problem(data)
+        if problem:
+            return unevaluated([criteriaKey], problem, validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -129,11 +187,16 @@ def transform(input):
                 license_purchased = True
                 license_details['auditLogCount'] = len(data)
 
-        if license_purchased:
-            pass_reasons.append("Red Canary subscription is active and confirmed")
-        else:
-            fail_reasons.append("Red Canary subscription could not be confirmed")
-            recommendations.append("Ensure a valid Red Canary subscription is active and API token has read permissions")
+        if not license_purchased:
+            # An empty audit log, an empty list or a body with none of the indicators above is
+            # not a measurement of the subscription: Unevaluated, never a finding.
+            return unevaluated(
+                [criteriaKey],
+                "The response carries no audit log records or account indicator: the "
+                "subscription could not be read, so nothing was measured",
+                validation)
+
+        pass_reasons.append("Red Canary subscription is active and confirmed")
 
         return create_response(
             result={criteriaKey: license_purchased, **license_details},
@@ -145,9 +208,6 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        message = "Transformation error: " + str(e)[:200]
+        return unevaluated([criteriaKey], message, {"status": "error", "errors": [], "warnings": []},
+                           transformation_errors=[message])
