@@ -241,7 +241,9 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        users = data.get("value") or []
+        # getUsers puts the users at "value"; a workflow that merges role assignments with
+        # users (Azure AD One-Click: output keys roleAssignments + users) puts them at "users".
+        users = data.get("value") or as_list(data.get("users")) or []
         if not isinstance(users, list):
             users = [users] if users else []
 
