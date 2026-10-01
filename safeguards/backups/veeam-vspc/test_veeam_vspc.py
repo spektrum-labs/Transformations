@@ -176,3 +176,24 @@ def test_not_measurable_keys_never_give_a_verdict(name, key, body):
 def test_not_measurable_reason_is_explicit_on_a_good_read(name, key):
     out = load(name)(ts_wrap(coll([job("a")])))
     assert "Not measurable through VSPC" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def enriched(raw):
+    return {"data": raw, "validation": {"status": "skipped", "errors": [], "warnings": []}}
+
+
+def test_token_service_enriched_envelope_bare_and_wrapped():
+    for raw in (coll([job("a")]), {"apiResponse": coll([job("a")])}):
+        assert value("isbackupenabled", "isBackupEnabled", enriched(raw)) is True
+    assert value("isbackupenabled", "isBackupEnabled", enriched(coll([job("a", enabled=False)]))) is False
+    assert value("isbackupenabled", "isBackupEnabled", enriched(None)) is None
+    body = {"vmJobs": coll([vm_job("a", "r1")]), "repositories": coll([repo("r1", True)])}
+    assert value("isbackupimmutable", "isBackupImmutable", enriched(body)) is True
+    assert value("isbackupimmutable", "isBackupImmutable", enriched({"apiResponse": body})) is True
+
+
+def test_every_file_opts_into_the_undrilled_input():
+    for name in os.listdir(HERE):
+        if name.endswith(".py") and not name.startswith("test_"):
+            with open(os.path.join(HERE, name)) as fh:
+                assert 'input.get("data")' in fh.read(), name

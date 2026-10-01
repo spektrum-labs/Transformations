@@ -217,7 +217,12 @@ def evaluate(input):
 
 
 def transform(input):
+    # Reading input.get("data") marks this transform as new-format for Token-Service, which then hands it the
+    # undrilled response as {"data": <response>, "validation": ...}. Without it Token-Service drills into the
+    # VSPC "data" array and meta.pagingInfo (the completeness proof) is lost.
     try:
+        if isinstance(input, dict) and "validation" in input and not isinstance(input.get("data"), list):
+            input = input.get("data")
         return evaluate(input)
     except Exception as e:
         return respond(KEY, METHOD, None, "Transformation error: " + str(e)[:300])
