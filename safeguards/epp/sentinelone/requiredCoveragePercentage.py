@@ -15,7 +15,7 @@ and in an enforcing mitigation mode.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def coerce_bool(value):
@@ -100,8 +100,118 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+
+def find_agent_list(obj):
+    """(agents, pagination, error) from the getEndpoints response, whatever wrapper Token-Service hands over."""
+    cur = obj
+    for depth in range(6):
+        if isinstance(cur, str):
+            try:
+                cur = json.loads(cur)
+            except Exception:
+                return None, None, None
+        if isinstance(cur, list):
+            return cur, None, None
+        if not isinstance(cur, dict):
+            return None, None, None
+        if cur.get("errors") or cur.get("error") is True:
+            detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
+            return None, None, json.dumps(detail)[:300]
+        if isinstance(cur.get("data"), list):
+            pagination = cur.get("pagination")
+            return cur["data"], (pagination if isinstance(pagination, dict) else None), None
+        nxt = None
+        for key in ["result", "response", "apiResponse", "api_response", "Output", "data"]:
+            if isinstance(cur.get(key), (dict, list, str)):
+                nxt = cur.get(key)
+                break
+        if nxt is None:
+            return None, None, None
+        cur = nxt
+    return None, None, None
+
+
+def complete_agent_read(raw):
+    """(agents, None) for a complete GET /agents read, else (None, problem).
+
+    Complete means: an agent list with SentinelOne's pagination block, a numeric totalItems, no
+    nextCursor left (every page read), no IS `truncated` marker (maxPages stopped the pager), and
+    at least totalItems agents. Anything else is a partial or unreadable read and is not scored.
+    """
+    agents, pagination, error = find_agent_list(raw)
+    if error is not None:
+        return None, "SentinelOne returned an error instead of an agent list: " + error
+    if agents is None:
+        return None, "No SentinelOne agent list in the response; nothing to evaluate."
+    if pagination is None:
+        return None, "The agent list carries no pagination block, so a complete read cannot be shown."
+    total = pagination.get("totalItems")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        return None, "pagination.totalItems is missing, so a complete read cannot be shown."
+    agents = [a for a in agents if isinstance(a, dict)]
+    if pagination.get("truncated"):
+        return None, ("Read stopped at the page limit (" + str(len(agents)) + " of " + str(total)
+                      + " agents); a partial read is not scored.")
+    if str(pagination.get("nextCursor") or "").strip() not in ("", "None", "null"):
+        return None, ("Only the first page was read (" + str(len(agents)) + " of " + str(total)
+                      + " agents; more pages remain); a partial read is not scored.")
+    if len(agents) < total:
+        return None, "Read " + str(len(agents)) + " of " + str(total) + " agents; a partial read is not scored."
+    return agents, None
+
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def fresh_agents(agents):
+    """(agents judged, stale count): endpoint rules 2026-09-29, the 15-day window on the newest check-in.
+
+    An agent whose lastActiveDate is more than 15 days before the newest lastActiveDate in the response is
+    stale: left out of the judgement and reported as staleAgentCount. When the newest check-in is itself
+    more than 15 days old the fleet is dark and every dated agent is stale. An agent with no readable
+    lastActiveDate is judged, not dropped.
+    """
+    agents = [a for a in agents if isinstance(a, dict)]
+    seen = [parse_seen(a.get("lastActiveDate")) for a in agents]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return agents, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        cutoff = wall_cutoff
+    fresh = []
+    stale = 0
+    for agent, when in zip(agents, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            fresh.append(agent)
+    return fresh, stale
+
+
 def transform(input):
     data, validation = extract_input(input)
+    # Read the undrilled response (input.get("data") makes Token-Service pass it whole), so the
+    # pagination block is visible and a partial read returns None with a dataCollection error.
+    raw = input.get("data") if isinstance(input, dict) and "validation" in input else input
+    agents, problem = complete_agent_read(raw)
+    if problem is not None:
+        return create_response(
+            result={"requiredCoveragePercentage": None},
+            validation=validation,
+            fail_reasons=[problem],
+            api_errors=[problem],
+            metadata={"transformationId": "requiredCoveragePercentage", "vendor": "SentinelOne", "category": "epp"},
+        )
+    data, stale_count = fresh_agents(agents)
 
     # Token-Service preprocessing may unwrap to a bare list of agents (when API
     # response's `data` field is a list) or leave a dict containing `data`.
@@ -181,6 +291,11 @@ def transform(input):
         )
 
     additional_findings = []
+    if stale_count > 0:
+        additional_findings.append(
+            f"{stale_count} agent(s) last checked in more than {ACTIVE_WINDOW_DAYS} days before the newest "
+            f"check-in and are left out of the coverage count (staleAgentCount)."
+        )
     if uninstalled_count > 0:
         additional_findings.append(
             f"{uninstalled_count} agent(s) have isUninstalled=true and are excluded from the coverage count."
@@ -207,6 +322,7 @@ def transform(input):
             "totalEnrolledAgents": total_enrolled,
             "uninstalledAgents": uninstalled_count,
             "decommissionedAgents": decommissioned_count,
+            "staleAgentCount": stale_count,
         },
         validation=validation,
         pass_reasons=pass_reasons,

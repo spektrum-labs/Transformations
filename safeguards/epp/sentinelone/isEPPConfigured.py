@@ -1,6 +1,15 @@
-"""Transformation: isEPPConfigured — checks EPP vendor health by inspecting per-agent mitigationMode fields."""
+"""Transformation: isEPPConfigured (SentinelOne, GET /web/api/v2.1/agents).
+
+Value: a whole-number percentage, floor(100 * configured / protected). protected = agents returned (each is an
+installed agent, servers included); configured = agents enforcing protection: mitigationMode "protect" (detect-only
+does not block) with a non-empty activeProtection list. The pass bar lives in the requirement. Only agents whose
+lastActiveDate is within 15 days of the newest one in the response are judged (endpoint rules 2026-09-29); the rest
+are reported as staleAgentCount, and a fleet with no agent inside the window is not evaluated. Not evaluated (dataCollection error, no value) when no agent
+is returned or when the agent list is a truncated page (pagination.totalItems larger than the agents returned, or a
+nextCursor still present): a percentage of a sample is not the fleet's.
+"""
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def extract_input(input_data):
@@ -68,11 +77,56 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def fresh_agents(agents):
+    """(agents judged, stale count): endpoint rules 2026-09-29, the 15-day window on the newest check-in.
+
+    An agent whose lastActiveDate is more than 15 days before the newest lastActiveDate in the response is
+    stale: left out of the judgement and reported as staleAgentCount. When the newest check-in is itself
+    more than 15 days old the fleet is dark and every dated agent is stale. An agent with no readable
+    lastActiveDate is judged, not dropped.
+    """
+    agents = [a for a in agents if isinstance(a, dict)]
+    seen = [parse_seen(a.get("lastActiveDate")) for a in agents]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return agents, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        cutoff = wall_cutoff
+    fresh = []
+    stale = 0
+    for agent, when in zip(agents, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            fresh.append(agent)
+    return fresh, stale
+
+
 def transform(input):
-    data, validation = extract_input(input)
+    # New input format: TS hands {"data": <raw response>, "validation": ...} to a transform that reads
+    # input.get("data"), so pagination.totalItems and nextCursor stay visible. The legacy format drills
+    # into the bare agent list and would hide a truncated page.
+    if isinstance(input, dict) and "validation" in input:
+        data, validation = extract_input(input.get("data"))[0], input["validation"]
+    else:
+        data, validation = extract_input(input)
 
     # Token-Service preprocessing may unwrap to a bare list of agents (when API
     # response's `data` field is a list) or leave a dict containing `data`/`pagination`.
+    next_cursor = None
     if isinstance(data, list):
         agents = data
         total_items = len(agents)
@@ -84,31 +138,46 @@ def transform(input):
         if not isinstance(pagination, dict):
             pagination = {}
         total_items = pagination.get("totalItems") or len(agents)
+        next_cursor = pagination.get("nextCursor")
     else:
         agents = []
         total_items = 0
     total_items = int(total_items) if total_items else 0
 
     sampled = len(agents)
+    truncated = total_items > sampled or str(next_cursor).strip() not in ("", "None", "null")
+    stale_count = 0
+    if not truncated:
+        agents, stale_count = fresh_agents(agents)
+        sampled = len(agents)
 
-    # No agents in fleet — EPP cannot be confirmed configured
-    if total_items == 0 and sampled == 0:
+    # No agents, or a truncated page: not evaluated (no value), never a percentage of a sample
+    if sampled == 0 or truncated:
+        reason = (
+            f"Agent list is truncated: {sampled} of {total_items} agents returned; configuration not evaluated on a sample"
+            if sampled and truncated else
+            f"All {stale_count} SentinelOne agents last checked in more than {ACTIVE_WINDOW_DAYS} days ago; there is nothing to measure"
+            if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
+        )
         return create_response(
             result={
-                "isEPPConfigured": False,
-                "totalAgents": 0,
-                "sampledAgents": 0,
+                "isEPPConfigured": None,
+                "totalAgents": total_items,
+                "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
+                "staleAgentCount": stale_count,
                 "protectModeCount": 0,
                 "detectModeCount": 0,
                 "noneModeCount": 0,
             },
             validation=validation,
-            fail_reasons=["No agents found in the fleet. EPP health check cannot pass with zero enrolled agents."],
+            api_errors=[reason],
+            fail_reasons=[reason],
             recommendations=[
-                "Deploy SentinelOne agents to endpoints. Ensure mitigationMode is set to 'protect' "
-                "or 'detect' via the SentinelOne console under Sentinels > Policy."
+                "Add pagination to the SentinelOne agents method so every agent is read"
+                if sampled else "Deploy SentinelOne agents to endpoints and confirm the siteId setting"
             ],
-            input_summary={"totalAgents": 0, "sampledAgents": 0},
+            input_summary={"totalAgents": total_items, "sampledAgents": sampled},
             metadata={
                 "transformationId": "isEPPConfigured",
                 "vendor": "SentinelOne",
@@ -144,48 +213,51 @@ def transform(input):
                 # No mitigation mode and no activeProtection — treat as unconfigured signal
                 unconfigured_names.append(computer_name)
 
-    is_configured = total_items > 0 and none_count == 0
+    configured_count = 0
+    for agent in agents:
+        agent = agent if isinstance(agent, dict) else {}
+        active = agent.get("activeProtection")
+        if agent.get("mitigationMode") == "protect" and isinstance(active, list) and len(active) > 0:
+            configured_count = configured_count + 1
+    configured_pct = (configured_count * 100) // sampled
+    is_configured = configured_count == sampled
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
     additional_findings = []
 
+    summary_line = (
+        f"{configured_count} of {sampled} agents ({configured_pct}%) enforce protection "
+        f"(mitigationMode 'protect' with activeProtection reported); "
+        f"{detect_count} in 'detect', {none_count} in 'none'."
+    )
     if is_configured:
-        if protect_count > 0 or detect_count > 0:
-            pass_reasons.append(
-                f"Fleet has {total_items} enrolled agents. Among {sampled} sampled agents, "
-                f"{protect_count} are in 'protect' mode and {detect_count} are in 'detect' mode. "
-                f"No agents with mitigationMode='none' detected. EPP health check passes."
-            )
-        else:
-            pass_reasons.append(
-                f"Fleet has {total_items} enrolled agents. Among {sampled} sampled agents, "
-                f"all have active protection reported (activeProtection field populated with active modules). "
-                f"No agents with mitigationMode='none' detected. EPP health check passes."
-            )
-        if active_protection_only > 0:
-            additional_findings.append(
-                f"{active_protection_only} sampled agents had mitigationMode absent in response "
-                f"but reported non-empty activeProtection arrays; counted as configured."
-            )
+        pass_reasons.append(summary_line)
     else:
-        fail_reasons.append(
-            f"Fleet has {total_items} enrolled agents. Among {sampled} sampled agents, "
-            f"{none_count} have mitigationMode='none', indicating EPP mitigation is disabled. "
-            f"Affected agents: {', '.join(unconfigured_names[:5])}"
-            f"{'...' if len(unconfigured_names) > 5 else ''}."
-        )
+        fail_reasons.append(summary_line)
+        if unconfigured_names:
+            additional_findings.append(
+                f"Agents without mitigation: {', '.join(unconfigured_names[:5])}"
+                f"{'...' if len(unconfigured_names) > 5 else ''}."
+            )
         recommendations.append(
-            "Set mitigationMode to 'protect' or 'detect' on all agents via the SentinelOne console "
-            "under Sentinels > Policy. Agents with mitigationMode='none' provide no active threat mitigation."
+            "Set mitigationMode to 'protect' on all agents via the SentinelOne console under Sentinels > Policy. "
+            "'detect' only alerts and 'none' provides no active threat mitigation."
+        )
+    if active_protection_only > 0:
+        additional_findings.append(
+            f"{active_protection_only} agents had mitigationMode absent but reported activeProtection; "
+            f"not counted as enforcing."
         )
 
     return create_response(
         result={
-            "isEPPConfigured": is_configured,
+            "isEPPConfigured": configured_pct,
+            "configuredAgents": configured_count,
             "totalAgents": total_items,
             "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
             "protectModeCount": protect_count,
             "detectModeCount": detect_count,
             "noneModeCount": none_count,
@@ -198,6 +270,7 @@ def transform(input):
         input_summary={
             "totalAgents": total_items,
             "sampledAgents": sampled,
+            "staleAgentCount": stale_count,
             "protectModeCount": protect_count,
             "detectModeCount": detect_count,
             "noneModeCount": none_count,
