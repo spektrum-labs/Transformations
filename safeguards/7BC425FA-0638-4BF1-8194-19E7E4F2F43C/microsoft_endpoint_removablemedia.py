@@ -40,6 +40,7 @@ from datetime import datetime
 
 KEY = "isRemovableMediaControlled"
 AUDIT_ONLY_PASSES = False
+MAX_SETTING_NODES = 20000
 EXCLUSION_TARGET = "#microsoft.graph.exclusiongroupassignmenttarget"
 ALL_TARGETS = ["#microsoft.graph.alldevicesassignmenttarget", "#microsoft.graph.alllicensedusersassignmenttarget"]
 OMA_DENY_WRITE = "/policy/config/storage/removablediskdenywriteaccess"
@@ -210,8 +211,10 @@ def setting_pairs(settings):
             if isinstance(s, dict):
                 stack.append(s.get("settingInstance", s))
     guard = 0
-    while stack and guard < 20000:
+    while stack:
         guard = guard + 1
+        if guard > MAX_SETTING_NODES:
+            raise ValueError("settings tree exceeds " + str(MAX_SETTING_NODES) + " nodes; not judged")
         inst = stack.pop()
         if not isinstance(inst, dict):
             continue

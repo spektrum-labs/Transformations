@@ -142,6 +142,16 @@ class RemovableMedia(unittest.TestCase):
         del policy["assignments"]
         self.assert_unevaluated(batch([policy], []))
 
+    def test_oversized_settings_tree_is_unevaluated_not_false(self):
+        node = {"settingDefinitionId": "device_vendor_msft_other", "groupSettingValue": {"children": []}}
+        kids = node["groupSettingValue"]["children"]
+        for i in range(m.MAX_SETTING_NODES + 5):
+            kids.append({"settingDefinitionId": "device_vendor_msft_other_" + str(i)})
+        policy = {"id": "big", "name": "Huge", "settings": [{"settingInstance": node}], "assignments": assignments(GROUP)}
+        out = self.out(batch([], [policy]))
+        self.assertIsNone(out["transformedResponse"][KEY])
+        self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()
