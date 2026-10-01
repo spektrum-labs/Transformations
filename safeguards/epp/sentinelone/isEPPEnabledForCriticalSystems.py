@@ -100,8 +100,80 @@ def is_protected(agent):
     return mitigation in ("protect", "detect") and len(active_protection) > 0
 
 
+
+def find_agent_list(obj):
+    """(agents, pagination, error) from the getEndpoints response, whatever wrapper Token-Service hands over."""
+    cur = obj
+    for depth in range(6):
+        if isinstance(cur, str):
+            try:
+                cur = json.loads(cur)
+            except Exception:
+                return None, None, None
+        if isinstance(cur, list):
+            return cur, None, None
+        if not isinstance(cur, dict):
+            return None, None, None
+        if cur.get("errors") or cur.get("error") is True:
+            detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
+            return None, None, json.dumps(detail)[:300]
+        if isinstance(cur.get("data"), list):
+            pagination = cur.get("pagination")
+            return cur["data"], (pagination if isinstance(pagination, dict) else None), None
+        nxt = None
+        for key in ["result", "response", "apiResponse", "api_response", "Output", "data"]:
+            if isinstance(cur.get(key), (dict, list, str)):
+                nxt = cur.get(key)
+                break
+        if nxt is None:
+            return None, None, None
+        cur = nxt
+    return None, None, None
+
+
+def complete_agent_read(raw):
+    """(agents, None) for a complete GET /agents read, else (None, problem).
+
+    Complete means: an agent list with SentinelOne's pagination block, a numeric totalItems, no
+    nextCursor left (every page read), no IS `truncated` marker (maxPages stopped the pager), and
+    at least totalItems agents. Anything else is a partial or unreadable read and is not scored.
+    """
+    agents, pagination, error = find_agent_list(raw)
+    if error is not None:
+        return None, "SentinelOne returned an error instead of an agent list: " + error
+    if agents is None:
+        return None, "No SentinelOne agent list in the response; nothing to evaluate."
+    if pagination is None:
+        return None, "The agent list carries no pagination block, so a complete read cannot be shown."
+    total = pagination.get("totalItems")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        return None, "pagination.totalItems is missing, so a complete read cannot be shown."
+    agents = [a for a in agents if isinstance(a, dict)]
+    if pagination.get("truncated"):
+        return None, ("Read stopped at the page limit (" + str(len(agents)) + " of " + str(total)
+                      + " agents); a partial read is not scored.")
+    if str(pagination.get("nextCursor") or "").strip() not in ("", "None", "null"):
+        return None, ("Only the first page was read (" + str(len(agents)) + " of " + str(total)
+                      + " agents; more pages remain); a partial read is not scored.")
+    if len(agents) < total:
+        return None, "Read " + str(len(agents)) + " of " + str(total) + " agents; a partial read is not scored."
+    return agents, None
+
 def transform(input):
     data, validation = extract_input(input)
+    # Read the undrilled response (input.get("data") makes Token-Service pass it whole), so the
+    # pagination block is visible and a partial read returns None with a dataCollection error.
+    raw = input.get("data") if isinstance(input, dict) and "validation" in input else input
+    agents, problem = complete_agent_read(raw)
+    if problem is not None:
+        return create_response(
+            result={"isEPPEnabledForCriticalSystems": None},
+            validation=validation,
+            fail_reasons=[problem],
+            api_errors=[problem],
+            metadata={"transformationId": "isEPPEnabledForCriticalSystems", "vendor": "SentinelOne", "category": "epp"},
+        )
+    data = agents
 
     if isinstance(data, list):
         items = data
