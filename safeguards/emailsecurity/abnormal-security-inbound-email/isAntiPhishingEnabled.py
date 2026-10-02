@@ -3,14 +3,20 @@ Transformation: isAntiPhishingEnabled
 Vendor: Abnormal Security Inbound Email
 Method: getThreatDetails  (GET {serverUrl}/v1/threats/{threatId}, threatId = listThreats threats[0])
 
-True only when the threat detail shows Abnormal ACTING on phishing for this tenant:
-at least one message in the threat is classified with a phishing-family attackType
-(Phishing: Credential / Phishing: Sensitive Data / Social Engineering / Invoice/Payment
-Fraud (BEC) / Scam / Extortion), carries a remediated remediationStatus, and was
-remediated (or sent) within the last 90 days. Everything else fails closed: an empty or
-missing messages list, an error envelope, a detect-only status (Not Remediated, No Action
-Done, Remediation Attempted, Marked Safe), a non-phishing type (Malware, Spam, Other), or
-a threat older than 90 days.
+The method reads ONE threat: the newest. That one threat can show protection is on, and it can
+show protection is off, but most threats show neither, so most reads are Unevaluated:
+
+- True: a message in the threat is a phishing-family attackType (Phishing: Credential /
+  Phishing: Sensitive Data / Social Engineering / Invoice/Payment Fraud (BEC) / Scam /
+  Extortion) that Abnormal remediated (Remediated / Auto-Remediated / Post Remediated) within
+  the last 90 days.
+- False (measured): a phishing-family message within 90 days that Abnormal saw and did NOT act
+  on: remediationStatus No Action Done, Would Remediate (detect-only) or Not Remediated.
+- None (Unevaluated, reason in dataCollection.errors): an empty, missing or error response, and
+  a newest threat that is neither of the above (a non-phishing type such as Spam or Malware,
+  Marked Safe, Remediation Attempted, no timestamp, or older than 90 days). One threat of that
+  kind says nothing about whether anti-phishing is on; reading it as False flipped THL Partners
+  from True to False on 2 Oct 2026 with no tenant or transform change.
 """
 
 import json
@@ -108,6 +114,11 @@ def is_remediated(status):
     return s in ["remediated", "auto-remediated", "auto remediated", "post remediated", "post-remediated"]
 
 
+def is_detect_only(status):
+    s = str(status or "").lower().strip()
+    return s in ["no action done", "would remediate", "not remediated"]
+
+
 def transform(input):
     criteriaKey = "isAntiPhishingEnabled"
     try:
@@ -115,14 +126,23 @@ def transform(input):
         messages = data.get("messages") if isinstance(data, dict) else None
         if not isinstance(messages, list):
             messages = []
+        messages = [m for m in messages if isinstance(m, dict)]
+        threat_id = data.get("threatId") if isinstance(data, dict) else None
+
+        if not messages:
+            reason = "No threat messages in the Abnormal response (empty, error or missing threat detail); nothing to measure"
+            return create_response(
+                result={criteriaKey: None, "remediatedPhishingMessages": 0, "messagesEvaluated": 0},
+                validation=validation, api_errors=[reason], fail_reasons=[reason],
+                recommendations=["Confirm the Abnormal REST API token is valid and the tenant has threat data at /v1/threats."],
+                input_summary={"threatId": threat_id, "messagesEvaluated": 0, "windowDays": WINDOW_DAYS})
 
         now = datetime.utcnow()
         evidence = []
+        unacted = []
         attack_types = []
         statuses = []
         for m in messages:
-            if not isinstance(m, dict):
-                continue
             at = m.get("attackType")
             rs = m.get("remediationStatus")
             if at and at not in attack_types:
@@ -131,43 +151,56 @@ def transform(input):
                 statuses.append(rs)
             when = parse_ts(m.get("remediationTimestamp")) or parse_ts(m.get("sentTime"))
             recent = when is not None and (now - when).days <= WINDOW_DAYS and (now - when).days >= -1
-            if is_phishing_family(at) and is_remediated(rs) and recent:
-                evidence.append({"attackType": at, "remediationStatus": rs,
-                                 "when": m.get("remediationTimestamp") or m.get("sentTime")})
+            if not (is_phishing_family(at) and recent):
+                continue
+            row = {"attackType": at, "remediationStatus": rs, "when": m.get("remediationTimestamp") or m.get("sentTime")}
+            if is_remediated(rs):
+                evidence.append(row)
+            elif is_detect_only(rs):
+                unacted.append(row)
 
-        enabled = len(evidence) > 0
         summary = {
-            "threatId": data.get("threatId") if isinstance(data, dict) else None,
+            "threatId": threat_id,
             "messagesEvaluated": len(messages),
             "remediatedPhishingMessages": len(evidence),
+            "unremediatedPhishingMessages": len(unacted),
             "attackTypesObserved": attack_types,
             "remediationStatusesObserved": statuses,
             "windowDays": WINDOW_DAYS,
         }
-        pass_reasons, fail_reasons, recs = [], [], []
-        if enabled:
+        result = {criteriaKey: None, "remediatedPhishingMessages": len(evidence),
+                  "unremediatedPhishingMessages": len(unacted), "messagesEvaluated": len(messages)}
+        if evidence:
             e = evidence[0]
-            pass_reasons.append(
-                "Abnormal classified an inbound message as %r and remediated it (remediationStatus=%r, %s); "
-                "%d of %d message(s) in threat %s are remediated phishing-family attacks within %d days."
-                % (e["attackType"], e["remediationStatus"], e["when"], len(evidence), len(messages),
-                   summary["threatId"], WINDOW_DAYS))
-        elif not messages:
-            fail_reasons.append("No threat messages in the response (empty, error or missing threat detail).")
-            recs.append("Confirm the Abnormal REST API token is valid and the tenant has threat data at /v1/threats.")
-        else:
-            fail_reasons.append(
-                "No message is a phishing-family attack remediated within %d days (attackTypes=%s, remediationStatuses=%s)."
-                % (WINDOW_DAYS, attack_types, statuses))
-            recs.append("Confirm Abnormal inbound protection runs in remediation (not detect-only) mode.")
-
+            result[criteriaKey] = True
+            return create_response(
+                result=result, validation=validation, input_summary=summary,
+                pass_reasons=[
+                    "Abnormal classified an inbound message as %r and remediated it (remediationStatus=%r, %s); "
+                    "%d of %d message(s) in threat %s are remediated phishing-family attacks within %d days."
+                    % (e["attackType"], e["remediationStatus"], e["when"], len(evidence), len(messages),
+                       threat_id, WINDOW_DAYS)])
+        if unacted:
+            e = unacted[0]
+            result[criteriaKey] = False
+            return create_response(
+                result=result, validation=validation, input_summary=summary,
+                fail_reasons=[
+                    "Abnormal classified an inbound message as %r within %d days and did not remediate it "
+                    "(remediationStatus=%r, %s): phishing was detected but not acted on."
+                    % (e["attackType"], WINDOW_DAYS, e["remediationStatus"], e["when"])],
+                recommendations=["Confirm Abnormal inbound protection runs in remediation (not detect-only) mode."])
+        reason = (
+            "The newest Abnormal threat (%s) is not a phishing-family attack from the last %d days with a "
+            "remediated or detect-only status (attackTypes=%s, remediationStatuses=%s); one such threat cannot "
+            "show whether anti-phishing is on, so there is nothing to measure"
+            % (threat_id, WINDOW_DAYS, attack_types, statuses))
         return create_response(
-            result={criteriaKey: enabled, "remediatedPhishingMessages": len(evidence), "messagesEvaluated": len(messages)},
-            validation=validation, pass_reasons=pass_reasons, fail_reasons=fail_reasons,
-            recommendations=recs, input_summary=summary)
+            result=result, validation=validation, input_summary=summary,
+            api_errors=[reason], fail_reasons=[reason])
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: " + str(e)])
