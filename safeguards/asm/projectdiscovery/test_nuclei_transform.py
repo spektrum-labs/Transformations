@@ -53,6 +53,18 @@ class NucleiTransformTest(unittest.TestCase):
         self.assertFalse(v["noCriticalFindings"])
         self.assertFalse(v["noHighFindings"])
 
+    def test_an_unresponsive_domain_is_not_a_failure(self):
+        results = [{"domain": "example.com", "findingsCount": 0, "status": "success"},
+                   {"domain": "dead.example.com", "findingsCount": 0, "status": "unresponsive"}]
+        v = verdict(scan(domainResults=results, domainsUnresponsive=1, domainsResponsive=1))
+        self.assertTrue(v["noCriticalFindings"])
+        self.assertTrue(v["noHighFindings"])
+
+    def test_all_unresponsive_fails_closed(self):
+        v = verdict({"status": "error", "message": "No host was scanned: of 2 domain(s), 2 unresponsive"})
+        self.assertFalse(v["noCriticalFindings"])
+        self.assertFalse(v["noHighFindings"])
+
     def test_scan_errors_fail(self):
         v = verdict(scan(errors=[{"domain": "www.example.com", "error": "timeout"}]))
         self.assertFalse(v["noCriticalFindings"])
