@@ -110,7 +110,7 @@ def transform(input):
         # zero findings there must not read as "no critical/high findings".
         domain_results = data.get("domainResults") or []
         failed_domains = [r.get("domain", "unknown") for r in domain_results
-                          if isinstance(r, dict) and r.get("status") != "success"]
+                          if isinstance(r, dict) and r.get("status") not in ("success", "unresponsive")]
         scan_errors = data.get("errors") or []
         domains_scanned = None
         if "domainsScanned" in data:
