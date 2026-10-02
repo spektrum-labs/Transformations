@@ -49,7 +49,19 @@ FAILED_SCANS = [
     scan(errors=[{"domain": "www.example.com", "error": "timeout"}]),
     scan(domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "error"}]),
     {"status": "success", "domain": "a.com", "findings": [], "total": 0},  # single-domain fallback: no discovery
+    # IS #1307: every host unreachable fails closed as status error.
+    {"status": "error", "message": "No host was scanned: of 2 domain(s), 2 unresponsive and the rest errored"},
 ]
+
+# IS #1307: a host that drops every connection is reported as unresponsive, not as a failed scan.
+ONE_UNRESPONSIVE = dict(
+    domainResults=[
+        {"domain": "example.com", "findingsCount": 0, "status": "success"},
+        {"domain": "dead.example.com", "findingsCount": 0, "status": "unresponsive"},
+    ],
+    domainsUnresponsive=1,
+    domainsResponsive=1,
+)
 
 KEYS = {
     "isasmenabled": ("isASMEnabled", False),
@@ -97,6 +109,12 @@ class Measured(unittest.TestCase):
     def test_kev_count_flips(self):
         self.assertEqual(value("knownexploitedvulncount", scan(findings=[CRIT])), 0)
         self.assertEqual(value("knownexploitedvulncount", scan(findings=[CRIT_KEV, CRIT])), 1)
+
+    def test_one_unresponsive_host_still_measures(self):
+        for name, (key, fail) in KEYS.items():
+            with self.subTest(key=key):
+                self.assertNotEqual(value(name, scan(**ONE_UNRESPONSIVE)), fail)
+        self.assertEqual(value("criticalvulnerabilitycount", scan(findings=[CRIT], **ONE_UNRESPONSIVE)), 1)
 
     def test_wrapped_input(self):
         self.assertEqual(value("criticalvulnerabilitycount", {"apiResponse": scan(findings=[CRIT])}), 1)

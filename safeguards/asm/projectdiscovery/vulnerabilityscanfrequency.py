@@ -86,7 +86,7 @@ def scan_problem(data):
     if scanned is None or scanned <= 0:
         return "Nuclei scanned zero hosts for " + str(domain)
     failed = [r.get("domain", "unknown") for r in (data.get("domainResults") or [])
-              if isinstance(r, dict) and r.get("status") != "success"]
+              if isinstance(r, dict) and r.get("status") not in ("success", "unresponsive")]
     errors = data.get("errors") or []
     if failed or errors:
         return "Nuclei scan failed for " + str(max(len(failed), len(errors))) + " host(s) of " + str(domain)
