@@ -15,7 +15,7 @@ and in an enforcing mitigation mode.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def coerce_bool(value):
@@ -159,6 +159,44 @@ def complete_agent_read(raw):
         return None, "Read " + str(len(agents)) + " of " + str(total) + " agents; a partial read is not scored."
     return agents, None
 
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_seen(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return datetime.fromisoformat(str(value)[:19])
+    except Exception:
+        return None
+
+
+def fresh_agents(agents):
+    """(agents judged, stale count): endpoint rules 2026-09-29, the 15-day window on the newest check-in.
+
+    An agent whose lastActiveDate is more than 15 days before the newest lastActiveDate in the response is
+    stale: left out of the judgement and reported as staleAgentCount. When the newest check-in is itself
+    more than 15 days old the fleet is dark and every dated agent is stale. An agent with no readable
+    lastActiveDate is judged, not dropped.
+    """
+    agents = [a for a in agents if isinstance(a, dict)]
+    seen = [parse_seen(a.get("lastActiveDate")) for a in agents]
+    known = [s for s in seen if s is not None]
+    if not known:
+        return agents, 0
+    cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
+    wall_cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    if max(known) < wall_cutoff:
+        cutoff = wall_cutoff
+    fresh = []
+    stale = 0
+    for agent, when in zip(agents, seen):
+        if when is not None and when < cutoff:
+            stale = stale + 1
+        else:
+            fresh.append(agent)
+    return fresh, stale
+
+
 def transform(input):
     data, validation = extract_input(input)
     # Read the undrilled response (input.get("data") makes Token-Service pass it whole), so the
@@ -173,7 +211,7 @@ def transform(input):
             api_errors=[problem],
             metadata={"transformationId": "requiredCoveragePercentage", "vendor": "SentinelOne", "category": "epp"},
         )
-    data = agents
+    data, stale_count = fresh_agents(agents)
 
     # Token-Service preprocessing may unwrap to a bare list of agents (when API
     # response's `data` field is a list) or leave a dict containing `data`.
@@ -191,12 +229,18 @@ def transform(input):
     total_enrolled = len(items)
 
     # An empty judged fleet proves nothing either way: Unevaluated with the reason, never 0%.
+    # Either the complete read held no agents, or every agent fell outside the check-in window.
     if total_enrolled == 0:
-        reason = "No SentinelOne agents were returned; there is nothing to measure"
+        reason = (
+            f"All {stale_count} SentinelOne agents last checked in more than {ACTIVE_WINDOW_DAYS} days ago; "
+            f"there is nothing to measure"
+            if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
+        )
         return create_response(
             result={
                 "requiredCoveragePercentage": None,
                 "totalEnrolledAgents": 0,
+                "staleAgentCount": stale_count,
             },
             validation=validation,
             api_errors=[reason],
@@ -204,7 +248,7 @@ def transform(input):
             recommendations=[
                 "Confirm SentinelOne agents are installed and checking in for the configured site or account."
             ],
-            input_summary={"totalEnrolledAgents": 0},
+            input_summary={"totalEnrolledAgents": 0, "staleAgentCount": stale_count},
             metadata={"transformationId": "requiredCoveragePercentage", "vendor": "SentinelOne", "category": "epp"},
         )
 
@@ -260,6 +304,11 @@ def transform(input):
         )
 
     additional_findings = []
+    if stale_count > 0:
+        additional_findings.append(
+            f"{stale_count} agent(s) last checked in more than {ACTIVE_WINDOW_DAYS} days before the newest "
+            f"check-in and are left out of the coverage count (staleAgentCount)."
+        )
     if uninstalled_count > 0:
         additional_findings.append(
             f"{uninstalled_count} agent(s) have isUninstalled=true and are excluded from the coverage count."
@@ -286,6 +335,7 @@ def transform(input):
             "totalEnrolledAgents": total_enrolled,
             "uninstalledAgents": uninstalled_count,
             "decommissionedAgents": decommissioned_count,
+            "staleAgentCount": stale_count,
         },
         validation=validation,
         pass_reasons=pass_reasons,

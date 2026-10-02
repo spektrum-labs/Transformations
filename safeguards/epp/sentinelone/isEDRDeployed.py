@@ -1,4 +1,17 @@
+"""Transformation: isEDRDeployed (SentinelOne, GET /web/api/v2.1/agents, method getEndpoints).
 
+Source field: each agent's activeProtection list. "edr" in it means the agent is running SentinelOne's EDR
+(Deep Visibility / Storyline) protection; isEPPLoggingEnabled reads the same field for EDR telemetry.
+
+True when at least one installed agent (not uninstalled, not decommissioned) inside the 15-day check-in window
+reports "edr" in activeProtection -- "the EDR sensor is deployed", the CrowdStrike Falcon isEDRDeployed
+convention. Breadth is requiredCoveragePercentage. edrDeployedPercentage (whole number, of the judged agents)
+is emitted as evidence. False on a complete read where no judged agent reports "edr".
+
+Not evaluated (isEDRDeployed None, dataCollection "error"): a partial or unreadable agent read (no pagination
+block, non-numeric totalItems, a nextCursor left, an IS truncated marker, fewer agents than totalItems), an
+error body, an empty fleet, or no agent inside the check-in window.
+"""
 import json
 from datetime import datetime, timedelta
 
@@ -165,112 +178,59 @@ def fresh_agents(agents):
     return fresh, stale
 
 
-def transform(input):
-    """isEPPLoggingEnabled (SentinelOne, GET /web/api/v2.1/agents).
+KEY = "isEDRDeployed"
+META = {"transformationId": "isEDRDeployed", "vendor": "SentinelOne", "category": "epp"}
 
-    An agent streams EDR telemetry when "edr" is in its activeProtection list. True only when at
-    least one agent is returned and every returned agent reports "edr"; the percentage is emitted
-    as eppLoggingPercentage. Enrolment alone (the old `agents_with_edr > 0 or totalItems > 0`
-    rule) is not evidence of logging. An error body, an unreadable or partial agent list and an
-    empty judged fleet (no agents, or all outside the check-in window) are Unevaluated (None)
-    with the reason, never False.
-    """
+
+def flag(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
+
+
+def transform(input):
     data, validation = extract_input(input)
-    # Read the undrilled response (input.get("data") makes Token-Service pass it whole), so the
-    # pagination block is visible and a partial read returns None with a dataCollection error.
     raw = input.get("data") if isinstance(input, dict) and "validation" in input else input
     agents, problem = complete_agent_read(raw)
+    if problem is None and not agents:
+        problem = "SentinelOne returned no agents; an empty fleet proves nothing about EDR deployment."
     if problem is not None:
-        return create_response(
-            result={"isEPPLoggingEnabled": None},
-            validation=validation,
-            fail_reasons=[problem],
-            api_errors=[problem],
-            metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
-        )
-    data, stale_count = fresh_agents(agents)
-    if isinstance(data, dict) and (data.get("errors") or data.get("error")):
-        reason = "SentinelOne returned an error instead of an agent list"
-        return create_response(
-            result={"isEPPLoggingEnabled": False, "eppLoggingPercentage": 0, "totalAgents": 0, "agentsWithEdrLogging": 0},
-            validation=validation, api_errors=[reason], fail_reasons=[reason],
-            metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
-        )
-    total_items = 0
-    if isinstance(data, list):
-        agents = data
-    elif isinstance(data, dict):
-        agents = data.get("data")
-        pagination = data.get("pagination") if isinstance(data.get("pagination"), dict) else {}
-        total_items = pagination.get("totalItems") or 0
-    else:
-        agents = None
-    if not isinstance(agents, list):
-        agents = []
-    agents = [a for a in agents if isinstance(a, dict)]
-    sampled = len(agents)
-    total_items = int(total_items) if total_items else sampled
-
-    # An empty judged fleet proves nothing either way: Unevaluated with the reason, never a False.
-    # Either the complete read held no agents, or every agent fell outside the check-in window.
-    if sampled == 0:
-        reason = (
-            "All " + str(stale_count) + " SentinelOne agents last checked in more than "
-            + str(ACTIVE_WINDOW_DAYS) + " days ago; there is nothing to measure"
-            if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
-        )
-        return create_response(
-            result={"isEPPLoggingEnabled": None, "totalAgents": total_items, "sampledAgents": 0, "staleAgentCount": stale_count},
-            validation=validation,
-            api_errors=[reason],
-            fail_reasons=[reason],
-            recommendations=["Confirm SentinelOne agents are installed and checking in for the configured site or account"],
-            input_summary={"totalAgents": total_items, "sampledAgents": 0, "staleAgentCount": stale_count},
-            metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
-        )
-
-    with_edr = 0
-    missing_names = []
-    for agent in agents:
-        active = agent.get("activeProtection")
-        modules = [str(m).lower() for m in active] if isinstance(active, list) else []
+        return create_response(result={KEY: None}, validation=validation, fail_reasons=[problem],
+                               api_errors=[problem], metadata=META)
+    judged, stale_count = fresh_agents(agents)
+    installed = [a for a in judged if not flag(a.get("isUninstalled")) and not flag(a.get("isDecommissioned"))]
+    if not installed:
+        problem = ("No installed SentinelOne agent checked in within " + str(ACTIVE_WINDOW_DAYS)
+                   + " days of the newest check-in; EDR deployment cannot be judged.")
+        return create_response(result={KEY: None, "staleAgentCount": stale_count}, validation=validation,
+                               fail_reasons=[problem], api_errors=[problem], metadata=META)
+    with_edr = []
+    without = []
+    for a in installed:
+        active = a.get("activeProtection")
+        modules = [str(m).strip().lower() for m in active] if isinstance(active, list) else []
         if "edr" in modules:
-            with_edr = with_edr + 1
+            with_edr.append(a)
         else:
-            missing_names.append(str(agent.get("computerName") or agent.get("uuid") or "unknown"))
-
-    pct = (with_edr * 100) // sampled if sampled else 0
-    is_enabled = sampled > 0 and with_edr == sampled
-    summary = str(with_edr) + " of " + str(sampled) + " returned agents (" + str(pct) + "%) report the edr module in activeProtection"
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+            without.append(str(a.get("computerName") or a.get("uuid") or "unknown"))
+    pct = (len(with_edr) * 100) // len(installed)
+    deployed = len(with_edr) > 0
+    summary = (str(len(with_edr)) + " of " + str(len(installed)) + " installed agents (" + str(pct)
+               + "%) report edr in activeProtection")
     findings = []
-    if is_enabled:
-        pass_reasons.append(summary)
-    else:
-        fail_reasons.append(summary)
-        findings.append("Agents without edr: " + ", ".join(missing_names[:5]) + ("..." if len(missing_names) > 5 else ""))
-        recommendations.append("Enable EDR telemetry in the SentinelOne policy applied to every agent")
+    if without:
+        findings.append("Agents without edr: " + ", ".join(without[:5]) + ("..." if len(without) > 5 else ""))
     if stale_count:
         findings.append(str(stale_count) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)
                         + " days before the newest check-in and are not judged (staleAgentCount)")
-    if total_items > sampled:
-        findings.append("Judged on the " + str(sampled) + " agents returned of " + str(total_items) + " enrolled")
     return create_response(
-        result={
-            "isEPPLoggingEnabled": is_enabled,
-            "eppLoggingPercentage": pct,
-            "totalAgents": total_items,
-            "sampledAgents": sampled,
-            "staleAgentCount": stale_count,
-            "agentsWithEdrLogging": with_edr,
-        },
+        result={KEY: deployed, "edrDeployedPercentage": pct, "edrAgents": len(with_edr),
+                "judgedAgents": len(installed), "staleAgentCount": stale_count, "totalAgents": len(agents)},
         validation=validation,
-        pass_reasons=pass_reasons,
-        fail_reasons=fail_reasons,
-        recommendations=recommendations,
+        pass_reasons=[summary] if deployed else [],
+        fail_reasons=[] if deployed else [summary + "; no agent runs SentinelOne EDR"],
+        recommendations=[] if deployed else ["Enable EDR (Deep Visibility) in the SentinelOne policy and licence the agents for it"],
         additional_findings=findings,
-        input_summary={"totalAgents": total_items, "sampledAgents": sampled, "agentsWithEdrLogging": with_edr},
-        metadata={"transformationId": "isEPPLoggingEnabled", "vendor": "SentinelOne", "category": "epp"},
+        input_summary={"totalAgents": len(agents), "judgedAgents": len(installed), "edrAgents": len(with_edr)},
+        metadata=META,
     )
