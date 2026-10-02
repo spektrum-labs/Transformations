@@ -228,6 +228,30 @@ def transform(input):
     # len(items) is the fleet-wide enrolled count — same scope as our per-agent counts.
     total_enrolled = len(items)
 
+    # An empty judged fleet proves nothing either way: Unevaluated with the reason, never 0%.
+    # Either the complete read held no agents, or every agent fell outside the check-in window.
+    if total_enrolled == 0:
+        reason = (
+            f"All {stale_count} SentinelOne agents last checked in more than {ACTIVE_WINDOW_DAYS} days ago; "
+            f"there is nothing to measure"
+            if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
+        )
+        return create_response(
+            result={
+                "requiredCoveragePercentage": None,
+                "totalEnrolledAgents": 0,
+                "staleAgentCount": stale_count,
+            },
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=[
+                "Confirm SentinelOne agents are installed and checking in for the configured site or account."
+            ],
+            input_summary={"totalEnrolledAgents": 0, "staleAgentCount": stale_count},
+            metadata={"transformationId": "requiredCoveragePercentage", "vendor": "SentinelOne", "category": "epp"},
+        )
+
     installed_count = 0
     uninstalled_count = 0
     decommissioned_count = 0
@@ -254,10 +278,7 @@ def transform(input):
 
     covered_count = installed_count
 
-    if total_enrolled > 0:
-        coverage_pct = round((covered_count / total_enrolled) * 100, 2)
-    else:
-        coverage_pct = 0.0
+    coverage_pct = round((covered_count / total_enrolled) * 100, 2)
 
     not_covered = total_enrolled - covered_count
 
@@ -265,15 +286,7 @@ def transform(input):
     fail_reasons = []
     recommendations = []
 
-    if total_enrolled == 0:
-        fail_reasons.append(
-            "No enrolled agents found in the SentinelOne account. "
-            "Endpoint Security coverage cannot be determined."
-        )
-        recommendations.append(
-            "Deploy the SentinelOne agent to managed endpoints and enroll them in the console."
-        )
-    elif coverage_pct >= 100.0:
+    if coverage_pct >= 100.0:
         pass_reasons.append(
             f"All {total_enrolled} enrolled endpoints have the SentinelOne agent installed "
             f"(isUninstalled=false, isDecommissioned=false), yielding 100% Endpoint Security coverage."

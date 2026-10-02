@@ -14,8 +14,9 @@ from pathlib import Path
 
 KEYS = ["requiredCoveragePercentage", "isEPPEnabled", "isEPPLoggingEnabled", "isEPPConfigured"]
 PASS = {"requiredCoveragePercentage": 100.0, "isEPPEnabled": True, "isEPPLoggingEnabled": True, "isEPPConfigured": 100}
-# What each key already returns for a complete read with no agent in it; a fully stale fleet must match.
-EMPTY = {"requiredCoveragePercentage": 0.0, "isEPPEnabled": False, "isEPPLoggingEnabled": False, "isEPPConfigured": None}
+# What each key returns for a complete read with no agent in it; a fully stale fleet must match.
+# Unevaluated (None), never False or 0% (2026-10-02: an empty fleet proves nothing either way).
+EMPTY = {"requiredCoveragePercentage": None, "isEPPEnabled": None, "isEPPLoggingEnabled": None, "isEPPConfigured": None}
 NOW = datetime.utcnow()
 
 
