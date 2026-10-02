@@ -130,7 +130,7 @@ def load_endpoints(criteria_key, input, fail_value):
     if len(items) == 0:
         reason = "Trend Vision One returned no endpoints, so nothing about the estate is proven"
         return None, None, create_response(criteria_key, {criteria_key: fail_value}, validation=validation,
-                                           fail_reasons=[reason],
+                                           api_errors=[reason], fail_reasons=[reason],
                                            recommendations=["Confirm endpoints are managed in Trend Vision One Endpoint Inventory and that the API key's role can see them"])
     return items, validation, None
 
@@ -168,8 +168,11 @@ def transform(input):
             recommendations.append("Resolve the investigations on the isolated endpoints and restore them")
         else:
             pass_reasons.append("None of the %d endpoints is network-isolated" % len(endpoints))
+        # A count that is not known is not evaluated, never a failed check: report it as a
+        # data-collection error so the platform records "not evaluated" instead of "failed".
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
-                               recommendations=recommendations, input_summary=summary)
+                               recommendations=recommendations, input_summary=summary,
+                               api_errors=(fail_reasons if value is None else None))
     except Exception as e:
         return failure(criteriaKey, None, e)
