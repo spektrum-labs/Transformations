@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -12,11 +11,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -69,97 +67,79 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error") is True or data.get("statusCode") == 500 or data.get("status") == "Error":
-        msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
-        api_errors.append(f"Vendor API returned an error: {msg}")
+    if isinstance(data, list):
+        policies = data
+    elif isinstance(data, dict):
+        policies = data.get("resources") or data.get("data") or []
+    else:
+        policies = []
 
-    resources = data.get("resources") or []
-    if not isinstance(resources, list):
-        resources = []
+    if not isinstance(policies, list):
+        policies = []
 
-    total_policies = len(resources)
-    configured_policies = []
-    for p in resources:
-        if not isinstance(p, dict):
-            continue
-        enabled = bool(p.get("enabled"))
+    total_policies = len(policies)
+    enabled_policies = [p for p in policies if isinstance(p, dict) and p.get("enabled")]
+    enabled_count = len(enabled_policies)
+
+    covering_policies = []
+    for p in enabled_policies:
         groups = p.get("groups") or []
-        prevention_settings = p.get("prevention_settings") or []
-        has_groups = isinstance(groups, list) and len(groups) > 0
-        has_settings = isinstance(prevention_settings, list) and len(prevention_settings) > 0
-        if enabled and has_groups and has_settings:
-            configured_policies.append(p)
+        is_platform_default = p.get("name") == "platform_default"
+        if groups or is_platform_default:
+            covering_policies.append(p)
 
-    is_configured = len(configured_policies) > 0
+    covering_count = len(covering_policies)
+    is_configured = covering_count > 0
 
-    input_summary = {
-        "totalPreventionPolicies": total_policies,
-        "configuredPreventionPolicies": len(configured_policies),
-    }
-
-    if api_errors:
-        return create_response(
-            result={"isEPPConfigured": False},
-            validation=validation,
-            fail_reasons=[
-                "Unable to retrieve prevention policy data from CrowdStrike Falcon API; "
-                "cannot confirm an enabled prevention policy assigned to a host group."
-            ],
-            recommendations=[
-                "Investigate the getCombinedPreventionPolicies API integration error and re-run "
-                "the scan once the vendor API responds successfully."
-            ],
-            input_summary=input_summary,
-            api_errors=api_errors,
-            metadata={
-                "transformationId": "isEPPConfigured",
-                "vendor": "CrowdStrike Falcon",
-                "category": "epp",
-            },
-        )
+    covering_names = [p.get("name") or p.get("id") or "unknown" for p in covering_policies][:10]
+    covering_platforms = list({p.get("platform_name") for p in covering_policies if p.get("platform_name")})
 
     if is_configured:
-        names = [p.get("name") for p in configured_policies if p.get("name")]
-        sample_names = ", ".join([str(n) for n in names[:3]]) if names else "unnamed policy"
         pass_reasons = [
-            f"Found {len(configured_policies)} of {total_policies} prevention policy(ies) with "
-            f"enabled=true, non-empty prevention_settings, and assigned host groups "
-            f"(e.g. {sample_names}), confirming EPP is configured and assigned to a host group "
-            f"covering the endpoint population."
+            f"Found {covering_count} enabled prevention policy(ies) assigned to a host group or acting as platform_default "
+            f"out of {total_policies} total prevention policies ({enabled_count} enabled). "
+            f"Covering policies: {covering_names}, platforms covered: {covering_platforms}."
         ]
         fail_reasons = []
         recommendations = []
     else:
         pass_reasons = []
-        if total_policies == 0:
-            fail_reasons = [
-                "No prevention policies were returned by getCombinedPreventionPolicies; "
-                "there is no Prevention Policy record to confirm EPP configuration."
-            ]
-        else:
-            fail_reasons = [
-                f"Found {total_policies} prevention policy(ies), but none had enabled=true "
-                f"together with non-empty prevention_settings and at least one assigned host group."
-            ]
+        fail_reasons = [
+            f"No enabled prevention policy is assigned to a host group or configured as platform_default. "
+            f"Total prevention policies observed: {total_policies}, enabled: {enabled_count}."
+        ]
         recommendations = [
-            "Create or enable a CrowdStrike Falcon Prevention Policy, configure its "
-            "prevention_settings (NGAV/ML detection toggles), and assign it to the host group "
-            "covering this endpoint population."
+            "Create or enable a Prevention Policy in CrowdStrike Falcon and assign it to the host group(s) "
+            "covering the endpoint population, or ensure the platform_default policy is enabled."
         ]
 
+    result = {
+        "isEPPConfigured": is_configured,
+        "totalPreventionPolicies": total_policies,
+        "enabledPreventionPolicies": enabled_count,
+        "coveringPreventionPolicies": covering_count,
+    }
+
+    input_summary = {
+        "totalPreventionPolicies": total_policies,
+        "enabledPreventionPolicies": enabled_count,
+        "coveringPreventionPolicies": covering_count,
+    }
+
+    metadata = {
+        "transformationId": "isEPPConfigured",
+        "vendor": "CrowdStrike Falcon",
+        "category": "epp",
+    }
+
     return create_response(
-        result={"isEPPConfigured": is_configured},
+        result=result,
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        metadata={
-            "transformationId": "isEPPConfigured",
-            "vendor": "CrowdStrike Falcon",
-            "category": "epp",
-        },
+        metadata=metadata,
     )

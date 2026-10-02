@@ -3,7 +3,6 @@ from datetime import datetime
 
 
 def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -12,11 +11,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -29,7 +28,6 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
-    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -69,69 +67,66 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error"):
-        api_errors.append(str(data.get("errorMessage") or data.get("message") or "API error"))
+    if isinstance(data, list):
+        policies = data
+    elif isinstance(data, dict):
+        policies = data.get("resources") or data.get("data") or []
+    else:
+        policies = []
 
-    policies = data.get("resources") or []
     if not isinstance(policies, list):
         policies = []
 
     total_policies = len(policies)
-    assigned_policies = []
-    for p in policies:
-        if not isinstance(p, dict):
-            continue
-        groups = p.get("groups") or []
-        if isinstance(groups, list) and len(groups) > 0:
-            assigned_policies.append(p)
-
-    enabled_assigned = [p for p in assigned_policies if p.get("enabled") is True]
-    disabled_assigned = [p for p in assigned_policies if p.get("enabled") is not True]
+    assigned_policies = [p for p in policies if isinstance(p, dict) and (p.get("groups") or [])]
+    assigned_enabled = [p for p in assigned_policies if p.get("enabled") is True]
+    assigned_disabled = [p for p in assigned_policies if p.get("enabled") is not True]
 
     total_assigned = len(assigned_policies)
-    total_enabled_assigned = len(enabled_assigned)
-
-    is_epp_enabled = total_assigned > 0 and total_enabled_assigned == total_assigned
-
-    input_summary = {
-        "totalPolicies": total_policies,
-        "assignedPolicies": total_assigned,
-        "enabledAssignedPolicies": total_enabled_assigned,
-        "disabledAssignedPolicies": len(disabled_assigned),
-    }
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
+    total_assigned_enabled = len(assigned_enabled)
+    total_assigned_disabled = len(assigned_disabled)
 
     if total_assigned == 0:
-        fail_reasons.append(
-            "No prevention policies with host-group assignments were found among %d total policies; cannot confirm enforcement." % total_policies
-        )
-        recommendations.append(
-            "Assign at least one prevention policy to a host group and ensure its top-level 'enabled' flag is set to true."
-        )
-    elif is_epp_enabled:
-        names = ", ".join([str(p.get("name")) for p in enabled_assigned][:5])
-        pass_reasons.append(
-            "All %d host-group-assigned prevention policies have enabled=true (e.g. %s)." % (total_enabled_assigned, names)
-        )
+        is_enabled = False
+        fail_reasons = [
+            f"No prevention policies with an assigned host group ('groups' non-empty) were found among {total_policies} policies returned; cannot confirm an enabled prevention policy is active on any host group."
+        ]
+        pass_reasons = []
+        recommendations = [
+            "Assign an enabled prevention policy to at least one host group in the CrowdStrike Falcon console."
+        ]
+    elif total_assigned_disabled == 0:
+        is_enabled = True
+        names = [p.get("name") for p in assigned_enabled][:5]
+        pass_reasons = [
+            f"All {total_assigned} prevention policies assigned to a host group have enabled=true (examples: {names}), out of {total_policies} total prevention policies."
+        ]
+        fail_reasons = []
+        recommendations = []
     else:
-        names = ", ".join([str(p.get("name")) for p in disabled_assigned][:5])
-        fail_reasons.append(
-            "%d of %d host-group-assigned prevention policies have enabled=false (e.g. %s), meaning prevention is defined but not actively enforced on those host groups." % (len(disabled_assigned), total_assigned, names)
-        )
-        recommendations.append(
-            "Enable the top-level 'enabled' flag on all prevention policies assigned to host groups so prevention actions are actively enforced."
-        )
+        is_enabled = False
+        disabled_names = [p.get("name") for p in assigned_disabled][:5]
+        pass_reasons = []
+        fail_reasons = [
+            f"{total_assigned_disabled} of {total_assigned} host-group-assigned prevention policies have enabled=false (examples: {disabled_names})."
+        ]
+        recommendations = [
+            f"Enable the prevention policy top-level flag for the following disabled but host-group-assigned policies: {disabled_names}."
+        ]
 
     result = {
-        "isEPPEnabled": is_epp_enabled,
-        "totalAssignedPolicies": total_assigned,
-        "enabledAssignedPolicies": total_enabled_assigned,
+        "isEPPEnabled": is_enabled,
+        "totalPreventionPolicies": total_policies,
+        "assignedPreventionPolicies": total_assigned,
+        "assignedEnabledPolicies": total_assigned_enabled,
+        "assignedDisabledPolicies": total_assigned_disabled,
+    }
+
+    input_summary = {
+        "totalPreventionPolicies": total_policies,
+        "assignedPreventionPolicies": total_assigned,
     }
 
     return create_response(
@@ -141,7 +136,6 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
-        api_errors=api_errors,
         metadata={
             "transformationId": "isEPPEnabled",
             "vendor": "CrowdStrike Falcon",

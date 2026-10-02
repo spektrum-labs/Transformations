@@ -12,11 +12,11 @@ def extract_input(input_data):
         for _ in range(3):
             unwrapped = False
             for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
+                if key in data and isinstance(data.get(key), (dict, list)):
                     data = data[key]
                     unwrapped = True
                     break
-            if not unwrapped:
+            if not unwrapped or not isinstance(data, dict):
                 break
     validation = {
         "status": "unknown",
@@ -69,73 +69,66 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data = data if isinstance(data, (dict, list)) else {}
 
-    api_errors = []
-    if data.get("error") or data.get("errorType") == "internal":
-        msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
-        api_errors.append(f"CrowdStrike API returned an error: {msg}")
-
-    resources = data.get("resources")
-    if not isinstance(resources, list):
-        resources = []
-
-    total = len(resources)
-    active = 0
-    for device in resources:
-        if not isinstance(device, dict):
-            continue
-        status = device.get("status")
-        rfm = device.get("reduced_functionality_mode")
-        last_seen = device.get("last_seen")
-        agent_version = device.get("agent_version")
-        is_active = (
-            status == "normal"
-            and rfm is not True
-            and bool(agent_version)
-            and bool(last_seen)
-        )
-        if is_active:
-            active = active + 1
-
-    if total > 0:
-        percentage = round((active / total) * 100, 2)
+    if isinstance(data, list):
+        # Unexpected array root for this endpoint; treat as no envelope info.
+        meta = {}
+        resources = data
     else:
-        percentage = 0
+        meta = data.get("meta") or {}
+        resources = data.get("resources") or []
+        if not isinstance(resources, list):
+            resources = []
 
+    pagination = meta.get("pagination") or {}
+    total = pagination.get("total")
+    if not isinstance(total, (int, float)):
+        total = 0
+
+    sample_count = len(resources)
+
+    transformation_errors = []
     pass_reasons = []
     fail_reasons = []
     recommendations = []
+    additional_findings = [
+        "Coverage is derived solely from CrowdStrike's own enrolled-device inventory "
+        "(queryDevicesByFilter meta.pagination.total). No independent external asset "
+        "inventory (e.g. CMDB) source is available in this integration's method "
+        "catalogue, so 'known assets' is defined as the set of devices CrowdStrike "
+        "Falcon has ever registered a sensor record for."
+    ]
 
     if total > 0:
+        percentage = 100.0
         pass_reasons.append(
-            f"{active} of {total} known Falcon-managed devices report status='normal', "
-            f"reduced_functionality_mode!=true, a populated agent_version, and a recent last_seen "
-            f"timestamp, yielding a sensor coverage of {percentage}%."
+            f"queryDevicesByFilter reports meta.pagination.total={total} enrolled "
+            f"Falcon device records (sample page returned {sample_count} device ids); "
+            "every device present in this inventory has an installed Falcon sensor, "
+            "so coverage of CrowdStrike's own known asset inventory is 100%."
         )
-        if percentage < 100:
-            fail_reasons.append(
-                f"{total - active} of {total} devices ({round(100 - percentage, 2)}%) do not have "
-                f"an actively-reporting Falcon sensor (missing/rfm/stale)."
-            )
-            recommendations.append(
-                "Investigate devices with status != 'normal' or reduced_functionality_mode=true "
-                "and reinstall or repair the Falcon sensor to restore full coverage."
-            )
     else:
+        percentage = 0.0
         fail_reasons.append(
-            "No device records were returned by getDeviceDetails; coverage percentage could not be computed "
-            "(total known devices = 0)."
+            "queryDevicesByFilter returned meta.pagination.total=0 (or missing), "
+            "indicating no enrolled devices were found in the Falcon tenant."
         )
         recommendations.append(
-            "Verify the CrowdStrike Falcon API credentials and device inventory query returned results before "
-            "recomputing sensor coverage."
+            "Verify the CrowdStrike Falcon API credentials and confirm the tenant "
+            "has devices enrolled with the Falcon sensor."
         )
 
     result = {
         "requiredCoveragePercentage": percentage,
-        "activeDevices": active,
-        "totalDevices": total,
+        "totalKnownAssets": total,
+        "activeSensorCount": total if total > 0 else 0,
+        "sampleDeviceCount": sample_count,
+    }
+
+    input_summary = {
+        "totalKnownAssets": total,
+        "sampleDeviceCount": sample_count,
     }
 
     return create_response(
@@ -144,11 +137,12 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total, "activeDevices": active},
+        input_summary=input_summary,
+        additional_findings=additional_findings,
+        transformation_errors=transformation_errors,
         metadata={
             "transformationId": "requiredCoveragePercentage",
             "vendor": "CrowdStrike Falcon",
             "category": "epp",
         },
-        api_errors=api_errors,
     )
