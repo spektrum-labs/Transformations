@@ -21,6 +21,12 @@ fails on (incomplete, empty, error-envelope, failed-host, truncated or capped-an
 no finding reaches the threshold but some CVE finding carries no usable EPSS percentile, since that finding's risk is
 unknown rather than low. A finding with no CVE (default login, exposure, takeover) has no EPSS by definition; it is
 listed as not EPSS-scored and does not block the answer.
+
+Unknown is never a measured answer: every return of None also sets dataCollection.status "error", which
+Token-Service routes to isEvaluated false (Unevaluated, out of the score) instead of comparing None against
+the requirement. That covers input that fails schema validation, a body that cannot be parsed, an unexpected
+exception, a scan in which no host responded (domainsResponsive 0), a findings list holding an unreadable
+entry, and a stored body whose scalars were stringified ("True", "25").
 """
 
 import json
@@ -85,6 +91,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def is_true(value):
+    """True for a real True and for the stringified forms a stored or replayed body carries ("True", "true")."""
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
 def to_int(value):
     try:
         return int(str(value).strip())
@@ -99,7 +110,7 @@ def scan_problem(data):
         return "No scan data"
     domain = data.get("primaryDomain") or data.get("domain") or "unknown"
     status = data.get("status", "unknown")
-    if status != "success":
+    if status != "success" or is_true(data.get("error")):
         return "Nuclei scan status: " + str(status) + " for " + str(domain)
     scanned = to_int(data.get("domainsScanned"))
     if scanned is None or scanned <= 0:
@@ -107,14 +118,21 @@ def scan_problem(data):
     templates = to_int(data.get("templatesScanned"))
     if templates is None or templates <= 0:
         return "Nuclei ran zero templates for " + str(domain)
+    if "domainsResponsive" in data:
+        responsive = to_int(data.get("domainsResponsive"))
+        if responsive is None or responsive <= 0:
+            return ("Nuclei reached no host of " + str(domain) + ": " + str(data.get("domainsUnresponsive"))
+                    + " of " + str(scanned) + " unresponsive and the rest errored")
     failed = [r.get("domain", "unknown") for r in (data.get("domainResults") or [])
-              if isinstance(r, dict) and r.get("status") != "success"]
+              if isinstance(r, dict) and r.get("status") not in ("success", "unresponsive")]
     errors = data.get("errors") or []
     if failed or errors:
         return "Nuclei scan failed for " + str(max(len(failed), len(errors))) + " host(s) of " + str(domain)
     findings = data.get("findings")
     if not isinstance(findings, list):
         return "Nuclei scan for " + str(domain) + " carries no findings list"
+    if any(not isinstance(f, dict) for f in findings):
+        return "Nuclei findings list for " + str(domain) + " holds an entry that is not a finding object"
     total = to_int(data.get("total"))
     if total is None or total != len(findings):
         return ("Nuclei findings list for " + str(domain) + " is truncated or inconsistent: " + str(len(findings))
@@ -124,7 +142,7 @@ def scan_problem(data):
 
 def capped_note(data):
     """The reason a zero would be partial (more hosts discovered than scanned), else None."""
-    if data.get("domainsCapped") is not True:
+    if not is_true(data.get("domainsCapped")):
         return None
     scanned = to_int(data.get("domainsScanned"))
     discovered = to_int(data.get("totalDiscovered"))
@@ -218,9 +236,8 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={CRITERIA_KEY: None}, validation=validation,
-                                   transformation_errors=["Input validation failed"],
-                                   fail_reasons=["Input validation failed"])
+            return failed("Input validation failed: the scan response did not match its schema, so the count is unknown",
+                          validation, {})
         domain = (data.get("primaryDomain") or data.get("domain") or "unknown") if isinstance(data, dict) else "unknown"
         summary = {"domain": domain, "scanScope": SCAN_SCOPE,
                    "domainsScanned": to_int(data.get("domainsScanned")) if isinstance(data, dict) else None,
@@ -273,6 +290,7 @@ def transform(input):
             recommendations=["Remediate these first: EPSS rates them among the CVEs most likely to be exploited in the next 30 days"],
             additional_findings=risky[:50] + notes, input_summary=summary)
     except Exception as e:
+        reason = "Transformation error, so the count is unknown: " + str(e)
         return create_response(result={CRITERIA_KEY: None},
                                validation={"status": "error", "errors": [], "warnings": []},
-                               transformation_errors=[str(e)], fail_reasons=["Transformation error: " + str(e)])
+                               api_errors=[reason], transformation_errors=[str(e)], fail_reasons=[reason])
