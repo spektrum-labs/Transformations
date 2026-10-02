@@ -169,19 +169,19 @@ def transform(input):
 
     total_enrolled = len(items)
 
+    # An empty fleet proves nothing either way: Unevaluated with the reason, never 0%.
     if total_enrolled == 0:
+        reason = "No SentinelOne agents were returned; there is nothing to measure"
         return create_response(
             result={
-                "requiredConfigurationPercentage": 0.0,
+                "requiredConfigurationPercentage": None,
                 "configuredAgents": 0,
                 "totalEnrolledAgents": 0,
             },
             validation=validation,
-            fail_reasons=[
-                "No enrolled agents found for the configured site. "
-                "EPP configuration cannot be evaluated without agents."
-            ],
-            recommendations=["Deploy SentinelOne agents to endpoints, then re-run."],
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=["Confirm SentinelOne agents are installed and checking in for the configured site or account."],
             input_summary={"totalEnrolledAgents": 0, "configuredAgents": 0},
             metadata={
                 "transformationId": "requiredConfigurationPercentage",

@@ -165,6 +165,18 @@ def transform(input):
         items = []
 
     total_enrolled = len(items)
+    # An empty fleet proves nothing either way: Unevaluated with the reason, never a False.
+    if total_enrolled == 0:
+        reason = "No SentinelOne agents were returned; there is nothing to measure"
+        return create_response(
+            result={"isEPPDeployed": None, "deployedAgents": 0, "totalEnrolledAgents": 0},
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=["Confirm SentinelOne agents are installed and checking in for the configured site or account."],
+            input_summary={"totalEnrolledAgents": 0},
+            metadata={"transformationId": "isEPPDeployed", "vendor": "SentinelOne", "category": "epp"},
+        )
     deployed = 0
     inactive = 0
     uninstalled = 0
@@ -204,15 +216,10 @@ def transform(input):
                 f"Investigate any that should be reporting."
             )
     else:
-        if total_enrolled == 0:
-            fail_reasons.append(
-                "No enrolled agents found for the configured site — EPP is not deployed."
-            )
-        else:
-            fail_reasons.append(
-                f"None of the {total_enrolled} enrolled agents are actively deployed "
-                f"({inactive} inactive, {uninstalled} uninstalled, {decommissioned} decommissioned)."
-            )
+        fail_reasons.append(
+            f"None of the {total_enrolled} enrolled agents are actively deployed "
+            f"({inactive} inactive, {uninstalled} uninstalled, {decommissioned} decommissioned)."
+        )
         recommendations.append(
             "Deploy the SentinelOne agent to managed endpoints. Reactivate any agents "
             "that have stopped reporting and reinstall any that were uninstalled."

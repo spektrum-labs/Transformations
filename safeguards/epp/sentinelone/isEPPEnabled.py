@@ -135,7 +135,8 @@ def transform(input):
     True only when at least one agent is returned and every returned agent is enabled; the
     percentage is emitted as eppEnabledPercentage. Enrolment alone (the old totalItems > 0 rule)
     is not evidence: an agent with mitigationMode "none" is enrolled and unprotected.
-    Fails closed on an error body, an unreadable agent list and an empty fleet.
+    An error body, an unreadable or partial agent list and an empty fleet are
+    Unevaluated (None) with the reason, never False.
     """
     data, validation = extract_input(input)
     # Read the undrilled response (input.get("data") makes Token-Service pass it whole), so the
@@ -173,6 +174,19 @@ def transform(input):
     sampled = len(agents)
     total_items = int(total_items) if total_items else sampled
 
+    # An empty judged fleet proves nothing either way: Unevaluated with the reason, never a False.
+    if sampled == 0:
+        reason = "No SentinelOne agents were returned; there is nothing to measure"
+        return create_response(
+            result={"isEPPEnabled": None, "totalAgents": total_items, "sampledAgents": 0},
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=["Confirm SentinelOne agents are installed and checking in for the configured site or account"],
+            input_summary={"totalAgents": total_items, "sampledAgents": 0},
+            metadata={"transformationId": "isEPPEnabled", "vendor": "SentinelOne", "category": "epp"},
+        )
+
     enabled = 0
     disabled_names = []
     for agent in agents:
@@ -194,10 +208,7 @@ def transform(input):
     fail_reasons = []
     recommendations = []
     findings = []
-    if sampled == 0:
-        fail_reasons.append("No SentinelOne agents were returned; endpoint protection is not evidenced")
-        recommendations.append("Deploy the SentinelOne agent and confirm the siteId setting")
-    elif is_enabled:
+    if is_enabled:
         pass_reasons.append(summary)
     else:
         fail_reasons.append(summary)
