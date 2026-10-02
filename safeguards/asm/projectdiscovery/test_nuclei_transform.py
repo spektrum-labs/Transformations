@@ -78,6 +78,63 @@ class NucleiTransformTest(unittest.TestCase):
         v = verdict({"status": "success", "domain": "a.com", "findings": [], "total": 0})
         self.assertTrue(v["noCriticalFindings"])
 
+    # Partial (capped) scans, 2 Oct 2026. Shapes follow the recorded inputSummary of the live scans.
+    def full(self, payload):
+        return load_transformation().transform(payload)
+
+    def test_carlex_capped_clean_scan_is_unevaluated(self):
+        # Carlex 2 Oct 01:04 ET: 25 of 45 discovered hosts scanned, 0 findings. Was a pass.
+        out = self.full(scan(primaryDomain="carlex.com", domainsScanned="25", totalDiscovered="45", domainsCapped="True",
+                             templatesScanned="1675", domainResults=[]))
+        tr, info = out["transformedResponse"], out["additionalInfo"]
+        self.assertIsNone(tr["noCriticalFindings"])
+        self.assertIsNone(tr["noHighFindings"])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertIn("Only 25 of 45 discovered host(s) of carlex.com were scanned", info["dataCollection"]["errors"][0])
+        self.assertIn("not a clean estate", info["dataCollection"]["errors"][0])
+        self.assertEqual(info["transformation"]["inputSummary"]["totalDiscovered"], 45)
+
+    def test_numeric_cap_without_flag_is_unevaluated(self):
+        out = self.full(scan(domainsScanned="25", totalDiscovered="70", domainResults=[]))
+        self.assertIsNone(out["transformedResponse"]["noCriticalFindings"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_see_to_solve_full_clean_scan_still_passes(self):
+        # See to Solve 2 Oct 01:04 ET: 20 of 20 hosts, 0 findings: a real pass.
+        out = self.full(scan(primaryDomain="seetosolve.com", domainsScanned="20", totalDiscovered="20", domainsCapped="False",
+                             domainResults=[]))
+        tr, info = out["transformedResponse"], out["additionalInfo"]
+        self.assertTrue(tr["noCriticalFindings"])
+        self.assertTrue(tr["noHighFindings"])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+
+    def test_finding_on_a_partial_scan_still_fails(self):
+        out = self.full(scan(domainsScanned="25", totalDiscovered="45", domainsCapped="True", domainResults=[], total="1",
+                             findings=[{"info": {"severity": "critical", "name": "CVE-2024-0001"}}]))
+        tr, info = out["transformedResponse"], out["additionalInfo"]
+        self.assertFalse(tr["noCriticalFindings"])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertTrue(any("Only 25 of 45" in r for r in info["evaluation"]["failReasons"]))
+
+    def test_high_finding_on_a_partial_high_scan_fails(self):
+        out = self.full(scan(domainsScanned="25", totalDiscovered="41", domainsCapped="True", domainResults=[], total="1",
+                             findings=[{"info": {"severity": "high", "name": "Exposed panel"}}]))
+        self.assertFalse(out["transformedResponse"]["noHighFindings"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_medium_only_on_a_partial_scan_is_unevaluated(self):
+        out = self.full(scan(domainsScanned="25", totalDiscovered="45", domainsCapped="True", domainResults=[], total="1",
+                             findings=[{"info": {"severity": "medium", "name": "Header missing"}}]))
+        self.assertIsNone(out["transformedResponse"]["noCriticalFindings"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_capped_flag_false_with_equal_counts_passes(self):
+        self.assertTrue(verdict(scan(domainsCapped="false"))["noCriticalFindings"])
+
+    def test_unparseable_counts_do_not_cap(self):
+        # Unparseable coverage cannot prove a partial scan; the existing guards still apply.
+        self.assertTrue(verdict(scan(domainsScanned="2", totalDiscovered="n/a"))["noCriticalFindings"])
+
 
 if __name__ == "__main__":
     unittest.main()

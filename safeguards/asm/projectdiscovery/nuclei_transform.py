@@ -5,6 +5,13 @@ Category: Attack Surface Management
 
 Evaluates nuclei vulnerability scan results to determine whether
 critical or high severity findings are present for a scanned domain.
+
+A capped scan (more hosts discovered than scanned, the ASM host cap) that found no critical or high
+finding returns None for both keys with the coverage reason in dataCollection.errors: zero findings on a
+partial estate is not a clean estate, so Token-Service reads it as Unevaluated, never a pass. A capped scan
+that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
+one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
+scan), so a response is only ever read for the key whose severity it scanned.
 """
 
 import json
@@ -66,6 +73,26 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             }
         }
     }
+
+
+def to_int(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def capped_note(data):
+    """The reason a zero would be partial (more hosts discovered than scanned), else None."""
+    scanned = to_int(data.get("domainsScanned"))
+    discovered = to_int(data.get("totalDiscovered"))
+    flagged = data.get("domainsCapped") is True or str(data.get("domainsCapped")).strip().lower() == "true"
+    short = scanned is not None and discovered is not None and 0 < scanned < discovered
+    if not (flagged or short):
+        return None
+    domain = data.get("primaryDomain") or data.get("domain") or "unknown"
+    return ("Only " + str(scanned) + " of " + str(discovered) + " discovered host(s) of " + str(domain)
+            + " were scanned")
 
 
 def transform(input):
@@ -170,6 +197,20 @@ def transform(input):
         no_critical = critical_count == 0
         no_high = high_count == 0
 
+        capped = capped_note(data)
+        if capped and no_critical and no_high:
+            reason = capped + "; zero critical or high findings on a partial scan is not a clean estate"
+            return create_response(
+                result={"noCriticalFindings": None, "noHighFindings": None, "domain": domain},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                input_summary={"domain": domain, "scanStatus": scan_status, "totalFindings": total_findings,
+                               "domainsScanned": to_int(data.get("domainsScanned")),
+                               "totalDiscovered": to_int(data.get("totalDiscovered")),
+                               "criticalCount": critical_count, "highCount": high_count}
+            )
+
         # Build pass/fail reasons
         if no_critical:
             pass_reasons.append(f"No critical severity findings for {domain}")
@@ -182,6 +223,9 @@ def transform(input):
         else:
             fail_reasons.append(f"{high_count} high severity finding(s) detected for {domain}")
             recommendations.append("Prioritize remediation of high severity vulnerabilities")
+
+        if capped:
+            fail_reasons.append(capped)
 
         if medium_count > 0 or low_count > 0:
             pass_reasons.append(f"Additional findings: {medium_count} medium, {low_count} low, {info_count} info")
