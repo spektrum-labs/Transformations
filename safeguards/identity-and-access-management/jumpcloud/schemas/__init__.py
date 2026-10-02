@@ -16,6 +16,7 @@ from .isMFAEnabled import IsMFAEnabledInput
 from .isMFAEnforced import IsMFAEnforcedInput
 from .isMFAEnforcedForUsers import IsMFAEnforcedForUsersInput
 from .isMFALoggingEnabled import IsMFALoggingEnabledInput
+from .isPAMEnabled import IsPAMEnabledInput
 from .isSmsAuthenticationDisabled import IsSmsAuthenticationDisabledInput
 from .isSSOEnabled import IsSSOEnabledInput
 from .isStrongAuthRequired import IsStrongAuthRequiredInput
@@ -45,6 +46,7 @@ __all__ = [
     "IsMFAEnforcedForUsersInput",
     "IsMFAEnforcedInput",
     "IsMFALoggingEnabledInput",
+    "IsPAMEnabledInput",
     "IsSSOEnabledInput",
     "IsSmsAuthenticationDisabledInput",
     "IsStrongAuthRequiredInput",
