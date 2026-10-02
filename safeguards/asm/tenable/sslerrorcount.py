@@ -117,19 +117,49 @@ def count_matching(assets, predicate, sample_key="bd.original_hostname", limit=2
     return len(hits), [a.get(sample_key) for a in hits if a.get(sample_key)][:limit]
 
 
+def inventory_problem(data):
+    """Why this body proves nothing about the estate, else None. POST /inventory always answers with an
+    `assets` list; an empty, missing or error reply (no list, or a list with no asset) is not a clean estate."""
+    if isinstance(data, list):
+        assets = data
+    elif isinstance(data, dict) and isinstance(data.get("assets"), list):
+        assets = data.get("assets")
+    else:
+        return "the inventory response carries no asset list (empty, missing or error reply), so the count is unknown, not 0"
+    if not [a for a in assets if isinstance(a, dict)]:
+        return "the inventory returned no assets, so the count is unknown, not 0"
+    return None
+
+
+def unevaluated(criteria_key, reason, validation, transformation_id, extras=None):
+    """Fail closed: None with the reason in dataCollection.errors, which Token-Service reads as Unevaluated."""
+    result = dict(extras or {})
+    result[criteria_key] = None
+    return create_response(result, validation, fail_reasons=[reason], api_errors=[reason],
+                           recommendations=["Confirm the ASM API key can read the inventory"],
+                           input_summary=result, transformation_id=transformation_id)
+
+
 def run_criterion(input, criteria_key, evaluate, transformation_id):
     try:
         data, validation = extract_input(parse_payload(input))
         if validation.get("status") == "failed":
-            return create_response({criteria_key: False}, validation, fail_reasons=["Input validation failed"], transformation_id=transformation_id)
+            return unevaluated(criteria_key, "Input validation failed: the inventory response did not match its schema, so the count is unknown",
+                               validation, transformation_id)
+        problem = inventory_problem(data)
+        if problem:
+            return unevaluated(criteria_key, problem, validation, transformation_id)
         value, extras, passes, fails, recs, api_errors = evaluate(data)
+        if value == 0 and not isinstance(value, bool) and extras.get("partial") is True:
+            reason = (f"scanned {extras.get('assetsScanned')} of {extras.get('inventoryTotal')} assets; "
+                      "zero on a partial inventory is not a clean estate, so the count is unknown")
+            return unevaluated(criteria_key, reason, validation, transformation_id, extras)
         return create_response({criteria_key: value, **extras}, validation, pass_reasons=passes, fail_reasons=fails,
                                recommendations=recs, input_summary={criteria_key: value, **extras},
                                api_errors=api_errors, transformation_id=transformation_id)
     except Exception as e:  # noqa: BLE001 - a transformation never raises into the engine
-        return create_response({criteria_key: False}, {"status": "error", "errors": [], "warnings": []},
-                               transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {e}"],
-                               transformation_id=transformation_id)
+        return unevaluated(criteria_key, f"Transformation error, so the count is unknown: {e}",
+                           {"status": "error", "errors": [], "warnings": []}, transformation_id)
 
 def matches(a):
     return bool(str(a.get("ssl.sslerror") or "").strip())
@@ -138,7 +168,7 @@ def matches(a):
 def evaluate(data):
     assets, total, stats_unused, partial = read_assets(data)
     if not isinstance(assets, list):
-        return 0, {"count": 0}, [], ["inventory response unreadable"], ["Confirm the API key can read the inventory"], ["unreadable inventory response"]
+        return None, {"count": None}, [], ["inventory response unreadable"], ["Confirm the API key can read the inventory"], ["unreadable inventory response"]
     n, sample = count_matching(assets, matches, 'bd.original_hostname')
     extras = {"count": n, "assetsScanned": len(assets), "inventoryTotal": total, "sample": sample}
     if partial:
