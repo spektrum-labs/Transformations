@@ -325,6 +325,11 @@ def transform(input):
                 total_endpoints > 0 and coverage_scores["Endpoint Protection"] > 0
             )
 
+        # Inverted key (true = the insecure condition). Its RTA entry reads this file through the
+        # isEPPConfigured method but nothing emitted it, so the row had no value. A read with no endpoint
+        # proves nothing either way, so it is None (never False, which would be a pass).
+        coverage_scores["isEPPMisconfigured"] = (not coverage_scores["isEPPConfigured"]) if total_endpoints > 0 else None
+
         # Build pass/fail reasons (use concatenation to avoid list mutation in restricted Python)
         epp_coverage = coverage_scores.get('Endpoint Protection', 0)
         if coverage_scores["isEPPEnabled"]:
