@@ -1,9 +1,15 @@
-"""Transformation: openHighSeverityVulnerabilitiesCount (CrowdStrike Falcon Spotlight, getCriticalVulnerabilities).
+"""Transformation: isPatchManagementValid (CrowdStrike Falcon Spotlight, derived from the overdue count).
 
 Vendor: CrowdStrike  |  Category: Endpoint Security
-Integration: Crowdstrike - XDR Falcon (765f3eb2). The same input shape also comes from CrowdStrike MDR's
-getCriticalVulnerabilities and from CrowdStrike Falcon-Endpoint Security (d61a39d7)'s
-getSpotlightVulnerabilitiesCombined (the same endpoint, filter, facet and paging).
+Integration: Crowdstrike - XDR Falcon (765f3eb2) getCriticalVulnerabilities, CrowdStrike MDR getCriticalVulnerabilities
+and CrowdStrike Falcon-Endpoint Security (d61a39d7) getSpotlightVulnerabilitiesCombined (the same endpoint, filter,
+facet and paging).
+
+isPatchManagementValid is true exactly when overdueCriticalHighVulnerabilitiesCount is 0: no open critical
+vulnerability first detected more than 15 days ago and no open high more than 30 days ago (CISA BOD 19-02). It is the
+same derivation as main's safeguards/epp/crowdstrike-falcon/isPatchManagementValid.py (#709), on the stricter
+develop reader of the three *FromSpotlight.py counts (record ids, no repeats), so the four Spotlight keys read one
+response one way. The three numbers are emitted beside it as evidence.
 
 Input: getCriticalVulnerabilities, GET /spotlight/combined/vulnerabilities/v1 with the FQL filter
 status:['open','reopen']+cve.severity:['CRITICAL','HIGH'] and facet=cve (without facet=cve a record carries no
@@ -11,17 +17,17 @@ cve.severity). IS pages it on meta.pagination.after (cursor, page size 5000, at 
 into `resources` and keeps meta.pagination with the vendor's `total` (`truncated` when maxPages stopped it).
 One record is one vulnerability instance: one vulnerability on one host.
 
-Numbers emitted (every file emits all three, its own key first, so each check's evidence shows all of them):
+Numbers emitted beside isPatchManagementValid (the same three every *FromSpotlight.py file emits):
   openCriticalVulnerabilitiesCount         open or reopened instances with cve.severity CRITICAL
   openHighSeverityVulnerabilitiesCount     open or reopened instances with cve.severity HIGH
   overdueCriticalHighVulnerabilitiesCount  of those, CRITICAL first detected (created_timestamp) more than 15 days
                                            ago or HIGH more than 30 days ago (CISA BOD 19-02 remediation windows,
                                            the same windows as the Defender and Action1 transforms for these keys)
 
-Fail closed: anything that is not a complete Spotlight read returns all three keys as None with dataCollection
-"error" (Unevaluated): no envelope, a vendor error, no resources list, no numeric meta.pagination.total, a
-truncated merge, fewer or more records than total, a repeated record id, or a record without id, status,
-cve.severity or a readable created_timestamp.
+Fail closed: anything that is not a complete Spotlight read returns isPatchManagementValid and all three counts as
+None with dataCollection "error" (Unevaluated): no envelope, a vendor error, no resources list, no numeric
+meta.pagination.total, a truncated merge, fewer or more records than total, a repeated record id, or a record without
+id, status, cve.severity or a readable created_timestamp.
 
 Missing scope (SCOPE-NOT-GRANTED): CrowdStrike answers a client without "Vulnerabilities: Read" with HTTP 403
 {"errors": [{"code": 403, "message": "access denied, scope not permitted"}]}. When the method opts in to
@@ -33,21 +39,21 @@ finding or a defect. Any other handed-over refusal is Unevaluated with errorCode
 
 Measured zero: a successful response whose meta.pagination.total is explicitly 0 (an int, or the digit string "0"
 as stored evidence renders it), with `resources` an empty list and no errors, is the vendor's own count for the
-filter and is reported as 0 for all three keys. Only that exact shape reads 0; a missing, null or non-numeric total
-stays Unevaluated.
+filter and is reported as 0 for all three counts, so isPatchManagementValid is true. Only that exact shape reads 0;
+a missing, null or non-numeric total stays Unevaluated.
 """
 import json
 from datetime import datetime
 
-KEY = "openHighSeverityVulnerabilitiesCount"
+KEY = "isPatchManagementValid"
 KEY_CRITICAL = "openCriticalVulnerabilitiesCount"
 KEY_HIGH = "openHighSeverityVulnerabilitiesCount"
 KEY_OVERDUE = "overdueCriticalHighVulnerabilitiesCount"
 CRITICAL_DAYS = 15
 HIGH_DAYS = 30
 OPEN_STATUSES = ["open", "reopen"]
-RECOMMENDATION = ("Patch or mitigate the open high-severity vulnerabilities in Falcon Spotlight, starting with "
-                  "those first detected more than 30 days ago.")
+RECOMMENDATION = ("Patch or mitigate the open critical vulnerabilities first detected more than 15 days ago and "
+                  "high more than 30 days ago in Falcon Spotlight; patch management is valid once none remain.")
 
 
 def extract_input(input_data):
@@ -283,10 +289,9 @@ def transform(input):
         numbers, problem = measure(data, datetime.utcnow())
         if problem:
             return unevaluated(problem, validation)
-        result = {KEY: numbers[KEY]}
+        result = {KEY: numbers[KEY_OVERDUE] == 0}
         for k in numbers:
-            if k != KEY:
-                result[k] = numbers[k]
+            result[k] = numbers[k]
         summary = ("Spotlight, all pages (" + str(numbers["spotlightRecordsRead"]) + " of " + str(numbers["spotlightTotal"])
                    + " open/reopened critical+high instances on " + str(numbers["hostsWithOpenCriticalOrHigh"])
                    + " hosts): " + str(numbers[KEY_CRITICAL]) + " critical, " + str(numbers[KEY_HIGH]) + " high, "
@@ -294,7 +299,7 @@ def transform(input):
         passes = []
         fails = []
         recs = []
-        if numbers[KEY] == 0:
+        if result[KEY] is True:
             passes.append(summary)
         else:
             fails.append(summary)
