@@ -103,7 +103,7 @@ class Measured(unittest.TestCase):
         self.assertIs(value("vulnerabilityscanfrequency", scan(timestamp="")), False)
 
     def test_critical_count_flips(self):
-        self.assertEqual(value("criticalvulnerabilitycount", scan()), 0)
+        self.assertEqual(value("criticalvulnerabilitycount", scan(totalDiscovered="2")), 0)
         self.assertEqual(value("criticalvulnerabilitycount", scan(findings=[CRIT_KEV, CRIT])), 2)
 
     def test_kev_count_flips(self):
@@ -113,11 +113,62 @@ class Measured(unittest.TestCase):
     def test_one_unresponsive_host_still_measures(self):
         for name, (key, fail) in KEYS.items():
             with self.subTest(key=key):
-                self.assertNotEqual(value(name, scan(**ONE_UNRESPONSIVE)), fail)
+                self.assertNotEqual(value(name, scan(totalDiscovered="2", **ONE_UNRESPONSIVE)), fail)
         self.assertEqual(value("criticalvulnerabilitycount", scan(findings=[CRIT], **ONE_UNRESPONSIVE)), 1)
 
     def test_wrapped_input(self):
         self.assertEqual(value("criticalvulnerabilitycount", {"apiResponse": scan(findings=[CRIT])}), 1)
+
+
+class CriticalCountCappedScan(unittest.TestCase):
+    """criticalVulnerabilityCount on a partial (capped) scan, 2 Oct 2026: the same guard noCriticalFindings got
+    in TX #786/#788. Shapes follow the recorded inputSummary of the live Carlex and See to Solve scans."""
+
+    def full(self, payload):
+        return load("criticalvulnerabilitycount").transform(payload)
+
+    def test_capped_clean_scan_is_unevaluated(self):
+        # Carlex 2 Oct 01:04 ET: 25 of 45 discovered hosts scanned, 0 findings. Read 0 (a pass) before this fix.
+        out = self.full(scan(primaryDomain="carlex.com", domainsScanned="25", totalDiscovered="45", domainsCapped="True",
+                             templatesScanned="1675", domainResults=[]))
+        tr, info = out["transformedResponse"], out["additionalInfo"]
+        self.assertIsNone(tr["criticalVulnerabilityCount"])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertIn("Only 25 of 45 discovered host(s) of carlex.com were scanned", info["dataCollection"]["errors"][0])
+        self.assertIn("not a clean estate", info["dataCollection"]["errors"][0])
+
+    def test_numeric_short_without_flag_is_unevaluated(self):
+        out = self.full(scan(domainsScanned="25", totalDiscovered="70", domainResults=[]))
+        self.assertIsNone(out["transformedResponse"]["criticalVulnerabilityCount"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_flag_alone_is_unevaluated(self):
+        self.assertIsNone(value("criticalvulnerabilitycount", scan(totalDiscovered="2", domainsCapped=True)))
+
+    def test_full_clean_scan_still_measures_zero(self):
+        # See to Solve 2 Oct 01:04 ET: 20 of 20 hosts, 0 findings: a real zero.
+        out = self.full(scan(primaryDomain="seetosolve.com", domainsScanned="20", totalDiscovered="20",
+                             domainsCapped="False", domainResults=[]))
+        self.assertEqual(out["transformedResponse"]["criticalVulnerabilityCount"], 0)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_critical_finding_on_a_capped_scan_is_a_lower_bound(self):
+        out = self.full(scan(domainsScanned="25", totalDiscovered="45", domainsCapped="True", domainResults=[],
+                             findings=[CRIT]))
+        tr, info = out["transformedResponse"], out["additionalInfo"]
+        self.assertEqual(tr["criticalVulnerabilityCount"], 1)
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertTrue(any("Only 25 of 45" in r and "lower bound" in r for r in info["evaluation"]["failReasons"]))
+
+    def test_empty_and_error_inputs_are_unevaluated_with_a_reason(self):
+        for body in [{}, [], None, "", "{}", {"value": []}, {"data": []},
+                     {"status": "error", "message": "Lambda HTTP 429: Rate Exceeded"},
+                     {"error": "Unauthorized", "statusCode": 401}]:
+            with self.subTest(body=str(body)[:60]):
+                out = self.full(body)
+                self.assertIsNone(out["transformedResponse"]["criticalVulnerabilityCount"])
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
 
 
 if __name__ == "__main__":
