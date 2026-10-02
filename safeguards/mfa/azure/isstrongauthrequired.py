@@ -6,8 +6,11 @@ Category: Identity / Authentication
 Evaluates if strong (phishing-resistant) authentication methods are enabled
 by inspecting the Microsoft Graph authenticationMethodsPolicy response.
 
-Strong auth methods: MicrosoftAuthenticator, Fido2
-Weak auth methods: Sms, Voice, Email, SoftwareOath
+Strong (phishing-resistant) methods: Fido2 (security keys and passkeys, including passkeys in Microsoft
+Authenticator), X509Certificate (certificate-based authentication).
+Phishable methods: MicrosoftAuthenticator (push and phone sign-in), Sms, Voice, Email, SoftwareOath,
+TemporaryAccessPass. Microsoft Authenticator stopped counting as strong on 2 Oct 2026 (J.J., 02:35 ET): it
+passed tenants with no phishing-resistant method enabled.
 
 API: GET /v1.0/policies/authenticationMethodsPolicy
 Reference: https://learn.microsoft.com/en-us/graph/api/authenticationmethodspolicy-get
@@ -18,10 +21,12 @@ from datetime import datetime
 
 STRONG_AUTH_METHODS = {
     "Fido2": "FIDO2 Security Key",
-    "MicrosoftAuthenticator": "Microsoft Authenticator",
+    "X509Certificate": "Certificate-based authentication",
 }
 
 WEAK_AUTH_METHODS = {
+    "MicrosoftAuthenticator": "Microsoft Authenticator (push / phone sign-in)",
+    "TemporaryAccessPass": "Temporary Access Pass",
     "Sms": "SMS",
     "Voice": "Voice call",
     "Email": "Email OTP",
@@ -148,8 +153,8 @@ def transform(input):
             if disabled_strong:
                 additional_findings.append("Strong method(s) not yet enabled: " + ", ".join(disabled_strong))
         else:
-            fail_reasons.append("No strong authentication methods (Authenticator or FIDO2) are enabled")
-            recommendations.append("Enable Microsoft Authenticator and/or FIDO2 security keys in the authentication methods policy")
+            fail_reasons.append("No phishing-resistant method (FIDO2 / passkeys or certificate-based authentication) is enabled")
+            recommendations.append("Enable FIDO2 security keys or passkeys (or certificate-based authentication) in the authentication methods policy")
 
         if enabled_weak:
             additional_findings.append("Weak authentication method(s) still enabled: " + ", ".join(enabled_weak))
