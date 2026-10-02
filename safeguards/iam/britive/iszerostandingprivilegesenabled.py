@@ -2,6 +2,11 @@
 Transformation: isZeroStandingPrivilegesEnabled
 Vendor: Britive  |  Category: Identity & Access Management
 Evaluates: Whether profiles (PAPs) have expiration/session duration limits
+
+Fails closed (2 Oct 2026): an empty, missing or error reply, a profile list with no active profile, a
+validation failure or an exception returns None with the reason in dataCollection.errors, which
+Token-Service reads as Unevaluated. "No active profiles" proves nothing about standing access, so it is no
+longer read as vacuously true.
 """
 import json
 from datetime import datetime
@@ -72,18 +77,22 @@ def evaluate(data):
                         break
 
         if not found_profile_key or not isinstance(profiles, list):
-            return {"isZeroStandingPrivilegesEnabled": False, "reason": "No profile data found"}
+            return {"isZeroStandingPrivilegesEnabled": None,
+                    "unevaluated": "The Britive reply carries no profile list (empty, missing or error reply), so "
+                                   "zero standing privileges cannot be judged"}
 
         # Only evaluate active profiles
         active_profiles = [
             p for p in profiles
-            if p.get("status", "").lower() == "active"
+            if isinstance(p, dict) and str(p.get("status") or "").lower() == "active"
         ]
 
         if len(active_profiles) == 0:
-            # A recognised (even empty) profile list with no active profiles — ZSP is
-            # vacuously true (nothing to check out).
-            return {"isZeroStandingPrivilegesEnabled": True, "activeProfiles": 0, "reason": "No active profiles found"}
+            # No active profile is not evidence of zero standing privileges: an empty list is what an
+            # unreadable or unscoped app also returns. It was read as vacuously true before 2 Oct 2026.
+            return {"isZeroStandingPrivilegesEnabled": None, "activeProfiles": 0, "profilesReturned": len(profiles),
+                    "unevaluated": "Britive returned " + str(len(profiles)) + " profile(s) and none is active, so "
+                                   "zero standing privileges cannot be judged from this reply"}
 
         total = len(active_profiles)
         profiles_without_expiry = []
@@ -115,7 +124,7 @@ def evaluate(data):
             "profilesWithoutExpiry": profiles_without_expiry,
         }
     except Exception as e:
-        return {"isZeroStandingPrivilegesEnabled": False, "error": str(e)}
+        return {"isZeroStandingPrivilegesEnabled": None, "unevaluated": "Evaluation error, so the result is unknown: " + str(e)}
 
 
 def transform(input):
@@ -129,17 +138,31 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            reason = "Input validation failed: the Britive reply did not match its schema, so the result is unknown"
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=[reason],
+                api_errors=[reason]
             )
 
         # Run core evaluation
         eval_result = evaluate(data)
 
+        if eval_result.get(criteriaKey) is None:
+            reason = eval_result.get("unevaluated") or "No usable Britive profile data, so the result is unknown"
+            extra_fields = {k: v for k, v in eval_result.items() if k not in (criteriaKey, "unevaluated")}
+            return create_response(
+                result={criteriaKey: None, **extra_fields},
+                validation=validation,
+                fail_reasons=[reason],
+                api_errors=[reason],
+                recommendations=["Confirm the Britive API token can list the profiles of each application"],
+                input_summary={criteriaKey: None, **extra_fields}
+            )
+
         # Extract the boolean result and any extra fields
-        result_value = eval_result.get(criteriaKey, False)
+        result_value = eval_result.get(criteriaKey) is True
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
 
         pass_reasons = []
@@ -166,9 +189,11 @@ def transform(input):
         )
 
     except Exception as e:
+        reason = "Transformation error, so the result is unknown: " + str(e)
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            api_errors=[reason],
+            fail_reasons=[reason]
         )
