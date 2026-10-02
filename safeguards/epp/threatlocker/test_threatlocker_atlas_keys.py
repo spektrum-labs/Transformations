@@ -1,9 +1,12 @@
-"""ThreatLocker (69b438a1): isEDRDeployed, isEPPDeployed, requiredCoveragePercentage and isEPPConfigured from
+"""ThreatLocker (69b438a1): isEPPDeployed, requiredCoveragePercentage and isEPPConfigured from
 getComputers (POST /portalapi/Computer/ComputerGetByAllParameters, IS-merged pages). SYNTHETIC fixtures only.
 
 Shape: a bare JSON array of computer rows, each carrying totalRows, computerId, lastCheckin, mode,
 maintenanceTypeId, activeMaintenanceModes, driverStatusString, isDeleted and maintenanceCapabilities (module
 flags). Each case runs as plain Python and in the Token-Service sandbox replica.
+
+isEDRDeployed is not evaluated for EVERY input: no documented PortalAPI field exposes ThreatLocker Detect, so
+not even a fleet with maintenanceCapabilities.detect true or false may answer.
 """
 import copy
 import importlib.util
@@ -79,7 +82,6 @@ def fleet(n, **kw):
 def test_good_fleet(mode, wrap):
     rows = fleet(4)
     rows[0]["maintenanceCapabilities"]["detect"] = True
-    assert run("isEDRDeployed", "isEDRDeployed", wrap(rows), mode)[:2] == (True, "success")
     assert run("isEPPDeployed", "isEPPDeployed", wrap(rows), mode)[:2] == (True, "success")
     assert run("requiredCoveragePercentage", "requiredCoveragePercentage", wrap(rows), mode)[:2] == (100.0, "success")
     assert run("isEPPConfigured", "isEPPConfigured", wrap(rows), mode)[:2] == (100, "success")
@@ -93,7 +95,6 @@ def test_bad_posture(mode):
     rows[2]["driverStatusString"] = "Inactive"
     rows[3]["mode"] = "Secure"
     rows[3]["activeMaintenanceModes"] = [{"maintenanceTypeId": 1}]
-    assert run("isEDRDeployed", "isEDRDeployed", rows, mode)[:2] == (False, "success")
     assert run("requiredCoveragePercentage", "requiredCoveragePercentage", rows, mode)[:2] == (75.0, "success")
     assert run("isEPPConfigured", "isEPPConfigured", rows, mode)[:2] == (50, "success")
     dead = fleet(2, driver="Inactive")
@@ -127,7 +128,6 @@ def test_partial_or_no_evidence_is_unevaluated(mode, body):
 def test_missing_field_is_unevaluated(mode):
     rows = fleet(2)
     del rows[0]["maintenanceCapabilities"]
-    assert run("isEDRDeployed", "isEDRDeployed", rows, mode)[:2] == (None, "error")
     rows = fleet(2)
     del rows[0]["driverStatusString"]
     assert run("isEPPDeployed", "isEPPDeployed", rows, mode)[:2] == (None, "error")
@@ -145,5 +145,22 @@ def test_stringified_scalars(mode):
         r["maintenanceTypeId"] = "0"
         r["isDeleted"] = "False"
         r["maintenanceCapabilities"]["detect"] = "True"
-    assert run("isEDRDeployed", "isEDRDeployed", rows, mode)[:2] == (True, "success")
     assert run("isEPPConfigured", "isEPPConfigured", rows, mode)[:2] == (100, "success")
+
+
+EDR_REASON = "ThreatLocker Detect state is not exposed by a documented API field"
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("detect", [True, False, "True", "False", None])
+def test_edr_is_unevaluated_for_every_input(mode, detect):
+    rows = fleet(3)
+    for r in rows:
+        r["maintenanceCapabilities"]["detect"] = detect
+        r["isOpsAlertsDisabled"] = False
+    bodies = [rows, ts(rows), {"result": rows}, fleet(3)[:2], fleet(2, driver="Inactive")] + NO_EVIDENCE
+    for b in bodies:
+        v, dc, out = run("isEDRDeployed", "isEDRDeployed", b, mode)
+        assert (v, dc) == (None, "error"), b
+        assert out["additionalInfo"]["dataCollection"]["errors"] == [EDR_REASON]
+        assert out["transformedResponse"] == {"isEDRDeployed": None}
