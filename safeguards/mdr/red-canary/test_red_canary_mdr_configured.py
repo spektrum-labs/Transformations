@@ -42,7 +42,7 @@ def body(monitored, unmonitored, decommissioned=0):
 
 def mdr(payload):
     out = MDR.transform(payload)["transformedResponse"]
-    return out["isMDRConfigured"], out["mdrMonitoredPercentage"], out["isMDREnabled"]
+    return out["isMDRConfigured"], out.get("mdrMonitoredPercentage"), out["isMDREnabled"]
 
 
 def test_fully_monitored_tenant_is_configured():
@@ -90,6 +90,7 @@ def test_coverage_no_longer_assumes_monitored_when_status_is_absent():
     assert cov(body(0, 12))[:2] == (False, 0)
 
 
-def test_coverage_no_evidence_fails():
+def test_coverage_no_evidence_is_unevaluated():
+    # was "fails" (False): a body that measured nothing is Unevaluated, never a finding
     for payload in ({}, None, [], AUTH_401, AUTH_403):
-        assert cov(payload)[0] is False, payload
+        assert cov(payload)[0] is None, payload
