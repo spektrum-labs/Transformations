@@ -2,7 +2,8 @@
 
 Vendor: CrowdStrike  |  Category: Endpoint Security
 Integration: Crowdstrike - XDR Falcon (765f3eb2). The same input shape also comes from CrowdStrike MDR's
-getCriticalVulnerabilities.
+getCriticalVulnerabilities and from CrowdStrike Falcon-Endpoint Security (d61a39d7)'s
+getSpotlightVulnerabilitiesCombined (the same endpoint, filter, facet and paging).
 
 Input: getCriticalVulnerabilities, GET /spotlight/combined/vulnerabilities/v1 with the FQL filter
 status:['open','reopen']+cve.severity:['CRITICAL','HIGH'] and facet=cve (without facet=cve a record carries no
@@ -21,6 +22,14 @@ Fail closed: anything that is not a complete Spotlight read returns all three ke
 "error" (Unevaluated): no envelope, a vendor error, no resources list, no numeric meta.pagination.total, a
 truncated merge, fewer or more records than total, a repeated record id, or a record without id, status,
 cve.severity or a readable created_timestamp.
+
+Missing scope (SCOPE-NOT-GRANTED): CrowdStrike answers a client without "Vulnerabilities: Read" with HTTP 403
+{"errors": [{"code": 403, "message": "access denied, scope not permitted"}]}. When the method opts in to
+Integration-Service's vendorErrorAsResponse for that 403, IS hands it over as
+{"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <the vendor body>}}. That refusal says
+nothing about the estate: all keys stay None (Unevaluated) and dataCollection carries errorCode
+"scope_not_granted" and requiredScope "Vulnerabilities: Read", so the check reads "needs the scope", not as a
+finding or a defect. Any other handed-over refusal is Unevaluated with errorCode "vendor_refusal".
 
 Measured zero: a successful response whose meta.pagination.total is explicitly 0 (an int, or the digit string "0"
 as stored evidence renders it), with `resources` an empty list and no errors, is the vendor's own count for the
@@ -101,10 +110,76 @@ def unevaluated_result():
     return result
 
 
-def unevaluated(problem, validation):
-    return create_response(unevaluated_result(), validation, fail_reasons=[problem], api_errors=[problem],
-                           recommendations=["Confirm the Falcon API client has Vulnerabilities: Read and that Falcon "
-                                            "Spotlight is licensed and assessing hosts."])
+SCOPE_NOT_GRANTED = "scope_not_granted"
+VENDOR_REFUSAL = "vendor_refusal"
+REQUIRED_SCOPE = "Vulnerabilities: Read"
+SCOPE_PROBLEM = ("SCOPE-NOT-GRANTED: CrowdStrike answered HTTP 403 \"access denied, scope not permitted\" on "
+                 "GET /spotlight/combined/vulnerabilities/v1, so the Falcon API client does not hold "
+                 "Vulnerabilities: Read (Falcon Spotlight). Nothing was measured; this is not a posture result.")
+SCOPE_RECOMMENDATION = ("In the Falcon console (Support and Resources > API Clients and Keys), edit the existing "
+                        "Spektrum API client and add Vulnerabilities: Read; the Client ID and Client Secret do not "
+                        "change. If Falcon Spotlight is not licensed, tell your Spektrum contact so this check can be "
+                        "taken off your requirements.")
+DEFAULT_RECOMMENDATION = ("Confirm the Falcon API client has Vulnerabilities: Read and that Falcon Spotlight is "
+                          "licensed and assessing hosts.")
+
+
+def unevaluated(problem, validation, error_code=None):
+    recommendation = SCOPE_RECOMMENDATION if error_code == SCOPE_NOT_GRANTED else DEFAULT_RECOMMENDATION
+    out = create_response(unevaluated_result(), validation, fail_reasons=[problem], api_errors=[problem],
+                          recommendations=[recommendation])
+    if error_code:
+        collection = out["additionalInfo"]["dataCollection"]
+        collection["errorCode"] = error_code
+        if error_code == SCOPE_NOT_GRANTED:
+            collection["requiredScope"] = REQUIRED_SCOPE
+    return out
+
+
+def decoded(body):
+    """A vendor body as an object: dicts as they are, JSON text or bytes parsed, anything else None."""
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8")
+        except Exception:
+            return None
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except Exception:
+            return None
+    return body
+
+
+def scope_refused(errors):
+    """True only for CrowdStrike's missing-scope answer: an error with code 403 and "scope not permitted"."""
+    if not isinstance(errors, list):
+        return False
+    for err in errors:
+        if not isinstance(err, dict):
+            continue
+        message = err.get("message")
+        if str(err.get("code")) == "403" and isinstance(message, str) and "scope not permitted" in message.lower():
+            return True
+    return False
+
+
+def refusal(data):
+    """(errorCode, problem) when the body is a CrowdStrike refusal rather than Spotlight data, else None."""
+    if not isinstance(data, dict):
+        return None
+    if "vendorErrorAsResponse" in data:
+        marker = data.get("vendorErrorAsResponse")
+        status = marker.get("status") if isinstance(marker, dict) else None
+        body = decoded(marker.get("body")) if isinstance(marker, dict) else None
+        errors = body.get("errors") if isinstance(body, dict) else None
+        if status == 403 and scope_refused(errors):
+            return SCOPE_NOT_GRANTED, SCOPE_PROBLEM
+        return VENDOR_REFUSAL, ("CrowdStrike refused the Spotlight call (handed over by Integration-Service, HTTP "
+                                + str(status)[:10] + "); nothing was measured.")
+    if scope_refused(data.get("errors")):
+        return SCOPE_NOT_GRANTED, SCOPE_PROBLEM
+    return None
 
 
 def as_count(value):
@@ -202,6 +277,9 @@ def measure(data, now):
 def transform(input):
     try:
         data, validation = extract_input(input)
+        refused = refusal(data)
+        if refused:
+            return unevaluated(refused[1], validation, refused[0])
         numbers, problem = measure(data, datetime.utcnow())
         if problem:
             return unevaluated(problem, validation)
