@@ -146,10 +146,15 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def measure_unprotected(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
+    metadata = {"transformationId": "endpointOperationalStatusUnprotectedCount", "vendor": "NinjaOne", "category": "epp"}
+    key = "endpointOperationalStatusUnprotectedCount"
+    if validation.get("status") == "failed":
+        return unevaluated(key, "Input validation failed: the antivirus-status report did not match its schema, so "
+                           "the unprotected count is unknown", validation, metadata)
     if isinstance(data, list):
         records = data
     elif isinstance(data, dict):
@@ -158,6 +163,10 @@ def transform(input):
             records = []
     else:
         records = []
+    if not [r for r in records if isinstance(r, dict) and r.get("deviceId") is not None]:
+        return unevaluated(key, "The antivirus-status report returned no device rows (empty, missing or error "
+                           "reply), so the unprotected count is unknown, not 0", validation, metadata,
+                           {"totalDevicesReported": 0})
 
     device_protected = {}
     device_seen = {}
@@ -244,3 +253,34 @@ def transform(input):
         input_summary=input_summary,
         metadata=metadata,
     )
+
+
+def parse_body(input):
+    """A JSON string or bytes body is parsed; anything else is returned unchanged."""
+    if isinstance(input, bytes):
+        input = input.decode("utf-8")
+    if isinstance(input, str):
+        try:
+            return json.loads(input)
+        except ValueError:
+            return None
+    return input
+
+
+def unevaluated(key, reason, validation, metadata, extra=None):
+    """Fail closed: the key reads None with the reason in dataCollection.errors, which Token-Service routes to
+    Unevaluated (out of the score). An empty, missing or error reply is never a measured 0."""
+    result = dict(extra or {})
+    result[key] = None
+    return create_response(result=result, validation=validation, fail_reasons=[reason], api_errors=[reason],
+                           recommendations=["Confirm the NinjaOne API client can read the device inventory for this tenant."],
+                           metadata=metadata)
+
+
+def transform(input):
+    metadata = {"transformationId": "endpointOperationalStatusUnprotectedCount", "vendor": "NinjaOne", "category": "epp"}
+    try:
+        return measure_unprotected(parse_body(input))
+    except Exception as e:  # a transformation never raises into the engine
+        return unevaluated("endpointOperationalStatusUnprotectedCount", "Transformation error, so the count is unknown: " + str(e),
+                           {"status": "error", "errors": [], "warnings": []}, metadata)
