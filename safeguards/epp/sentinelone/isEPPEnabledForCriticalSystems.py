@@ -197,20 +197,21 @@ def transform(input):
     recommendations = []
     additional_findings = []
 
+    # An empty fleet proves nothing either way: Unevaluated with the reason, never a False.
     if total == 0:
+        reason = "No SentinelOne agents were returned; there is nothing to measure"
         return create_response(
             result={
-                "isEPPEnabledForCriticalSystems": False,
+                "isEPPEnabledForCriticalSystems": None,
                 "criticalSystemsTotal": 0,
                 "criticalSystemsProtected": 0,
                 "criticalSystemsUnprotected": 0,
                 "fleetTotal": 0,
             },
             validation=validation,
-            fail_reasons=[
-                "No enrolled agents found for the configured site — cannot evaluate EPP on critical systems."
-            ],
-            recommendations=["Deploy SentinelOne agents to managed endpoints, then re-evaluate."],
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=["Confirm SentinelOne agents are installed and checking in for the configured site or account."],
             input_summary={"fleetTotal": 0, "criticalSystemsTotal": 0},
             metadata={
                 "transformationId": "isEPPEnabledForCriticalSystems",
