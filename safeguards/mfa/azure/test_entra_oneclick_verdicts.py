@@ -28,8 +28,33 @@ def strong(body):
 
 
 def test_strong_method_enabled_passes():
-    assert strong(methods(["MicrosoftAuthenticator", "Sms"])) is True
+    assert strong(methods(["Fido2", "MicrosoftAuthenticator", "Sms"])) is True
     assert strong(methods(["Fido2"], "preMigration")) is True
+    cba = {"id": "X509Certificate", "state": "enabled"}
+    assert strong(methods([], extra=[cba])) is True
+
+
+def test_microsoft_authenticator_alone_is_not_phishing_resistant():
+    # J.J. 2 Oct 2026 02:35 ET: push / phone sign-in is phishable. Crown, Flagstone Foods, Marcal, Packaging
+    # Exchange, Thunder Bay, Trebron and US Farathane passed on Authenticator alone.
+    assert strong(methods(["MicrosoftAuthenticator", "Sms"])) is False
+    out = STRONG.transform(methods(["MicrosoftAuthenticator", "Email", "Sms", "Voice"]))
+    assert out["transformedResponse"]["enabledStrongMethods"] == []
+    assert "MicrosoftAuthenticator" in out["transformedResponse"]["enabledPhishableMethods"]
+    assert "phishable" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_fido2_alongside_phishable_methods_still_passes():
+    # The 14 tenants with FIDO2 enabled (e.g. Infraservices: Fido2, MicrosoftAuthenticator, TemporaryAccessPass).
+    tap = {"id": "TemporaryAccessPass", "state": "enabled"}
+    out = STRONG.transform(methods(["Fido2", "MicrosoftAuthenticator"], extra=[tap]))
+    assert out["transformedResponse"]["isStrongAuthRequired"] is True
+    assert out["transformedResponse"]["enabledStrongMethods"] == ["FIDO2 security key"]
+
+
+def test_authenticator_only_during_migration_is_not_evaluated():
+    assert strong(methods(["MicrosoftAuthenticator"], "preMigration")) is None
 
 
 def test_no_strong_method_after_migration_fails():

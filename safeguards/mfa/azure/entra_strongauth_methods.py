@@ -6,8 +6,15 @@ Why a new file: the One-Click definition ran d9b6f27a/isstrongauthrequired.py on
 carry, so it read false at 21 of 21 tenants (2026-09-29). isstrongauthrequired.py in this folder reads
 the right policy but reads false on any body, including an error, so it is not reused as is.
 
-Value: true when Microsoft Authenticator or FIDO2 is enabled in the policy; false when the policy was
-read, its migration to the converged policy is complete (or not reported), and neither is enabled.
+Value: true when a phishing-resistant method is enabled in the policy: FIDO2 security keys and passkeys
+(including passkeys in Microsoft Authenticator, which Entra configures under the Fido2 method) or
+certificate-based authentication (X509Certificate). False when the policy was read, its migration to the
+converged policy is complete (or not reported), and neither is enabled.
+
+Microsoft Authenticator push and phone sign-in do not count (J.J., 2 Oct 2026 02:35 ET): a user can be
+phished into approving a push or typing a number, so they are not phishing-resistant (CISA, NIST SP 800-63B).
+Until 2 Oct they counted as strong, which passed 7 tenants with no phishing-resistant method enabled at all.
+Conditional Access authentication strength (what sign-in actually requires) is the next-round version.
 
 Not evaluated (dataCollection error, value None):
 - an error or unrecognised body (no non-empty authenticationMethodConfigurations array);
@@ -22,7 +29,7 @@ from datetime import datetime
 
 
 CRITERIA_KEY = "isStrongAuthRequired"
-STRONG_METHODS = {"fido2": "FIDO2 security key", "microsoftauthenticator": "Microsoft Authenticator"}
+STRONG_METHODS = {"fido2": "FIDO2 security key", "x509certificate": "Certificate-based authentication"}
 LEGACY_STATES = ("premigration", "migrationinprogress")
 
 
@@ -93,8 +100,11 @@ def transform(input):
                   if str(c.get("id") or "").lower() in STRONG_METHODS]
         external = [str(c.get("displayName") or c.get("id") or "external method") for c in enabled if is_external(c)]
         migration = str(data.get("policyMigrationState") or "")
+        phishable = [str(c.get("id") or "") for c in enabled
+                     if str(c.get("id") or "").lower() not in STRONG_METHODS and not is_external(c)]
         summary = {"enabledStrongMethods": strong, "enabledExternalMethods": external,
-                   "enabledMethods": [str(c.get("id") or "") for c in enabled], "policyMigrationState": migration}
+                   "enabledMethods": [str(c.get("id") or "") for c in enabled], "enabledPhishableMethods": phishable,
+                   "policyMigrationState": migration}
         if strong:
             result = {CRITERIA_KEY: True}
             result.update(summary)
@@ -110,8 +120,10 @@ def transform(input):
         result = {CRITERIA_KEY: False}
         result.update(summary)
         return create_response(result, validation,
-                               failed=["Neither Microsoft Authenticator nor FIDO2 is enabled in the authentication "
-                                       "methods policy"], summary=summary)
+                               failed=["No phishing-resistant method (FIDO2 / passkeys or certificate-based "
+                                       "authentication) is enabled in the authentication methods policy"
+                                       + ("; enabled methods are phishable: " + ", ".join(phishable) if phishable else "")],
+                               summary=summary)
     except Exception as error:
         return create_response(
             {CRITERIA_KEY: None},
