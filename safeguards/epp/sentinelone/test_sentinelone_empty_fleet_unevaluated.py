@@ -4,10 +4,10 @@ Read-only fleet run, 2 Oct 2026 17:37 ET: at Collaborative Fund GET /web/api/v2.
 with no agents ("No SentinelOne agents were returned"). isEPPConfigured already read Not evaluated, but
 requiredCoveragePercentage read a measured 0.0 and isEPPEnabled / isEPPLoggingEnabled a measured False, so the
 passport went from 6 passing to 2 on an empty list. The same shape read FAIL at Padilla Law, ValueSelling, ATX
-Venture Partners, HeyApril and MEASURE.
+Venture Partners, HeyApril and MEASURE, and a fully stale fleet (GeriCloud) did the same.
 
 The contract every getEndpoints transform now holds, through the Token-Service envelope:
-- empty complete read, error body, partial read: value None and dataCollection "error" with the
+- empty complete read, all-stale fleet, error body, partial read: value None and dataCollection "error" with the
   reason (Token-Service renders that as "Not evaluated", no gap);
 - a real tenant whose agents fail still reads a measured FAIL, and one whose agents pass still passes.
 Agent shapes follow SentinelOne's GET /agents fields the transforms read.
@@ -19,6 +19,7 @@ from pathlib import Path
 
 KEYS = ["requiredCoveragePercentage", "requiredConfigurationPercentage", "isEPPEnabled", "isEPPLoggingEnabled",
         "isEPPConfigured", "isEPPEnabledForCriticalSystems", "isEPPDeployed"]
+WINDOWED = ["requiredCoveragePercentage", "isEPPEnabled", "isEPPLoggingEnabled", "isEPPConfigured"]
 NOW = datetime.utcnow()
 
 
@@ -74,6 +75,11 @@ class EmptyFleetUnevaluated(unittest.TestCase):
             value, collection = self.run_key(key, is_response([]))
             self.assertIsNone(value, key)
             self.assertEqual(collection["status"], "error", key)
+
+    def test_all_stale_fleet_is_unevaluated_with_reason(self):
+        dark = [agent(1, days_ago=30), agent(2, days_ago=45)]
+        for key in WINDOWED:
+            self.assert_unevaluated(key, ts(is_response(dark)), "last checked in more than 15 days ago")
 
     def test_error_body_is_unevaluated(self):
         bodies = [ts({"result": {"errors": [{"code": 4010010, "title": "Authentication Failed"}]}}),
