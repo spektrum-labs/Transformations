@@ -149,7 +149,9 @@ def eastern(moment):
     dst_end = november + timedelta(days=(6 - november.weekday()) % 7)
     dst = dst_start <= moment < dst_end
     local = moment + timedelta(hours=-4 if dst else -5)
-    return local.strftime("%d %b %Y %H:%M") + (" EDT" if dst else " EST")
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return "%02d %s %d %02d:%02d %s" % (local.day, months[local.month - 1], local.year,
+                                        local.hour, local.minute, "EDT" if dst else "EST")
 
 
 def transform(input):
