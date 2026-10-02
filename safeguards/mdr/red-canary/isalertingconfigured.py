@@ -78,6 +78,15 @@ def get_items_from_section(section):
     return []
 
 
+def section_was_read(section):
+    """True when a triggers or playbooks section is a clean v3 collection (a data list, no error)."""
+    if not isinstance(section, dict):
+        return False
+    if error_problem(section):
+        return False
+    return isinstance(section.get("data"), list)
+
+
 def count_active(items):
     active = 0
     for item in items:
@@ -88,42 +97,109 @@ def count_active(items):
     return active
 
 
+# ---- fail-closed guard (2026-10-01) ------------------------------------------------------------
+# A body that does not show a measured answer proves nothing either way, so the criterion is
+# returned as None with dataCollection.status "error". Token-Service reads that as Unevaluated:
+# never a pass and never a finding. It covers a missing or empty body, a vendor or platform error
+# envelope, a payload this transformation does not recognise, and a transformation exception.
+
+
+def parse_body(data):
+    """A JSON string or bytes body parsed; anything else unchanged. Unparseable text stays text."""
+    if isinstance(data, bytes):
+        try:
+            data = data.decode("utf-8")
+        except Exception:
+            return data
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except Exception:
+            return data
+    return data
+
+
+def error_problem(data):
+    """Describe why `data` is a vendor or platform error rather than evidence, or return None."""
+    if data is None:
+        return "Red Canary returned no body"
+    if isinstance(data, (str, bytes)):
+        return "Red Canary returned a body that is not JSON"
+    if not isinstance(data, dict):
+        return None
+    for name in ("statusCode", "status_code", "httpStatus", "vendorStatus"):
+        code = data.get(name)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Red Canary returned HTTP " + str(code)
+    err = data.get("error") or data.get("errors") or data.get("vendorError")
+    if err:
+        if isinstance(err, list):
+            err = err[0]
+        if isinstance(err, dict):
+            err = err.get("message") or err.get("detail") or err.get("title") or err.get("type") or "error"
+        return "Red Canary returned an error: " + str(err)[:200]
+    if str(data.get("status", "")).strip().lower() == "error":
+        return "the integration reported an error status"
+    return None
+
+
+def unevaluated(keys, problem, validation=None, input_summary=None, transformation_errors=None):
+    """Every key as None plus a dataCollection error: reads Unevaluated, never True or False."""
+    result = {}
+    for key in keys:
+        result[key] = None
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        transformation_errors=transformation_errors,
+        input_summary=input_summary,
+    )
+
+
 def transform(input):
     criteriaKey = "isAlertingConfigured"
 
     try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        extracted = extract_input(input)
+        extracted = extract_input(parse_body(input))
         data = extracted.get("data")
         validation = extracted.get("validation")
 
-        if validation.get("status") == "failed":
-            has_data = isinstance(data, dict) and ('triggers' in data or 'playbooks' in data)
-            if not has_data:
-                return create_response(
-                    result={criteriaKey: False},
-                    validation=validation,
-                    fail_reasons=["Input validation failed"]
-                )
+        problem = error_problem(data)
+        if problem:
+            return unevaluated([criteriaKey], problem, validation)
+        if not isinstance(data, dict) or ("triggers" not in data and "playbooks" not in data):
+            return unevaluated([criteriaKey],
+                               "The response carries neither the triggers nor the playbooks read: "
+                               "nothing was measured", validation)
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         additional_findings = []
 
-        triggers = []
-        playbooks = []
-
-        if isinstance(data, dict):
-            triggers = get_items_from_section(data.get("triggers"))
-            playbooks = get_items_from_section(data.get("playbooks"))
+        triggers = get_items_from_section(data.get("triggers"))
+        playbooks = get_items_from_section(data.get("playbooks"))
 
         total_triggers = len(triggers)
         total_playbooks = len(playbooks)
+
+        # A configured trigger or playbook is evidence on its own. "None configured" is only a
+        # measurement when BOTH reads came back as clean collections; a missing, failed or
+        # unrecognised section leaves the answer Unevaluated rather than a finding.
+        if total_triggers == 0 and total_playbooks == 0:
+            unread = []
+            for name in ("triggers", "playbooks"):
+                if not section_was_read(data.get(name)):
+                    unread.append(name)
+            if unread:
+                return unevaluated([criteriaKey],
+                                   "No triggers or playbooks were returned and the " + " and ".join(unread)
+                                   + " read did not return a collection: nothing was measured",
+                                   validation)
         active_triggers = count_active(triggers)
         active_playbooks = count_active(playbooks)
 
@@ -165,9 +241,6 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        message = "Transformation error: " + str(e)[:200]
+        return unevaluated([criteriaKey], message, {"status": "error", "errors": [], "warnings": []},
+                           transformation_errors=[message])
