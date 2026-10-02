@@ -25,7 +25,7 @@ vault lock, so every result was "not locked" without anything having been measur
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 CRITERIA_KEY = "isBackupImmutable"
 AIR_GAPPED = "LOGICALLY_AIR_GAPPED_BACKUP_VAULT"
@@ -140,6 +140,18 @@ def to_int(value):
         return 0
 
 
+def eastern(moment):
+    """Format a UTC datetime in US Eastern time (DST: 2nd Sunday of March to 1st Sunday of November)."""
+    year = moment.year
+    march = datetime(year, 3, 8, 7, tzinfo=timezone.utc)
+    dst_start = march + timedelta(days=(6 - march.weekday()) % 7)
+    november = datetime(year, 11, 1, 6, tzinfo=timezone.utc)
+    dst_end = november + timedelta(days=(6 - november.weekday()) % 7)
+    dst = dst_start <= moment < dst_end
+    local = moment + timedelta(hours=-4 if dst else -5)
+    return local.strftime("%d %b %Y %H:%M") + (" EDT" if dst else " EST")
+
+
 def transform(input):
     try:
         if isinstance(input, str):
@@ -167,6 +179,7 @@ def transform(input):
 
         findings = []
         not_immutable = []
+        grace = []
         for vault in judged:
             name = str(vault.get("BackupVaultName") or "unknown")
             lock_date = parse_time(vault.get("LockDate"))
@@ -178,6 +191,7 @@ def transform(input):
                 mode = "governance"
             elif lock_date > now:
                 mode = "compliance, still in grace period"
+                grace.append("%s: Vault Lock applied in compliance mode; becomes immutable on %s after the cooling-off window. Until then the lock can be removed." % (name, eastern(lock_date)))
             else:
                 mode = "compliance"
             immutable = mode in ("compliance", "air-gapped (compliance)")
@@ -186,8 +200,9 @@ def transform(input):
             findings.append({
                 "metric": name,
                 "value": immutable,
-                "reason": "%s; %d recovery points; MinRetentionDays=%s" % (
-                    mode, to_int(vault.get("NumberOfRecoveryPoints")), vault.get("MinRetentionDays"))
+                "reason": "%s; %d recovery points; MinRetentionDays=%s%s" % (
+                    mode, to_int(vault.get("NumberOfRecoveryPoints")), vault.get("MinRetentionDays"),
+                    ("; immutable from %s" % eastern(lock_date)) if mode == "compliance, still in grace period" else "")
             })
 
         is_immutable = len(judged) > 0 and len(not_immutable) == 0
@@ -203,7 +218,11 @@ def transform(input):
         else:
             fail_reasons.append("%d of %d vaults holding recovery points are not compliance-locked: %s" % (
                 len(not_immutable), len(judged), ", ".join(not_immutable)))
-            recommendations.append("Apply AWS Backup Vault Lock in compliance mode (set ChangeableForDays) to every vault holding recovery points")
+            fail_reasons.extend(grace)
+            if len(grace) < len(not_immutable):
+                recommendations.append("Apply AWS Backup Vault Lock in compliance mode (set ChangeableForDays) to every vault holding recovery points")
+            if grace:
+                recommendations.append("No action needed for vaults in the cooling-off window: the check passes after each lock date (Vault Lock compliance mode has a cooling-off period of at least 3 days)")
         if data.get("NextToken"):
             validation = {"status": "unknown", "errors": [], "warnings": ["Only the first page of vaults was returned"]}
 
