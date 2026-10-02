@@ -1,5 +1,86 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+# Endpoint rules (2026-09-29), shared by every NinjaOne antivirus-status check:
+#   1. Judge a device only when its newest row is within ACTIVE_WINDOW_DAYS of the newest row
+#      in the report. A device whose rows carry no timestamp is judged. If the newest row is itself
+#      more than ACTIVE_WINDOW_DAYS before evaluation time, the whole fleet is dark and every device is stale.
+#   2. Phones and tablets are left out (needs the device list beside the report).
+#   3. A Mac whose only products are third-party ones not reporting ON is unreadable, not
+#      unprotected: NinjaOne cannot read third-party AV state on macOS, so coverage there is
+#      the EDR vendor's to prove. A Mac reporting productName NONE is still judged.
+ACTIVE_WINDOW_DAYS = 15
+MOBILE_NODE_CLASSES = ("APPLE_IOS", "APPLE_IPADOS", "ANDROID")
+
+
+def epoch(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def device_classes(data):
+    """deviceId -> nodeClass from a device list riding beside the report (workflow key "devices")."""
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(devices, dict):
+        devices = devices.get("data") or devices.get("results")
+    classes = {}
+    for device in devices if isinstance(devices, list) else []:
+        if isinstance(device, dict) and device.get("id") is not None:
+            classes[str(device.get("id"))] = str(device.get("nodeClass") or "").upper()
+    return classes
+
+
+def endpoint_rows(rows, data, mac_unreadable):
+    """Apply the endpoint rules to antivirus-status rows. Returns (rows to judge, scope counts)."""
+    classes = device_classes(data)
+    by_device = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("deviceId") is not None:
+            by_device.setdefault(str(row.get("deviceId")), []).append(row)
+    newest = {}
+    for device_id, device_rows in by_device.items():
+        stamps = [epoch(r.get("timestamp")) for r in device_rows]
+        stamps = [s for s in stamps if s is not None]
+        newest[device_id] = max(stamps) if stamps else None
+    known = [s for s in newest.values() if s is not None]
+    cutoff = max(known) - ACTIVE_WINDOW_DAYS * 86400 if known else None
+    wall_cutoff = datetime.now(timezone.utc).timestamp() - ACTIVE_WINDOW_DAYS * 86400
+    dark = bool(known) and max(known) < wall_cutoff
+    if dark:
+        # Dark fleet: the newest check-in is itself older than the window, so every device is stale.
+        cutoff = wall_cutoff
+    kept = []
+    stale = 0
+    mobile = 0
+    unreadable = 0
+    for device_id, device_rows in by_device.items():
+        node_class = classes.get(device_id, "")
+        if node_class in MOBILE_NODE_CLASSES:
+            mobile = mobile + 1
+            continue
+        if cutoff is not None and newest[device_id] is not None and newest[device_id] < cutoff:
+            stale = stale + 1
+            continue
+        if mac_unreadable and node_class == "MAC":
+            named = [r for r in device_rows if str(r.get("productName") or "NONE").upper() != "NONE"]
+            running = [r for r in device_rows if str(r.get("productState") or "").upper() == "ON"]
+            if named and not running:
+                unreadable = unreadable + 1
+                continue
+        kept.extend(device_rows)
+    scope = {
+        "devicesReported": len(by_device),
+        "devicesJudged": len(by_device) - stale - mobile - unreadable,
+        "devicesLeftOutStale": stale,
+        "devicesLeftOutMobile": mobile,
+        "macDevicesUnreadable": unreadable,
+        "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "fleetDark": dark,
+    }
+    return kept, scope
 
 
 def extract_input(input_data):
@@ -65,10 +146,15 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def measure_unprotected(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
+    metadata = {"transformationId": "endpointOperationalStatusUnprotectedCount", "vendor": "NinjaOne", "category": "epp"}
+    key = "endpointOperationalStatusUnprotectedCount"
+    if validation.get("status") == "failed":
+        return unevaluated(key, "Input validation failed: the antivirus-status report did not match its schema, so "
+                           "the unprotected count is unknown", validation, metadata)
     if isinstance(data, list):
         records = data
     elif isinstance(data, dict):
@@ -77,9 +163,19 @@ def transform(input):
             records = []
     else:
         records = []
+    if not [r for r in records if isinstance(r, dict) and r.get("deviceId") is not None]:
+        return unevaluated(key, "The antivirus-status report returned no device rows (empty, missing or error "
+                           "reply), so the unprotected count is unknown, not 0", validation, metadata,
+                           {"totalDevicesReported": 0})
 
     device_protected = {}
     device_seen = {}
+    records, scope = endpoint_rows(records, data, True)
+    if scope["devicesReported"] and not scope["devicesJudged"]:
+        nothing = ("Every device in the antivirus-status report was left out (stale, phone or tablet, or a Mac "
+                   "whose third-party AV NinjaOne cannot read), so this is not evaluated here.")
+        return create_response(result=dict(scope, endpointOperationalStatusUnprotectedCount=None), validation=validation,
+                               api_errors=[nothing], fail_reasons=[nothing])
     for rec in records:
         if not isinstance(rec, dict):
             continue
@@ -130,6 +226,7 @@ def transform(input):
             )
 
     result = {
+        **scope,
         "endpointOperationalStatusUnprotectedCount": unprotected_count,
         "totalDevicesReported": total_devices,
         "protectedDeviceCount": protected_count,
@@ -156,3 +253,34 @@ def transform(input):
         input_summary=input_summary,
         metadata=metadata,
     )
+
+
+def parse_body(input):
+    """A JSON string or bytes body is parsed; anything else is returned unchanged."""
+    if isinstance(input, bytes):
+        input = input.decode("utf-8")
+    if isinstance(input, str):
+        try:
+            return json.loads(input)
+        except ValueError:
+            return None
+    return input
+
+
+def unevaluated(key, reason, validation, metadata, extra=None):
+    """Fail closed: the key reads None with the reason in dataCollection.errors, which Token-Service routes to
+    Unevaluated (out of the score). An empty, missing or error reply is never a measured 0."""
+    result = dict(extra or {})
+    result[key] = None
+    return create_response(result=result, validation=validation, fail_reasons=[reason], api_errors=[reason],
+                           recommendations=["Confirm the NinjaOne API client can read the device inventory for this tenant."],
+                           metadata=metadata)
+
+
+def transform(input):
+    metadata = {"transformationId": "endpointOperationalStatusUnprotectedCount", "vendor": "NinjaOne", "category": "epp"}
+    try:
+        return measure_unprotected(parse_body(input))
+    except Exception as e:  # a transformation never raises into the engine
+        return unevaluated("endpointOperationalStatusUnprotectedCount", "Transformation error, so the count is unknown: " + str(e),
+                           {"status": "error", "errors": [], "warnings": []}, metadata)
