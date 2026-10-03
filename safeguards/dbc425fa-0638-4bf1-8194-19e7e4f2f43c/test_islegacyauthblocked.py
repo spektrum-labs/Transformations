@@ -235,3 +235,21 @@ class LegacyAuthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_no_call_the_token_service_sandbox_refuses():
+    # Token-Service's code validator rejects any call named compile, eval, exec, getattr and the like
+    # (src/utils/codeexecutor.py dangerous_calls). re.compile tripped it in production on 3 Oct 2026.
+    import ast
+    from pathlib import Path
+    src = Path(__file__).with_name("islegacyauthblocked.py").read_text()
+    denied = {"__import__", "eval", "exec", "compile", "open", "file", "input", "raw_input", "execfile", "reload",
+              "__builtins__", "getattr", "setattr", "delattr", "hasattr", "globals", "locals", "vars", "dir"}
+    hits = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
+            if name in denied:
+                hits.append((name, node.lineno))
+    assert hits == []
