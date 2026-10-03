@@ -98,6 +98,8 @@ NO_EVIDENCE = {
     "graph_403": {"error": {"code": "Forbidden", "message": "Missing DeviceManagementManagedDevices.Read.All"}},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"value": [{"id": "u1", "userPrincipalName": "a@b.c"}]},
+    "not_found_404": {"statusCode": 404, "error": "Not Found"},
+    "pagination_incomplete": {"error": True, "errorType": "pagination_incomplete", "status": "Error", "statusCode": 429},
 }
 
 
@@ -128,3 +130,17 @@ def test_passcode_paged_list_is_unmeasured():
     body = policies(IOS_ON)
     body["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/deviceManagement/deviceCompliancePolicies?$skiptoken=x"
     assert run(PASS, "isPasscodeCompliant", body) == (None, "error")
+
+
+def test_every_transform_reports_schema_version_2_0():
+    """transformedResponse envelope is the CONTRIBUTING.md schemaVersion 2.0 one, on answers and on errors."""
+    import importlib.util as iu
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        spec = iu.spec_from_file_location("schema_" + path.stem, path)
+        module = iu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        out = module.transform({})
+        assert out["additionalInfo"]["metadata"]["schemaVersion"] == "2.0", path.name
+        assert set(out["additionalInfo"]) == {"dataCollection", "validation", "transformation", "evaluation", "metadata"}
