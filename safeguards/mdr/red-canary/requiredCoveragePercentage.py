@@ -1,10 +1,22 @@
 """
 Transformation: requiredCoveragePercentage
-Red Canary MDR — validates that the percentage of endpoints enrolled in Red Canary MDR
-meets the Cyvatar baseline coverage threshold (default >=95% of expected device fleet).
+Red Canary MDR: the share of the tenant's live endpoints that Red Canary itself reports as
+monitored, as a whole-number percentage (rounded down, so it never overstates coverage).
 
-Numerator:   meta.total_items from getEndpoints (all pages aggregated via follow=true)
-Denominator: expected fleet size from per-tenant safeguard config
+    coverage = monitored endpoints / total endpoints * 100
+
+Numerator:   endpoints whose attributes.monitoring_status is "monitored"
+Denominator: every endpoint in the complete getEndpoints census that is not decommissioned
+
+Both come from GET /openapi/v3/endpoints. The threshold lives in the bundle criterion, not here.
+
+2026-10-02: the previous version divided the number of listed endpoints by an "expected fleet"
+it looked for in the response body. The body never carries one, so the expected count fell back
+to the listed count and every tenant read 100%, whatever monitoring_status said (Ethico 107 of
+194 monitored, Gohlke 18 of 21, Kingsmen 5 of 10 all read 100%). It now reads monitoring_status.
+
+A read that cannot show the whole census -- empty, an error, cut short, or records that do not
+report a monitoring_status -- is Unevaluated with the reason: never 100% and never 0%.
 """
 import json
 from datetime import datetime
@@ -225,97 +237,103 @@ def unevaluated(keys, problem, validation=None, input_summary=None, transformati
     )
 
 
+def coverage_census(endpoints):
+    """(monitored, total, decommissioned, problem) over a complete endpoint census.
+
+    Red Canary v3 nests fields under attributes; a flat record is read the same way. Booleans
+    arrive as strings ("True"/"False"). A live endpoint that reports no monitoring_status makes
+    the census partial: coverage cannot be stated, so problem names how many are missing.
+    """
+    monitored = 0
+    total = 0
+    decommissioned = 0
+    unreadable = 0
+    no_status = 0
+    for ep in endpoints:
+        if not is_endpoint_record(ep):
+            unreadable = unreadable + 1
+            continue
+        attrs = ep.get("attributes")
+        fields = attrs if isinstance(attrs, dict) else ep
+        if str(fields.get("is_decommissioned")).strip().lower() == "true":
+            decommissioned = decommissioned + 1
+            continue
+        total = total + 1
+        status = str(fields.get("monitoring_status") or "").strip().lower()
+        if not status:
+            no_status = no_status + 1
+        elif status == "monitored":
+            monitored = monitored + 1
+    if unreadable:
+        return monitored, total, decommissioned, (
+            str(unreadable) + " of " + str(len(endpoints)) + " records in the endpoints read are "
+            "not Red Canary endpoints: the census is partial, so coverage was not measured")
+    if total == 0:
+        return monitored, total, decommissioned, (
+            "Every endpoint Red Canary returned (" + str(decommissioned) + ") is decommissioned: "
+            "there is no live endpoint to measure coverage over")
+    if no_status:
+        return monitored, total, decommissioned, (
+            str(no_status) + " of " + str(total) + " live endpoint(s) report no monitoring_status: "
+            "the census is partial, so coverage was not measured")
+    return monitored, total, decommissioned, None
+
+
 def transform(input):
     keys = ["requiredCoveragePercentage"]
+    empty_summary = {"monitoredEndpoints": None, "totalEndpoints": None}
     try:
         data, validation = extract_input(parse_body(input))
         if isinstance(validation, dict) and validation.get("status") == "failed":
             return unevaluated(keys, "Input validation failed: nothing was measured", validation)
         endpoints, meta, problem = endpoint_census(data)
         if problem:
-            return unevaluated(keys, problem, validation,
-                               input_summary={"enrolledEndpoints": None, "expectedEndpoints": None})
-        config_lookup = data if isinstance(data, dict) else {}
-        return measure(endpoints, meta, validation, config_lookup)
+            return unevaluated(keys, problem, validation, input_summary=empty_summary)
+        monitored, total, decommissioned, problem = coverage_census(endpoints)
+        if problem:
+            return unevaluated(keys, problem, validation, input_summary={
+                "monitoredEndpoints": monitored, "totalEndpoints": total,
+                "decommissionedEndpoints": decommissioned})
+        return measure(monitored, total, decommissioned, meta, validation)
     except Exception as e:
         message = "Transformation error: " + str(e)[:200]
         return unevaluated(keys, message, {"status": "error", "errors": [], "warnings": []},
                            transformation_errors=[message])
 
 
-def measure(endpoints_list, meta, validation, config_lookup):
-    """The coverage from a complete, non-empty endpoint census (see endpoint_census)."""
-    total_items_raw = meta.get("total_items")
-    enrolled_count = len(endpoints_list)
-
-    expected_count = None
-    config_key_candidates = [
-        "expectedEndpoints",
-        "expectedDeviceCount",
-        "deviceCount",
-        "expectedDevices",
-        "totalExpectedEndpoints",
-        "fleetSize",
-    ]
-    for ck in config_key_candidates:
-        val = config_lookup.get(ck)
-        if val is not None:
-            try:
-                expected_count = int(val)
-            except (TypeError, ValueError):
-                pass
-            if expected_count is not None:
-                break
-
-    if expected_count is None or expected_count <= 0:
-        # No config denominator available — treat enrolled fleet as 100% coverage
-        expected_count = enrolled_count if enrolled_count > 0 else 0
-
-    # --- Coverage percentage ---
-    if expected_count == 0:
-        coverage_pct = 0.0
-    else:
-        raw_pct = (float(enrolled_count) / float(expected_count)) * 100.0
-        # Cap at 100 — more endpoints than expected is still 100% covered
-        coverage_pct = raw_pct if raw_pct <= 100.0 else 100.0
-
-    coverage_pct = round(coverage_pct, 2)
-
-    # --- Evaluation reasons ---
+def measure(monitored, total, decommissioned, meta, validation):
+    """The whole-number coverage from a complete census with total > 0 (see coverage_census)."""
+    coverage_pct = (monitored * 100) // total
+    unmonitored = total - monitored
+    summary = (str(monitored) + " of " + str(total) + " live endpoint(s) are monitored by Red Canary ("
+               + str(coverage_pct) + "%)")
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-
-    if coverage_pct >= 95.0:
-        pass_reasons.append(
-            f"{enrolled_count} of {expected_count} expected endpoints are enrolled in Red Canary MDR "
-            f"(meta.total_items={enrolled_count}), yielding {coverage_pct}% coverage which meets the >=95% threshold."
-        )
+    if unmonitored == 0:
+        pass_reasons.append(summary + ".")
     else:
-        gap = expected_count - enrolled_count
-        fail_reasons.append(
-            f"Only {enrolled_count} of {expected_count} expected endpoints are enrolled in Red Canary MDR "
-            f"(meta.total_items={enrolled_count}), yielding {coverage_pct}% coverage which is below the >=95% threshold."
-        )
+        fail_reasons.append(summary + "; " + str(unmonitored) + " are unmonitored.")
         recommendations.append(
-            f"Enroll the remaining {gap} endpoint(s) in Red Canary MDR to reach the 95% coverage baseline. "
-            f"Verify that the Red Canary sensor is deployed and active on all devices in the expected fleet."
-        )
-
+            "Return the unmonitored endpoints to monitoring in the Red Canary portal (Endpoints, "
+            "filter monitoring status: unmonitored), or decommission those no longer in service.")
     return create_response(
         result={
             "requiredCoveragePercentage": coverage_pct,
-            "enrolledEndpoints": enrolled_count,
-            "expectedEndpoints": expected_count,
+            "monitoredEndpoints": monitored,
+            "unmonitoredEndpoints": unmonitored,
+            "totalEndpoints": total,
+            "decommissionedEndpoints": decommissioned,
         },
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary={
-            "totalItems": total_items_raw,
-            "enrolledEndpoints": enrolled_count,
-            "expectedEndpoints": expected_count,
+            "totalItems": meta.get("total_items"),
+            "monitoredEndpoints": monitored,
+            "totalEndpoints": total,
+            "decommissionedEndpoints": decommissioned,
         },
         metadata={
             "transformationId": "requiredCoveragePercentage",
