@@ -15,10 +15,20 @@ WHAT "SEPARATE" MEANS HERE. Every enabled user that holds a privileged Entra dir
 role (Global Administrator and the other admin roles in PRIVILEGED_ROLE_IDS) is a
 dedicated admin account:
 
-  * it has no mailbox: the user's `mail` attribute is empty, and no assigned service plan
-    is an enabled Exchange plan; and
+  * it has no Exchange Online mailbox: no assigned service plan is an enabled Exchange
+    plan; and
   * it holds no productivity licence: no assigned SKU is a known mailbox or Office
     productivity SKU (MAILBOX_OR_PRODUCTIVITY_SKU_IDS).
+
+A non-empty `mail` attribute ALONE (no productivity SKU and no enabled Exchange plan) is
+a finding, not a fail (J.J., 3 Oct 2026). `mail` is a directory attribute that is often
+set on cloud-only admin accounts for notifications or forwarding without any mailbox
+behind it, so it is not shown to be a day-to-day account. It is reported under
+additionalFindings and does not change the verdict, but ONLY when the mailbox question is
+answered: assignedPlans is in the read and shows no enabled Exchange plan, or every assigned
+SKU is known and is not a productivity SKU (KNOWN_NON_PRODUCTIVITY_SKU_IDS; no licence at all
+also counts). `mail` plus a SKU we cannot classify and no assignedPlans is not evaluated
+("mailbox licence could not be classified"), never a pass.
 
 Licences that are not productivity licences (Entra ID P1/P2, for example) do not count.
 Role holders that are service principals are not user accounts and are not judged.
@@ -44,7 +54,8 @@ privileged role holders (every tenant has a Global Administrator), a truncated r
 (@odata.nextLink) or a role holder that cannot be resolved returns
 areAdminAccountsSeparate = false together with a dataCollection error, so the check reads
 "not evaluated" rather than pass or fail. A role holder that is shown to have a mailbox or
-a productivity licence is a measured fail, whatever else is missing.
+a productivity licence (or an enabled Exchange plan) is a measured fail, whatever else is
+missing.
 """
 
 import json
@@ -142,8 +153,8 @@ PRIVILEGED_ROLE_IDS = [
 
 # Commercial SKU ids that carry an Exchange Online mailbox or the Office productivity apps
 # (Microsoft "product names and service plan identifiers for licensing" reference).
-# NON-EXHAUSTIVE: an unlisted SKU is backstopped by the mailbox checks (`mail`, and the
-# Exchange service plans in assignedPlans when the read carries them).
+# NON-EXHAUSTIVE: an unlisted SKU is backstopped by the Exchange service plans in
+# assignedPlans when the read carries them. `mail` alone is a finding, not a backstop.
 MAILBOX_OR_PRODUCTIVITY_SKU_IDS = [
     "4b9405b0-7788-4568-add1-99614e63306e",  # EXCHANGESTANDARD (Exchange Online Plan 1)
     "19ec0d23-8335-4cbd-94ac-6050e30712fa",  # EXCHANGEENTERPRISE (Exchange Online Plan 2)
@@ -293,12 +304,42 @@ def is_enabled(user):
     return str(user.get("accountEnabled")).lower() != "false"
 
 
-def has_mailbox_or_productivity_licence(user):
-    """Return the reasons this role holder looks like a day-to-day account (empty if none)."""
-    reasons = []
+def has_mail_address(user):
+    """A non-empty `mail` attribute: a finding on its own, never a fail by itself."""
     mail = user.get("mail")
-    if mail and str(mail).strip():
-        reasons.append("has a mailbox address")
+    return bool(mail and str(mail).strip())
+
+
+# Licences that are known NOT to carry a mailbox or the Office apps. Same set as
+# mfa/azure/areadminaccountsseparate.py.
+KNOWN_NON_PRODUCTIVITY_SKU_IDS = [
+    "078d2b04-f1bd-4111-bbd4-b4b1b354cef4",  # AAD_PREMIUM (Entra ID P1)
+    "84a661c4-e949-4bd2-a560-ed7766fcaf2b",  # AAD_PREMIUM_P2 (Entra ID P2)
+    "efccb6f7-5641-4e0e-bd10-b4976e1bf68e",  # EMS (Enterprise Mobility + Security E3)
+    "b05e124f-c7cc-45a0-a6aa-8cf78c946968",  # EMSPREMIUM (Enterprise Mobility + Security E5)
+    "061f9ace-7d42-4136-88ac-31dc755f143f",  # INTUNE_A (Microsoft Intune)
+]
+
+
+def mail_only_is_classified(user):
+    """For a role holder with `mail` and no proven mailbox licence or Exchange plan: True when
+    the mailbox question is answered (assignedPlans present, or every SKU known and
+    non-productivity), False when a SKU could not be classified and there is no assignedPlans."""
+    if isinstance(user.get("assignedPlans"), list):
+        return True
+    for lic in user.get("assignedLicenses") or []:
+        sku = lower_id(lic.get("skuId") if isinstance(lic, dict) else lic)
+        if sku not in KNOWN_NON_PRODUCTIVITY_SKU_IDS:
+            return False
+    return True
+
+
+def has_mailbox_or_productivity_licence(user):
+    """Return the reasons this role holder is a day-to-day account (empty if none).
+
+    Only a productivity licence or an enabled Exchange plan counts. `mail` alone does not
+    (see has_mail_address)."""
+    reasons = []
     for lic in user.get("assignedLicenses") or []:
         sku = lower_id(lic.get("skuId") if isinstance(lic, dict) else lic)
         if sku in MAILBOX_OR_PRODUCTIVITY_SKU_IDS:
@@ -387,6 +428,7 @@ def transform(input):
         "adminCount": 0,
         "adminsWithMailboxOrLicence": 0,
         "unresolvedAdminPrincipals": 0,
+        "adminsWithMailAttributeOnly": 0,
     }
     try:
         if isinstance(input, str):
@@ -453,6 +495,8 @@ def transform(input):
         service_principals = 0
         unresolved = []
         violations = []
+        mail_only = []
+        unclassified = []
         for pid in sorted(principals):
             kind = principals[pid]
             if kind == "serviceprincipal":
@@ -470,15 +514,24 @@ def transform(input):
                 disabled_admins = disabled_admins + 1
                 continue
             reasons = has_mailbox_or_productivity_licence(user)
+            name = short(user.get("userPrincipalName") or user.get("displayName") or pid)
             if reasons:
-                name = short(user.get("userPrincipalName") or user.get("displayName") or pid)
+                if has_mail_address(user):
+                    reasons = ["has a mail address"] + reasons
                 violations.append(name + ": " + ", ".join(reasons))
+            elif has_mail_address(user):
+                if mail_only_is_classified(user):
+                    mail_only.append(name)
+                else:
+                    unclassified.append(name)
 
         result = {
             CRITERIA_KEY: False,
             "adminCount": admin_count,
             "adminsWithMailboxOrLicence": len(violations),
             "unresolvedAdminPrincipals": len(unresolved),
+            "adminsWithMailAttributeOnly": len(mail_only),
+            "adminsWithUnclassifiedMailboxLicence": len(unclassified),
         }
         summary = {
             "privilegedPrincipals": len(principals),
@@ -494,15 +547,23 @@ def transform(input):
             findings.append(f"{service_principals} privileged role holder(s) are service principals (not judged)")
         if disabled_admins > 0:
             findings.append(f"{disabled_admins} privileged role holder(s) are disabled accounts (not judged)")
+        if mail_only:
+            findings.append(
+                f"{len(mail_only)} privileged admin account(s) have a mail address but no productivity "
+                f"licence and no enabled Exchange plan (a finding, not a fail): " + "; ".join(mail_only[:5])
+            )
 
         if len(violations) > 0:
+            # A proven mailbox/productivity licence on ANY admin is a measured fail, whatever else
+            # is unresolved; the unresolved admins are named in the reason.
+            fail_reason = (f"{len(violations)} of {admin_count} privileged admin account(s) are day-to-day "
+                           f"accounts with a mailbox or productivity licence: " + "; ".join(violations[:5]))
+            if unresolved or unclassified:
+                fail_reason += "; also unresolved: " + "; ".join((unresolved + unclassified)[:5])
             return create_response(
                 result=result,
                 validation=validation,
-                fail_reasons=[
-                    f"{len(violations)} of {admin_count} privileged admin account(s) are day-to-day "
-                    f"accounts with a mailbox or productivity licence: " + "; ".join(violations[:5])
-                ],
+                fail_reasons=[fail_reason],
                 recommendations=[
                     "Give each administrator a separate cloud-only admin account with no mailbox and "
                     "no productivity licence, and remove admin roles from everyday accounts"
@@ -519,6 +580,10 @@ def transform(input):
         if unresolved:
             incomplete.append(f"{len(unresolved)} privileged role holder(s) could not be resolved: "
                               + "; ".join(unresolved[:5]))
+        if unclassified:
+            incomplete.append(f"Mailbox licence could not be classified for {len(unclassified)} privileged admin "
+                              f"account(s) with a mail address and no assignedPlans in the read: "
+                              + "; ".join(unclassified[:5]))
         if admin_count == 0 and not unresolved:
             incomplete.append("no enabled user holds a privileged directory role; every tenant has a "
                               "Global Administrator, so the read is incomplete")
@@ -543,8 +608,8 @@ def transform(input):
             result=result,
             validation=validation,
             pass_reasons=[
-                f"All {admin_count} privileged admin account(s) are dedicated: no mailbox and no "
-                f"mailbox/productivity licence"
+                f"All {admin_count} privileged admin account(s) are dedicated: no enabled Exchange "
+                f"plan and no mailbox/productivity licence"
             ],
             input_summary=summary,
             additional_findings=findings,

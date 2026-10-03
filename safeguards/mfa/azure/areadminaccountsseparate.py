@@ -4,6 +4,16 @@ Vendor: Microsoft
 Category: Identity / Admin Accounts
 
 Evaluates whether privileged admin identities are separate from everyday mail-licensed user accounts.
+
+A privileged role holder FAILS only on a mailbox/productivity licence (MAIL_EXCHANGE_SKU_IDS)
+or an enabled Exchange plan in assignedPlans. A non-empty `mail` attribute alone is a finding,
+not a fail (J.J., 3 Oct 2026; same rule as the Microsoft 365 file
+874a78ff-.../areadminaccountsseparate.py), but only when the mailbox question is answered:
+assignedPlans is in the read and shows no enabled Exchange plan, or every assigned SKU is known
+and is not a productivity SKU (KNOWN_NON_PRODUCTIVITY_SKU_IDS). `mail` plus a SKU we cannot
+classify and no assignedPlans is not evaluated ("mailbox licence could not be classified"),
+never a pass. A proven fail on any admin wins over unresolved admins. No role or licence data
+is not evaluated, never a measured fail.
 """
 
 import json
@@ -82,20 +92,27 @@ PRIVILEGED_ROLE_IDS = {
     "f2ef992c-3afb-46b9-b7cf-a126ee74c451",  # Global Reader (read-only but tenant-wide - conservative inclusion)
 }
 
-# Commercial SKU ids that include an Exchange Online mailbox (Microsoft licensing reference).
-# NON-EXHAUSTIVE by design: unknown SKUs are backstopped by the mail-attribute check below.
-# Complete this list against Microsoft's product-names-and-service-plan-identifiers CSV when
-# the getUsers feed is upgraded to carry assignedLicenses.
+# Commercial SKU ids that carry an Exchange Online mailbox or the Office productivity apps
+# (Microsoft "product names and service plan identifiers for licensing" reference). Same set
+# as the Microsoft 365 file 874a78ff-.../areadminaccountsseparate.py so both give one answer
+# for a tenant. NON-EXHAUSTIVE: an unlisted SKU is backstopped by the Exchange service plans
+# in assignedPlans when the read carries them. `mail` alone is a finding, not a backstop.
 MAIL_EXCHANGE_SKU_IDS = {
     "4b9405b0-7788-4568-add1-99614e63306e",  # EXCHANGESTANDARD (Exchange Online Plan 1)
-    "efb87545-963c-4f51-83ff-779edf226046",  # EXCHANGEENTERPRISE (Exchange Online Plan 2)
+    "19ec0d23-8335-4cbd-94ac-6050e30712fa",  # EXCHANGEENTERPRISE (Exchange Online Plan 2)
+    "efb87545-963c-4f51-83ff-779edf226046",  # EXCHANGE_S_ENTERPRISE (Plan 2 service plan id; kept)
+    "18181a46-0d4e-45cd-891e-60aabd171b4e",  # STANDARDPACK (Office 365 E1)
     "6fd2c87f-b296-42f0-b197-1e91e994b900",  # ENTERPRISEPACK (Office 365 E3)
     "c7df2760-2c81-4ef7-b578-5b5392b571df",  # ENTERPRISEPREMIUM (Office 365 E5)
+    "4b585984-651b-448a-9e53-3b10f069cf7f",  # DESKLESSPACK (Office 365 F3)
     "05e9a617-0261-4cee-bb44-138d3ef5d965",  # SPE_E3 (Microsoft 365 E3)
     "06ebc4ee-1bb5-47dd-8120-11324bc54e06",  # SPE_E5 (Microsoft 365 E5)
+    "66b55226-6b4f-492c-910c-a3b7a3c9d993",  # SPE_F1 (Microsoft 365 F3)
     "3b555118-da6a-4418-894f-7df1e2096870",  # O365_BUSINESS_ESSENTIALS (M365 Business Basic)
     "f245ecc8-75af-4f8e-b61f-27d8114de5f3",  # O365_BUSINESS_PREMIUM (M365 Business Standard; lab-verified)
     "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46",  # SPB (Microsoft 365 Business Premium)
+    "cdd28e44-67e3-425e-be4c-737fab2899d3",  # O365_BUSINESS (Microsoft 365 Apps for business)
+    "c2273bd0-dff7-4215-9ef5-2c7bcfb06425",  # OFFICESUBSCRIPTION (Microsoft 365 Apps for enterprise)
 }
 
 
@@ -169,6 +186,8 @@ def collect_admin_principal_ids(data, users):
 
 
 def user_has_mail_or_exchange_license(user):
+    """True only for a mailbox/productivity SKU or an enabled Exchange plan. `mail` alone is
+    not enough (J.J., 3 Oct 2026): see user_has_mail_attribute."""
     licenses = user.get("assignedLicenses") or []
     for lic in licenses:
         if not isinstance(lic, dict):
@@ -176,18 +195,53 @@ def user_has_mail_or_exchange_license(user):
         sku_id = lic.get("skuId")
         if sku_id and str(sku_id).lower() in MAIL_EXCHANGE_SKU_IDS:
             return True
-    mail = user.get("mail")
-    if mail and str(mail).strip():
-        return True
+    for plan in user.get("assignedPlans") or []:
+        if not isinstance(plan, dict):
+            continue
+        service = str(plan.get("service") or "").lower()
+        status = str(plan.get("capabilityStatus") or "").lower()
+        if service == "exchange" and status == "enabled":
+            return True
     return False
+
+
+# Licences that are known NOT to carry a mailbox or the Office apps. Same set as the
+# Microsoft 365 file. An admin whose `mail` is set and whose SKUs are all here (or who has no
+# licence at all) is a finding, not a fail; any other SKU with no assignedPlans is unclassified.
+KNOWN_NON_PRODUCTIVITY_SKU_IDS = {
+    "078d2b04-f1bd-4111-bbd4-b4b1b354cef4",  # AAD_PREMIUM (Entra ID P1)
+    "84a661c4-e949-4bd2-a560-ed7766fcaf2b",  # AAD_PREMIUM_P2 (Entra ID P2)
+    "efccb6f7-5641-4e0e-bd10-b4976e1bf68e",  # EMS (Enterprise Mobility + Security E3)
+    "b05e124f-c7cc-45a0-a6aa-8cf78c946968",  # EMSPREMIUM (Enterprise Mobility + Security E5)
+    "061f9ace-7d42-4136-88ac-31dc755f143f",  # INTUNE_A (Microsoft Intune)
+}
+
+
+def mail_only_is_classified(user):
+    """For a role holder with `mail` and no proven mailbox licence or Exchange plan: True when
+    the mailbox question is answered (assignedPlans present, or every SKU known and
+    non-productivity), False when a SKU could not be classified and there is no assignedPlans."""
+    if isinstance(user.get("assignedPlans"), list):
+        return True
+    for lic in user.get("assignedLicenses") or []:
+        sku_id = lic.get("skuId") if isinstance(lic, dict) else lic
+        if str(sku_id or "").strip().lower() not in KNOWN_NON_PRODUCTIVITY_SKU_IDS:
+            return False
+    return True
+
+
+def user_has_mail_attribute(user):
+    """A non-empty `mail` attribute: a finding on its own, never a fail by itself."""
+    mail = user.get("mail")
+    return bool(mail and str(mail).strip())
 
 
 def transform(input):
     # FEED CAVEAT: the integration's stated intent ("admins hold no mail/Exchange license")
     # needs role membership + assignedLicenses, but the current getUsers feed is a bare
-    # GET /v1.0/users that carries neither. Until the feed is upgraded, this transform fails
-    # with an explicit feed-update reason rather than pretending to evaluate (no name-pattern
-    # heuristics). The rich branch below activates automatically once the feed carries
+    # GET /v1.0/users that carries neither. Until the feed is upgraded, this transform reads
+    # not evaluated with an explicit feed-update reason rather than pretending to evaluate (no
+    # name-pattern heuristics, and never a measured fail on missing data). The rich branch below activates automatically once the feed carries
     # role data (directoryRoles/roleAssignments/assignedRoles) AND assignedLicenses.
     criteriaKey = "areAdminAccountsSeparate"
     feed_update_reason = (
@@ -203,6 +257,7 @@ def transform(input):
         "userCount": 0,
         "adminCount": 0,
         "adminsWithMailLicense": 0,
+        "adminsWithMailAttributeOnly": 0,
     }
 
     try:
@@ -217,7 +272,7 @@ def transform(input):
             return create_response(
                 result=default_result,
                 validation=validation,
-                fail_reasons=["Unexpected input format: expected a JSON object"]
+                api_errors=["Unexpected input format: expected a JSON object with Microsoft Graph users"]
             )
 
         if validation.get("status") == "failed":
@@ -229,17 +284,23 @@ def transform(input):
 
         if "error" in data:
             error_info = data.get("error", {})
+            if not isinstance(error_info, dict):
+                error_info = {"message": str(error_info)[:200]}
             inner_error = error_info.get("innerError", {})
+            if not isinstance(inner_error, dict):
+                inner_error = {}
             return create_response(
                 result=default_result,
                 validation={"status": "error", "errors": [error_info.get("message", "API error")], "warnings": []},
-                fail_reasons=[f"Microsoft Graph API error: {error_info.get('code', 'unknown')}"],
+                api_errors=[f"Microsoft Graph API error: {str(error_info.get('code', 'unknown'))[:80]}"],
                 input_summary={"errorCode": error_info.get("code"), "innerErrorCode": inner_error.get("code") if inner_error else None}
             )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        no_evidence = []
+        findings = []
 
         # getUsers puts the users at "value"; a workflow that merges role assignments with
         # users (Azure AD One-Click: output keys roleAssignments + users) puts them at "users".
@@ -260,46 +321,75 @@ def transform(input):
 
         admin_count = 0
         admins_with_mail_license = 0
+        admins_with_mail_attribute_only = []
+        admins_unclassified = []
         admins_missing_from_user_feed = 0
         is_separate = False
 
         if has_license_data and has_role_data:
-            for principal_id in admin_principal_ids:
+            for principal_id in sorted(admin_principal_ids, key=str):
                 admin_count += 1
                 user = users_by_id.get(principal_id)
                 if user is None:
                     admins_missing_from_user_feed += 1
                     continue
+                name = str(user.get("userPrincipalName") or user.get("displayName") or principal_id)[:100]
                 if user_has_mail_or_exchange_license(user):
                     admins_with_mail_license += 1
+                elif user_has_mail_attribute(user):
+                    if mail_only_is_classified(user):
+                        admins_with_mail_attribute_only.append(name)
+                    else:
+                        admins_unclassified.append(name)
 
-            is_separate = (
-                admin_count > 0
-                and admins_with_mail_license == 0
-                and admins_missing_from_user_feed == 0
-            )
+            unresolved = []
+            if admins_missing_from_user_feed > 0:
+                unresolved.append(
+                    f"{admins_missing_from_user_feed} privileged admin account(s) are not present in the user feed"
+                )
+            if admins_unclassified:
+                unresolved.append(
+                    f"{len(admins_unclassified)} privileged admin account(s) have a mail address and a mailbox "
+                    f"licence that could not be classified (no assignedPlans in the read): "
+                    + "; ".join(admins_unclassified[:5])
+                )
 
-            if is_separate:
+            is_separate = admin_count > 0 and admins_with_mail_license == 0 and not unresolved
+
+            if admins_with_mail_license > 0:
+                # A proven mailbox/productivity licence on ANY admin is a measured fail, whatever
+                # else is unresolved; the unresolved admins are named in the reason.
+                reason = (f"{admins_with_mail_license} of {admin_count} admin account(s) have mail/Exchange "
+                          f"Online licenses")
+                if unresolved:
+                    reason += "; also unresolved: " + "; ".join(unresolved)
+                fail_reasons.append(reason)
+                recommendations.append("Use dedicated admin accounts without mail or Exchange Online licenses")
+            elif is_separate:
                 pass_reasons.append(
                     f"All {admin_count} privileged admin account(s) are free of mail/Exchange Online licenses"
                 )
             elif admin_count == 0:
-                fail_reasons.append("No privileged directory role members found in user feed")
+                no_evidence.append("No privileged directory role members found in user feed")
                 recommendations.append("Verify directory role membership is included in the integration feed")
-            elif admins_missing_from_user_feed > 0:
-                fail_reasons.append(
-                    f"{admins_missing_from_user_feed} privileged admin account(s) are not present in the user feed"
-                )
-                recommendations.append(
-                    "Include privileged role members in the getUsers feed with assignedLicenses for license evaluation"
-                )
             else:
-                fail_reasons.append(
-                    f"{admins_with_mail_license} of {admin_count} admin account(s) have mail/Exchange Online licenses"
+                if admins_unclassified:
+                    no_evidence.append("Mailbox licence could not be classified")
+                no_evidence.extend(unresolved)
+                recommendations.append(
+                    "Include privileged role members in the getUsers feed with assignedLicenses and assignedPlans "
+                    "for license evaluation"
                 )
-                recommendations.append("Use dedicated admin accounts without mail or Exchange Online licenses")
+            if admins_with_mail_attribute_only:
+                findings.append(
+                    f"{len(admins_with_mail_attribute_only)} privileged admin account(s) have a mail address but "
+                    f"no productivity licence and no enabled Exchange plan (a finding, not a fail): "
+                    + "; ".join(admins_with_mail_attribute_only[:5])
+                )
         else:
-            fail_reasons.append(feed_update_reason)
+            # No role or licence data is no evidence: not evaluated, never a measured fail
+            # (2026-10-03 fleet check: 3 Azure AD passports showed FAIL on this branch).
+            no_evidence.append(feed_update_reason)
             recommendations.append(feed_update_recommendation)
 
         return create_response(
@@ -308,12 +398,15 @@ def transform(input):
                 "userCount": user_count,
                 "adminCount": admin_count,
                 "adminsWithMailLicense": admins_with_mail_license,
+                "adminsWithMailAttributeOnly": len(admins_with_mail_attribute_only),
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data}
+            input_summary={"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data},
+            api_errors=no_evidence,
+            additional_findings=findings,
         )
 
     except Exception as e:
