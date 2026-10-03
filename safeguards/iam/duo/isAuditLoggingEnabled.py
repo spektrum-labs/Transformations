@@ -1,12 +1,40 @@
 """
 Transformation: isAuditLoggingEnabled
 Vendor: Duo  |  Category: iam
-Evaluates: Confirms that audit logging is enabled by verifying administrator action log
-events (action, description, timestamp, username) are being recorded and returned
-from /admin/v1/logs/administrator.
+Evaluates: Confirms that audit logging is ACTIVE: the newest administrator log event returned by
+/admin/v1/logs/administrator (getAdminLogs, mintime=1, limit=1000) is recent.
+
+Rules (newest = the MAXIMUM timestamp over every entry, never the first one; `timestamp` epoch
+seconds, else `isotimestamp`; entries with no valid timestamp, or more than 1 day in the future,
+are ignored). Ages are measured against now_utc(), which tests replace.
+
+  newest age <= 30 days                          -> True   (exactly 30 days is a PASS)
+  30 < age <= 90 days                            -> Unevaluated (exactly 90 days is Unevaluated)
+  age > 90 days, read complete (< 1000 entries)  -> False  ("no event in the last 90 days")
+  age > 90 days, read at the 1000 limit          -> Unevaluated (newer events may be unread)
+  empty list                                     -> Unevaluated (getAdminLogs' returnSpec defaults a
+                                                    body it cannot read to [], so an empty list cannot
+                                                    be told apart from a failed read; a Duo account
+                                                    always logs its own administrator activity)
+  error body, vendorErrorAsResponse, None, non-list, no usable timestamp, any exception
+                                                 -> Unevaluated (value None), NEVER False
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+CRITERIA_KEY = "isAuditLoggingEnabled"
+REQUEST_LIMIT = 1000  # getAdminLogs sends limit=1000: a list this long may be a cut window
+FRESH_DAYS = 30
+STALE_DAYS = 90
+FUTURE_SLACK_SECONDS = 86400
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+RESULT_KEYS = ["totalLogCount", "wellFormedLogCount", "logsPresent", "mostRecentTimestamp",
+               "newestEventAgeDays"]
+
+
+def now_utc():
+    """Current time; a module-level function so tests can substitute a fixed clock."""
+    return datetime.now(timezone.utc)
 
 
 def extract_input(input_data):
@@ -75,56 +103,118 @@ def has_required_fields(log_entry):
     return has_action and has_timestamp and has_username
 
 
-def evaluate(data):
-    try:
-        log_entries = []
+def entry_epoch(entry):
+    """Epoch seconds of one log entry, or None when it has no valid timestamp."""
+    ts = entry.get("timestamp")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0:
+        return float(ts)
+    iso = entry.get("isotimestamp")
+    if isinstance(iso, str) and iso.strip():
+        text = iso.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return (parsed - EPOCH).total_seconds()
+        except (ValueError, OverflowError, TypeError):
+            return None
+    return None
 
-        if isinstance(data, list):
-            log_entries = data
-        elif isinstance(data, dict):
-            for candidate_key in ["response", "logs", "admin_logs", "events"]:
-                candidate = data.get(candidate_key)
-                if isinstance(candidate, list):
-                    log_entries = candidate
-                    break
-            if not log_entries:
-                for k in data:
-                    if isinstance(data[k], list):
-                        log_entries = data[k]
-                        break
 
-        total_log_count = len(log_entries)
-        logs_present = total_log_count > 0
+def error_reason(data):
+    """Why this body is not a log list (an error or marker envelope), else None."""
+    if isinstance(data, dict):
+        if "vendorErrorAsResponse" in data:
+            return "Duo returned an error instead of administrator log data: " + str(
+                data.get("vendorErrorAsResponse"))[:300]
+        stat = data.get("stat")
+        if (isinstance(stat, str) and stat.upper() == "FAIL") or "error" in data or (
+                "code" in data and "message" in data):
+            return "Duo returned an error body instead of administrator log data: " + str(data)[:300]
+    return None
 
-        well_formed_count = 0
-        for entry in log_entries:
-            if isinstance(entry, dict) and has_required_fields(entry):
-                well_formed_count = well_formed_count + 1
 
-        audit_logging_enabled = logs_present
+def find_entries(data):
+    """The administrator log list inside the body, or None when there is none."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for candidate_key in ["response", "logs", "admin_logs", "events"]:
+            candidate = data.get(candidate_key)
+            if isinstance(candidate, list):
+                return candidate
+    return None
 
-        most_recent_timestamp = None
-        if logs_present:
-            for entry in log_entries:
-                if isinstance(entry, dict):
-                    ts = entry.get("isotimestamp") or entry.get("timestamp")
-                    if ts is not None:
-                        most_recent_timestamp = str(ts)
-                        break
 
-        return {
-            "isAuditLoggingEnabled": audit_logging_enabled,
-            "totalLogCount": total_log_count,
-            "wellFormedLogCount": well_formed_count,
-            "logsPresent": logs_present,
-            "mostRecentTimestamp": most_recent_timestamp
-        }
-    except Exception as e:
-        return {"isAuditLoggingEnabled": False, "error": str(e)}
+def evaluate(data, now=None):
+    """Returns {"state": "pass"|"fail"|"unevaluated", "reason": str, ...summary fields}."""
+    reason = error_reason(data)
+    if reason is not None:
+        return {"state": "unevaluated", "reason": reason, "readError": True}
+    entries = find_entries(data)
+    if entries is None:
+        return {"state": "unevaluated", "readError": True,
+                "reason": "The response holds no administrator log list (expected a list from "
+                          "/admin/v1/logs/administrator)"}
+    if now is None:
+        now = now_utc()
+    now_epoch = (now - EPOCH).total_seconds()
+
+    total = len(entries)
+    well_formed = 0
+    newest = None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if has_required_fields(entry):
+            well_formed = well_formed + 1
+        ts = entry_epoch(entry)
+        if ts is None or ts > now_epoch + FUTURE_SLACK_SECONDS:
+            continue  # no valid timestamp, or implausibly in the future: never evidence
+        if newest is None or ts > newest:
+            newest = ts
+
+    truncated = total >= REQUEST_LIMIT
+    summary = {"totalLogCount": total, "wellFormedLogCount": well_formed,
+               "logsPresent": total > 0, "mostRecentTimestamp": None, "newestEventAgeDays": None,
+               "readMayBeTruncated": truncated}
+    if total == 0:
+        return dict(summary, state="unevaluated",
+                    reason="The administrator log list is empty. An empty list cannot be told apart "
+                           "from a read that returned nothing usable, so audit logging cannot be judged")
+    if newest is None:
+        return dict(summary, state="unevaluated",
+                    reason="None of the " + str(total) + " administrator log entries carries a usable "
+                           "timestamp, so recency cannot be judged")
+    newest_dt = EPOCH + timedelta(seconds=newest)
+    age_seconds = now_epoch - newest
+    age_days = int(age_seconds // 86400) if age_seconds > 0 else 0
+    summary["mostRecentTimestamp"] = newest_dt.isoformat()
+    summary["newestEventAgeDays"] = age_days
+
+    # Boundaries: exactly 30 days old is still fresh (PASS); exactly 90 days old is still
+    # inside the "couldn't tell" band (Unevaluated), so only strictly older than 90 is a FAIL.
+    if age_seconds <= FRESH_DAYS * 86400:
+        return dict(summary, state="pass",
+                    reason="Newest administrator log event is " + str(age_days) + " days old (within "
+                           + str(FRESH_DAYS) + " days)")
+    if truncated:
+        return dict(summary, state="unevaluated",
+                    reason="Newest administrator log event read is " + str(age_days) + " days old, but the "
+                           "read returned " + str(total) + " entries (the request limit), so newer "
+                           "events may not have been read")
+    if age_seconds <= STALE_DAYS * 86400:
+        return dict(summary, state="unevaluated",
+                    reason="newest administrator log event is " + str(age_days) + " days old (more than "
+                           + str(FRESH_DAYS) + ")")
+    return dict(summary, state="fail",
+                reason="no administrator log events in the last 90 days; newest is "
+                       + str(age_days) + " days old")
 
 
 def transform(input):
-    criteriaKey = "isAuditLoggingEnabled"
     try:
         if isinstance(input, str):
             input = json.loads(input)
@@ -132,55 +222,52 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-        eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
+            return unevaluated_response("Input validation failed; the log list is not evidence",
+                                        validation=validation, read_error=True)
+        outcome = evaluate(data, now_utc())
+        state = outcome["state"]
+        if state == "unevaluated":
+            return unevaluated_response(outcome["reason"], validation=validation,
+                                        read_error=outcome.get("readError", False), summary=outcome)
+        value = state == "pass"
+        result = {CRITERIA_KEY: value}
+        summary = {CRITERIA_KEY: value}
+        for k in RESULT_KEYS:
+            result[k] = outcome.get(k)
+            summary[k] = outcome.get(k)
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-        additional_findings = []
-
-        total_count = extra_fields.get("totalLogCount", 0)
-        well_formed = extra_fields.get("wellFormedLogCount", 0)
-        most_recent = extra_fields.get("mostRecentTimestamp")
-
-        if result_value:
-            pass_reasons.append("Administrator audit log events are being recorded -- " + str(total_count) + " log entries found")
-            if well_formed > 0:
-                pass_reasons.append(str(well_formed) + " of " + str(total_count) + " entries contain required fields (action, timestamp, username)")
-            if most_recent is not None:
-                additional_findings.append("Most recent log timestamp: " + str(most_recent))
+        findings = []
+        if value:
+            pass_reasons.append(outcome["reason"] + " -- " + str(outcome["totalLogCount"]) + " log entries read")
+            pass_reasons.append(str(outcome["wellFormedLogCount"]) + " of " + str(outcome["totalLogCount"])
+                                + " entries contain required fields (action, timestamp, username)")
+            findings.append("Most recent log timestamp: " + str(outcome["mostRecentTimestamp"]))
         else:
-            fail_reasons.append("No administrator audit log entries were returned from /admin/v1/logs/administrator")
-            recommendations.append("Verify that the Duo Admin API application has 'Grant read log' permission and that audit logging activity has occurred")
-            additional_findings.append("An empty log response may indicate logging is not configured or no admin actions have been taken recently")
-
-        result_dict = {criteriaKey: result_value}
-        for k in extra_fields:
-            result_dict[k] = extra_fields[k]
-
-        summary_dict = {criteriaKey: result_value}
-        for k in extra_fields:
-            summary_dict[k] = extra_fields[k]
-
-        return create_response(
-            result=result_dict,
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary=summary_dict,
-            additional_findings=additional_findings
-        )
+            fail_reasons.append(outcome["reason"])
+            recommendations.append("Verify that the Duo Admin API application has 'Grant read log' permission "
+                                   "and that administrators are active in the Duo Admin Panel")
+        return create_response(result=result, validation=validation, pass_reasons=pass_reasons,
+                               fail_reasons=fail_reasons, recommendations=recommendations,
+                               input_summary=summary, additional_findings=findings)
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
-        )
+        return unevaluated_response("Transformation error: " + str(e), transformation_errors=[str(e)])
+
+
+def unevaluated_response(reason, validation=None, read_error=False, summary=None, transformation_errors=None):
+    """Not evaluated: every value None. Never False, because nothing was measured."""
+    result = {CRITERIA_KEY: None}
+    for k in RESULT_KEYS:
+        result[k] = None
+    response = create_response(
+        result=result,
+        validation=validation if validation is not None else {"status": "unknown", "errors": [], "warnings": []},
+        fail_reasons=[reason],
+        recommendations=["Re-run once Duo returns the administrator log list; confirm the Admin API "
+                         "application has 'Grant read log' permission"],
+        input_summary={k: (summary or {}).get(k) for k in RESULT_KEYS} if summary else {},
+        api_errors=[reason],
+        transformation_errors=transformation_errors,
+    )
+    return response
