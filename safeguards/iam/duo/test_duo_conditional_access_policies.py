@@ -279,6 +279,20 @@ class DuoConditionalAccessTests(unittest.TestCase):
             with self.subTest(label):
                 self.assertUnevaluated(bodies(with_sections(DEFAULTS, **change)))
 
+    def test_endpoint_security_list_needs_a_known_vendor(self):
+        for value in ("disabled", ["disabled"], "not-required"):
+            with self.subTest(value):
+                change = {"health_checks": {"windows_endpoint_security_list": value}}
+                self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], False)
+        for value in (["any-old-word"], "enabled"):
+            with self.subTest(value):
+                change = {"health_checks": {"macos_endpoint_security_list": value}}
+                self.assertUnevaluated(bodies(with_sections(DEFAULTS, **change)))
+        for value in (["crowdstrike"], "sentinelone,sophos", ["Windows-Defender"]):
+            with self.subTest(value):
+                change = {"health_checks": {"windows_endpoint_security_list": value}}
+                self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], True)
+
     def test_json_list_string_is_read(self):
         change = {"health_checks": {"requires_duo_desktop": '["windows", "macos"]'}}
         self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], True)
