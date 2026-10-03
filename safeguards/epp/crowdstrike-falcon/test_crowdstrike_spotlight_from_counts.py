@@ -6,8 +6,8 @@ Security (d61a39d7).
 Every body here is SYNTHETIC. It follows the documented GET /spotlight/queries/vulnerabilities/v1 shape
 (meta.pagination {limit, total, after}, resources = ids, errors []) wrapped by the IS workflow
 spotlightCriticalHighCounts (merge + output.key, one block per step). The totals in the "real scale" cases are the
-open critical+high totals the record-reading files saw on 2-3 Oct 2026 (955,551 and 109,730), where the 100,000-record
-page cap stopped every read; the split between critical and high is made up.
+synthetic, at the scale the record-reading files met on 2-3 Oct 2026 (about 1M and about 100k), where the 100,000-record
+page cap stopped every read.
 
 Bundle targets: the three counts are lessThan "0" (Token-Service lessThan is inclusive on int-truncated values, so 0
 passes and 1 or more fails; None is never satisfied); isPatchManagementValid is equals true.
@@ -65,20 +65,20 @@ def satisfied(key, value):
 # ---------------------------------------------------------------- real-scale reads that the page cap used to stop
 
 def test_real_scale_failing_estate_is_scored_not_unevaluated():
-    # 955,551 open critical+high instances: the record reader stopped at 100,000 and said "partial read".
-    body = composite(212_004, 743_547, 150_321, 501_006)
-    want = {"openCriticalVulnerabilitiesCount": 212_004, "openHighSeverityVulnerabilitiesCount": 743_547,
-            "overdueCriticalHighVulnerabilitiesCount": 651_327, VALID: False}
+    # About 1M open critical+high instances (synthetic): the record reader stopped at 100,000 and said "partial read".
+    body = composite(200_000, 800_000, 150_000, 500_000)
+    want = {"openCriticalVulnerabilitiesCount": 200_000, "openHighSeverityVulnerabilitiesCount": 800_000,
+            "overdueCriticalHighVulnerabilitiesCount": 650_000, VALID: False}
     for k in KEYS:
         v, status, out = run(k, body)
         assert (v, status) == (want[k], "success"), (k, v, status)
         assert not satisfied(k, v)
         assert out["additionalInfo"]["evaluation"]["failReasons"], k
-        assert out["transformedResponse"]["spotlightOpenCriticalHighTotal"] == 955_551
+        assert out["transformedResponse"]["spotlightOpenCriticalHighTotal"] == 1_000_000
 
 
 def test_real_scale_as_stored_evidence_strings():
-    body = composite(9_730, 100_000, 4_000, 20_000, as_strings=True)
+    body = composite(10_000, 100_000, 4_000, 20_000, as_strings=True)
     assert run("openHighSeverityVulnerabilitiesCount", body)[:2] == (100_000, "success")
     assert run(VALID, body)[:2] == (False, "success")
     assert run("overdueCriticalHighVulnerabilitiesCount", body)[:2] == (24_000, "success")
@@ -260,3 +260,27 @@ def test_every_file_compiles_and_runs_in_the_restricted_sandbox():
                                                  "overdueCriticalHighVulnerabilitiesCount": 0}[k]), k
         bad = ns["transform"](None)
         assert bad["transformedResponse"][k] is None, k
+
+
+# ---------------------------------------------------------------- an error flag on a wrapper must never be peeled away
+
+def test_error_on_top_level_wrapper_is_unevaluated_not_a_pass():
+    body = {"apiResponse": composite(0, 0, 0, 0), "error": True, "message": "upstream failure"}
+    for k in KEYS:
+        v, status, _ = run(k, body)
+        assert v is None and status == "error", (k, v, status)
+
+
+def test_errors_list_on_top_level_wrapper_is_unevaluated_not_a_pass():
+    body = {"response": composite(0, 0, 0, 0), "errors": [{"code": 500, "message": "boom"}]}
+    for k in KEYS:
+        v, status, _ = run(k, body)
+        assert v is None and status == "error", (k, v, status)
+
+
+def test_error_on_block_wrapper_is_unevaluated_not_a_pass():
+    body = composite(0, 0, 0, 0)
+    body["openCritical"] = {"apiResponse": body["openCritical"], "error": True}
+    for k in KEYS:
+        v, status, _ = run(k, body)
+        assert v is None and status == "error", (k, v, status)
