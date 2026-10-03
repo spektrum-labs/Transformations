@@ -8,8 +8,12 @@ Evaluates whether privileged admin identities are separate from everyday mail-li
 A privileged role holder FAILS only on a mailbox/productivity licence (MAIL_EXCHANGE_SKU_IDS)
 or an enabled Exchange plan in assignedPlans. A non-empty `mail` attribute alone is a finding,
 not a fail (J.J., 3 Oct 2026; same rule as the Microsoft 365 file
-874a78ff-.../areadminaccountsseparate.py). No role or licence data is not evaluated, never a
-measured fail.
+874a78ff-.../areadminaccountsseparate.py), but only when the mailbox question is answered:
+assignedPlans is in the read and shows no enabled Exchange plan, or every assigned SKU is known
+and is not a productivity SKU (KNOWN_NON_PRODUCTIVITY_SKU_IDS). `mail` plus a SKU we cannot
+classify and no assignedPlans is not evaluated ("mailbox licence could not be classified"),
+never a pass. A proven fail on any admin wins over unresolved admins. No role or licence data
+is not evaluated, never a measured fail.
 """
 
 import json
@@ -201,6 +205,31 @@ def user_has_mail_or_exchange_license(user):
     return False
 
 
+# Licences that are known NOT to carry a mailbox or the Office apps. Same set as the
+# Microsoft 365 file. An admin whose `mail` is set and whose SKUs are all here (or who has no
+# licence at all) is a finding, not a fail; any other SKU with no assignedPlans is unclassified.
+KNOWN_NON_PRODUCTIVITY_SKU_IDS = {
+    "078d2b04-f1bd-4111-bbd4-b4b1b354cef4",  # AAD_PREMIUM (Entra ID P1)
+    "84a661c4-e949-4bd2-a560-ed7766fcaf2b",  # AAD_PREMIUM_P2 (Entra ID P2)
+    "efccb6f7-5641-4e0e-bd10-b4976e1bf68e",  # EMS (Enterprise Mobility + Security E3)
+    "b05e124f-c7cc-45a0-a6aa-8cf78c946968",  # EMSPREMIUM (Enterprise Mobility + Security E5)
+    "061f9ace-7d42-4136-88ac-31dc755f143f",  # INTUNE_A (Microsoft Intune)
+}
+
+
+def mail_only_is_classified(user):
+    """For a role holder with `mail` and no proven mailbox licence or Exchange plan: True when
+    the mailbox question is answered (assignedPlans present, or every SKU known and
+    non-productivity), False when a SKU could not be classified and there is no assignedPlans."""
+    if isinstance(user.get("assignedPlans"), list):
+        return True
+    for lic in user.get("assignedLicenses") or []:
+        sku_id = lic.get("skuId") if isinstance(lic, dict) else lic
+        if str(sku_id or "").strip().lower() not in KNOWN_NON_PRODUCTIVITY_SKU_IDS:
+            return False
+    return True
+
+
 def user_has_mail_attribute(user):
     """A non-empty `mail` attribute: a finding on its own, never a fail by itself."""
     mail = user.get("mail")
@@ -293,47 +322,64 @@ def transform(input):
         admin_count = 0
         admins_with_mail_license = 0
         admins_with_mail_attribute_only = []
+        admins_unclassified = []
         admins_missing_from_user_feed = 0
         is_separate = False
 
         if has_license_data and has_role_data:
-            for principal_id in admin_principal_ids:
+            for principal_id in sorted(admin_principal_ids, key=str):
                 admin_count += 1
                 user = users_by_id.get(principal_id)
                 if user is None:
                     admins_missing_from_user_feed += 1
                     continue
+                name = str(user.get("userPrincipalName") or user.get("displayName") or principal_id)[:100]
                 if user_has_mail_or_exchange_license(user):
                     admins_with_mail_license += 1
                 elif user_has_mail_attribute(user):
-                    admins_with_mail_attribute_only.append(
-                        str(user.get("userPrincipalName") or user.get("displayName") or principal_id)[:100])
+                    if mail_only_is_classified(user):
+                        admins_with_mail_attribute_only.append(name)
+                    else:
+                        admins_unclassified.append(name)
 
-            is_separate = (
-                admin_count > 0
-                and admins_with_mail_license == 0
-                and admins_missing_from_user_feed == 0
-            )
+            unresolved = []
+            if admins_missing_from_user_feed > 0:
+                unresolved.append(
+                    f"{admins_missing_from_user_feed} privileged admin account(s) are not present in the user feed"
+                )
+            if admins_unclassified:
+                unresolved.append(
+                    f"{len(admins_unclassified)} privileged admin account(s) have a mail address and a mailbox "
+                    f"licence that could not be classified (no assignedPlans in the read): "
+                    + "; ".join(admins_unclassified[:5])
+                )
 
-            if is_separate:
+            is_separate = admin_count > 0 and admins_with_mail_license == 0 and not unresolved
+
+            if admins_with_mail_license > 0:
+                # A proven mailbox/productivity licence on ANY admin is a measured fail, whatever
+                # else is unresolved; the unresolved admins are named in the reason.
+                reason = (f"{admins_with_mail_license} of {admin_count} admin account(s) have mail/Exchange "
+                          f"Online licenses")
+                if unresolved:
+                    reason += "; also unresolved: " + "; ".join(unresolved)
+                fail_reasons.append(reason)
+                recommendations.append("Use dedicated admin accounts without mail or Exchange Online licenses")
+            elif is_separate:
                 pass_reasons.append(
                     f"All {admin_count} privileged admin account(s) are free of mail/Exchange Online licenses"
                 )
             elif admin_count == 0:
                 no_evidence.append("No privileged directory role members found in user feed")
                 recommendations.append("Verify directory role membership is included in the integration feed")
-            elif admins_missing_from_user_feed > 0:
-                no_evidence.append(
-                    f"{admins_missing_from_user_feed} privileged admin account(s) are not present in the user feed"
-                )
-                recommendations.append(
-                    "Include privileged role members in the getUsers feed with assignedLicenses for license evaluation"
-                )
             else:
-                fail_reasons.append(
-                    f"{admins_with_mail_license} of {admin_count} admin account(s) have mail/Exchange Online licenses"
+                if admins_unclassified:
+                    no_evidence.append("Mailbox licence could not be classified")
+                no_evidence.extend(unresolved)
+                recommendations.append(
+                    "Include privileged role members in the getUsers feed with assignedLicenses and assignedPlans "
+                    "for license evaluation"
                 )
-                recommendations.append("Use dedicated admin accounts without mail or Exchange Online licenses")
             if admins_with_mail_attribute_only:
                 findings.append(
                     f"{len(admins_with_mail_attribute_only)} privileged admin account(s) have a mail address but "
