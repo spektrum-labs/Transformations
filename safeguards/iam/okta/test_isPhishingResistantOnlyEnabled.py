@@ -85,14 +85,49 @@ class PhishResistantOnlyTests(unittest.TestCase):
                 self.assertIs(self.out(body)[KEY], False)
 
     def test_only_resistant_active_passes(self):
-        out = self.out(only("webauthn", "signed_nonce"))
+        out = self.out(only("webauthn", "u2f"))
         self.assertIs(out[KEY], True)
         self.assertEqual(out["phishableActiveCount"], 0)
 
     def test_each_resistant_type_alone_passes(self):
-        for kind in ("webauthn", "u2f", "signed_nonce", "smart_card"):
+        for kind in ("webauthn", "u2f", "smart_card"):
             with self.subTest(kind=kind):
                 self.assertIs(self.out(only(kind))[KEY], True)
+
+    def test_fastpass_never_passes(self):
+        # review HIGH: the factor list cannot show FastPass phishing-resistant mode
+        for kinds in (("signed_nonce",), ("signed_nonce", "webauthn"), ("signed_nonce", "u2f", "smart_card")):
+            with self.subTest(kinds=kinds):
+                res = self.t.transform(only(*kinds))
+                self.assertIsNone(res["transformedResponse"][KEY])
+                self.assertEqual(res["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertIs(self.out(only("signed_nonce", "push"))[KEY], False)
+
+    def test_truncated_list_is_not_evaluated(self):
+        # review MEDIUM: a list that lacks factors every org lists is a partial read
+        for body in ([f("webauthn", "FIDO", "ACTIVE")],
+                     [x for x in only("webauthn") if x["factorType"] != "push"],
+                     [x for x in only("webauthn") if x["factorType"] not in ("sms", "token:software:totp")]):
+            with self.subTest(n=len(body)):
+                self.assert_unevaluated(body)
+
+    def test_pagination_marker_is_not_evaluated(self):
+        page = only("webauthn")
+        for body in ({"apiResponse": page, "nextPage": "https://x.okta.com/api/v1/org/factors?after=abc"},
+                     {"apiResponse": page, "_links": {"next": {"href": "https://x"}}},
+                     {"response": {"apiResponse": page, "hasMore": True}},
+                     {"apiResponse": page, "headers": {"link": '<https://x?after=1>; rel="next"'}},
+                     {"data": {"apiResponse": page, "next": "abc"}, "validation": {"status": "unknown"}}):
+            with self.subTest(body=str(body)[:50]):
+                self.assert_unevaluated(body)
+        self.assertIs(self.out({"apiResponse": page, "_links": {"self": {"href": "https://x"}}})[KEY], True)
+
+    def test_failed_validation_is_not_evaluated(self):
+        # review MEDIUM: an enriched input whose validation failed is not evidence
+        for status in ("failed", "FAILED"):
+            with self.subTest(status=status):
+                self.assert_unevaluated({"data": only("webauthn"), "validation": {"status": status, "errors": ["x"]}})
+        self.assertIs(self.out({"data": only("webauthn"), "validation": {"status": "passed"}})[KEY], True)
 
     def test_resistant_plus_any_phishable_fails(self):
         # isAdminMFAPhishingResistant reads this mix as None (admin policy may narrow it); the org-wide key fails.
