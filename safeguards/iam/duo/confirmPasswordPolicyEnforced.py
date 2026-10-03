@@ -195,6 +195,46 @@ def refusal_unevaluated(envelope):
     return out
 
 
+# A read that measured nothing is Unevaluated, never False. getDuoSettings defaults an unreadable body to {}
+# (returnSpec default_to {}), so {} cannot be told from a failed read, and a real Duo settings response is never
+# empty. {}, empty or non-JSON input, an error body (stat FAIL, error, statusCode >= 400), a settings object
+# holding none of the fields this check reads, and any exception are all Unevaluated: every result key None and
+# dataCollection status "error".
+MEASURED_FIELDS = ["minimum_password_length", "password_requires_upper_alpha", "password_requires_lower_alpha", "password_requires_numeric", "password_requires_special"]
+
+
+def has_error_body(value):
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("stat", "")).upper() == "FAIL" or value.get("error"):
+        return True
+    code = value.get("statusCode")
+    return isinstance(code, int) and not isinstance(code, bool) and code >= 400
+
+
+def measured_nothing(raw, data):
+    """A reason string when the input proves nothing about the settings, else None."""
+    if not isinstance(data, dict) or len(data) == 0:
+        return "Duo returned no settings object (empty, missing or unreadable body)"
+    if has_error_body(raw) or has_error_body(data):
+        return "Duo returned an error body instead of the account settings"
+    for k in MEASURED_FIELDS:
+        if k in data:
+            return None
+    return "the Duo settings response holds none of the fields this check reads (" + ", ".join(MEASURED_FIELDS) + ")"
+
+
+def unevaluated(reason):
+    result = {}
+    for k in REFUSAL_KEYS:
+        result[k] = None
+    problem = ("Duo account settings from " + REFUSAL_ENDPOINT + " could not be evaluated: " + reason
+               + ". Nothing was measured; this is not a posture result.")
+    return create_response(result, None, api_errors=[problem],
+                           recommendations=["Confirm the Duo Admin API credentials are valid, the application has the \""
+                                            + REQUIRED_PERMISSION + "\" permission, and the settings read succeeds."])
+
+
 def transform(input):
     refusal = refusal_envelope(input)
     if refusal is not None:
@@ -207,12 +247,13 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unevaluated("input validation failed")
+        reason = measured_nothing(input, data)
+        if reason is not None:
+            return unevaluated(reason)
         eval_result = evaluate(data)
+        if "error" in eval_result:
+            return unevaluated("evaluation raised " + str(eval_result["error"])[:200])
         result_value = eval_result.get(criteriaKey, False)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
         pass_reasons = []
@@ -252,9 +293,4 @@ def transform(input):
             additional_findings=additional_findings
         )
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
-        )
+        return unevaluated("transformation raised " + str(e)[:200])
