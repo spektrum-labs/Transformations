@@ -60,6 +60,7 @@ def policy(*overrides, migration="migrationComplete"):
 REAL = policy()
 OFF = [("MicrosoftAuthenticator", {"state": "disabled"}), ("SoftwareOath", {"state": "disabled"})]
 FIDO_ONLY = OFF + [("Fido2", {"state": "enabled"})]
+MULTI = {"x509CertificateAuthenticationDefaultMode": "x509CertificateMultiFactor", "rules": []}
 DUO = {"@odata.type": "#microsoft.graph.externalAuthenticationMethodConfiguration", "id": "11111111-2222-3333-4444-555555555555",
        "displayName": "Cisco Duo", "state": "enabled", "appId": "x", "includeTargets": [target()], "excludeTargets": []}
 
@@ -113,8 +114,30 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
         self.assertIs(res["transformedResponse"][KEY], True)
         self.assertEqual(res["transformedResponse"]["enabledPhishableMethods"], [])
 
-    def test_certificate_only_passes(self):
-        self.assertIs(self.value(policy(*(OFF + [("X509Certificate", {"state": "enabled"})]))), True)
+    def test_certificate_only_passes_in_multi_factor_mode(self):
+        self.assertIs(self.value(policy(*(OFF + [("X509Certificate", {"state": "enabled", "authenticationModeConfiguration": MULTI})]))), True)
+
+    def test_certificate_single_factor_fails(self):
+        # review MEDIUM: CBA counts only in multi-factor mode (default mode and every rule)
+        single_default = {"x509CertificateAuthenticationDefaultMode": "x509CertificateSingleFactor", "rules": []}
+        single_rule = {"x509CertificateAuthenticationDefaultMode": "x509CertificateMultiFactor",
+                       "rules": [{"x509CertificateRuleType": "issuerSubject", "identifier": "CN=Test CA",
+                                  "x509CertificateAuthenticationMode": "x509CertificateSingleFactor"}]}
+        for mode in (single_default, single_rule):
+            with self.subTest(mode=str(mode)[:60]):
+                body = policy(*(OFF + [("X509Certificate", {"state": "enabled", "authenticationModeConfiguration": mode})]))
+                self.assertIs(self.value(body), False)
+                body = policy(*(FIDO_ONLY + [("X509Certificate", {"state": "enabled", "authenticationModeConfiguration": mode})]))
+                self.assertIs(self.value(body), False)
+
+    def test_certificate_mode_unknown_is_not_evaluated(self):
+        for mode in (None, {}, {"x509CertificateAuthenticationDefaultMode": "somethingNew"}, {"rules": "x"},
+                     {"x509CertificateAuthenticationDefaultMode": "x509CertificateMultiFactor", "rules": [{"x509CertificateAuthenticationMode": ""}]}):
+            with self.subTest(mode=mode):
+                changes = {"state": "enabled"}
+                if mode is not None:
+                    changes["authenticationModeConfiguration"] = mode
+                self.assert_unevaluated(policy(*(FIDO_ONLY + [("X509Certificate", changes)])))
 
     def test_fido2_plus_any_phishable_fails(self):
         # isStrongAuthRequired passes every one of these; this key must not.
@@ -137,13 +160,22 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
         self.assertIs(res["transformedResponse"]["guestOnlyEmailOtp"], True)
 
     def test_bounded_tap_is_allowed_with_a_finding(self):
+        # J.J.'s ruling as applied in authtypesallowed.py (TX #833): a TAP with a maximum lifetime is allowed
         res = self.run_t(policy(*(FIDO_ONLY + [("TemporaryAccessPass", {"state": "enabled"})])))
         self.assertIs(res["transformedResponse"][KEY], True)
         self.assertTrue(res["additionalInfo"]["evaluation"]["additionalFindings"])
 
     def test_unbounded_tap_fails(self):
-        tap = {"state": "enabled", "maximumLifetimeInMinutes": None}
-        self.assertIs(self.value(policy(*(FIDO_ONLY + [("TemporaryAccessPass", tap)]))), False)
+        # J.J.'s ruling (TX #833): a TAP without a lifetime limit fails
+        for lifetime in (None, 0, "", "abc", -5):
+            with self.subTest(lifetime=lifetime):
+                tap = {"state": "enabled", "maximumLifetimeInMinutes": lifetime}
+                self.assertIs(self.value(policy(*(FIDO_ONLY + [("TemporaryAccessPass", tap)]))), False)
+        tap = {"state": "enabled"}
+        body = policy(*(FIDO_ONLY + [("TemporaryAccessPass", tap)]))
+        for c in body["authenticationMethodConfigurations"]:
+            c.pop("maximumLifetimeInMinutes", None)
+        self.assertIs(self.value(body), False)
 
     def test_untargeted_non_email_method_is_a_finding(self):
         res = self.run_t(policy(*(FIDO_ONLY + [("Sms", {"state": "enabled", "includeTargets": []})])))
@@ -160,6 +192,16 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
         body["authenticationMethodConfigurations"].append(DUO)
         self.assertIs(self.value(body), False)
 
+    def test_missing_or_unknown_migration_state_is_not_evaluated(self):
+        # review MEDIUM: only migrationComplete can PASS; legacy per-user MFA / SSPR may apply otherwise
+        for state in ("", None, "unknownFutureValue", "MIGRATIONCOMPLETE-ish"):
+            with self.subTest(state=state):
+                self.assert_unevaluated(policy(*FIDO_ONLY, migration=state))
+        body = policy(*FIDO_ONLY)
+        body.pop("policyMigrationState")
+        self.assert_unevaluated(body)
+        self.assertIs(self.value(policy(*FIDO_ONLY, migration="MigrationComplete")), True)
+
     def test_legacy_migration_state_is_not_evaluated(self):
         for state in ("preMigration", "migrationInProgress"):
             with self.subTest(state=state):
@@ -173,9 +215,11 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
     def test_partial_or_no_evidence_bodies_are_not_evaluated(self):
         partial = policy(*FIDO_ONLY)
         partial["authenticationMethodConfigurations"][2].pop("state")
+        paged = policy(*FIDO_ONLY)
+        paged["authenticationMethodConfigurations@odata.nextLink"] = "https://graph.microsoft.com/v1.0/next"
         no_id = policy(*FIDO_ONLY)
         no_id["authenticationMethodConfigurations"][1]["id"] = ""
-        for body in (None, {}, [], "", "null", "not json", b"", 0, partial, no_id,
+        for body in (None, {}, [], "", "null", "not json", b"", 0, partial, no_id, paged,
                      {"error": {"code": "Authorization_RequestDenied", "message": "Insufficient privileges"}},
                      {"authenticationMethodConfigurations": []}, {"authenticationMethodConfigurations": None},
                      {"authenticationMethodConfigurations": ["Fido2"]}, {"value": []}, {"apiResponse": {}},
