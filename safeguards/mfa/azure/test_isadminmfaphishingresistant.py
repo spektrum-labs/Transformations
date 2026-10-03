@@ -242,6 +242,13 @@ class AadAdminPhishResistantTests(unittest.TestCase):
                                         ca_policy(roles=ADMIN_ROLE_IDS[7:], exclude_users=["c"])))
         self.assert_unevaluated(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_groups=["g"], exclude_users=[])))
 
+    def test_ca_any_role_exclusion_is_not_proven(self):
+        # review MEDIUM: excluding ANY role (even Reports Reader) excludes an admin who also holds it
+        reports_reader = "4a5d8f65-41da-4de4-8968-e035b65339cf"
+        self.assert_unevaluated(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_roles=[reports_reader])))
+        self.assert_unevaluated(ca_body(ca_policy(users=["All"], exclude_roles=[reports_reader])))
+        self.assert_unevaluated(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_roles=[ADMIN_ROLE_IDS[0]])))
+
     def test_ca_paged_or_unreadable_is_not_evaluated(self):
         paged = ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS)))
         paged["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/next"
