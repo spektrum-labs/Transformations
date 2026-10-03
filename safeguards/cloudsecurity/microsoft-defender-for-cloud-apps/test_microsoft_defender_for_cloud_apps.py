@@ -1,6 +1,8 @@
 """Microsoft Defender for Cloud Apps (Cloud Security): openHighSeverityAlertCount, noHighFindings.
 
-Fixtures follow the List alerts response on https://learn.microsoft.com/en-us/defender-cloud-apps/api-alerts-list .
+Fixtures follow the Microsoft Graph List alerts_v2 response
+(https://learn.microsoft.com/en-us/graph/api/security-list-alerts_v2?view=graph-rest-1.0), filtered server-side to
+serviceSource microsoftDefenderForCloudApps, severity high, status new or inProgress; IS merges every page into value.
 """
 import importlib.util
 from pathlib import Path
@@ -19,10 +21,13 @@ COUNT = load("openHighSeverityAlertCount")
 NONE_HIGH = load("noHighFindings")
 
 
-def alerts(total, more=False):
-    data = [{"_id": "603f704aaf7417985bbf3b22", "title": "Impossible travel", "severityValue": 2,
-             "resolutionStatusValue": 0}] if total else []
-    return {"data": data, "hasNext": total > 1, "max": 1, "total": total, "moreThanTotal": more}
+def alert(i, status="new", severity="high", source="microsoftDefenderForCloudApps"):
+    return {"@odata.type": "#microsoft.graph.security.alert", "id": "da6375512276775608%02d" % i, "status": status,
+            "severity": severity, "serviceSource": source, "title": "Impossible travel activity"}
+
+
+def alerts(total, statuses=("new", "inProgress")):
+    return {"value": [alert(i, status=statuses[i % len(statuses)]) for i in range(total)]}
 
 
 def run(module, key, payload):
@@ -40,18 +45,36 @@ def test_zero_open_high_alerts():
     assert run(NONE_HIGH, "noHighFindings", alerts(0)) == (True, "success")
 
 
+def test_merged_pages_are_all_counted():
+    """IS link pagination merges pages into value and drops the nextLink on the last page."""
+    payload = {"value": [alert(i) for i in range(250)]}
+    assert run(COUNT, "openHighSeverityAlertCount", payload) == (250, "success")
+    assert run(NONE_HIGH, "noHighFindings", payload) == (False, "success")
+
+
+def test_case_of_enum_values_does_not_matter():
+    payload = {"value": [alert(1, status="InProgress", severity="High", source="MicrosoftDefenderForCloudApps")]}
+    assert run(COUNT, "openHighSeverityAlertCount", payload) == (1, "success")
+
+
 NO_EVIDENCE = {
     "null": None,
     "empty_dict": {},
     "empty_string": "",
-    "mdca_403": {"error": {"code": "Forbidden", "message": "Missing Investigation.read"}},
+    "graph_403": {"error": {"code": "Forbidden", "message": "Missing role SecurityAlert.Read.All"}},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"hello": "world"},
     "not_found_404": {"statusCode": 404, "error": "Not Found"},
+    "throttled_429": {"statusCode": 429, "error": "TooManyRequests"},
     "pagination_incomplete": {"error": True, "errorType": "pagination_incomplete", "status": "Error", "statusCode": 429},
-    "no_total": {"data": [], "hasNext": False},
-    "lower_bound": alerts(5000, more=True),
-    "bool_total": {"data": [], "total": False},
+    "next_link_left": {"value": [alert(1)], "@odata.nextLink": "https://graph.microsoft.com/v1.0/security/alerts_v2?$skiptoken=x"},
+    "value_not_list": {"value": {"id": "x"}},
+    "item_not_dict": {"value": ["x"]},
+    "other_source": {"value": [alert(1, source="microsoftDefenderForEndpoint")]},
+    "medium_alert": {"value": [alert(1, severity="medium")]},
+    "resolved_alert": {"value": [alert(1, status="resolved")]},
+    "missing_fields": {"value": [{"id": "x"}]},
+    "old_mdca_api_shape": {"data": [], "total": 0, "hasNext": False, "moreThanTotal": False},
 }
 CASES = [(COUNT, "openHighSeverityAlertCount"), (NONE_HIGH, "noHighFindings")]
 
