@@ -62,7 +62,7 @@ class AbnormalInboundAntiPhishingWindowTests(unittest.TestCase):
         self.assertTrue(dc["errors"])
 
     # One newest threat that is neither remediated phishing nor unacted phishing proves nothing:
-    # Unevaluated with the reason, never False (THL Partners, 2 Oct 2026).
+    # Unevaluated with the reason, never False (a tenant flipped that way on 2 Oct 2026).
     def test_remediated_phishing_100_days_ago_is_unevaluated(self):
         self.assert_unevaluated(threat(100))
 
@@ -102,11 +102,33 @@ class AbnormalInboundAntiPhishingWindowTests(unittest.TestCase):
             self.assertIs(self.verdict(threat(5, status=status)), False, status)
             self.assertEqual(self.collection(threat(5, status=status))["status"], "success")
 
-    def test_one_remediated_message_outweighs_an_unacted_one(self):
+    def test_any_unacted_phishing_fails_even_next_to_remediated_phishing(self):
+        # Master review, 3 Oct 2026: an unacted phishing message in the window fails wherever it appears.
         body = threat(3)
         body["messages"].append({"attackType": "Phishing: Credential", "remediationStatus": "No Action Done",
                                  "remediationTimestamp": iso_days_ago(3)})
-        self.assertIs(self.verdict(body), True)
+        self.assertIs(self.verdict(body), False)
+        body["messages"].reverse()
+        self.assertIs(self.verdict(body), False)
+
+    def test_paged_or_truncated_threat_is_unevaluated(self):
+        for extra in ({"nextPageNumber": 2}, {"nextPageNumber": "2"}, {"paginationTruncated": True}, {"truncated": "true"}):
+            with self.subTest(extra):
+                body = threat(3)
+                body.update(extra)
+                self.assert_unevaluated(body)
+
+    def test_last_page_is_scored(self):
+        for extra in ({"nextPageNumber": None}, {"pageNumber": 3, "nextPageNumber": None}, {}):
+            with self.subTest(extra):
+                body = threat(3)
+                body.update(extra)
+                self.assertIs(self.verdict(body), True)
+
+    def test_window_is_exactly_90_days(self):
+        for days, want in ((89, True), (90, True), (91, None)):
+            with self.subTest(days):
+                self.assertIs(self.verdict(threat(days)), want)
 
     def test_real_shape_threat_detail(self):
         # Shape of GET /v1/threats/{threatId} (Abnormal REST API v1): threatId plus a messages list.
