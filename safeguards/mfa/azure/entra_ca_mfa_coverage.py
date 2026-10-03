@@ -1,7 +1,9 @@
 """isRDPProtected and isMFARequiredForRemoteAccess for Microsoft Entra ID (Azure AD One-Click), from the
 Conditional Access policy list (GET /v1.0/identity/conditionalAccess/policies) and, when the workflow supplies
-it, the tenant's group list with membership rules (GET /v1.0/groups?$select=id,displayName,groupTypes,
-membershipRule,membershipRuleProcessingState).
+them, the tenant's group list with membership rules (GET /v1.0/groups?$select=id,displayName,groupTypes,
+membershipRule,membershipRuleProcessingState) and the security defaults policy
+(GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy, merged under "securityDefaults"; Policy.Read.All,
+the same permission the Conditional Access list already needs).
 
 Coverage (2 Oct 2026, J.J.): entra_ca_tenantwide_mfa.py left every group-scoped or client-type-split policy
 "not evaluated". This version decides coverage where the data allows it, and stays not evaluated otherwise:
@@ -12,6 +14,14 @@ Coverage (2 Oct 2026, J.J.): entra_ca_tenantwide_mfa.py left every group-scoped 
   mobileAppsAndDesktopClients across two enabled MFA policies is the same as "all";
 - excluded users and groups are allowed and listed, as before.
 Nothing here can pass a tenant on data it did not read.
+
+Security defaults (3 Oct 2026, J.J.): when no Conditional Access policy is enabled, the tenant's security defaults
+policy is read. Security defaults and enabled Conditional Access policies are mutually exclusive in Entra. When it
+says isEnabled true, both keys pass: Microsoft then requires every user to register for MFA, challenges sign-ins
+with it (administrators at every sign-in, other users when Microsoft judges it necessary) and blocks legacy
+authentication. When it says isEnabled false, the keys stay not evaluated, because per-user MFA may still apply
+and is not read here. An absent, error or unrecognised security defaults body changes nothing (not evaluated, as
+before). It is never consulted when any Conditional Access policy is enabled.
 
 Why a new file: isrdpprotected.py and ismfarequiredforremoteaccess.py count ANY enabled policy that
 grants mfa (or block) for all apps, whoever it targets and whatever else it is conditioned on. On
@@ -26,13 +36,14 @@ and carries a real MFA grant ("mfa" in builtInControls or an authenticationStren
 OR no other control that could satisfy the policy instead).
 
 Value, per key:
-- true: a workforce MFA policy targets all users (includeUsers "All"; excluded accounts are allowed and
+- true: no Conditional Access policy is enabled and security defaults are on; or a workforce MFA policy targets all users (includeUsers "All"; excluded accounts are allowed and
   listed) with no platform, device-filter or client-type narrowing (client types "all", or both browser
   and mobileAppsAndDesktopClients), and is in force off the corporate network (no location condition,
   or includeLocations "All" with trusted or named locations excluded);
 - not evaluated (dataCollection error, None): the only workforce MFA policies are scoped to user groups,
   platforms, client types or named locations, so whether they reach every user and sign-in cannot be
-  read from this list; or no policy is enabled at all (security defaults or per-user MFA may apply);
+  read from this list; or no policy is enabled and security defaults were not read as on (per-user MFA, or
+  security defaults when that policy was not read, may apply);
 - false: policies are enabled and none of them is a workforce MFA policy.
 If either key is not evaluated the whole run reports a dataCollection error, so neither key reads a
 verdict from an incomplete picture. An error or unrecognised body, or a list that still carries
@@ -44,6 +55,7 @@ from datetime import datetime
 
 
 KEYS = ("isRDPProtected", "isMFARequiredForRemoteAccess")
+SECURITY_DEFAULTS_POLICY_ID = "00000000-0000-0000-0000-000000000005"
 RDP_APP_IDS = ("a4a365df-50f1-4397-bc59-1a1564b8bb9c", "270efc09-cd0d-444b-a71f-39af4910ec45",
                "c0d2a505-13b8-4ae0-aa9e-cddd5eab0b12")
 
@@ -261,10 +273,33 @@ def client_union_full(policies, app_ids, groups):
     return []
 
 
-def evaluate(policies, groups=None):
+def read_security_defaults(body):
+    """True or False from GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy; None when the body is absent,
+    an error, not that policy, or carries no readable isEnabled."""
+    if isinstance(body, list) and len(body) == 1:
+        body = body[0]
+    if not isinstance(body, dict) or "error" in body:
+        return None
+    context = str(body.get("@odata.context") or "").lower()
+    if "identitysecuritydefaultsenforcementpolicy" not in context \
+            and str(body.get("id") or "") != SECURITY_DEFAULTS_POLICY_ID:
+        return None
+    value = body.get("isEnabled")
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
+
+
+def evaluate(policies, groups=None, security_defaults=None):
     enabled = [p for p in policies if str(p.get("state") or "").lower() == "enabled"]
     result = {"enabledPolicyCount": len(enabled), "policyCount": len(policies),
-              "groupListRead": isinstance(groups, dict), "groupsRead": len(groups) if isinstance(groups, dict) else 0}
+              "groupListRead": isinstance(groups, dict), "groupsRead": len(groups) if isinstance(groups, dict) else 0,
+              "securityDefaultsEnabled": security_defaults}
     for key, app_ids, names in (("isRDPProtected", RDP_APP_IDS, "rdpPolicies"),
                                 ("isMFARequiredForRemoteAccess", (), "remoteAccessPolicies")):
         full = [p for p in enabled if classify(p, app_ids, groups) == "full"]
@@ -272,7 +307,10 @@ def evaluate(policies, groups=None):
         union = [] if full else client_union_full(enabled, app_ids, groups)
         result[names] = [str(p.get("displayName") or p.get("id")) for p in full] or union
         result[names + "Partial"] = [str(p.get("displayName") or p.get("id")) for p in partial]
-        if full or union:
+        if not enabled and security_defaults is True:
+            result[names] = ["Security defaults"]
+            result[key] = True
+        elif full or union:
             result[key] = True
         elif partial or not enabled:
             result[key] = None
@@ -307,8 +345,10 @@ def transform(input):
         if validation.get("status") == "failed":
             raise ValueError("Input validation failed")
         groups = None
+        security_defaults = None
         if isinstance(data, dict) and "conditionalAccessPolicies" in data:
             group_data = data.get("groups")
+            security_defaults = read_security_defaults(data.get("securityDefaults"))
             data = data.get("conditionalAccessPolicies")
             if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
                 data = data[0]
@@ -323,12 +363,16 @@ def transform(input):
         next_link = data.get("@odata.nextLink")
         if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
             raise ValueError("The policy list has more pages than were read (@odata.nextLink still present)")
-        result = evaluate(policies, groups)
+        result = evaluate(policies, groups, security_defaults)
         passed = []
         failed = []
         errors = []
         for key, names in (("isRDPProtected", "rdpPolicies"), ("isMFARequiredForRemoteAccess", "remoteAccessPolicies")):
-            if result[key] is True:
+            if result[key] is True and result["enabledPolicyCount"] == 0:
+                passed.append(key + ": no Conditional Access policy is enabled and security defaults are on: every user "
+                              "must register for MFA and Microsoft challenges sign-ins with it; legacy authentication "
+                              "is blocked")
+            elif result[key] is True:
                 passed.append(key + ": MFA required of all users for all apps by " + ", ".join(result[names]))
             elif result[key] is False:
                 failed.append(key + ": no enabled policy requires MFA of the workforce for all apps (only admins, roles, "
@@ -338,6 +382,9 @@ def transform(input):
                 errors.append(key + ": MFA for all apps is required by policies scoped to user groups, platforms, "
                               "client types or named locations (" + ", ".join(result[names + "Partial"])
                               + "); whether they reach every user and sign-in cannot be read here")
+            elif result["securityDefaultsEnabled"] is False:
+                errors.append(key + ": no Conditional Access policy is enabled and security defaults are off; "
+                              "per-user MFA may apply and is not read here")
             else:
                 errors.append(key + ": no Conditional Access policy is enabled; security defaults or per-user MFA "
                               "may apply and are not read here")
