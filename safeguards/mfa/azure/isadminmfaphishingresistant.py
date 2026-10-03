@@ -365,16 +365,16 @@ def from_ca_policies(policies, validation):
         if None in (include_users, exclude_users, exclude_groups, include_roles, exclude_roles):
             unknown.append(name_of(policy))
             continue
-        if (len(exclude_users) > MAX_EXCLUDED_USERS or exclude_groups
-                or any(r in ADMIN_ROLES for r in exclude_roles)):
-            findings.append(name_of(policy) + " excludes a group (size unknown), an admin role or more than "
+        if len(exclude_users) > MAX_EXCLUDED_USERS or exclude_groups or exclude_roles:
+            # any excluded role counts: an admin who also holds an excluded role (even Reports Reader) is excluded
+            findings.append(name_of(policy) + " excludes a group (size unknown), a role or more than "
                             + str(MAX_EXCLUDED_USERS) + " users, so it does not prove coverage")
             continue
         if users.get("excludeGuestsOrExternalUsers"):
             findings.append(name_of(policy) + " excludes guests or external users, so it does not prove coverage")
             continue
         counted = False
-        if "all" in include_users and not exclude_roles:
+        if "all" in include_users:
             all_users = True
             counted = True
         roles = [r for r in include_roles if r in ADMIN_ROLES]
