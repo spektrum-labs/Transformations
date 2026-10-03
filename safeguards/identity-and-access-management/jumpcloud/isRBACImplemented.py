@@ -20,13 +20,19 @@ A SCOPED admin is an active administrator none of whose roles is full-admin and 
 Read Only alone is not counted as evidence: Spektrum's own setup instructions ask every customer to create a
 Read Only administrator for this integration, so that account would satisfy the check by itself.
 
+Least-privilege bar (Microsoft's guidance for privileged roles: fewer than five global administrators): a scoped
+admin alone is not role-based access if most people still hold full Administrator. The full-admin count must be 1
+to 4 (MAX_FULL_ADMINS); JumpCloud always needs at least one Administrator With Billing.
+
 Verdict:
-  True   the full admin list was read and at least one active administrator holds only scoped roles.
-  False  the full admin list was read, every active administrator's role is readable, and each is a full admin or
-         Read Only only (flat access).
+  True   the full admin list was read, at least one active administrator holds only scoped roles, and 1 to 4
+         active administrators hold full Administrator / Administrator With Billing.
+  False  the full admin list was read and either every active administrator's role is readable and each is a full
+         admin or Read Only only (flat access), or 5 or more active administrators hold full admin roles.
   None   (Unevaluated, dataCollection error) no complete admin list (null, {}, error/401/403, unrelated JSON,
-         partial read vs totalCount), no active administrator, or a False that rests on an admin whose role
-         cannot be read.
+         partial read vs totalCount), no active administrator, no readable full admin (the list cannot be
+         complete), unreadable roles that could push the full-admin count past the bar, or a False that rests on an
+         admin whose role cannot be read.
 
 Does not prove: what a custom role grants, or provider (MSP) administrators, who are not in this list.
 """
@@ -34,6 +40,7 @@ import json
 from datetime import datetime
 
 KEY = "isRBACImplemented"
+MAX_FULL_ADMINS = 4
 META = {"transformationId": KEY, "vendor": "JumpCloud", "category": "identity-and-access-management"}
 FULL_ADMIN_ROLES = ("administrator with billing", "administrator")
 READ_ONLY_ROLES = ("read only",)
@@ -168,12 +175,33 @@ def transform(input):
                    "readOnlyOnlyAdminCount": len(read_only), "unreadableRoleCount": len(unreadable)}
         result = {KEY: None, "activeAdministratorCount": len(active), "fullAdminCount": len(full_admin),
                   "scopedAdminCount": len(scoped), "readOnlyOnlyAdminCount": len(read_only)}
+        if scoped and len(full_admin) > MAX_FULL_ADMINS:
+            result[KEY] = False
+            return create_response(
+                result=result, validation=validation,
+                fail_reasons=[str(len(full_admin)) + " active administrator(s) hold full Administrator (or "
+                              "Administrator With Billing); least privilege allows at most "
+                              + str(MAX_FULL_ADMINS) + ", even though " + str(len(scoped))
+                              + " hold a scoped role"],
+                recommendations=["Move administrators who do not need every scope to a scoped system role (Manager, "
+                                 "Help Desk, Command Runner) or a custom role, keeping 1 to "
+                                 + str(MAX_FULL_ADMINS) + " full administrators"],
+                input_summary=summary)
+        if scoped and unreadable and len(full_admin) + len(unreadable) > MAX_FULL_ADMINS:
+            return unevaluated(str(len(unreadable)) + " active administrator(s) carry no readable role; if they are "
+                               "full administrators the count exceeds " + str(MAX_FULL_ADMINS)
+                               + ", so least privilege cannot be confirmed.", validation)
+        if scoped and not full_admin:
+            return unevaluated("No active administrator with a readable full Administrator role was found; JumpCloud "
+                               "always has at least one, so the admin list or its roles are incomplete.", validation)
         if scoped:
             result[KEY] = True
             return create_response(
                 result=result, validation=validation,
                 pass_reasons=[str(len(scoped)) + " of " + str(len(active)) + " active administrator(s) hold a "
-                              "scoped role rather than full Administrator (roles: " + "; ".join(sorted(set(scoped))[:10]) + ")"],
+                              "scoped role rather than full Administrator (roles: " + "; ".join(sorted(set(scoped))[:10])
+                              + "), and " + str(len(full_admin)) + " hold full Administrator (at most "
+                              + str(MAX_FULL_ADMINS) + ")"],
                 input_summary=summary)
         if unreadable:
             return unevaluated(str(len(unreadable)) + " of " + str(len(active)) + " active administrator(s) carry "
