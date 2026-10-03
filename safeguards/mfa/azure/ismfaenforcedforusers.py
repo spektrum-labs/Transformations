@@ -13,7 +13,7 @@ Not evaluated (value None, dataCollection.status "error"):
 - no Microsoft MFA method is enabled but an external authentication method (for example Cisco
   Duo, @odata.type externalAuthenticationMethodConfiguration) is: the factor is enforced by that
   provider, which Entra cannot grade (J.J., 3 Oct 2026; same rule as authtypesallowed.py and
-  entra_strongauth_methods.py). It is never a FAIL. Seen at passport 7c1375c8, where a tenant
+  entra_strongauth_methods.py). It is never a FAIL. Seen at one estate, where a tenant
   that requires Duo through Conditional Access read "No MFA authentication methods enabled";
 - the authentication methods policy or the Conditional Access policies were not read (error
   envelope, no authenticationMethodConfigurations array, no policy list), or input validation
