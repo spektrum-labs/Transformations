@@ -62,13 +62,29 @@ class AbnormalInboundAntiPhishingWindowTests(unittest.TestCase):
         self.assertTrue(dc["errors"])
 
     # One newest threat that is neither remediated phishing nor unacted phishing proves nothing:
-    # Unevaluated with the reason, never False (THL Partners, 2 Oct 2026).
+    # Unevaluated with the reason, never False (a tenant flipped that way on 2 Oct 2026).
     def test_remediated_phishing_100_days_ago_is_unevaluated(self):
         self.assert_unevaluated(threat(100))
 
-    def test_non_phishing_type_within_window_is_unevaluated(self):
+    def test_any_remediated_threat_within_window_is_true(self):
+        # Product decision (3 Oct 2026): a remediated threat of any type shows the inline protection is acting.
         for attack_type in ["Malware", "Spam", "Graymail", "Other"]:
-            self.assert_unevaluated(threat(2, attack_type=attack_type))
+            with self.subTest(attack_type):
+                self.assertIs(self.verdict(threat(2, attack_type=attack_type)), True)
+
+    def test_non_phishing_threat_not_remediated_is_unevaluated(self):
+        for status in ["No Action Done", "Would Remediate", "Marked Safe", "Remediation Attempted"]:
+            with self.subTest(status):
+                self.assert_unevaluated(threat(2, attack_type="Spam", status=status))
+
+    def test_old_remediated_non_phishing_threat_is_unevaluated(self):
+        self.assert_unevaluated(threat(120, attack_type="Spam"))
+
+    def test_unacted_phishing_still_fails_even_with_remediated_spam(self):
+        body = threat(2, attack_type="Phishing: Credential", status="Would Remediate")
+        body["messages"].append({"attackType": "Spam", "remediationStatus": "Auto-Remediated",
+                                 "remediationTimestamp": iso_days_ago(1)})
+        self.assertIs(self.verdict(body), False)
 
     def test_marked_safe_or_attempted_is_unevaluated(self):
         for status in ["Marked Safe", "Remediation Attempted"]:
@@ -86,11 +102,41 @@ class AbnormalInboundAntiPhishingWindowTests(unittest.TestCase):
             self.assertIs(self.verdict(threat(5, status=status)), False, status)
             self.assertEqual(self.collection(threat(5, status=status))["status"], "success")
 
-    def test_one_remediated_message_outweighs_an_unacted_one(self):
+    def test_any_unacted_phishing_fails_even_next_to_remediated_phishing(self):
+        # Master review, 3 Oct 2026: an unacted phishing message in the window fails wherever it appears.
         body = threat(3)
         body["messages"].append({"attackType": "Phishing: Credential", "remediationStatus": "No Action Done",
                                  "remediationTimestamp": iso_days_ago(3)})
-        self.assertIs(self.verdict(body), True)
+        self.assertIs(self.verdict(body), False)
+        body["messages"].reverse()
+        self.assertIs(self.verdict(body), False)
+
+    def test_paged_or_truncated_threat_is_unevaluated(self):
+        for extra in ({"nextPageNumber": 2}, {"nextPageNumber": "2"}, {"paginationTruncated": True}, {"truncated": "true"}):
+            with self.subTest(extra):
+                body = threat(3)
+                body.update(extra)
+                self.assert_unevaluated(body)
+
+    def test_later_page_alone_is_unevaluated(self):
+        # Page 3 with no next page still leaves pages 1-2 unread.
+        for extra in ({"pageNumber": 3, "nextPageNumber": None}, {"pageNumber": "2"}):
+            with self.subTest(extra):
+                body = threat(3)
+                body.update(extra)
+                self.assert_unevaluated(body)
+
+    def test_single_or_first_page_is_scored(self):
+        for extra in ({"nextPageNumber": None}, {"pageNumber": 1, "nextPageNumber": None}, {"pageNumber": "1"}, {}):
+            with self.subTest(extra):
+                body = threat(3)
+                body.update(extra)
+                self.assertIs(self.verdict(body), True)
+
+    def test_window_is_exactly_90_days(self):
+        for days, want in ((89, True), (90, True), (91, None)):
+            with self.subTest(days):
+                self.assertIs(self.verdict(threat(days)), want)
 
     def test_real_shape_threat_detail(self):
         # Shape of GET /v1/threats/{threatId} (Abnormal REST API v1): threatId plus a messages list.
