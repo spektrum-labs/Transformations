@@ -45,8 +45,9 @@ KEY = "isLegacyAuthBlocked"
 SETTING = "security.less_secure_apps"
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/cloud-identity.policies.readonly"
 META = {"transformationId": KEY, "vendor": "Google Workspace", "category": "Email Security"}
-OU_ONLY = re.compile(r"^entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('[A-Za-z0-9_-]+'\)\)$")
-GROUP_AND_OU = re.compile(r"^entity\.groups\.exists\(group, group\.group_id == groupId\('[A-Za-z0-9_-]+'\)\) && "
+# Plain pattern strings, not re.compile: the Token-Service sandbox refuses any call named compile.
+OU_ONLY = (r"^entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('[A-Za-z0-9_-]+'\)\)$")
+GROUP_AND_OU = (r"^entity\.groups\.exists\(group, group\.group_id == groupId\('[A-Za-z0-9_-]+'\)\) && "
                           r"entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('[A-Za-z0-9_-]+'\)\)$")
 SCOPE_HINTS = ["insufficient authentication scopes", "access_token_scope_insufficient", "unauthorized_client",
                "scope_not_granted", "access_denied", "request had insufficient authentication"]
@@ -208,8 +209,8 @@ def plain_target_query(policy):
     query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
     q = text(query.get("query"))
     if text(query.get("group")):
-        return bool(GROUP_AND_OU.match(q))
-    return bool(OU_ONLY.match(q))
+        return bool(re.match(GROUP_AND_OU, q))
+    return bool(re.match(OU_ONLY, q))
 
 
 def label(target):
