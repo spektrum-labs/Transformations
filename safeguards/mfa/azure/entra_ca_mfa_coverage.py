@@ -561,7 +561,7 @@ def group_detail(coverage):
     unread = coverage["groupsUnread"]
     unread_note = ""
     if unread:
-        unread_note = f" ({len(unread)} group member lists could not be read whole: {', '.join(unread)})"
+        unread_note = f" (member lists not read whole for {len(unread)} group(s): {', '.join(unread)})"
     if not coverage["memberListRead"]:
         return ("the enabled member account list could not be read whole, so whether the included groups reach "
                 "every user cannot be read here" + unread_note)
@@ -570,7 +570,7 @@ def group_detail(coverage):
     if coverage["uncoveredCount"]:
         where = "the included groups that could be read" if unread else "the included groups"
         return (f"{coverage['uncoveredCount']} of {coverage['membersTotal']} enabled members are outside {where}"
-                + unread_note + "; group membership never fails this check, add them to a group the policy includes "
+                + unread_note + ". Group membership never fails this check: add them to a group the policy includes, "
                 "or attest")
     return "whether they reach every user and sign-in cannot be read here" + unread_note
 
