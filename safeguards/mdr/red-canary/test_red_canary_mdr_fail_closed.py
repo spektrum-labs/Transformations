@@ -169,7 +169,7 @@ def test_measured_fleet_answers(shape):
     assert dc["status"] == "success" and tr["isMDRLoggingEnabled"] is True
     assert tr["totalEnrolledEndpoints"] == 100
     tr, dc = run("requiredCoveragePercentage", shaped(FLEET))
-    assert dc["status"] == "success" and tr["requiredCoveragePercentage"] == 100.0
+    assert dc["status"] == "success" and tr["requiredCoveragePercentage"] == 97  # 97 of 100 monitored
     tr, dc = run("isendpointcoveragevalid", shaped(FLEET))
     assert dc["status"] == "success" and tr["isEndpointCoverageValid"] is True
     assert (tr["totalEndpoints"], tr["monitoredEndpoints"], tr["unmonitoredEndpoints"]) == (100, 97, 3)
