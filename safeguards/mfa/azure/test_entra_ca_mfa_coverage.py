@@ -141,5 +141,123 @@ class Coverage(unittest.TestCase):
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
 
 
+
+# GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy, the documented response shape.
+SD_CTX = "https://graph.microsoft.com/v1.0/$metadata#policies/identitySecurityDefaultsEnforcementPolicy/$entity"
+
+
+def security_defaults(enabled):
+    return {"@odata.context": SD_CTX, "id": "00000000-0000-0000-0000-000000000005",
+            "displayName": "Security Defaults",
+            "description": "Security defaults is a set of basic identity security mechanisms recommended by Microsoft.",
+            "isEnabled": enabled}
+
+
+def run_sd(policies, sd):
+    out = m.transform({"conditionalAccessPolicies": policies, "groups": ALL_GROUPS, "securityDefaults": sd})
+    return out["transformedResponse"], out["additionalInfo"]
+
+
+class SecurityDefaults(unittest.TestCase):
+    """No Conditional Access policy enabled (an estate with no enabled policy): read security defaults."""
+
+    def test_real_shape_security_defaults_on_never_passes_and_names_the_next_step(self):
+        res, info = run_sd(ca(), security_defaults(True))
+        self.assertIsNone(res["isRDPProtected"])
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        self.assertIs(res["securityDefaultsEnabled"], True)
+        self.assertEqual(res["rdpPolicies"], [])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        errors = info["dataCollection"]["errors"]
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all("Security defaults are on" in e and "Conditional Access policy requiring MFA" in e
+                            and "attest" in e for e in errors))
+        self.assertTrue(any("Remote Desktop" in e for e in errors if e.startswith("isRDPProtected")))
+        self.assertFalse(info["evaluation"]["passReasons"])
+
+    def test_flipped_security_defaults_off_stays_not_evaluated(self):
+        res, info = run_sd(ca(), security_defaults(False))
+        self.assertIsNone(res["isRDPProtected"])
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        self.assertIs(res["securityDefaultsEnabled"], False)
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertTrue(all("security defaults are off" in e for e in info["dataCollection"]["errors"]))
+
+    def test_report_only_policies_with_security_defaults_on_do_not_pass(self):
+        res, _ = run_sd(ca(policy("MFA all (report only)", users=["All"], state="enabledForReportingButNotEnforced")),
+                        security_defaults(True))
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+
+    def test_string_booleans_are_read(self):
+        res, _ = run_sd(ca(), security_defaults("True"))
+        self.assertIs(res["securityDefaultsEnabled"], True)
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        res, _ = run_sd(ca(), security_defaults("false"))
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        self.assertIs(res["securityDefaultsEnabled"], False)
+
+    def test_list_wrapped_body_is_read(self):
+        res, _ = run_sd(ca(), [security_defaults(True)])
+        self.assertIs(res["securityDefaultsEnabled"], True)
+        self.assertIsNone(res["isRDPProtected"])
+
+    def test_empty_security_defaults_body_changes_nothing(self):
+        for body in ({}, [], ""):
+            res, info = run_sd(ca(), body)
+            self.assertIsNone(res["isMFARequiredForRemoteAccess"], body)
+            self.assertIsNone(res["securityDefaultsEnabled"], body)
+            self.assertIn("security defaults or per-user MFA may apply", info["dataCollection"]["errors"][0])
+
+    def test_none_security_defaults_changes_nothing(self):
+        res, info = run_sd(ca(), None)
+        self.assertIsNone(res["isRDPProtected"])
+        self.assertIn("security defaults or per-user MFA may apply", info["dataCollection"]["errors"][0])
+
+    def test_error_security_defaults_body_changes_nothing(self):
+        res, info = run_sd(ca(), {"error": {"code": "Authorization_RequestDenied",
+                                            "message": "Insufficient privileges to complete the operation."}})
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+
+    def test_missing_is_enabled_changes_nothing(self):
+        body = security_defaults(True)
+        del body["isEnabled"]
+        res, _ = run_sd(ca(), body)
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        res, _ = run_sd(ca(), security_defaults(None))
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+
+    def test_unrelated_body_with_is_enabled_is_not_trusted(self):
+        res, _ = run_sd(ca(), {"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#policies/"
+                                                 "authenticationMethodsPolicy/$entity", "isEnabled": True})
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+
+    def test_not_consulted_when_a_policy_is_enabled(self):
+        # Group-scoped policy enabled: the answer stays the group-scope one even if a body claims defaults are on.
+        res, info = run_sd(ca(policy("MFA Standard users", groups=[G_ASSIGNED])), security_defaults(True))
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        self.assertIn("scoped to user groups", info["dataCollection"]["errors"][0])
+        # Enabled policies that require no workforce MFA still fail.
+        res, _ = run_sd(ca(policy("Block legacy auth", users=["All"], controls=("block",))), security_defaults(True))
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+
+    def test_error_ca_body_with_security_defaults_on_fails_closed(self):
+        out = m.transform({"conditionalAccessPolicies": {"error": {"code": "Forbidden"}}, "groups": ALL_GROUPS,
+                           "securityDefaults": security_defaults(True)})
+        self.assertIsNone(out["transformedResponse"]["isRDPProtected"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_paged_ca_list_with_security_defaults_on_fails_closed(self):
+        body = ca()
+        body["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies?$skiptoken=x"
+        res, _ = run_sd(body, security_defaults(True))
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+
+    def test_none_input_fails_closed(self):
+        out = m.transform(None)
+        self.assertIsNone(out["transformedResponse"]["isRDPProtected"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()
