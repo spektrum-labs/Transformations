@@ -155,7 +155,8 @@ def word(value):
 
 
 # Values that mean "nothing set" when Integration-Service stringifies an empty or false field.
-EMPTY_TOKENS = ("", "none", "null", "false", "true", "[]", "{}", "n/a", "no", "off", "0")
+EMPTY_TOKENS = ("", "none", "null", "false", "true", "[]", "{}", "n/a", "no", "off", "0", "disabled", "disable",
+                "not-required", "not_required")
 PLATFORMS = ("windows", "macos", "linux")
 OS_NAMES = ("android", "ios", "ipados", "windows", "macos", "linux", "chromeos", "blackberry", "windows-phone",
             "windowsphone", "other", "unknown")
@@ -175,8 +176,20 @@ def is_network(v):
     return any(ch.isdigit() for ch in v) and all(ch in allowed for ch in v) and ("." in v or ":" in v)
 
 
+# Endpoint-security agents Duo Desktop can require (Duo Policy API endpoint_security lists), in the token forms
+# Duo uses. Anything else is not counted as a condition: it makes the setting unreadable (fail closed).
+ENDPOINT_SECURITY_VENDORS = ("cisco-secure-endpoint", "cisco-amp", "crowdstrike", "crowdstrike-falcon", "cylance",
+                             "eset", "f-secure", "withsecure", "mcafee", "trellix", "windows-defender",
+                             "microsoft-defender", "defender", "palo-alto-cortex-xdr", "palo-alto-traps",
+                             "cortex-xdr", "sentinelone", "sophos", "sophos-intercept-x", "symantec",
+                             "broadcom-symantec", "trend-micro", "trendmicro", "carbon-black", "vmware-carbon-black",
+                             "malwarebytes", "bitdefender", "kaspersky", "webroot", "avast", "avg", "norton",
+                             "fortinet", "fortiedr", "fortinet-forticlient", "cybereason", "deep-instinct",
+                             "elastic-endpoint", "harfanglab", "cisco-secure-client", "jamf-protect", "xprotect")
+
+
 def is_vendor(v):
-    return all(ch.isalnum() or ch in "-_ ." for ch in v) and any(ch.isalpha() for ch in v)
+    return v.lower() in ENDPOINT_SECURITY_VENDORS
 
 
 def real_items(value, valid, field):
