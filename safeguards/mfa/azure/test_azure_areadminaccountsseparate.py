@@ -18,6 +18,8 @@ GLOBAL_ADMIN = "62e90394-69f5-4237-9190-012177145e10"
 SPE_E3 = "05e9a617-0261-4cee-bb44-138d3ef5d965"
 EXCHANGE_PLAN_2 = "19ec0d23-8335-4cbd-94ac-6050e30712fa"
 ENTRA_P2 = "84a661c4-e949-4bd2-a560-ed7766fcaf2b"
+ENTRA_P1 = "078d2b04-f1bd-4111-bbd4-b4b1b354cef4"
+SPE_E3_NO_TEAMS = "dcf0408c-aaec-446a-afd4-43a3683943ea"  # Microsoft 365 E3 (no Teams): NOT on our SKU list
 
 
 def load():
@@ -92,6 +94,42 @@ class AzureAdminSeparationTests(unittest.TestCase):
         self.assertEqual(result["adminsWithMailLicense"], 0)
         self.assertEqual(result["adminsWithMailAttributeOnly"], 1)
         self.assertIn("not a fail", " ".join(info["evaluation"]["additionalFindings"]))
+
+    def test_mail_with_known_non_productivity_skus_only_is_a_finding_and_passes(self):
+        for skus in ([ENTRA_P1, ENTRA_P2], []):
+            with self.subTest(skus=skus):
+                admin = user("u1", "admin@contoso.com", mail="admin@contoso.com", skus=skus)
+                result, info = self.run_t(body([admin], ["u1"]))
+                self.assertTrue(result[KEY], info)
+                self.assertTrue(info["evaluation"]["additionalFindings"])
+
+    def test_mail_with_assigned_plans_showing_no_exchange_is_a_finding_and_passes(self):
+        plans = [{"service": "MicrosoftOffice", "capabilityStatus": "Enabled", "servicePlanId": "y"},
+                 {"service": "exchange", "capabilityStatus": "Deleted", "servicePlanId": "x"}]
+        admin = user("u1", "admin@contoso.com", mail="admin@contoso.com", skus=[SPE_E3_NO_TEAMS], plans=plans)
+        result, info = self.run_t(body([admin], ["u1"]))
+        self.assertTrue(result[KEY], info)
+        self.assertIn("not a fail", " ".join(info["evaluation"]["additionalFindings"]))
+
+    def test_mail_with_unclassified_sku_and_no_assigned_plans_is_not_a_pass(self):
+        # Review of #833: this used to PASS. Main FAILs it on `mail`; it is now not evaluated.
+        admin = user("u1", "admin@contoso.com", mail="admin@contoso.com", skus=[SPE_E3_NO_TEAMS])
+        result, info = self.run_t(body([admin], ["u1"]))
+        self.assertFalse(result[KEY])
+        self.assert_not_evaluated(body([admin], ["u1"]))
+        self.assertIn("could not be classified", " ".join(info["dataCollection"]["errors"]))
+
+    def test_proven_fail_wins_over_unresolved_admin(self):
+        licensed = user("u1", "alice@contoso.com", mail="alice@contoso.com", skus=[SPE_E3])
+        result, info = self.run_t(body([licensed], ["u1", "u-ghost"]))
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertIn("not present in the user feed", info["evaluation"]["failReasons"][0])
+        unclassified = user("u2", "carol@contoso.com", mail="carol@contoso.com", skus=[SPE_E3_NO_TEAMS])
+        result, info = self.run_t(body([licensed, unclassified], ["u1", "u2"]))
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertIn("carol@contoso.com", info["evaluation"]["failReasons"][0])
 
     def test_productivity_sku_fails(self):
         for sku in (SPE_E3, EXCHANGE_PLAN_2):
