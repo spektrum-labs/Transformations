@@ -88,6 +88,18 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
+        # The feeds this file is mapped to (Graph GET /v1.0/users, Okta GET /api/v1/org/factors)
+        # never carry privilegedAccounts or pamPolicies, so this read "no PAM" at every passport
+        # (24 of 24 FAILs, 2026-10-03 fleet check). An identity provider's user or factor list
+        # cannot prove a PAM vault or credential rotation: absent fields are not evaluated.
+        if not isinstance(data, dict) or ('privilegedAccounts' not in data and 'pamPolicies' not in data):
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                api_errors=["This feed carries no privileged access management data (privilegedAccounts or "
+                            "pamPolicies); a user or MFA-factor list cannot show a PAM vault or credential rotation"],
+                input_summary={"pamConfigCount": 0, "pamDataPresent": False}
+            )
         pam = data.get('privilegedAccounts') or data.get('pamPolicies') or []
         is_enabled = isinstance(pam, list) and len(pam) > 0
 

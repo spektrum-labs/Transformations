@@ -3,7 +3,10 @@ Transformation: authTypesAllowed
 Vendor: Microsoft
 Category: Identity / Authentication
 
-Evaluates if only secure authentication types are allowed (FIDO2, Microsoft Authenticator, or properly configured Temporary Access Pass).
+Evaluates "no weak factors": only strong authentication methods are enabled (FIDO2, certificate-based
+authentication, Microsoft Authenticator, software or hardware OATH tokens, and a Temporary Access Pass
+with a maximum lifetime). SMS, voice and email OTP (for any target, guests included) fail. An external
+method alone, or no member method at all, is not evaluated.
 """
 
 import json
@@ -128,69 +131,121 @@ def transform(input):
                              "methods policy was never read, so the absence of an insecure "
                              "method is not evidence that none is enabled")])
 
-        # Find enabled authentication methods
-        enabled_methods = [obj for obj in auth_configs if obj.get('state', '').lower() == "enabled"]
+        # Classify each enabled method (Graph authenticationMethodConfiguration objects).
+        #
+        # Rules (2026-10-03 fleet check, integration-fix-queue
+        # changes/2026-10-03-false-fail-check, with J.J.'s decisions of 3 Oct 00:55 ET):
+        #  * Email OTP that is enabled FAILS "no weak factors" whoever it targets. An Email
+        #    configuration with an empty includeTargets list still lets B2B guests sign in
+        #    with an emailed one-time passcode (allowExternalIdToUseEmailOtp), and that is
+        #    an email-based factor allowed in the tenant. Guests included: still a fail.
+        #  * An external authentication method (for example Cisco Duo) enforces its own
+        #    factors, which Entra cannot see. It is never called insecure here; when it is
+        #    the only thing standing between "no weak method" and a verdict, the check is
+        #    not evaluated (same rule as entra_strongauth_methods.py).
+        #  * A Temporary Access Pass with a maximum lifetime is a time-limited onboarding
+        #    and recovery credential, not a standing sign-in factor. It does not fail the
+        #    check on its own or together with other allowed methods.
+        #  * When no member method is enabled at all, the converged policy is not what
+        #    governs sign-in (policyMigrationState preMigration / migrationInProgress, or
+        #    legacy per-user MFA). That is not evidence either way: not evaluated, and the
+        #    reason names policyMigrationState when the policy carries it.
+        #  * X509Certificate (certificate-based authentication) and HardwareOath (OATH
+        #    hardware tokens) are strong factors and are allowed.
+        enabled_methods = [obj for obj in auth_configs
+                           if isinstance(obj, dict) and str(obj.get('state', '')).lower() == "enabled"]
 
-        # Secure methods that are always allowed
-        secure_methods = ['fido2', 'microsoftauthenticator', 'softwareoath']
+        allowed_methods = ['fido2', 'x509certificate', 'microsoftauthenticator', 'softwareoath', 'hardwareoath']
 
-        # Filter to find non-secure auth types
-        other_auth_types = [
-            auth_type for auth_type in enabled_methods
-            if auth_type.get('id', '').lower() not in secure_methods
-        ]
+        def method_id(m):
+            return str(m.get('id', '') or '').lower()
 
-        # Check for temporary access pass configuration
-        temp_access_obj = None
-        for auth_type in enabled_methods:
-            if auth_type.get('id', '').lower() == 'temporaryaccesspass':
-                temp_access_obj = auth_type
-                break
-        has_temporary_access = temp_access_obj is not None
-        temp_access_timeout = False
-        if temp_access_obj:
-            max_lifetime = temp_access_obj.get('maximumLifetimeInMinutes')
+        def is_external(m):
+            return "externalauthenticationmethodconfiguration" in str(m.get('@odata.type') or '').lower()
+
+        def guest_only_email(m):
+            return method_id(m) == 'email' and isinstance(m.get('includeTargets'), list) and not m.get('includeTargets')
+
+        def bounded_tap(m):
+            if method_id(m) != 'temporaryaccesspass':
+                return False
             try:
-                if max_lifetime is not None and int(max_lifetime) > 0:
-                    temp_access_timeout = True
+                return int(m.get('maximumLifetimeInMinutes')) > 0
             except (ValueError, TypeError):
-                pass
+                return False
 
-        # Check for presence of FIDO2 or Microsoft Authenticator
-        has_fido2 = any(auth_type.get('id', '').lower() == 'fido2' for auth_type in enabled_methods)
-        has_ms_auth = any(auth_type.get('id', '').lower() == 'microsoftauthenticator' for auth_type in enabled_methods)
-
-        # Determine if auth types are allowed
-        if len(other_auth_types) > 0:
-            # Allow if only temp access pass with proper timeout and FIDO2/MS Auth present
-            if (len(other_auth_types) == 1 and
-                has_temporary_access and
-                temp_access_timeout and
-                (has_fido2 or has_ms_auth)):
-                is_allowed = True
+        allowed, weak, external, taps = [], [], [], []
+        for m in enabled_methods:
+            if is_external(m):
+                external.append(str(m.get('displayName') or m.get('id') or 'external method'))
+            elif bounded_tap(m):
+                taps.append(m)
+            elif method_id(m) in allowed_methods:
+                allowed.append(m)
             else:
-                is_allowed = False
-        else:
-            is_allowed = True
+                weak.append(m)
 
-        if is_allowed:
-            secure_enabled = [m.get('id') for m in enabled_methods if m.get('id', '').lower() in secure_methods]
-            pass_reasons.append(f"Only secure authentication methods enabled: {', '.join(secure_enabled)}")
-            if has_temporary_access and temp_access_timeout:
-                pass_reasons.append("Temporary Access Pass configured with proper lifetime limit")
-        else:
-            insecure_names = [m.get('id', 'unknown') for m in other_auth_types]
+        guest_email = [m for m in weak if guest_only_email(m)]
+        has_fido2 = any(method_id(m) == 'fido2' for m in enabled_methods)
+        has_ms_auth = any(method_id(m) == 'microsoftauthenticator' for m in enabled_methods)
+        migration = str(data.get('policyMigrationState') or '')
+        input_summary = {
+            "totalEnabledMethods": len(enabled_methods),
+            "insecureMethods": len(weak),
+            "hasFido2": has_fido2,
+            "hasMsAuth": has_ms_auth,
+            "externalMethods": external,
+            "guestOnlyEmailOtp": bool(guest_email),
+            "temporaryAccessPassBounded": bool(taps),
+            "policyMigrationState": migration,
+        }
+        findings = []
+        if taps:
+            findings.append("Temporary Access Pass is enabled with a maximum lifetime (onboarding/recovery credential)")
+
+        if weak:
+            insecure_names = [str(m.get('id', 'unknown'))[:60] for m in weak]
             fail_reasons.append(f"Insecure authentication methods enabled: {', '.join(insecure_names)}")
-            recommendations.append("Disable legacy authentication methods and use only FIDO2, Microsoft Authenticator, or properly configured Temporary Access Pass")
+            if guest_email:
+                fail_reasons.append("Email one-time passcode is enabled for external (guest) users; an "
+                                    "email-based factor allowed for any user, guests included, is a weak factor")
+            recommendations.append("Disable SMS, voice and email OTP (including email OTP for guests); use "
+                                   "FIDO2/passkeys, certificate-based authentication, Microsoft Authenticator "
+                                   "or OATH tokens")
+            return create_response(
+                result={criteriaKey: False, "authTypes": weak},
+                validation=validation, pass_reasons=pass_reasons, fail_reasons=fail_reasons,
+                recommendations=recommendations, input_summary=input_summary, additional_findings=findings)
 
+        if external:
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation, input_summary=input_summary, additional_findings=findings,
+                api_errors=["No weak Microsoft method is enabled; the external authentication method(s) "
+                            + ", ".join(e[:60] for e in external)
+                            + " enforce their own factors and cannot be graded from Entra"])
+
+        if not allowed:
+            reason = "No member authentication method is enabled in the authentication methods policy"
+            if migration.lower() in ("premigration", "migrationinprogress"):
+                reason += (f" (policyMigrationState: {migration[:40]}): the legacy MFA and SSPR policies "
+                           "still apply and cannot be read here")
+            elif migration:
+                reason += (f" (policyMigrationState: {migration[:40]}): the methods members can use are not "
+                           "set by this policy, so it is not evidence either way")
+            else:
+                reason += ": the methods members can use are not set by this policy, so it is not evidence either way"
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation, input_summary=input_summary, additional_findings=findings,
+                api_errors=[reason])
+
+        pass_reasons.append("Only allowed authentication methods are enabled: "
+                            + ", ".join(str(m.get('id'))[:60] for m in allowed))
         return create_response(
-            result={criteriaKey: is_allowed, "authTypes": other_auth_types},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"totalEnabledMethods": len(enabled_methods), "insecureMethods": len(other_auth_types), "hasFido2": has_fido2, "hasMsAuth": has_ms_auth}
-        )
+            result={criteriaKey: True, "authTypes": []},
+            validation=validation, pass_reasons=pass_reasons, input_summary=input_summary,
+            additional_findings=findings)
 
     except Exception as e:
         return create_response(
