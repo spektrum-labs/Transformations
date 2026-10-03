@@ -357,7 +357,7 @@ def test_both_files_compile_and_run_in_the_restricted_sandbox():
 @pytest.mark.parametrize("ids", [
     ["ldt:0000000000000000000000000000000a:1234"],             # detection ids
     ["0000000000000000000000000000000a_cve-2024-0001"],         # vulnerability instance ids
-    ["estate-a-policy-1", "estate-a-policy-2"],                 # policy ids
+    ["estate-a-group-1", "estate-a-group-2"],                   # non-hex names
     ["0123456789abcdef"],                                       # too short
 ])
 def test_epp_misrouted_id_list_is_unevaluated(ids):
@@ -370,4 +370,13 @@ def test_epp_misrouted_id_list_is_unevaluated(ids):
 def test_epp_device_ids_are_counted_in_either_case():
     ids = ["%032x" % (0xb0 + i) for i in range(3)] + ["%032X" % 0xc0]
     out = EPP.transform({"meta": {"pagination": {"total": 4}}, "resources": ids, "errors": []})
+    assert out["transformedResponse"]["isEPPDeployed"] is True
+
+
+def test_epp_32_hex_policy_ids_are_indistinguishable_from_device_ids_known_limit():
+    # Known Low: real Falcon policy ids are also 32 hex, so a misrouted policy-id list reads as hosts. The control is
+    # the definition's method binding (devices-scroll for isEPPDeployed), not the id shape. This asserts the honest
+    # current behaviour so a future change to it is deliberate.
+    policy_ids = ["%032x" % (0xd0 + i) for i in range(2)]
+    out = EPP.transform({"meta": {"pagination": {"total": 2}}, "resources": policy_ids, "errors": []})
     assert out["transformedResponse"]["isEPPDeployed"] is True
