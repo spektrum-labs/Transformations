@@ -7,9 +7,11 @@ Legacy clients are the Conditional Access clientAppTypes exchangeActiveSync and 
 other basic-auth protocols). The verdict is unchanged: True when at least one enabled policy blocks them.
 
 Named evidence (#101): the reasons name the accounts the block does not reach, capped at 20 plus "and N more":
-the users, groups and directory roles excluded from every enabled blocking policy (an account excluded from one
-policy but caught by another is still blocked), and the user, group or role scope when no blocking policy targets
-all users. Microsoft Graph returns object ids, not names, so the reasons carry ids prefixed with their kind.
+every user, group and directory role named in an enabled blocking policy that no blocking policy covers (a policy
+covers a principal when it includes it, directly or through All users, and does not exclude it), and the user,
+group or role scope when no blocking policy targets all users. Coverage is computed on the ids as the policies
+list them; group and role membership is not expanded. Microsoft Graph returns object ids, not names, so the
+reasons carry ids prefixed with their kind.
 """
 import json
 from datetime import datetime
@@ -54,6 +56,8 @@ MAX_NAMED = 20
 LEGACY_CLIENTS = ['exchangeActiveSync', 'other']
 EXCLUDE_FIELDS = [('excludeUsers', 'user'), ('excludeGroups', 'group'), ('excludeRoles', 'role')]
 INCLUDE_FIELDS = [('includeUsers', 'user'), ('includeGroups', 'group'), ('includeRoles', 'role')]
+# Graph keywords, not principals.
+SPECIAL_PRINCIPALS = {'user:All', 'user:None', 'user:GuestsOrExternalUsers', 'group:All', 'role:All'}
 
 
 def name_list(items):
@@ -94,21 +98,33 @@ def evaluate(data):
             "blockingPolicies": len(legacy_block)
         }
         if legacy_block:
-            # An account is unblocked only when every blocking policy excludes it.
-            excluded = None
+            # Coverage per principal: a principal is blocked when at least one blocking policy includes it
+            # (directly or through All users) and that same policy does not exclude it. Every principal named
+            # in any blocking policy is checked, so an account excluded from the All-users block and not
+            # included by a scoped one is named, even when another policy does not exclude it.
             all_users = False
             scoped = []
+            rules = []
+            candidates = []
             for p in legacy_block:
                 users = p.get('conditions', {}).get('users', {})
-                this_excluded = principals(users, EXCLUDE_FIELDS)
-                excluded = this_excluded if excluded is None else [x for x in excluded if x in this_excluded]
+                excluded = set(principals(users, EXCLUDE_FIELDS))
                 included = principals(users, INCLUDE_FIELDS)
-                if "user:All" in included:
+                includes_all = "user:All" in included
+                if includes_all:
                     all_users = True
+                rules.append((includes_all, set(included), excluded))
                 for x in included:
                     if x not in scoped:
                         scoped.append(x)
-            exempt = sorted(set(excluded or []))
+                for x in list(excluded) + included:
+                    if x not in SPECIAL_PRINCIPALS and x not in candidates:
+                        candidates.append(x)
+            exempt = sorted(
+                x for x in candidates
+                if not any((includes_all or x in included) and x not in excluded
+                           for includes_all, included, excluded in rules)
+            )
             result["exemptPrincipals"] = len(exempt)
             result["exemptPrincipalIds"] = exempt
             if not all_users:
@@ -155,7 +171,7 @@ def transform(input):
             reason = (f"{criteriaKey} check passed: {extra_fields.get('blockingPolicies', 0)} enabled Conditional "
                       "Access policy(ies) block legacy clients (POP, IMAP, SMTP AUTH, Exchange ActiveSync)")
             if exempt:
-                reason = (reason + "; " + str(len(exempt)) + " account(s), group(s) or role(s) excluded from every "
+                reason = (reason + "; " + str(len(exempt)) + " account(s), group(s) or role(s) not covered by any "
                           "blocking policy can still use them: " + name_list(exempt))
             if scope is not None:
                 reason = (reason + "; no blocking policy targets all users, the block reaches only: "

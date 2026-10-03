@@ -1,7 +1,8 @@
 """legacyAuthBlocked (legacyauthblocked.py) on GET /v1.0/identity/conditionalAccess/policies.
 
-#101: the reasons name the accounts the legacy-auth block does not reach (excluded from every enabled blocking
-policy, or outside a block that does not target all users), capped at 20 plus "and N more". The verdict is
+#101: the reasons name the accounts the legacy-auth block does not reach (named in a blocking policy but covered
+by none: coverage is per principal, not the intersection of exclusions; or outside a block that does not target
+all users), capped at 20 plus "and N more". The verdict is
 unchanged. Fixtures are synthetic: zero-filled object ids, no customer data. Each case runs as plain Python and
 in the Token-Service sandbox replica. The duplicate copy under safeguards/86ded564-.../ must stay byte-identical.
 """
@@ -87,7 +88,7 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         res = self.run_t(body(policy(exclude_users=[oid(1)], exclude_groups=[oid(2)], exclude_roles=[oid(3)])))
         self.assertIs(res["transformedResponse"][KEY], True)
         first = self.reasons(res, "passReasons")[0]
-        self.assertIn("3 account(s), group(s) or role(s)", first)
+        self.assertIn("3 account(s), group(s) or role(s) not covered by any", first)
         for ident in ["user:" + oid(1), "group:" + oid(2), "role:" + oid(3)]:
             self.assertIn(ident, first)
         self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 3)
@@ -116,6 +117,28 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         self.assertNotIn("user:" + oid(1), first)
         self.assertIn("user:" + oid(2), first)
         self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 1)
+
+    def test_excluded_from_all_users_block_and_outside_scoped_block_is_named(self):
+        # Coverage per principal: user 1 is excluded from the All-users block and the other block is scoped to a
+        # group, so nothing covers user 1, even though that second policy does not exclude it.
+        res = self.run_t(body(policy(exclude_users=[oid(1)]), policy(include_users=[], include_groups=[oid(8)])))
+        self.assertIs(res["transformedResponse"][KEY], True)
+        first = self.reasons(res, "passReasons")[0]
+        self.assertIn("user:" + oid(1), first)
+        self.assertIn("not covered by any blocking policy", first)
+        self.assertNotIn("group:" + oid(8), first.split("can still use them:")[1])
+        self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 1)
+
+    def test_excluded_from_all_users_block_but_included_by_scoped_block_is_not_named(self):
+        res = self.run_t(body(policy(exclude_users=[oid(1)]), policy(include_users=[oid(1)])))
+        self.assertNotIn("user:" + oid(1), self.reasons(res, "passReasons")[0])
+        self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 0)
+
+    def test_scoped_block_excluding_its_own_include_is_named(self):
+        res = self.run_t(body(policy(include_users=[oid(7)], exclude_users=[oid(7)])))
+        first = self.reasons(res, "passReasons")[0]
+        self.assertIn("1 account(s)", first)
+        self.assertIn("user:" + oid(7), first.split("can still use them:")[1])
 
     def test_scoped_block_names_its_scope(self):
         res = self.run_t(body(policy(include_users=[oid(7)], include_groups=[oid(8)])))
