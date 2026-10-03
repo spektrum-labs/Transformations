@@ -51,7 +51,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
                            "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
                          "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
         },
     }

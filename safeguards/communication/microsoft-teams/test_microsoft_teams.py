@@ -51,6 +51,28 @@ def test_suspended_or_zero_seat_teams_sku_does_not_count():
     assert run(LICENSE, "confirmedLicensePurchased", body) == (False, "success")
 
 
+def test_free_and_trial_teams_skus_are_not_purchased():
+    body = skus(sku("TEAMS_EXPLORATORY", ["TEAMS1"], enabled=100), sku("TEAMS_FREE", ["TEAMS_FREE"], enabled=500000),
+                sku("SPE_E5_TRIAL", ["TEAMS1"], enabled=25))
+    assert run(LICENSE, "confirmedLicensePurchased", body) == (False, "success")
+
+
+def test_premium_addon_alone_or_disabled_plan_is_not_teams():
+    premium = sku("Microsoft_Teams_Premium", ["TEAMSPRO_CUST", "TEAMSPRO_PROTECTION"])
+    no_teams = sku("SPE_E3", ["EXCHANGE_S_ENTERPRISE", "TEAMS1"])
+    no_teams["servicePlans"][1]["provisioningStatus"] = "Disabled"
+    assert run(LICENSE, "confirmedLicensePurchased", skus(premium, no_teams)) == (False, "success")
+
+
+def test_gov_teams_plan_counts():
+    assert run(LICENSE, "confirmedLicensePurchased", skus(sku("SPE_E3_USGOV_GCCHIGH", ["TEAMS_AR_GCCHIGH"]))) == (True, "success")
+
+
+def test_schema_version_is_2():
+    assert LICENSE.transform(skus(sku("SPE_E3", ["TEAMS1"])))["additionalInfo"]["metadata"]["schemaVersion"] == "2.0"
+    assert ENABLED.transform({"isTeamsEnabled": True})["additionalInfo"]["metadata"]["schemaVersion"] == "2.0"
+
+
 def test_teams_enabled_and_disabled():
     assert run(ENABLED, "isTeamsEnabled", {"id": "teamwork", "isTeamsEnabled": True, "region": "Americas"}) == (True, "success")
     assert run(ENABLED, "isTeamsEnabled", {"id": "teamwork", "isTeamsEnabled": False}) == (False, "success")
@@ -63,6 +85,8 @@ NO_EVIDENCE = {
     "graph_403": {"error": {"code": "Authorization_RequestDenied", "message": "Insufficient privileges"}},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"hello": "world"},
+    "not_found_404": {"statusCode": 404, "error": "Not Found"},
+    "pagination_incomplete": {"error": True, "errorType": "pagination_incomplete", "status": "Error", "statusCode": 429},
 }
 
 
@@ -84,3 +108,17 @@ def test_paged_sku_list_is_unmeasured():
 
 def test_string_flag_is_not_a_boolean():
     assert run(ENABLED, "isTeamsEnabled", {"id": "teamwork", "isTeamsEnabled": "true"}) == (None, "error")
+
+
+def test_every_transform_reports_schema_version_2_0():
+    """transformedResponse envelope is the CONTRIBUTING.md schemaVersion 2.0 one, on answers and on errors."""
+    import importlib.util as iu
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        spec = iu.spec_from_file_location("schema_" + path.stem, path)
+        module = iu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        out = module.transform({})
+        assert out["additionalInfo"]["metadata"]["schemaVersion"] == "2.0", path.name
+        assert set(out["additionalInfo"]) == {"dataCollection", "validation", "transformation", "evaluation", "metadata"}

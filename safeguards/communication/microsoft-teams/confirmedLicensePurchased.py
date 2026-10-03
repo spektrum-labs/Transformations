@@ -8,7 +8,11 @@ Data source: getLicenseInfo --
 GET https://graph.microsoft.com/v1.0/subscribedSkus
 (https://learn.microsoft.com/en-us/graph/api/subscribedsku-list?view=graph-rest-1.0, application permission
 LicenseAssignment.Read.All). A SKU counts when capabilityStatus is Enabled, prepaidUnits.enabled > 0 and one
-of its servicePlans is a Teams plan (servicePlanName starting TEAMS, e.g. TEAMS1, TEAMS_GOV).
+of its servicePlans is a Teams plan (servicePlanName starting TEAMS, e.g. TEAMS1, TEAMS_GOV) whose
+provisioningStatus is not Disabled. Not counted, because they are not a purchased Teams licence: free and trial
+SKUs (skuPartNumber containing TRIAL, FREE or EXPLORATORY -- TEAMS_FREE, TEAMS_EXPLORATORY, ..._TRIAL), the
+TEAMS_FREE plan, and the TEAMSPRO_* Teams Premium add-on plans. Service plan names:
+https://learn.microsoft.com/en-us/entra/identity/users/licensing-service-plan-reference .
 
 Returns teamsLicensedSeats (sum of prepaidUnits.enabled) and teamsConsumedUnits over those SKUs. A tenant
 with SKUs but none carrying Teams is a measured false. Fails closed: an error body, no value list, or a
@@ -54,7 +58,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
                            "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
                          "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
         },
     }
@@ -95,11 +99,32 @@ def load(input):
     return extract_input(input)
 
 
+NOT_PURCHASED_MARKERS = ["TRIAL", "FREE", "EXPLORATORY"]
+
+
+def is_teams_plan(plan):
+    """A Teams service plan the SKU actually provisions: TEAMS1, TEAMS_GOV, TEAMS_AR_GCCHIGH, TEAMS_AR_DOD ...
+
+    Not TEAMS_FREE (Teams free), not the TEAMSPRO_* Teams Premium add-on plans (they need a base Teams licence and
+    do not grant Teams), and not a plan whose provisioningStatus is Disabled (Teams switched off in that SKU).
+    """
+    if not isinstance(plan, dict):
+        return False
+    name = str(plan.get("servicePlanName") or "").upper()
+    if not name.startswith("TEAMS") or name.startswith("TEAMSPRO") or "FREE" in name:
+        return False
+    return str(plan.get("provisioningStatus") or "") != "Disabled"
+
+
 def is_teams_sku(sku):
     if str(sku.get("capabilityStatus") or "") != "Enabled":
         return False
+    part = str(sku.get("skuPartNumber") or "").upper()
+    for marker in NOT_PURCHASED_MARKERS:
+        if marker in part:
+            return False
     for plan in sku.get("servicePlans") or []:
-        if isinstance(plan, dict) and str(plan.get("servicePlanName") or "").upper().startswith("TEAMS"):
+        if is_teams_plan(plan):
             return True
     return False
 
