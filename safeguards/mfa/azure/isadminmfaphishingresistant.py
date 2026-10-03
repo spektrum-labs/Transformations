@@ -3,28 +3,29 @@ Transformation: isAdminMFAPhishingResistant
 Vendor: Microsoft (Azure AD, d9b6f27a)
 Category: Identity
 
-Requirement asked: "Only phishing-resistant MFA for admins." Two Graph bodies are understood:
+Requirement asked: "Only phishing-resistant MFA for admins": admins are REQUIRED to sign in with a
+phishing-resistant method. Three Graph bodies are understood; each answers only what it can prove.
 
-1. GET /v1.0/policies/authenticationMethodsPolicy (getAuthenticationMethodsPolicy; Policy.Read.All, already granted).
-   This is the body that can answer the question. Same reading as Okta isAdminMFAPhishingResistant:
-   - no phishing-resistant method (Fido2 incl. passkeys, X509Certificate in multi-factor mode) enabled -> False:
-     admins cannot be limited to phishing-resistant MFA;
-   - phishing-resistant methods only (no phishable member method, no external method, policyMigrationState
-     migrationComplete) -> True. A TAP with a maximum lifetime is allowed (J.J.'s ruling as applied in #833);
-     single-factor certificate auth counts as phishable; an unknown certificate mode reads None;
-   - phishing-resistant AND phishable methods enabled -> None: whether admins are restricted is set by a
-     Conditional Access authentication strength, which this body does not carry
-     (isCAAuthStrengthPhishingResistantRequired is that check);
-   - external method, any migration state but migrationComplete, a next-page link, a partial or error body -> None.
-   Email OTP that targets only guests (includeTargets []) cannot reach an admin, so it is a finding here.
+1. GET /v1.0/identity/conditionalAccess/policies (getConditionalAccessPolicies; Policy.Read.All, already granted).
+   The only body that can prove the requirement. True when enabled Conditional Access policies, for all cloud apps
+   and every sign-in, together require an authentication strength made only of phishing-resistant combinations
+   (fido2, windowsHelloForBusiness, x509CertificateMultiFactor) for every role in Microsoft's "Require
+   phishing-resistant MFA for administrators" template (or for all users), with none of those roles excluded.
+   An admin who cannot satisfy that strength is blocked, not phished, so the methods policy is not needed for the
+   pass. Otherwise None: CA alone cannot show that admins use a phishable method. Never False.
 
-2. GET /v1.0/security/secureScores?$top=1 (getRecentSecureScores, the current wiring), control AdminMFAV2.
-   AdminMFAV2 measures whether admin-role members are protected by MFA of ANY kind. Until 3 Oct 2026 a 100%
-   score read True, which called push and SMS "phishing-resistant" (AT-2 follow-up 3). Now:
-   - score below 100% -> False: some admins have no MFA at all, so they are not all on phishing-resistant MFA;
-   - score 100% -> None: every admin has MFA, but its kind is not in this body;
-   - no score, no AdminMFAV2 control, an ambiguous match, an API error or PSError -> None (not evaluated).
-   This file never returns True from Secure Score.
+2. GET /v1.0/policies/authenticationMethodsPolicy (getAuthenticationMethodsPolicy). It shows which methods are
+   allowed, never that admins must use one, so it NEVER returns True. Windows Hello for Business is not in this
+   policy, so "no FIDO2 / certificate enabled" is never a FAIL either.
+   - Email OTP enabled (any target, guests included) -> False. J.J., 3 Oct 2026 00:55 ET: guest-only email OTP
+     FAILS (same rule as #833 and #848).
+   - Everything else, including nothing enabled, preMigration / migrationInProgress / unknown migration state,
+     external methods, partial, truncated or paged bodies -> None.
+
+3. GET /v1.0/security/secureScores?$top=1 (getRecentSecureScores, the current wiring), control AdminMFAV2, which
+   measures admin MFA of ANY kind. Until 3 Oct 2026 a 100% score read True, which called push and SMS
+   "phishing-resistant" (AT-2 follow-up 3). Now: below 100% -> False (some admins have no MFA at all); 100% ->
+   None; no score, no control, ambiguous, PSError, Graph error -> None. Never True.
 """
 
 import json
@@ -157,10 +158,6 @@ def as_number(value, default=0):
     return default
 
 
-RESISTANT = {"fido2": "FIDO2 security key / passkey", "x509certificate": "Certificate-based authentication"}
-COMPLETE_STATE = "migrationcomplete"
-CBA_MULTI = "x509certificatemultifactor"
-CBA_SINGLE = "x509certificatesinglefactor"
 # Graph v1.0 returns a configuration for every built-in method, enabled or not. A body missing any of these is a
 # truncated or partial read, and "nothing phishable enabled" is not evidence from it.
 ALWAYS_RETURNED = ["fido2", "microsoftauthenticator", "sms", "temporaryaccesspass", "softwareoath", "voice", "email",
@@ -188,28 +185,6 @@ def method_id(config):
     return str(config.get("id") or "").lower()
 
 
-def cba_mode(config):
-    """'multi', 'single' or 'unknown' for an X509Certificate configuration (authenticationModeConfiguration)."""
-    mode_cfg = config.get("authenticationModeConfiguration")
-    if not isinstance(mode_cfg, dict):
-        return "unknown"
-    rules = mode_cfg.get("rules")
-    if rules is None:
-        rules = []
-    if not isinstance(rules, list):
-        return "unknown"
-    modes = [str(mode_cfg.get("x509CertificateAuthenticationDefaultMode") or "").lower()]
-    for rule in rules:
-        if not isinstance(rule, dict):
-            return "unknown"
-        modes.append(str(rule.get("x509CertificateAuthenticationMode") or "").lower())
-    if any(m == CBA_SINGLE for m in modes):
-        return "single"
-    if all(m == CBA_MULTI for m in modes):
-        return "multi"
-    return "unknown"
-
-
 def from_methods_policy(data, validation):
     if data.get("@odata.nextLink") or data.get("authenticationMethodConfigurations@odata.nextLink"):
         return unevaluated("The authentication methods policy carries a next-page link, so the method list is partial",
@@ -230,76 +205,192 @@ def from_methods_policy(data, validation):
                            + ("it has no configuration for " + ", ".join(missing) if missing
                               else "a method id appears more than once")
                            + "; Graph returns every built-in method, so this is not a complete read", validation)
-    resistant, phishable, external, findings, cba_unknown = [], [], [], [], []
-    for config in configs:
-        if str(config.get("state")).lower() != "enabled":
-            continue
-        mid = method_id(config)
-        name = str(config.get("displayName") or config.get("id"))[:60]
-        targets = config.get("includeTargets")
-        no_targets = isinstance(targets, list) and not targets
-        if "externalauthenticationmethodconfiguration" in str(config.get("@odata.type") or "").lower():
-            external.append(name)
-        elif mid == "x509certificate":
-            mode = cba_mode(config)
-            if mode == "multi":
-                resistant.append(RESISTANT[mid])
-            elif mode == "single":
-                phishable.append("X509Certificate (single-factor mode)")
-            else:
-                cba_unknown.append(name)
-        elif mid in RESISTANT:
-            resistant.append(RESISTANT[mid])
-        elif mid == "temporaryaccesspass":
-            try:
-                bounded = int(config.get("maximumLifetimeInMinutes")) > 0
-            except (ValueError, TypeError):
-                bounded = False
-            if bounded:
-                findings.append("Temporary Access Pass is enabled with a maximum lifetime (onboarding/recovery credential)")
-            else:
-                phishable.append(name)
-        elif no_targets:
-            findings.append(name + " is enabled but targets no member (guests only or no one); it cannot reach an admin")
-        else:
-            phishable.append(name)
+    enabled = [c for c in configs if str(c.get("state")).lower() == "enabled"]
+    email = [c for c in enabled if method_id(c) == "email"]
     migration = str(data.get("policyMigrationState") or "")[:40]
-    summary = {"source": "authenticationMethodsPolicy", "enabledPhishResistantMethods": resistant,
-               "enabledPhishableMethods": phishable, "enabledExternalMethods": external,
+    summary = {"source": "authenticationMethodsPolicy", "enabledMethods": [str(c.get("id"))[:60] for c in enabled],
                "policyMigrationState": migration}
-    if cba_unknown:
-        return unevaluated("Certificate-based authentication is enabled but its authenticationModeConfiguration "
-                           "(single- or multi-factor) is missing or unrecognised, so it cannot be graded",
-                           validation, summary, findings)
-    if not resistant:
-        if external and not phishable:
-            return unevaluated("No phishing-resistant Microsoft method is enabled; the external method(s) "
-                               + ", ".join(external) + " cannot be graded from Entra", validation, summary, findings)
+    if email:
+        targets = email[0].get("includeTargets")
+        guests_only = isinstance(targets, list) and not targets
         return create_response(
-            result={CRITERIA_KEY: False, "enabledPhishResistantMethods": resistant, "enabledPhishableMethods": phishable},
-            validation=validation, input_summary=summary, additional_findings=findings,
-            fail_reasons=["No phishing-resistant method (FIDO2 / passkeys or certificate-based authentication) is enabled "
-                          "in the authentication methods policy, so admins cannot be limited to phishing-resistant MFA"
-                          + ("; enabled: " + ", ".join(phishable) if phishable else "")],
-            recommendations=["Enable FIDO2 security keys / passkeys or certificate-based authentication and require a "
-                             "phishing-resistant authentication strength for admin roles in Conditional Access"])
-    if phishable:
-        return unevaluated("Phishing-resistant method(s) " + ", ".join(resistant) + " and phishable method(s) "
-                           + ", ".join(phishable) + " are both enabled; whether admins are limited to the "
-                           "phishing-resistant ones is set by a Conditional Access authentication strength, which this "
-                           "policy does not show", validation, summary, findings)
-    if external:
-        return unevaluated("The external authentication method(s) " + ", ".join(external)
-                           + " are enabled and cannot be graded from Entra", validation, summary, findings)
-    if migration.lower() != COMPLETE_STATE:
-        return unevaluated("Only phishing-resistant methods are enabled, but policyMigrationState is "
-                           + (migration or "not reported") + " (not migrationComplete): the legacy per-user MFA and "
-                           "SSPR policies may still apply and cannot be read here", validation, summary, findings)
-    return create_response(
-        result={CRITERIA_KEY: True, "enabledPhishResistantMethods": resistant, "enabledPhishableMethods": []},
-        validation=validation, input_summary=summary, additional_findings=findings,
-        pass_reasons=["Only phishing-resistant methods are enabled in the tenant (" + ", ".join(resistant)
-                      + "), so admins can authenticate only with phishing-resistant MFA"])
+            result={CRITERIA_KEY: False, "emailOtpEnabled": True, "emailOtpGuestsOnly": guests_only},
+            validation=validation, input_summary=summary,
+            fail_reasons=["Email one-time passcode is enabled" + (" for external (guest) users" if guests_only else "")
+                          + "; an email-based factor allowed in the tenant, guests included, is not phishing-resistant "
+                          "(J.J., 3 Oct 2026)"],
+            recommendations=["Disable email OTP in the authentication methods policy and require the built-in "
+                             "'Phishing-resistant MFA' authentication strength for admin roles in Conditional Access"])
+    return unevaluated("The authentication methods policy shows which methods are allowed, not that admins must use a "
+                       "phishing-resistant one (Windows Hello for Business is not listed in it either); a Conditional "
+                       "Access authentication strength for admin roles (getConditionalAccessPolicies) is the proof",
+                       validation, summary)
+
+
+RESISTANT_COMBINATIONS = ["fido2", "windowshelloforbusiness", "x509certificatemultifactor"]
+MAX_EXCLUDED_USERS = 2
+# Microsoft Entra "Require phishing-resistant multifactor authentication for administrators" template roles
+ADMIN_ROLES = {
+    "62e90394-69f5-4237-9190-012177145e10": "Global Administrator",
+    "194ae4cb-b126-40b2-bd5b-6091b380977d": "Security Administrator",
+    "f28a1f50-f6e7-4571-818b-6a12f2af6b6c": "SharePoint Administrator",
+    "29232cdf-9323-42fd-ade2-1d097af3e4de": "Exchange Administrator",
+    "b1be1c3e-b65d-4f19-8427-f6fa0d97feb9": "Conditional Access Administrator",
+    "729827e3-9c14-49f7-bb1b-9608f156bbb8": "Helpdesk Administrator",
+    "b0f54661-2d74-4c50-afa3-1ec803f12efe": "Billing Administrator",
+    "fe930be7-5e62-47db-91af-98c3a49a38b1": "User Administrator",
+    "c4e39bd9-1100-46d3-8c65-fb160da0071f": "Authentication Administrator",
+    "9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3": "Application Administrator",
+    "158c047a-c907-4556-b7ef-446551a6b5f7": "Cloud Application Administrator",
+    "966707d0-3269-4727-9be2-8c3a10f19b9d": "Password Administrator",
+    "7be44c8a-adaf-4e2a-84d6-ab2649e08a13": "Privileged Authentication Administrator",
+    "e8611ab8-c189-46e8-94e1-60213ab1f814": "Privileged Role Administrator",
+}
+
+
+def strings(value):
+    """A list of lower-cased strings, or None when the value is not a list of strings."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        return None
+    return [v.lower() for v in value]
+
+
+def name_of(policy):
+    return str(policy.get("displayName") or policy.get("id") or "policy")[:80]
+
+
+def strength_state(grant):
+    """'resistant', 'weak', 'none' or 'unknown' for a policy's grant controls."""
+    if not isinstance(grant, dict):
+        return "none"
+    strength = grant.get("authenticationStrength")
+    if not strength:
+        return "none"
+    if not isinstance(strength, dict):
+        return "unknown"
+    combos = strings(strength.get("allowedCombinations"))
+    if not combos:
+        return "unknown"
+    others = strings(grant.get("builtInControls"))
+    custom = strings(grant.get("customAuthenticationFactors"))
+    terms = strings(grant.get("termsOfUse"))
+    if others is None or custom is None or terms is None:
+        return "unknown"
+    alternatives = [c for c in others if c != "mfa"] + custom
+    # mfa next to a strength is redundant under AND and an easier alternative under OR
+    if str(grant.get("operator") or "OR").upper() == "OR" and (alternatives or "mfa" in others or terms):
+        return "weak"
+    if all(c in RESISTANT_COMBINATIONS for c in combos):
+        return "resistant"
+    return "weak"
+
+
+def narrowing(conditions):
+    """Names of the conditions that limit the policy to some sign-ins, or None when the shape is unreadable."""
+    found = []
+    apps = conditions.get("applications")
+    if not isinstance(apps, dict):
+        return None
+    include_apps = strings(apps.get("includeApplications"))
+    exclude_apps = strings(apps.get("excludeApplications"))
+    if include_apps is None or exclude_apps is None:
+        return None
+    if "all" not in include_apps:
+        found.append("not all cloud apps")
+    if exclude_apps:
+        found.append("excluded apps")
+    if apps.get("applicationFilter"):
+        found.append("application filter")
+    client_types = strings(conditions.get("clientAppTypes"))
+    if client_types is None:
+        return None
+    if client_types and client_types != ["all"]:
+        found.append("client app types")
+    for key, label in (("platforms", "platforms"), ("devices", "device filter"),
+                       ("authenticationFlows", "authentication flows"), ("clientApplications", "client applications")):
+        if conditions.get(key):
+            found.append(label)
+    for key, label in (("signInRiskLevels", "sign-in risk"), ("userRiskLevels", "user risk"),
+                       ("servicePrincipalRiskLevels", "service principal risk"),
+                       ("insiderRiskLevels", "insider risk")):
+        if conditions.get(key):
+            found.append(label)
+    locations = conditions.get("locations")
+    if locations:
+        if not isinstance(locations, dict):
+            return None
+        include_loc = strings(locations.get("includeLocations"))
+        exclude_loc = strings(locations.get("excludeLocations"))
+        if include_loc is None or exclude_loc is None:
+            return None
+        if "all" not in include_loc or exclude_loc:
+            found.append("locations")
+    return found
+
+
+
+
+def from_ca_policies(policies, validation):
+    if not policies:
+        return unevaluated("The Conditional Access policy list is empty; it is not evidence either way", validation)
+    covered, used, unknown, findings = set(), [], [], []
+    all_users = False
+    for policy in policies:
+        if not isinstance(policy, dict):
+            return unevaluated("The Conditional Access policy list holds an entry that is not a policy", validation)
+        if str(policy.get("state") or "").lower() != "enabled":
+            continue
+        state = strength_state(policy.get("grantControls"))
+        if state == "unknown":
+            unknown.append(name_of(policy))
+            continue
+        if state != "resistant":
+            continue
+        conditions = policy.get("conditions")
+        narrow = narrowing(conditions) if isinstance(conditions, dict) else None
+        users = conditions.get("users") if isinstance(conditions, dict) else None
+        if narrow is None or not isinstance(users, dict):
+            unknown.append(name_of(policy))
+            continue
+        if narrow:
+            findings.append(name_of(policy) + " applies to some sign-ins only (" + ", ".join(narrow) + ")")
+            continue
+        include_users = strings(users.get("includeUsers"))
+        exclude_users = strings(users.get("excludeUsers"))
+        exclude_groups = strings(users.get("excludeGroups"))
+        include_roles = strings(users.get("includeRoles"))
+        exclude_roles = strings(users.get("excludeRoles"))
+        if None in (include_users, exclude_users, exclude_groups, include_roles, exclude_roles):
+            unknown.append(name_of(policy))
+            continue
+        if (len(exclude_users) > MAX_EXCLUDED_USERS or exclude_groups
+                or any(r in ADMIN_ROLES for r in exclude_roles)):
+            findings.append(name_of(policy) + " excludes groups, admin roles or more than "
+                            + str(MAX_EXCLUDED_USERS) + " users")
+            continue
+        if "all" in include_users and not users.get("excludeGuestsOrExternalUsers") and not exclude_roles:
+            all_users = True
+            used.append(name_of(policy))
+        roles = [r for r in include_roles if r in ADMIN_ROLES]
+        if roles:
+            covered.update(roles)
+            used.append(name_of(policy))
+    missing = [ADMIN_ROLES[r] for r in ADMIN_ROLES if r not in covered]
+    summary = {"source": "conditionalAccessPolicies", "qualifyingPolicies": used, "adminRolesNotCovered":
+               [] if all_users else missing, "unreadablePolicies": unknown}
+    if all_users or not missing:
+        return create_response(
+            result={CRITERIA_KEY: True}, validation=validation, input_summary=summary, additional_findings=findings,
+            pass_reasons=["Enabled Conditional Access requires a phishing-resistant authentication strength (FIDO2, "
+                          "Windows Hello for Business or multi-factor certificate only) for every administrator role: "
+                          + ", ".join(used[:5])])
+    return unevaluated("No enabled Conditional Access policy requires a phishing-resistant authentication strength "
+                       "for every administrator role (not covered: " + ", ".join(missing[:5])
+                       + ("..." if len(missing) > 5 else "") + "); Conditional Access alone does not show whether "
+                       "admins sign in with a phishable method" + ("; unreadable: " + ", ".join(unknown[:3]) if unknown else ""),
+                       validation, summary, findings)
 
 
 def from_secure_score(data, validation):
@@ -350,6 +441,13 @@ def transform(input):
             return unevaluated("Microsoft Graph API error: " + str(error_info.get("code") or "unknown")[:80], validation)
         if "authenticationMethodConfigurations" in data:
             return from_methods_policy(data, validation)
+        values = data.get("value")
+        if isinstance(values, list) and any(isinstance(v, dict) and ("grantControls" in v or "conditions" in v)
+                                            for v in values):
+            if data.get("@odata.nextLink"):
+                return unevaluated("The Conditional Access policy list carries a next-page link, so it is partial",
+                                   validation)
+            return from_ca_policies(values, validation)
         return from_secure_score(data, validation)
     except Exception as e:
         return unevaluated("Transformation error: " + str(e)[:200])
