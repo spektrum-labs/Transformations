@@ -171,6 +171,13 @@ def evaluate(raw):
     lifetimes = []
     idles = []
     for policy, rules in judged:
+        # Okta lists a policy's Default Rule (system: true, usually no lifetime limit) last. A rule list without it
+        # was cut short (paging), and the rule most likely to be the longest session is the one missing.
+        if not any(rule.get("system") is True or text(rule.get("system")).lower() == "true" for rule in rules):
+            state["error"] = ("The rule list for policy '" + text(policy.get("name")) + "' does not include its "
+                              "Default Rule (system: true); Okta lists it last, so the list is incomplete and the "
+                              "longest session cannot be read")
+            return state
         for rule in rules:
             if not active(rule):
                 continue

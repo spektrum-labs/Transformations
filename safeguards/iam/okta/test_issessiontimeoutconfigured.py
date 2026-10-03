@@ -36,7 +36,7 @@ REAL = {"result": {
         {"id": "pol-2", "name": "Default Policy", "status": "ACTIVE", "system": "True", "priority": "2"},
     ],
     "signOnRules": [
-        [rule("Passwordless", "240")],
+        [rule("Passwordless", "240"), rule("Default Rule", "480", system="True", priority="99")],
         [rule("Default Rule", "0", system="True")],
     ],
     "accessPolicies": [],
@@ -83,7 +83,7 @@ class SessionTimeoutTests(unittest.TestCase):
         data["result"]["signOnRules"][1][0]["actions"]["signon"]["session"]["maxSessionLifetimeMinutes"] = "720"
         out = self.out(data)
         self.assertEqual(out[KEY], 720)
-        self.assertEqual(out["allowRuleCount"], 2)
+        self.assertEqual(out["allowRuleCount"], 3)
         self.assertTrue(ts_less_than(out[KEY], "10080"))
         self.assertFalse(ts_less_than(out[KEY], "480"))
 
@@ -107,8 +107,27 @@ class SessionTimeoutTests(unittest.TestCase):
         data["result"]["signOnPolicies"].append({"id": "pol-3", "name": "Retired", "status": "INACTIVE"})
         data["result"]["signOnRules"].append([rule("Retired rule", "0")])
         out = self.out(data)
-        self.assertEqual(out[KEY], 240)
-        self.assertEqual(out["allowRuleCount"], 1)
+        self.assertEqual(out[KEY], 480)
+        self.assertEqual(out["allowRuleCount"], 2)
+
+    def test_rule_list_cut_before_its_default_rule_is_unevaluated_not_a_pass(self):
+        # Okta lists the Default Rule last. A first page holding only a 120-minute rule would pass a 480-minute bar,
+        # while the full list (with an unlimited Default Rule) fails it.
+        data = copy.deepcopy(REAL)
+        data["result"]["signOnPolicies"] = [data["result"]["signOnPolicies"][0]]
+        data["result"]["signOnRules"] = [[rule("Short sessions", "120")]]
+        full = self.t.transform(copy.deepcopy(data))
+        self.assertIsNone(full["transformedResponse"][KEY])
+        self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertIn("Default Rule", " ".join(full["additionalInfo"]["dataCollection"]["errors"]))
+        self.assertFalse(ts_less_than(full["transformedResponse"][KEY], "480"))
+
+    def test_default_rule_flag_as_boolean_is_read(self):
+        data = copy.deepcopy(REAL)
+        for rules in data["result"]["signOnRules"]:
+            for r in rules:
+                r["system"] = r["system"] == "True"
+        self.assertEqual(self.out(data)[KEY], "unlimited")
 
     def test_value_is_never_a_boolean(self):
         # A boolean would coerce to 0 minutes in a numeric comparison and pass.
