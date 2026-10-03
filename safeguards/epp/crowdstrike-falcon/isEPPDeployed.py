@@ -152,9 +152,11 @@ def is_host_record(item):
 
 
 def is_device_id(item):
-    """True for a Falcon device ID (aid) as GET /devices/queries/devices-scroll returns it: 32 lowercase hex
-    characters. Other ID lists (detections, vulnerability instances, policies) do not match, so a misrouted
-    ID-list body is not read as hosts."""
+    """True for a string shaped like a Falcon device ID (aid), as GET /devices/queries/devices-scroll returns it:
+    32 hex characters. Detection ids ("ldt:..."), vulnerability-instance ids ("<aid>_<hash>") and other
+    non-32-hex strings do not match. Known limit: Falcon policy ids are ALSO 32 hex, so the shape alone cannot
+    tell a device id from a policy id; the definition's method binding (devices-scroll for this key) is the
+    control against a misrouted policy-id list."""
     if not isinstance(item, str):
         return False
     text = item.strip().lower()
