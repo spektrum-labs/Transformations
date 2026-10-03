@@ -47,6 +47,10 @@ RESISTANT = {"fido2": "FIDO2 security key / passkey", "x509certificate": "Certif
 COMPLETE_STATE = "migrationcomplete"
 CBA_MULTI = "x509certificatemultifactor"
 CBA_SINGLE = "x509certificatesinglefactor"
+# Graph v1.0 returns a configuration for every built-in method, enabled or not. A body missing any of these is a
+# truncated or partial read, and "nothing phishable enabled" is not evidence from it.
+ALWAYS_RETURNED = ["fido2", "microsoftauthenticator", "sms", "temporaryaccesspass", "softwareoath", "voice", "email",
+                   "x509certificate"]
 STATES = ("enabled", "disabled")
 
 
@@ -176,6 +180,13 @@ def transform(input):
             return not_evaluated("The authentication methods policy is incomplete: a method configuration has no id "
                                  "or no enabled/disabled state, so the set of enabled methods is not known")
 
+    ids = [method_id(c) for c in configs]
+    missing = [m for m in ALWAYS_RETURNED if m not in ids]
+    if missing or len(set(ids)) != len(ids):
+        return not_evaluated("The authentication methods policy looks partial: "
+                             + ("it has no configuration for " + ", ".join(missing) if missing
+                                else "a method id appears more than once")
+                             + "; Graph returns every built-in method, so this is not a complete read")
     enabled = [c for c in configs if str(c.get("state")).lower() == "enabled"]
     resistant, phishable, external, taps, untargeted, cba_unknown = [], [], [], [], [], []
     guest_email = False

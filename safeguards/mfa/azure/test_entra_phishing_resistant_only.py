@@ -212,6 +212,24 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
         self.assert_unevaluated(policy(*OFF))
         self.assert_unevaluated(policy(*(OFF + [("TemporaryAccessPass", {"state": "enabled"})])))
 
+    def test_truncated_method_list_is_not_evaluated(self):
+        # review MEDIUM: a FIDO2-only list with the other built-in methods cut off must not PASS
+        fido_only_list = policy(*FIDO_ONLY)
+        fido_only_list["authenticationMethodConfigurations"] = [
+            c for c in fido_only_list["authenticationMethodConfigurations"] if c["id"] == "Fido2"]
+        self.assert_unevaluated(fido_only_list)
+        for drop in ("MicrosoftAuthenticator", "Sms", "TemporaryAccessPass", "SoftwareOath", "Voice", "Email",
+                     "X509Certificate"):
+            with self.subTest(drop=drop):
+                body = policy(*FIDO_ONLY)
+                body["authenticationMethodConfigurations"] = [
+                    c for c in body["authenticationMethodConfigurations"] if c["id"] != drop]
+                self.assert_unevaluated(body)
+        dup = policy(*FIDO_ONLY)
+        dup["authenticationMethodConfigurations"].append(dict(dup["authenticationMethodConfigurations"][0]))
+        self.assert_unevaluated(dup)
+        self.assertIs(self.value(policy(*FIDO_ONLY)), True)
+
     def test_partial_or_no_evidence_bodies_are_not_evaluated(self):
         partial = policy(*FIDO_ONLY)
         partial["authenticationMethodConfigurations"][2].pop("state")
