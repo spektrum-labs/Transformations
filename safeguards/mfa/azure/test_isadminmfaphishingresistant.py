@@ -163,7 +163,9 @@ class AadAdminPhishResistantTests(unittest.TestCase):
         partial["authenticationMethodConfigurations"][3].pop("state")
         paged = policy(["Fido2"])
         paged["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/next"
-        for b in (partial, paged, {"authenticationMethodConfigurations": []}):
+        truncated = policy(["Fido2"])
+        truncated["authenticationMethodConfigurations"] = truncated["authenticationMethodConfigurations"][:1]
+        for b in (partial, paged, truncated, {"authenticationMethodConfigurations": []}):
             with self.subTest(b=str(b)[:40]):
                 self.assert_unevaluated(b)
 
