@@ -3,10 +3,10 @@
 Azure AD (d9b6f27a, refs/heads/main) and Azure AD One-Click (cde89168, pinned ea2d2a3f) run this file on the
 merged workflow body {"authMethodsPolicy": ..., "conditionalAccessPolicies": ...}.
 
-Finding (false-fail check, 3 Oct 2026, REPORT.md section 6): passport 7c1375c8 enforces MFA through Cisco Duo as
+Finding (false-fail check, 3 Oct 2026, REPORT.md section 6): estate A enforces MFA through Cisco Duo as
 an Entra external authentication method and FAILED with "No MFA authentication methods enabled at the tenant
 level". J.J.'s rule (3 Oct 2026): an external method alone cannot be graded from Entra and reads NOT EVALUATED,
-never FAIL. SYNTHETIC fixtures in the Graph shapes; the Duo configuration mirrors the one stored for 7c1375c8
+never FAIL. SYNTHETIC fixtures in the Graph shapes; the Duo configuration mirrors the one stored for estate A
 (client id and app id replaced). Each case runs as plain Python and in the Token-Service sandbox replica.
 """
 import copy
@@ -94,7 +94,7 @@ def body(enabled=(), extra=(), policies=None):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_external_method_only_is_not_evaluated(mode):
-    # 7c1375c8: Duo is the only enabled method, two CA policies require MFA for all users.
+    # Estate A: Duo is the only enabled method, two CA policies require MFA for all users.
     value, status, out = run(body(extra=[DUO]), mode)
     assert value is None and status == "error"
     reason = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
