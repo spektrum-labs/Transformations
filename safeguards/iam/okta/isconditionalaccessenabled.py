@@ -29,18 +29,18 @@ def transform(input):
 
     Also returns conditionalAccessPolicyPercentage: enforcing policies / judged policies * 100.
 
-    Fails closed on: an error body, missing policy or rule lists, rule lists that do not line up with the
-    policies, and no active policy to judge.
+    Unevaluated (value None, dataCollection status "error") on: an error body, missing policy or rule lists, rule
+    lists that do not line up with the policies, no active policy to judge, and a transformation error. None of
+    those is a measurement, so none may read as Failed (or Passed).
 
     Does not prove: which apps each policy is assigned to, or what the named network zones contain.
     """
-    key = "isConditionalAccessEnabled"
     try:
         state = evaluate(input)
     except Exception as e:
-        return respond(False, 0, [], ["Transformation error: " + str(e)], {}, [str(e)])
+        return unevaluated("Transformation error: " + str(e), [str(e)])
     if state["error"] is not None:
-        return respond(False, 0, [], [state["error"]], {}, [])
+        return unevaluated(state["error"], [])
     ok = len(state["enforcing"]) > 0
     passes = []
     fails = []
@@ -248,6 +248,21 @@ def respond(ok, percentage, passes, fails, summary, errors):
                            ["Add an authentication policy rule conditioned on network zone, device assurance or risk, "
                             "and set that policy's catch-all rule to deny or require two factors"],
                            "additionalFindings": []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
+                         "transformationId": "isConditionalAccessEnabled", "vendor": "Okta", "category": "Identity"},
+        },
+    }
+
+
+def unevaluated(reason, errors):
+    from datetime import datetime
+    return {
+        "transformedResponse": {"isConditionalAccessEnabled": None, "conditionalAccessPolicyPercentage": None},
+        "additionalInfo": {
+            "dataCollection": {"status": "error", "errors": [reason]},
+            "validation": {"status": "error" if errors else "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "error" if errors else "success", "errors": errors, "inputSummary": {}},
+            "evaluation": {"passReasons": [], "failReasons": [reason], "recommendations": [], "additionalFindings": []},
             "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
                          "transformationId": "isConditionalAccessEnabled", "vendor": "Okta", "category": "Identity"},
         },

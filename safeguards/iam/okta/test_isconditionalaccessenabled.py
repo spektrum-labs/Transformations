@@ -102,12 +102,44 @@ class ConditionalAccessTests(unittest.TestCase):
         data["signOnRules"][0][1]["actions"]["signon"]["requireFactor"] = False
         self.assertIs(self.out(data)[KEY], False)
 
-    def test_no_evidence_fails_closed(self):
+    def test_no_evidence_is_unevaluated_not_failed(self):
+        # A body that proves nothing is not a measurement: None with dataCollection "error", which the
+        # Token-Service reads as Unevaluated. False here would read as a measured failure (red, gap).
         for body in [{}, None, "{}", [], {"statusCode": 401, "error": "Unauthorized"},
                      {"statusCode": 403, "error": "Forbidden"},
                      {"errorCode": "E0000006", "errorSummary": "You do not have permission"},
-                     {"accessPolicies": [{"name": "x", "status": "ACTIVE"}], "accessRules": []}]:
-            self.assertIs(self.out(body)[KEY], False, body)
+                     {"accessPolicies": [{"name": "x", "status": "ACTIVE"}], "accessRules": []},
+                     {"accessPolicies": [], "accessRules": [], "signOnPolicies": [], "signOnRules": []}]:
+            full = self.t.transform(body)
+            self.assertIsNone(full["transformedResponse"][KEY], body)
+            self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "error", body)
+            self.assertTrue(full["additionalInfo"]["dataCollection"]["errors"], body)
+
+    def test_transformation_error_is_unevaluated(self):
+        full = self.t.transform(b"not json")
+        self.assertIsNone(full["transformedResponse"][KEY])
+        self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_measured_verdicts_keep_data_collection_success(self):
+        for body, expected in [(REAL, True)]:
+            full = self.t.transform(body)
+            self.assertIs(full["transformedResponse"][KEY], expected)
+            self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["accessRules"][5][1] = catch_all()
+        full = self.t.transform(flipped)
+        self.assertIs(full["transformedResponse"][KEY], False)
+        self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_string_values_as_integration_service_returns_them(self):
+        # Integration-Service stringifies scalars ("ACTIVE", "True", "2") in workflow output.
+        data = copy.deepcopy(REAL)
+        for rules in data["result"]["accessRules"]:
+            for r in rules:
+                r["system"] = str(r["system"])
+                r["priority"] = str(r["priority"])
+        data["result"]["accessRules"][5][0]["conditions"]["device"]["registered"] = "True"
+        self.assertIs(self.out(data)[KEY], True)
 
 
 if __name__ == "__main__":
