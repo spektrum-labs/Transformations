@@ -77,11 +77,7 @@ def transform(endpoints_response, debug=False):
         data, validation = extract_input(endpoints_response)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={"isEPPEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unevaluated("Input validation failed: nothing was measured", validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -120,6 +116,13 @@ def transform(endpoints_response, debug=False):
                 devices = data.get("devices", [])
         elif isinstance(data, list):
             devices = data
+
+        # Fail closed (2026-10-02): a body that is not a device list proves nothing about the
+        # estate, so every key is None with a dataCollection error (Unevaluated), never False and
+        # never True. See no_device_evidence for the cases.
+        problem = no_device_evidence(data, devices)
+        if problem:
+            return unevaluated(problem, validation)
 
         total_endpoints = len(devices)
         total_computers = 0
@@ -331,12 +334,9 @@ def transform(endpoints_response, debug=False):
         )
 
     except Exception as e:
-        return create_response(
-            result={"isEPPEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        message = "Transformation error: " + str(e)[:200]
+        return unevaluated(message, {"status": "error", "errors": [], "warnings": []},
+                           transformation_errors=[message])
 
 
 #: share of hosts that must be ready for MDR response for isMDRConfigured to hold
@@ -398,3 +398,95 @@ def epp_coverage_observed(data):
         if data.get(key) is True:
             return True
     return False
+
+
+# ---- fail-closed guard (2026-10-02) ------------------------------------------------------------
+# The CrowdStrike - MDR definition routed isBehavioralMonitoringValid, isEDRDeployed, isEPPDeployed,
+# isEPPConfigured and the patch / removable-media keys to this file through getLicenseStatus
+# (GET /installation-tokens/entities/customer-settings/v1). That body carries one settings record
+# under "resources", which the device loop counted as one unprotected host: every coverage key read
+# False ("0 of 1 hosts"), isEPPConfigured read True (any non-empty resources list), and
+# isBehavioralMonitoringValid, which this file never emitted, failed with the whole response as its
+# value. A read that is not a device list is now Unevaluated for every key.
+
+#: keys this transformation answers from a device list
+DEVICE_KEYS = ("Endpoint Protection", "Endpoint Security", "Server Protection", "MDR", "Network Protection",
+               "Cloud Security", "Mobile Protection", "Email Security", "Phishing Protection",
+               "Zero Trust Network Access", "Encryption", "isEPPEnabled", "isEPPDeployed",
+               "isEPPLoggingEnabled", "isEPPEnabledForCriticalSystems", "isEDRDeployed",
+               "isEndpointSecurityEnabled", "isMDREnabled", "isMDRLoggingEnabled", "mdrConfiguredPercentage",
+               "isMDRConfigured", "isAlertingEnabled", "requiredCoveragePercentage",
+               "requiredConfigurationPercentage", "isEPPConfigured")
+
+#: keys a definition routes here that a device list cannot answer; None on the no-evidence path
+UNMEASURED_KEYS = ("isBehavioralMonitoringValid", "isPatchManagementEnabled", "isPatchManagementValid",
+                   "isRemovableMediaControlled")
+
+#: fields a Falcon host record (GET /devices/combined/devices/v1) carries; one marks a record as a host
+DEVICE_FIELDS = ("device_id", "deviceId", "hostname", "agent_version", "agentVersion", "sensor_version",
+                 "platform_name", "os_version", "osVersion", "device_policies", "devicePolicies",
+                 "last_seen", "first_seen", "product_type_desc", "system_product_name", "mac_address",
+                 "local_ip", "reduced_functionality_mode")
+
+
+def is_device_record(item):
+    """True when `item` reads as a Falcon host record."""
+    if not isinstance(item, dict):
+        return False
+    for name in DEVICE_FIELDS:
+        if name in item:
+            return True
+    return False
+
+
+def vendor_error(data):
+    """Why `data` is a CrowdStrike or platform error envelope, or None."""
+    if not isinstance(data, dict):
+        return None
+    for name in ("statusCode", "status_code", "httpStatus"):
+        code = data.get(name)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "CrowdStrike returned HTTP " + str(code)
+    errors = data.get("errors") or data.get("error") or data.get("errorMessage")
+    if errors:
+        first = errors[0] if isinstance(errors, list) else errors
+        if isinstance(first, dict):
+            first = first.get("message") or first.get("code") or "error"
+        return "CrowdStrike returned an error: " + str(first)[:200]
+    return None
+
+
+def no_device_evidence(data, devices):
+    """Why this read proves nothing about the estate, or None when it is a usable device list."""
+    if not isinstance(data, (dict, list)) or not data:
+        return "CrowdStrike returned no body: nothing was measured"
+    problem = vendor_error(data)
+    if problem:
+        return problem
+    if not devices:
+        return ("CrowdStrike returned no host records. A failed or partial read returns an empty "
+                "list, so zero hosts is not evidence either way")
+    recognised = 0
+    for device in devices:
+        if is_device_record(device):
+            recognised = recognised + 1
+    if recognised == 0:
+        return ("The response carries no Falcon host records (for example the customer-settings "
+                "body of getLicenseStatus): nothing was measured")
+    return None
+
+
+def unevaluated(problem, validation=None, transformation_errors=None):
+    """Every key as None plus a dataCollection error: reads Unevaluated, never True or False."""
+    result = {}
+    for key in DEVICE_KEYS + UNMEASURED_KEYS:
+        result[key] = None
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        transformation_errors=transformation_errors,
+    )

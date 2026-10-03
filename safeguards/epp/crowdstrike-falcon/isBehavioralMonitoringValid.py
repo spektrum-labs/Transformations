@@ -81,18 +81,85 @@ def is_behavioral_setting(setting_id, setting_name):
     return False
 
 
+def parse_body(data):
+    """A JSON string or bytes body parsed; anything else unchanged. Unparseable text stays text."""
+    if isinstance(data, bytes):
+        try:
+            data = data.decode("utf-8")
+        except Exception:
+            return data
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except Exception:
+            return data
+    return data
+
+
+def is_policy_record(item):
+    """True when `item` reads as a Falcon prevention policy (GET /policy/combined/prevention/v1)."""
+    if not isinstance(item, dict):
+        return False
+    for name in ("prevention_settings", "platform_name", "groups"):
+        if name in item:
+            return True
+    return False
+
+
+def no_policy_evidence(data):
+    """Why `data` shows no prevention policies to judge, or None when it does.
+
+    Falcon always holds a platform default prevention policy, so an empty list is a failed or
+    partial read (or a token without Prevention Policies: Read), not a tenant without policies.
+    """
+    if not isinstance(data, dict) or not data:
+        return "CrowdStrike returned no body: no prevention policies were read"
+    for name in ("statusCode", "status_code", "httpStatus"):
+        code = data.get(name)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "CrowdStrike returned HTTP " + str(code)
+    err = data.get("errors") or data.get("error") or data.get("errorType") or data.get("errorMessage")
+    if err:
+        first = err[0] if isinstance(err, list) else err
+        if isinstance(first, dict):
+            first = first.get("message") or first.get("code") or "error"
+        return "CrowdStrike returned an error: " + str(first)[:200]
+    resources = data.get("resources")
+    if not isinstance(resources, list):
+        return "The response carries no prevention policies collection: nothing was measured"
+    if len(resources) == 0:
+        return ("CrowdStrike returned 0 prevention policies. Falcon always holds a platform default "
+                "policy, so an empty list is a failed read, not evidence either way")
+    for item in resources:
+        if is_policy_record(item):
+            return None
+    return "The response carries no Falcon prevention policy records: nothing was measured"
+
+
 def transform(input):
-    data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
+    data, validation = extract_input(parse_body(input))
+
+    problem = no_policy_evidence(data)
+    if problem:
+        # Fail closed (2026-10-02): a read that shows no prevention policies proves nothing, so the
+        # key is None with a dataCollection error (Unevaluated), never False and never True.
+        return create_response(
+            result={"isBehavioralMonitoringValid": None, "totalPolicies": None, "validBehavioralPolicies": None},
+            validation=validation,
+            fail_reasons=[problem],
+            api_errors=[problem],
+            input_summary={"totalPolicies": None},
+            metadata={
+                "transformationId": "isBehavioralMonitoringValid",
+                "vendor": "CrowdStrike Falcon",
+                "category": "epp",
+            },
+        )
 
     api_errors = []
-    if data.get("error") or data.get("errorType") or (data.get("statusCode") and data.get("statusCode") != 200):
-        msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
-        api_errors.append(f"Vendor API returned an error: {msg}")
-
-    resources = data.get("resources") or []
-    if not isinstance(resources, list):
-        resources = []
+    resources = data.get("resources")
 
     enabled_policies_with_groups = []
     behavioral_findings = []
