@@ -112,6 +112,21 @@ class DuoConditionalAccessTests(unittest.TestCase):
         s = {"trusted_endpoints": {"trusted_endpoint_checking": "require-trusted"}}
         self.assertIs(self.value(bodies(s))[0], True)
 
+    def test_requires_duo_desktop_as_the_list_duo_really_returns(self):
+        # Captured shape from a production tenant: a list of operating systems, [] when not required.
+        self.assertIs(self.value(bodies({"duo_desktop": {"requires_duo_desktop": ["windows"],
+                                                         "enforce_device_id_pinning": "never"}}))[0], True)
+        self.assertIs(self.value(bodies({"health_checks": {"requires_duo_desktop": ["windows", "macos"]}}))[0], True)
+
+    def test_empty_requires_duo_desktop_list_is_not_a_condition_and_not_a_problem(self):
+        # The real global policy of an Essentials tenant: nothing contextual set, a complete read -> False.
+        self.assertIs(self.value(bodies({"duo_desktop": {"requires_duo_desktop": [],
+                                                         "enforce_device_id_pinning": "never",
+                                                         "enforce_signed_payload": "never"}}))[0], False)
+
+    def test_requires_duo_desktop_list_with_a_non_name_is_unevaluated(self):
+        self.assertIsNone(self.value(bodies({"duo_desktop": {"requires_duo_desktop": [1, {}]}}))[0])
+
     def test_requires_duo_desktop_is_true(self):
         self.assertIs(self.value(bodies({"duo_desktop": {"requires_duo_desktop": True}}))[0], True)
         self.assertIs(self.value(bodies({"health_checks": {"requires_duo_desktop": True,

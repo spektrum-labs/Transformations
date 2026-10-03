@@ -22,7 +22,9 @@ Sections that COUNT as an access condition, and the value that counts:
   authorized_networks  a non-empty mfa_required.ip_list or blocked.ip_list, or deny_other_access true
   anonymous_networks   anonymous_access_behavior "require-mfa" or "deny"
   trusted_endpoints    trusted_endpoint_checking "require-trusted"
-  duo_desktop /        requires_duo_desktop true (the device must run Duo Desktop)
+  duo_desktop /        requires_duo_desktop: a non-empty list of operating systems (what Duo returns, e.g.
+                       ["windows"]) or true (the device must run Duo Desktop); an empty list or false
+                       does not count
   health_checks
 RELAXING values never count: default_action "allow-access-no-2fa" or "ignore-location", a
 no_2fa_required network list, anonymous_access_behavior "no-action", trusted_endpoint_checking
@@ -338,7 +340,16 @@ def conditions(policy):
         block, text = sub(sections, name, name)
         note_problem(text)
         wanted = block.get("requires_duo_desktop")
-        if wanted is not None:
+        if isinstance(wanted, list):
+            # What Duo really returns (captured from a production tenant): a list of operating
+            # systems on which Duo Desktop is required, e.g. ["windows"]; an empty list means it
+            # is not required anywhere. A non-empty list of names is a restrictive value.
+            names = [str(w).strip() for w in wanted if isinstance(w, str) and str(w).strip()]
+            if len(names) != len(wanted):
+                problems.append("%s.requires_duo_desktop holds a value that is not an operating system name" % name)
+            elif names:
+                found.append("%s requires Duo Desktop on: %s" % (name, ", ".join(names)))
+        elif wanted is not None:
             if flag(wanted) is None:
                 problems.append("%s.requires_duo_desktop is not a boolean" % name)
             elif flag(wanted) is True:
