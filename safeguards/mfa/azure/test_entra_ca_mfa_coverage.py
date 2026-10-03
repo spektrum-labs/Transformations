@@ -159,7 +159,7 @@ def run_sd(policies, sd):
 
 
 class SecurityDefaults(unittest.TestCase):
-    """No Conditional Access policy enabled (the Tecumseh shape on 3 Oct 2026): read security defaults."""
+    """No Conditional Access policy enabled (an estate with no enabled policy): read security defaults."""
 
     def test_real_shape_security_defaults_on_passes_both_keys(self):
         res, info = run_sd(ca(), security_defaults(True))
