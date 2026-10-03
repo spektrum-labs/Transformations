@@ -118,8 +118,16 @@ class AbnormalInboundAntiPhishingWindowTests(unittest.TestCase):
                 body.update(extra)
                 self.assert_unevaluated(body)
 
-    def test_last_page_is_scored(self):
-        for extra in ({"nextPageNumber": None}, {"pageNumber": 3, "nextPageNumber": None}, {}):
+    def test_later_page_alone_is_unevaluated(self):
+        # Page 3 with no next page still leaves pages 1-2 unread.
+        for extra in ({"pageNumber": 3, "nextPageNumber": None}, {"pageNumber": "2"}):
+            with self.subTest(extra):
+                body = threat(3)
+                body.update(extra)
+                self.assert_unevaluated(body)
+
+    def test_single_or_first_page_is_scored(self):
+        for extra in ({"nextPageNumber": None}, {"pageNumber": 1, "nextPageNumber": None}, {"pageNumber": "1"}, {}):
             with self.subTest(extra):
                 body = threat(3)
                 body.update(extra)
