@@ -159,9 +159,25 @@ def test_pass_and_flip(key):
 
 @pytest.mark.parametrize("key", sorted(CASES))
 def test_fail_closed(key):
-    empty = None if key in FALLBACK_NONE else False
-    for body in NOTHING:
-        assert value(key, body) == empty, body
+    # A body that proves nothing is not measured (None), never a pass and never a fail.
+    for body in NOTHING[:-1]:
+        assert value(key, body) is None, body
+
+
+@pytest.mark.parametrize("key", sorted(CASES))
+def test_complete_empty_read_is_never_a_pass(key):
+    # A complete read with zero items is evidence: a finding (False) or not measurable (None), never True.
+    v = value(key, NOTHING[-1])
+    assert v is not True
+    if key in FALLBACK_NONE:
+        assert v is None
+
+
+@pytest.mark.parametrize("key", sorted(CASES))
+def test_not_measured_reports_a_data_collection_error(key):
+    out = load(key)({"statusCode": 401, "error": "Unauthorized"})
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert out["additionalInfo"]["dataCollection"]["errors"]
 
 
 @pytest.mark.parametrize("key", sorted(CASES))
@@ -171,7 +187,7 @@ def test_unread_page_is_refused(key):
         good["pagination"]["total"] = len(good["data"]) + 1
     else:
         good["repositories"]["pagination"]["total"] += 1
-    assert value(key, good) == (None if key in FALLBACK_NONE else False)
+    assert value(key, good) is None
 
 
 def test_session_filters_not_applied_are_refused():
@@ -185,7 +201,7 @@ def test_session_filters_not_applied_are_refused():
 def test_unresolved_target_is_refused():
     body = targets([job("A", repo="r-missing")])
     for key in ("isBackupImmutable", "isExternalTargetEncryptionAES256", "isCloudTierEncryptionEnabled"):
-        assert value(key, body) is False
+        assert value(key, body) is None
 
 
 def test_offline_local_repository_is_unknown():
@@ -195,3 +211,18 @@ def test_offline_local_repository_is_unknown():
 def test_no_external_target_is_not_a_pass():
     assert value("isExternalTargetEncryptionAES256", targets([job("A", repo="r-hard")])) is False
     assert value("isCloudTierEncryptionEnabled", targets([job("A", repo="r-hard")])) is False
+
+
+@pytest.mark.parametrize("key", sorted(CASES))
+def test_token_service_enriched_envelope(key):
+    # Token-Service passes {"data": <undrilled response>, "validation": ...} to transforms that read input.get("data").
+    good, want, bad, want_bad = CASES[key]
+    for raw, expect in ((good, want), ({"apiResponse": good}, want), (bad, want_bad)):
+        assert value(key, {"data": raw, "validation": {"status": "skipped", "errors": [], "warnings": []}}) == expect
+    assert value(key, {"data": None, "validation": {"status": "skipped"}}) is None
+
+
+def test_every_file_opts_into_the_undrilled_input():
+    for p in HERE.glob("*.py"):
+        if not p.name.startswith("test_"):
+            assert 'input.get("data")' in p.read_text(), p.name
