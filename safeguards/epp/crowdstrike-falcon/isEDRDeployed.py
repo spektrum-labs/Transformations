@@ -10,6 +10,12 @@ from datetime import datetime
 # meta.pagination.truncated flag, or a next-page token left) that would otherwise have produced
 # False. A partial read that already shows the sensor on a host still answers True: hosts not
 # read cannot undo a host that was read.
+#
+# Reduced Functionality Mode (2026-10-03): Falcon reports reduced_functionality_mode as "yes" / "no",
+# not a boolean. "yes", "true" or True (trimmed, any case) is RFM and the host is not counted as
+# deployed; "no", "false" or False is not RFM. A missing field (or null) does not block the host, as
+# before. Any other value is unknown: when no host proves the sensor and a host with an unknown value
+# would otherwise count as deployed, the verdict is Unevaluated (dataCollection error with a reason).
 
 #: platform wrappers peeled off the vendor body, at most three levels deep
 WRAPPER_KEYS = ("api_response", "response", "result", "apiResponse", "Output")
@@ -81,6 +87,28 @@ def level_error(level):
                 detail = "error flag set"
             return "CrowdStrike returned an error: " + str(detail)[:200]
     return None
+
+
+#: reduced_functionality_mode values (trimmed, any case) that mean the sensor is / is not in RFM
+RFM_YES = ("yes", "true")
+RFM_NO = ("no", "false")
+
+
+def rfm_state(value):
+    """'rfm', 'not_rfm', 'absent' or 'unknown' for a host's reduced_functionality_mode value."""
+    if value is None:
+        return "absent"
+    if value is True:
+        return "rfm"
+    if value is False:
+        return "not_rfm"
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in RFM_YES:
+            return "rfm"
+        if text in RFM_NO:
+            return "not_rfm"
+    return "unknown"
 
 
 def flag_true(flag):
@@ -269,12 +297,16 @@ def evaluate(input):
     rfm_count = 0
     stale_count = 0
     sample_hosts = []
+    unknown_rfm_count = 0
+    unknown_rfm_deciding = 0
+    unknown_rfm_values = []
 
     for device in resources:
         if not isinstance(device, dict):
             continue
         rfm = device.get("reduced_functionality_mode")
-        rfm_is_true = rfm is True or (isinstance(rfm, str) and rfm.strip().lower() == "true")
+        state = rfm_state(rfm)
+        rfm_is_true = state == "rfm"
         device_policies = device.get("device_policies") or {}
         has_sensor_update_policy = isinstance(device_policies, dict) and bool(device_policies.get("sensor_update"))
         agent_version = device.get("agent_version")
@@ -282,8 +314,16 @@ def evaluate(input):
 
         if rfm_is_true:
             rfm_count = rfm_count + 1
+        sensor_evidence = bool(agent_version) and has_sensor_update_policy
+        if state == "unknown":
+            unknown_rfm_count = unknown_rfm_count + 1
+            if sensor_evidence:
+                # this host counts as deployed unless it is in RFM, and its RFM value says neither
+                unknown_rfm_deciding = unknown_rfm_deciding + 1
+            if len(unknown_rfm_values) < 3:
+                unknown_rfm_values.append('"' + str(rfm)[:40] + '"')
 
-        is_deployed_and_streaming = (not rfm_is_true) and bool(agent_version) and has_sensor_update_policy
+        is_deployed_and_streaming = state in ("not_rfm", "absent") and sensor_evidence
         if is_deployed_and_streaming:
             deployed_count = deployed_count + 1
             if len(sample_hosts) < 5:
@@ -298,6 +338,11 @@ def evaluate(input):
         "deployedCount": deployed_count,
         "rfmCount": rfm_count,
     }
+    unknown_note = ""
+    if unknown_rfm_count > 0:
+        input_summary["rfmUnknownCount"] = unknown_rfm_count
+        unknown_note = (str(unknown_rfm_count) + " host(s) report a reduced_functionality_mode value that is "
+                        "neither yes/true nor no/false (" + ", ".join(unknown_rfm_values) + ")")
 
     partial = partial_read(data, total_devices, truncated)
     additional_findings = []
@@ -306,12 +351,20 @@ def evaluate(input):
         return unevaluated("None of the " + str(total_devices) + " host records read shows a streaming Falcon "
                            "sensor, but the read is partial (" + partial + "), so the hosts not read were "
                            "never measured", validation, input_summary=input_summary)
+    if unknown_rfm_deciding > 0 and not is_edr_deployed:
+        # False needs every host measured: a host whose RFM state is unknown may be streaming.
+        return unevaluated("No host proves a streaming Falcon sensor, and " + unknown_note + "; " +
+                           str(unknown_rfm_deciding) + " of them would count as deployed if not in Reduced "
+                           "Functionality Mode, so the verdict cannot be decided", validation,
+                           input_summary=input_summary)
+    if unknown_rfm_count > 0:
+        additional_findings.append(unknown_note + "; they were not counted as deployed.")
     if partial:
         additional_findings.append("Partial read (" + partial + "); the verdict rests on the deployed hosts that were read.")
 
     if is_edr_deployed:
         pass_reasons = [
-            f"{deployed_count} of {total_devices} devices report reduced_functionality_mode=false, a populated agent_version, and an assigned sensor_update policy (e.g. {', '.join([str(h) for h in sample_hosts])}), confirming the Falcon sensor is installed and actively streaming EDR telemetry."
+            f"{deployed_count} of {total_devices} devices are not in Reduced Functionality Mode (reduced_functionality_mode \"no\"/false, or not reported), report a populated agent_version, and have an assigned sensor_update policy (e.g. {', '.join([str(h) for h in sample_hosts])}), confirming the Falcon sensor is installed and actively streaming EDR telemetry."
         ]
         fail_reasons = []
         recommendations = []
@@ -320,7 +373,7 @@ def evaluate(input):
     else:
         pass_reasons = []
         fail_reasons = [
-            f"None of the {total_devices} devices returned by getDeviceDetails have both reduced_functionality_mode=false and an assigned sensor_update policy with a populated agent_version, so EDR telemetry cannot be confirmed as active."
+            f"None of the {total_devices} devices returned by getDeviceDetails are out of Reduced Functionality Mode (reduced_functionality_mode \"no\"/false, or not reported) with an assigned sensor_update policy and a populated agent_version, so EDR telemetry cannot be confirmed as active."
         ]
         recommendations = ["Investigate why Falcon sensors are reporting Reduced Functionality Mode or missing sensor_update policy assignment; reinstall or re-license affected sensors to restore full EDR streaming."]
 
