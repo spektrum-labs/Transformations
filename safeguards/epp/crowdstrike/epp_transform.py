@@ -77,11 +77,7 @@ def transform(endpoints_response, debug=False):
         data, validation = extract_input(endpoints_response)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={"isEPPEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unevaluated("Input validation failed: nothing was measured", validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -121,11 +117,19 @@ def transform(endpoints_response, debug=False):
         elif isinstance(data, list):
             devices = data
 
+        # Fail closed (2026-10-02): a body that is not a device list proves nothing about the
+        # estate, so every key is None with a dataCollection error (Unevaluated), never False and
+        # never True. See no_device_evidence for the cases.
+        problem = no_device_evidence(data, devices)
+        if problem:
+            return unevaluated(problem, validation)
+
         total_endpoints = len(devices)
         total_computers = 0
         total_servers = 0
         total_mobile_devices = 0
         total_cloud_endpoints = 0
+        mdr_configured_count = 0
 
         safeguard_counters = {
             "Endpoint Protection": 0,
@@ -231,6 +235,9 @@ def transform(endpoints_response, debug=False):
             if has_mdr:
                 safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
 
+            if device_mdr_configured(device):
+                mdr_configured_count = mdr_configured_count + 1
+
         coverage_scores = {}
         coverage_scores["Endpoint Protection"] = round((safeguard_counters["Endpoint Protection"] / total_computers) * 100 if total_computers > 0 else 0)
         coverage_scores["Endpoint Security"] = round((safeguard_counters["Endpoint Security"] / total_computers) * 100 if total_computers > 0 else 0)
@@ -252,6 +259,18 @@ def transform(endpoints_response, debug=False):
         coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
+        # isMDRConfigured is a measurement, not a copy of isMDREnabled (rtr_state alone counts
+        # every host): the share of hosts on which Falcon Complete / OverWatch can actually act --
+        # a live sensor with the prevention AND remote-response policies applied -- against the
+        # threshold. Unanswered (None) when nothing was measured: no device list, or a list
+        # shorter than meta.pagination.total (a sample is not the estate).
+        reported_total = reported_device_total(data)
+        if total_endpoints == 0 or (reported_total is not None and reported_total > total_endpoints):
+            coverage_scores["mdrConfiguredPercentage"] = None
+            coverage_scores["isMDRConfigured"] = None
+        else:
+            coverage_scores["mdrConfiguredPercentage"] = round(mdr_configured_count * 100.0 / total_endpoints, 2)
+            coverage_scores["isMDRConfigured"] = coverage_scores["mdrConfiguredPercentage"] >= MDR_CONFIGURED_THRESHOLD
         # Alerting is active whenever at least one endpoint is actively protected
         # (sensor + prevention policy) or covered by MDR, since those devices
         # generate and forward detections/alerts. Server- or MDR-only fleets must
@@ -277,6 +296,24 @@ def transform(endpoints_response, debug=False):
         if coverage_scores["isMDREnabled"]:
             pass_reasons.append(f"MDR enabled: {coverage_scores['MDR']}% coverage")
 
+        if coverage_scores["isMDRConfigured"] is True:
+            pass_reasons.append(
+                f"MDR configured: {mdr_configured_count} of {total_endpoints} hosts have a live sensor with prevention "
+                f"and remote-response policies applied ({coverage_scores['mdrConfiguredPercentage']}%)"
+            )
+        elif coverage_scores["isMDRConfigured"] is False:
+            fail_reasons.append(
+                f"MDR not fully configured: {mdr_configured_count} of {total_endpoints} hosts have a live sensor with "
+                f"prevention and remote-response policies applied ({coverage_scores['mdrConfiguredPercentage']}%, "
+                f"threshold {MDR_CONFIGURED_THRESHOLD}%)"
+            )
+            recommendations.append(
+                "Apply a prevention policy and a Real Time Response policy to every host group, and bring hosts in "
+                "reduced functionality mode or not reporting back to a normal sensor state"
+            )
+        else:
+            fail_reasons.append("isMDRConfigured not measured: no device list, or the device list was truncated")
+
         if coverage_scores["isAlertingEnabled"]:
             pass_reasons.append("Alerting enabled: protected endpoints/servers/MDR generate detections")
         else:
@@ -297,12 +334,46 @@ def transform(endpoints_response, debug=False):
         )
 
     except Exception as e:
-        return create_response(
-            result={"isEPPEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        message = "Transformation error: " + str(e)[:200]
+        return unevaluated(message, {"status": "error", "errors": [], "warnings": []},
+                           transformation_errors=[message])
+
+
+#: share of hosts that must be ready for MDR response for isMDRConfigured to hold
+MDR_CONFIGURED_THRESHOLD = 95.0
+
+
+def flag_true(value):
+    """CrowdStrike policy flags arrive as booleans or as the strings "True"/"False"."""
+    return value is True or str(value).strip().lower() == "true"
+
+
+def device_mdr_configured(device):
+    """A live sensor (status normal, not reduced functionality mode, agent_version and last_seen
+    present) with both the prevention and the remote_response policy applied."""
+    if not isinstance(device, dict):
+        return False
+    rfm = str(device.get("reduced_functionality_mode") or "").strip().lower()
+    if device.get("status") != "normal" or rfm in ("yes", "true") or not device.get("agent_version") or not device.get("last_seen"):
+        return False
+    policies = device.get("device_policies")
+    if not isinstance(policies, dict):
+        return False
+    prevention = policies.get("prevention") if isinstance(policies.get("prevention"), dict) else {}
+    response = policies.get("remote_response") if isinstance(policies.get("remote_response"), dict) else {}
+    return flag_true(prevention.get("applied")) and flag_true(response.get("applied"))
+
+
+def reported_device_total(data):
+    """meta.pagination.total as an int, or None when the response does not carry one."""
+    meta = data.get("meta") if isinstance(data, dict) else None
+    pagination = meta.get("pagination") if isinstance(meta, dict) else None
+    if not isinstance(pagination, dict):
+        return None
+    try:
+        return int(str(pagination.get("total")).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def epp_coverage_observed(data):
@@ -327,3 +398,95 @@ def epp_coverage_observed(data):
         if data.get(key) is True:
             return True
     return False
+
+
+# ---- fail-closed guard (2026-10-02) ------------------------------------------------------------
+# The CrowdStrike - MDR definition routed isBehavioralMonitoringValid, isEDRDeployed, isEPPDeployed,
+# isEPPConfigured and the patch / removable-media keys to this file through getLicenseStatus
+# (GET /installation-tokens/entities/customer-settings/v1). That body carries one settings record
+# under "resources", which the device loop counted as one unprotected host: every coverage key read
+# False ("0 of 1 hosts"), isEPPConfigured read True (any non-empty resources list), and
+# isBehavioralMonitoringValid, which this file never emitted, failed with the whole response as its
+# value. A read that is not a device list is now Unevaluated for every key.
+
+#: keys this transformation answers from a device list
+DEVICE_KEYS = ("Endpoint Protection", "Endpoint Security", "Server Protection", "MDR", "Network Protection",
+               "Cloud Security", "Mobile Protection", "Email Security", "Phishing Protection",
+               "Zero Trust Network Access", "Encryption", "isEPPEnabled", "isEPPDeployed",
+               "isEPPLoggingEnabled", "isEPPEnabledForCriticalSystems", "isEDRDeployed",
+               "isEndpointSecurityEnabled", "isMDREnabled", "isMDRLoggingEnabled", "mdrConfiguredPercentage",
+               "isMDRConfigured", "isAlertingEnabled", "requiredCoveragePercentage",
+               "requiredConfigurationPercentage", "isEPPConfigured")
+
+#: keys a definition routes here that a device list cannot answer; None on the no-evidence path
+UNMEASURED_KEYS = ("isBehavioralMonitoringValid", "isPatchManagementEnabled", "isPatchManagementValid",
+                   "isRemovableMediaControlled")
+
+#: fields a Falcon host record (GET /devices/combined/devices/v1) carries; one marks a record as a host
+DEVICE_FIELDS = ("device_id", "deviceId", "hostname", "agent_version", "agentVersion", "sensor_version",
+                 "platform_name", "os_version", "osVersion", "device_policies", "devicePolicies",
+                 "last_seen", "first_seen", "product_type_desc", "system_product_name", "mac_address",
+                 "local_ip", "reduced_functionality_mode")
+
+
+def is_device_record(item):
+    """True when `item` reads as a Falcon host record."""
+    if not isinstance(item, dict):
+        return False
+    for name in DEVICE_FIELDS:
+        if name in item:
+            return True
+    return False
+
+
+def vendor_error(data):
+    """Why `data` is a CrowdStrike or platform error envelope, or None."""
+    if not isinstance(data, dict):
+        return None
+    for name in ("statusCode", "status_code", "httpStatus"):
+        code = data.get(name)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "CrowdStrike returned HTTP " + str(code)
+    errors = data.get("errors") or data.get("error") or data.get("errorMessage")
+    if errors:
+        first = errors[0] if isinstance(errors, list) else errors
+        if isinstance(first, dict):
+            first = first.get("message") or first.get("code") or "error"
+        return "CrowdStrike returned an error: " + str(first)[:200]
+    return None
+
+
+def no_device_evidence(data, devices):
+    """Why this read proves nothing about the estate, or None when it is a usable device list."""
+    if not isinstance(data, (dict, list)) or not data:
+        return "CrowdStrike returned no body: nothing was measured"
+    problem = vendor_error(data)
+    if problem:
+        return problem
+    if not devices:
+        return ("CrowdStrike returned no host records. A failed or partial read returns an empty "
+                "list, so zero hosts is not evidence either way")
+    recognised = 0
+    for device in devices:
+        if is_device_record(device):
+            recognised = recognised + 1
+    if recognised == 0:
+        return ("The response carries no Falcon host records (for example the customer-settings "
+                "body of getLicenseStatus): nothing was measured")
+    return None
+
+
+def unevaluated(problem, validation=None, transformation_errors=None):
+    """Every key as None plus a dataCollection error: reads Unevaluated, never True or False."""
+    result = {}
+    for key in DEVICE_KEYS + UNMEASURED_KEYS:
+        result[key] = None
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        transformation_errors=transformation_errors,
+    )
