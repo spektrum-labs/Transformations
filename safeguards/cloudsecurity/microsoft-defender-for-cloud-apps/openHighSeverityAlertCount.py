@@ -2,18 +2,18 @@
 Transformation: openHighSeverityAlertCount
 Vendor: Microsoft Defender for Cloud Apps  |  Category: Cloud Security
 
-Criterion: the number of open High severity Defender for Cloud Apps alerts.
+Criterion: the number of open (new or inProgress) High severity Defender for Cloud Apps alerts.
 
-Data source: getOpenHighSeverityAlerts --
-POST {apiUrl}/api/v1/alerts/ with body
-{"filters": {"alertOpen": {"eq": true}, "severity": {"eq": [2]}}, "limit": 1}
-(list call, read-only; https://learn.microsoft.com/en-us/defender-cloud-apps/api-alerts-list, filters on
-https://learn.microsoft.com/en-us/defender-cloud-apps/api-alerts: severity 2 = High, alertOpen = not closed).
-Application permission: Microsoft Cloud App Security Investigation.read
-(https://learn.microsoft.com/en-us/defender-cloud-apps/api-authentication-application).
-The response carries {data, hasNext, total, moreThanTotal}; total is the full match count, so no paging.
-Fails closed: an error body, a missing or non-integer total, or moreThanTotal true (total is only a lower
-bound) returns None.
+Data source: getOpenHighSeverityAlerts (Microsoft One-Click, certificate sign-in, no client secret) --
+GET https://graph.microsoft.com/v1.0/security/alerts_v2?$filter=serviceSource eq 'microsoftDefenderForCloudApps'
+and severity eq 'high' and (status eq 'new' or status eq 'inProgress')
+(https://learn.microsoft.com/en-us/graph/api/security-list-alerts_v2?view=graph-rest-1.0,
+application permission SecurityAlert.Read.All). Integration-Service follows @odata.nextLink and merges every
+page into value; the count is the number of alerts in value.
+
+Fails closed (returns None): an error body (403 before re-consent, 429 after retries, IS pagination_incomplete),
+no value list, a remaining @odata.nextLink (pages were not all read), or any alert outside the filter
+(missing or different serviceSource / severity / status: an unexpected body is never counted as zero).
 """
 import json
 from datetime import datetime
@@ -96,21 +96,35 @@ def load(input):
     return extract_input(input)
 
 
+OPEN_STATUSES = ("new", "inprogress")
+
+
 def open_high_total(data):
-    if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+    """Number of open High Defender for Cloud Apps alerts, or None when the list cannot be trusted."""
+    if not isinstance(data, dict) or not isinstance(data.get("value"), list):
         return None
-    if data.get("moreThanTotal") is True:
+    if data.get("@odata.nextLink"):
         return None
-    return as_count(data.get("total"))
+    total = 0
+    for alert in data["value"]:
+        if not isinstance(alert, dict):
+            return None
+        source = str(alert.get("serviceSource") or "").lower()
+        severity = str(alert.get("severity") or "").lower()
+        status = str(alert.get("status") or "").lower()
+        if source != "microsoftdefenderforcloudapps" or severity != "high" or status not in OPEN_STATUSES:
+            return None
+        total = total + 1
+    return total
 
 def transform(input):
     try:
         data, validation = load(input)
         if is_error_body(data):
-            return not_measured("Defender for Cloud Apps returned an error for the alerts list", validation)
+            return not_measured("Microsoft Graph returned an error for the Defender for Cloud Apps alerts list", validation)
         total = open_high_total(data)
         if total is None:
-            return not_measured("No exact open High alert count was returned", validation)
+            return not_measured("No complete Defender for Cloud Apps alert list was returned", validation)
         summary = {"openHighSeverityAlertCount": total}
         line = str(total) + " open High severity alerts in Defender for Cloud Apps"
         result = {KEY: total}
