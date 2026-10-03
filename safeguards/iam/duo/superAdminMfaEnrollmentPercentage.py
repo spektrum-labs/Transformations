@@ -138,10 +138,47 @@ def refusal_unevaluated(envelope):
     return out
 
 
+def unreadable(reason):
+    """Nothing was measured: every key None, never 0."""
+    result = {}
+    for k in REFUSAL_KEYS:
+        result[k] = None
+    problem = ("No Duo administrator objects could be read from the getAdmins response (" + reason
+               + "). A Duo account always has an Owner, so this is a failed or empty read, not 0% of super admins enrolled.")
+    return create_response(
+        result=result, api_errors=[problem], fail_reasons=[problem],
+        recommendations=["Confirm the Duo Admin API credentials are valid and the Admin API application "
+                         "has the \"" + REQUIRED_PERMISSION + "\" permission."],
+        metadata={"transformationId": "superAdminMfaEnrollmentPercentage", "vendor": "Duo",
+                  "category": "Multifactor Authentication"},
+    )
+
+
+def is_admin_object(a):
+    return isinstance(a, dict) and any(a.get(f) not in (None, "") for f in ("admin_id", "role", "role_id"))
+
+
 def transform(input):
-    refusal = refusal_envelope(input)
-    if refusal is not None:
-        return refusal_unevaluated(refusal)
+    try:
+        refusal = refusal_envelope(input)
+        if refusal is not None:
+            return refusal_unevaluated(refusal)
+        return measure(input)
+    except Exception:
+        return unreadable("the response could not be processed")
+
+
+def measure(input):
+    if isinstance(input, bytes):
+        try:
+            input = input.decode("utf-8")
+        except Exception:
+            return unreadable("body is not valid UTF-8")
+    if isinstance(input, str):
+        try:
+            input = json.loads(input)
+        except ValueError:
+            return unreadable("body is not valid JSON")
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -153,6 +190,9 @@ def transform(input):
             admins = []
     else:
         admins = []
+
+    if not any(is_admin_object(a) for a in admins):
+        return unreadable("empty, error or unrecognised body")
 
     super_admin_roles = ["owner", "administrator"]
     super_admins = []

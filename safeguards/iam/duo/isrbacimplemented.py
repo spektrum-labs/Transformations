@@ -10,7 +10,9 @@ from datetime import datetime
 # Verdict: true when at least one admin holds a role other than Owner, i.e. administration
 # is split into least-privilege roles rather than every admin holding full control.
 # ownerAdminPercentage is the measure. A body with no admin object (admin_id) proves
-# nothing and is reported as a data-collection error, never judged. An Admin API
+# nothing: a Duo account always has an Owner and getAdmins' returnSpec defaults an unreadable body to
+# an empty value, so an empty, error or non-list body is Unevaluated (every key None, data-collection
+# error), never "RBAC not implemented". An Admin API
 # credential without "Grant administrators - Read" gets a 403 (code 40301) from Duo; when the method opts
 # in to vendorErrorAsResponse it arrives as a marker and is reported Unevaluated, naming the permission.
 
@@ -175,18 +177,35 @@ def refusal_unevaluated(envelope):
     return out
 
 
+def unreadable(reason):
+    """Nothing was measured: every key None, never False."""
+    result = {}
+    for k in REFUSAL_KEYS:
+        result[k] = None
+    problem = ("No Duo administrator objects (admin_id) could be read from the getAdmins response (" + reason
+               + "). A Duo account always has an Owner, so this is a failed or empty read, not a posture result.")
+    return create_response(
+        result=result, api_errors=[problem], fail_reasons=[problem],
+        recommendations=["Confirm the Duo Admin API credentials are valid and the Admin API application "
+                         "has the \"" + REQUIRED_PERMISSION + "\" permission."],
+    )
+
+
 def transform(input):
-    refusal = refusal_envelope(input)
-    if refusal is not None:
-        return refusal_unevaluated(refusal)
+    try:
+        refusal = refusal_envelope(input)
+        if refusal is not None:
+            return refusal_unevaluated(refusal)
+        return measure(input)
+    except Exception:
+        return unreadable("the response could not be processed")
+
+
+def measure(input):
     data, validation = load(input)
     admins = objects_with(data, "admin_id")
     if admins is None:
-        return create_response(
-            result={KEY: False, "adminCount": 0, "ownerAdminPercentage": 0.0},
-            validation=validation,
-            api_errors=["No Duo administrator objects (admin_id) in the getAdmins response."],
-        )
+        return unreadable("empty, error or unrecognised body")
 
     roles = {}
     owners = 0
