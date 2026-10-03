@@ -238,6 +238,51 @@ class DuoConditionalAccessTests(unittest.TestCase):
                 mutate(b)
                 self.assertUnevaluated(b, "cannot be read")
 
+    def test_stringified_empty_values_are_not_conditions(self):
+        # Integration-Service can stringify an empty or false field; none of these is an access condition.
+        cases = {
+            "requires app False": {"health_checks": {"requires_duo_desktop": "False"}},
+            "encryption []": {"duo_desktop": {"enforce_encryption": "[]"}},
+            "firewall none": {"health_checks": {"enforce_firewall": "none"}},
+            "password null": {"health_checks": {"enforce_system_password": "null"}},
+            "edr list empty json": {"health_checks": {"windows_endpoint_security_list": "[]"}},
+            "countries empty": {"user_location": {"deny_access_countries_list": ""}},
+            "blocked ips []": {"authorized_networks": {"blocked": {"ip_list": "[]"}}},
+            "os list False": {"operating_systems": {"block_os_list": "False"}},
+            "browsers none": {"browsers": {"blocked_browsers_list": "none"}},
+            "list of empties": {"health_checks": {"requires_duo_desktop": ["", "none", "False"]}},
+        }
+        for label, change in cases.items():
+            with self.subTest(label):
+                self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], False)
+
+    def test_only_explicit_os_block_policies_count(self):
+        for policy_word in ("warn-only", "no-remediation", "something-new", ""):
+            with self.subTest(policy_word):
+                change = {"operating_systems": {"os_restrictions": {"windows": {"block_policy": policy_word}}}}
+                self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], False)
+        for policy_word in ("end-of-life", "not-up-to-date", "less-than-version", "less-than-latest-version"):
+            with self.subTest(policy_word):
+                change = {"operating_systems": {"os_restrictions": {"windows": {"block_policy": policy_word}}}}
+                self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], True)
+
+    def test_unknown_list_values_are_unevaluated_not_conditions(self):
+        cases = {
+            "platform": {"health_checks": {"requires_duo_desktop": ["toaster"]}},
+            "country": {"user_location": {"deny_access_countries_list": ["Narnia"]}},
+            "network": {"authorized_networks": {"blocked": {"ip_list": ["everyone"]}}},
+            "os": {"operating_systems": {"block_os_list": ["plan9"]}},
+            "browser": {"browsers": {"blocked_browsers_list": ["lynx-ng"]}},
+            "malformed json list": {"health_checks": {"requires_duo_desktop": "[windows"}},
+        }
+        for label, change in cases.items():
+            with self.subTest(label):
+                self.assertUnevaluated(bodies(with_sections(DEFAULTS, **change)))
+
+    def test_json_list_string_is_read(self):
+        change = {"health_checks": {"requires_duo_desktop": '["windows", "macos"]'}}
+        self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], True)
+
     # ---- Error / empty / None ---------------------------------------------------------------------
     def test_error_bodies_are_unevaluated(self):
         cases = [
