@@ -66,9 +66,25 @@ class AbnormalInboundAntiPhishingWindowTests(unittest.TestCase):
     def test_remediated_phishing_100_days_ago_is_unevaluated(self):
         self.assert_unevaluated(threat(100))
 
-    def test_non_phishing_type_within_window_is_unevaluated(self):
+    def test_any_remediated_threat_within_window_is_true(self):
+        # Product decision (3 Oct 2026): a remediated threat of any type shows the inline protection is acting.
         for attack_type in ["Malware", "Spam", "Graymail", "Other"]:
-            self.assert_unevaluated(threat(2, attack_type=attack_type))
+            with self.subTest(attack_type):
+                self.assertIs(self.verdict(threat(2, attack_type=attack_type)), True)
+
+    def test_non_phishing_threat_not_remediated_is_unevaluated(self):
+        for status in ["No Action Done", "Would Remediate", "Marked Safe", "Remediation Attempted"]:
+            with self.subTest(status):
+                self.assert_unevaluated(threat(2, attack_type="Spam", status=status))
+
+    def test_old_remediated_non_phishing_threat_is_unevaluated(self):
+        self.assert_unevaluated(threat(120, attack_type="Spam"))
+
+    def test_unacted_phishing_still_fails_even_with_remediated_spam(self):
+        body = threat(2, attack_type="Phishing: Credential", status="Would Remediate")
+        body["messages"].append({"attackType": "Spam", "remediationStatus": "Auto-Remediated",
+                                 "remediationTimestamp": iso_days_ago(1)})
+        self.assertIs(self.verdict(body), False)
 
     def test_marked_safe_or_attempted_is_unevaluated(self):
         for status in ["Marked Safe", "Remediation Attempted"]:
