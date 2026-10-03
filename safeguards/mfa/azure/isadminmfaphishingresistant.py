@@ -335,7 +335,7 @@ def narrowing(conditions):
 def from_ca_policies(policies, validation):
     if not policies:
         return unevaluated("The Conditional Access policy list is empty; it is not evidence either way", validation)
-    covered, used, unknown, findings = set(), [], [], []
+    covered, used, unknown, findings, excluded = set(), [], [], [], set()
     all_users = False
     for policy in policies:
         if not isinstance(policy, dict):
@@ -367,25 +367,40 @@ def from_ca_policies(policies, validation):
             continue
         if (len(exclude_users) > MAX_EXCLUDED_USERS or exclude_groups
                 or any(r in ADMIN_ROLES for r in exclude_roles)):
-            findings.append(name_of(policy) + " excludes groups, admin roles or more than "
-                            + str(MAX_EXCLUDED_USERS) + " users")
+            findings.append(name_of(policy) + " excludes a group (size unknown), an admin role or more than "
+                            + str(MAX_EXCLUDED_USERS) + " users, so it does not prove coverage")
             continue
-        if "all" in include_users and not users.get("excludeGuestsOrExternalUsers") and not exclude_roles:
+        if users.get("excludeGuestsOrExternalUsers"):
+            findings.append(name_of(policy) + " excludes guests or external users, so it does not prove coverage")
+            continue
+        counted = False
+        if "all" in include_users and not exclude_roles:
             all_users = True
-            used.append(name_of(policy))
+            counted = True
         roles = [r for r in include_roles if r in ADMIN_ROLES]
         if roles:
             covered.update(roles)
+            counted = True
+        if counted:
             used.append(name_of(policy))
+            excluded.update(exclude_users)
     missing = [ADMIN_ROLES[r] for r in ADMIN_ROLES if r not in covered]
     summary = {"source": "conditionalAccessPolicies", "qualifyingPolicies": used, "adminRolesNotCovered":
                [] if all_users else missing, "unreadablePolicies": unknown}
+    summary["excludedUserAccounts"] = sorted(excluded)
+    if (all_users or not missing) and len(excluded) > MAX_EXCLUDED_USERS:
+        return unevaluated("The covering Conditional Access policies exclude " + str(len(excluded)) + " user accounts "
+                           "in total (more than " + str(MAX_EXCLUDED_USERS) + " emergency-access accounts), so admin "
+                           "coverage is not proven", validation, summary, findings)
     if all_users or not missing:
+        ids = sorted(e[:40] for e in excluded)
         return create_response(
-            result={CRITERIA_KEY: True}, validation=validation, input_summary=summary, additional_findings=findings,
-            pass_reasons=["Enabled Conditional Access requires a phishing-resistant authentication strength (FIDO2, "
-                          "Windows Hello for Business or multi-factor certificate only) for every administrator role: "
-                          + ", ".join(used[:5])])
+            result={CRITERIA_KEY: True, "excludedEmergencyAccessAccounts": ids}, validation=validation,
+            input_summary=summary, additional_findings=findings,
+            pass_reasons=[("PASS with " + str(len(ids)) + " excluded emergency-access accounts: " + ", ".join(ids) + ". "
+                           if ids else "") + "Enabled Conditional Access requires a phishing-resistant authentication "
+                          "strength (FIDO2, Windows Hello for Business or multi-factor certificate only) for every "
+                          "administrator role: " + ", ".join(used[:5])])
     return unevaluated("No enabled Conditional Access policy requires a phishing-resistant authentication strength "
                        "for every administrator role (not covered: " + ", ".join(missing[:5])
                        + ("..." if len(missing) > 5 else "") + "); Conditional Access alone does not show whether "
