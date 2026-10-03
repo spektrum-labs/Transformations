@@ -154,6 +154,69 @@ def word(value):
     return str(value or "").strip().lower()
 
 
+# Values that mean "nothing set" when Integration-Service stringifies an empty or false field.
+EMPTY_TOKENS = ("", "none", "null", "false", "true", "[]", "{}", "n/a", "no", "off", "0")
+PLATFORMS = ("windows", "macos", "linux")
+OS_NAMES = ("android", "ios", "ipados", "windows", "macos", "linux", "chromeos", "blackberry", "windows-phone",
+            "windowsphone", "other", "unknown")
+BROWSERS = ("chrome", "firefox", "safari", "edge", "ie", "internet-explorer", "opera", "brave", "chromium",
+            "other", "unknown")
+OS_BLOCK_POLICIES = ("end-of-life", "not-up-to-date", "less-than-version", "less-than-latest-version",
+                     "less-than-latest")
+
+
+def is_country(v):
+    return len(v) == 2 and v.isalpha()
+
+
+def is_network(v):
+    """An IPv4/IPv6 address or CIDR, or an IPv4 range a.b.c.d-e.f.g.h (the forms Duo accepts)."""
+    allowed = "0123456789abcdefABCDEF.:/-"
+    return any(ch.isdigit() for ch in v) and all(ch in allowed for ch in v) and ("." in v or ":" in v)
+
+
+def is_vendor(v):
+    return all(ch.isalnum() or ch in "-_ ." for ch in v) and any(ch.isalpha() for ch in v)
+
+
+def real_items(value, valid, field):
+    """The meaningful entries of a Duo list setting. Stringified empties ("False", "[]", "none") are not entries.
+    Every remaining entry must be a known value for the field; anything else makes the setting unreadable, so an
+    unrecognised value can never count as a condition (fail closed)."""
+    if isinstance(value, str) and value.strip().startswith("["):
+        try:
+            value = json.loads(value)
+        except Exception:
+            raise unreadable(field + " is a malformed list")
+    out = []
+    for entry in items(value):
+        token = entry.strip().strip("\"'").strip()
+        if token.lower() in EMPTY_TOKENS:
+            continue
+        if not valid(token.lower() if valid in (in_platforms, in_os, in_browsers) else token):
+            raise unreadable(field + " holds a value that is not a known setting: " + token[:20])
+        out.append(token)
+    return out
+
+
+def in_platforms(v):
+    return v in PLATFORMS
+
+
+def in_os(v):
+    return v in OS_NAMES
+
+
+def in_browsers(v):
+    return v in BROWSERS
+
+
+HEALTH_VALIDATORS = {"requires_duo_desktop": in_platforms, "enforce_encryption": in_platforms,
+                     "enforce_firewall": in_platforms, "enforce_system_password": in_platforms,
+                     "windows_endpoint_security_list": is_vendor, "macos_endpoint_security_list": is_vendor,
+                     "linux_endpoint_security_list": is_vendor}
+
+
 def unwrap(body):
     for attempt in range(3):
         if not isinstance(body, dict) or "policies" in body or "summary" in body:
@@ -238,7 +301,7 @@ def conditions_in(section_name, s):
     if section_name == "user_location":
         if word(s.get("default_action")) == "deny-access":
             found.append("user location: unlisted countries are denied")
-        denied = items(s.get("deny_access_countries_list"))
+        denied = real_items(s.get("deny_access_countries_list"), is_country, "user_location.deny_access_countries_list")
         if denied:
             found.append("user location: %d countr%s denied" % (len(denied), "y" if len(denied) == 1 else "ies"))
     elif section_name == "anonymous_networks":
@@ -256,21 +319,22 @@ def conditions_in(section_name, s):
         if blocked is not None:
             if not isinstance(blocked, dict):
                 raise unreadable("authorized_networks.blocked is not an object")
-            if items(blocked.get("ip_list")):
+            if real_items(blocked.get("ip_list"), is_network, "authorized_networks.blocked.ip_list"):
                 found.append("authorized networks: listed networks are blocked")
     elif section_name == "trusted_endpoints":
         if word(s.get("trusted_endpoint_checking")) == "require-trusted":
             found.append("trusted endpoints: only managed (trusted) endpoints may sign in")
     elif section_name in ("health_checks", "duo_desktop"):
-        named = [k for k in HEALTH_LISTS if items(s.get(k))]
+        named = [k for k in HEALTH_LISTS if real_items(s.get(k), HEALTH_VALIDATORS[k], section_name + "." + k)]
         if named:
             found.append("device health (%s): %s" % (section_name, ", ".join(named)))
         for k in ("enforce_signed_payload", "enforce_device_id_pinning"):
             if word(s.get(k)) == "enforce-enabled":
                 found.append("device health (%s): %s" % (section_name, k))
     elif section_name == "operating_systems":
-        if items(s.get("block_os_list")):
-            found.append("operating systems: %s blocked" % ", ".join([x[:20] for x in items(s.get("block_os_list"))[:9]]))
+        blocked_os = real_items(s.get("block_os_list"), in_os, "operating_systems.block_os_list")
+        if blocked_os:
+            found.append("operating systems: %s blocked" % ", ".join([x[:20] for x in blocked_os[:9]]))
         restrictions = s.get("os_restrictions")
         if restrictions is not None:
             if not isinstance(restrictions, dict):
@@ -280,11 +344,12 @@ def conditions_in(section_name, s):
                 if not isinstance(rule, dict):
                     raise unreadable("operating_systems.os_restrictions.%s is not an object" % str(os_name)[:20])
                 policy_word = word(rule.get("block_policy"))
-                if policy_word and policy_word != "no-remediation":
+                if policy_word in OS_BLOCK_POLICIES:
                     found.append("operating systems: out-of-date %s blocked (%s)" % (str(os_name)[:20], policy_word[:30]))
     elif section_name == "browsers":
-        if items(s.get("blocked_browsers_list")):
-            found.append("browsers: %s blocked" % ", ".join([x[:20] for x in items(s.get("blocked_browsers_list"))[:10]]))
+        blocked_browsers = real_items(s.get("blocked_browsers_list"), in_browsers, "browsers.blocked_browsers_list")
+        if blocked_browsers:
+            found.append("browsers: %s blocked" % ", ".join([x[:20] for x in blocked_browsers[:10]]))
         if word(s.get("out_of_date_behavior")) == "warn-and-block":
             found.append("browsers: out-of-date browsers blocked")
     elif section_name == "full_disk_encryption":
