@@ -377,7 +377,7 @@ class GroupMembership(unittest.TestCase):
         res, info = run_members(ca(gpolicy("MFA Standard users", [G_STAFF])), workforce(U1, U2), [(G_STAFF, body)])
         self.assert_unevaluated(res, info)
         self.assertEqual(res["remoteAccessPoliciesGroupCoverage"]["groupsUnread"], [G_STAFF[:4]])
-        self.assertIn("could not be read whole", info["dataCollection"]["errors"][0])
+        self.assertIn("member lists not read whole for 1 group(s)", info["dataCollection"]["errors"][0])
 
     def test_pagination_truncated_marker_is_unevaluated(self):
         users = workforce(U1, U2)
