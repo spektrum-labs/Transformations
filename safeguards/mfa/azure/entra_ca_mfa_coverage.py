@@ -16,11 +16,12 @@ Coverage (2 Oct 2026, J.J.): entra_ca_tenantwide_mfa.py left every group-scoped 
 Nothing here can pass a tenant on data it did not read.
 
 Security defaults (3 Oct 2026, J.J.): when no Conditional Access policy is enabled, the tenant's security defaults
-policy is read. Security defaults and enabled Conditional Access policies are mutually exclusive in Entra. When it
-says isEnabled true, both keys pass: Microsoft then requires every user to register for MFA, challenges sign-ins
-with it (administrators at every sign-in, other users when Microsoft judges it necessary) and blocks legacy
-authentication. When it says isEnabled false, the keys stay not evaluated, because per-user MFA may still apply
-and is not read here. An absent, error or unrecognised security defaults body changes nothing (not evaluated, as
+policy is read. Security defaults and enabled Conditional Access policies are mutually exclusive in Entra.
+Security defaults never pass either key: they require administrators to use MFA at every sign-in, but other users
+are challenged only when Microsoft judges a sign-in risky, not at every remote sign-in, and they do not target the
+Remote Desktop apps. When isEnabled is true, both keys read not evaluated with that reason and the honest next step
+(add a Conditional Access policy requiring MFA, or attest). When it is false, the keys stay not evaluated, because
+per-user MFA may still apply and is not read here. An absent, error or unrecognised security defaults body changes nothing (not evaluated, as
 before). It is never consulted when any Conditional Access policy is enabled.
 
 Why a new file: isrdpprotected.py and ismfarequiredforremoteaccess.py count ANY enabled policy that
@@ -36,14 +37,14 @@ and carries a real MFA grant ("mfa" in builtInControls or an authenticationStren
 OR no other control that could satisfy the policy instead).
 
 Value, per key:
-- true: no Conditional Access policy is enabled and security defaults are on; or a workforce MFA policy targets all users (includeUsers "All"; excluded accounts are allowed and
+- true: a workforce MFA policy targets all users (includeUsers "All"; excluded accounts are allowed and
   listed) with no platform, device-filter or client-type narrowing (client types "all", or both browser
   and mobileAppsAndDesktopClients), and is in force off the corporate network (no location condition,
   or includeLocations "All" with trusted or named locations excluded);
 - not evaluated (dataCollection error, None): the only workforce MFA policies are scoped to user groups,
   platforms, client types or named locations, so whether they reach every user and sign-in cannot be
-  read from this list; or no policy is enabled and security defaults were not read as on (per-user MFA, or
-  security defaults when that policy was not read, may apply);
+  read from this list; or no policy is enabled (security defaults on challenge non-admins by risk only; with
+  them off or unread, per-user MFA may apply and is not read here);
 - false: policies are enabled and none of them is a workforce MFA policy.
 If either key is not evaluated the whole run reports a dataCollection error, so neither key reads a
 verdict from an incomplete picture. An error or unrecognised body, or a list that still carries
@@ -307,10 +308,7 @@ def evaluate(policies, groups=None, security_defaults=None):
         union = [] if full else client_union_full(enabled, app_ids, groups)
         result[names] = [str(p.get("displayName") or p.get("id")) for p in full] or union
         result[names + "Partial"] = [str(p.get("displayName") or p.get("id")) for p in partial]
-        if not enabled and security_defaults is True:
-            result[names] = ["Security defaults"]
-            result[key] = True
-        elif full or union:
+        if full or union:
             result[key] = True
         elif partial or not enabled:
             result[key] = None
@@ -368,11 +366,7 @@ def transform(input):
         failed = []
         errors = []
         for key, names in (("isRDPProtected", "rdpPolicies"), ("isMFARequiredForRemoteAccess", "remoteAccessPolicies")):
-            if result[key] is True and result["enabledPolicyCount"] == 0:
-                passed.append(key + ": no Conditional Access policy is enabled and security defaults are on: every user "
-                              "must register for MFA and Microsoft challenges sign-ins with it; legacy authentication "
-                              "is blocked")
-            elif result[key] is True:
+            if result[key] is True:
                 passed.append(key + ": MFA required of all users for all apps by " + ", ".join(result[names]))
             elif result[key] is False:
                 failed.append(key + ": no enabled policy requires MFA of the workforce for all apps (only admins, roles, "
@@ -382,6 +376,14 @@ def transform(input):
                 errors.append(key + ": MFA for all apps is required by policies scoped to user groups, platforms, "
                               "client types or named locations (" + ", ".join(result[names + "Partial"])
                               + "); whether they reach every user and sign-in cannot be read here")
+            elif result["securityDefaultsEnabled"] is True and key == "isRDPProtected":
+                errors.append(key + ": Security defaults are on, but they do not target Remote Desktop sign-ins and "
+                              "challenge non-admins by risk only. Add a Conditional Access policy requiring MFA for "
+                              "Remote Desktop, or attest.")
+            elif result["securityDefaultsEnabled"] is True:
+                errors.append(key + ": Security defaults are on: admins always need MFA; other users are challenged "
+                              "by risk, not on every remote sign-in. Add a Conditional Access policy requiring MFA, "
+                              "or attest.")
             elif result["securityDefaultsEnabled"] is False:
                 errors.append(key + ": no Conditional Access policy is enabled and security defaults are off; "
                               "per-user MFA may apply and is not read here")

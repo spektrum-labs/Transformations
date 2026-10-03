@@ -161,15 +161,19 @@ def run_sd(policies, sd):
 class SecurityDefaults(unittest.TestCase):
     """No Conditional Access policy enabled (an estate with no enabled policy): read security defaults."""
 
-    def test_real_shape_security_defaults_on_passes_both_keys(self):
+    def test_real_shape_security_defaults_on_never_passes_and_names_the_next_step(self):
         res, info = run_sd(ca(), security_defaults(True))
-        self.assertIs(res["isRDPProtected"], True)
-        self.assertIs(res["isMFARequiredForRemoteAccess"], True)
+        self.assertIsNone(res["isRDPProtected"])
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
         self.assertIs(res["securityDefaultsEnabled"], True)
-        self.assertEqual(res["rdpPolicies"], ["Security defaults"])
-        self.assertEqual(info["dataCollection"]["status"], "success")
-        self.assertTrue(all("security defaults are on" in r for r in info["evaluation"]["passReasons"]))
-        self.assertEqual(len(info["evaluation"]["passReasons"]), 2)
+        self.assertEqual(res["rdpPolicies"], [])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        errors = info["dataCollection"]["errors"]
+        self.assertEqual(len(errors), 2)
+        self.assertTrue(all("Security defaults are on" in e and "Conditional Access policy requiring MFA" in e
+                            and "attest" in e for e in errors))
+        self.assertTrue(any("Remote Desktop" in e for e in errors if e.startswith("isRDPProtected")))
+        self.assertFalse(info["evaluation"]["passReasons"])
 
     def test_flipped_security_defaults_off_stays_not_evaluated(self):
         res, info = run_sd(ca(), security_defaults(False))
@@ -179,21 +183,23 @@ class SecurityDefaults(unittest.TestCase):
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertTrue(all("security defaults are off" in e for e in info["dataCollection"]["errors"]))
 
-    def test_report_only_policies_with_security_defaults_on_pass(self):
+    def test_report_only_policies_with_security_defaults_on_do_not_pass(self):
         res, _ = run_sd(ca(policy("MFA all (report only)", users=["All"], state="enabledForReportingButNotEnforced")),
                         security_defaults(True))
-        self.assertIs(res["isMFARequiredForRemoteAccess"], True)
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
 
     def test_string_booleans_are_read(self):
         res, _ = run_sd(ca(), security_defaults("True"))
-        self.assertIs(res["isMFARequiredForRemoteAccess"], True)
+        self.assertIs(res["securityDefaultsEnabled"], True)
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
         res, _ = run_sd(ca(), security_defaults("false"))
         self.assertIsNone(res["isMFARequiredForRemoteAccess"])
         self.assertIs(res["securityDefaultsEnabled"], False)
 
     def test_list_wrapped_body_is_read(self):
         res, _ = run_sd(ca(), [security_defaults(True)])
-        self.assertIs(res["isRDPProtected"], True)
+        self.assertIs(res["securityDefaultsEnabled"], True)
+        self.assertIsNone(res["isRDPProtected"])
 
     def test_empty_security_defaults_body_changes_nothing(self):
         for body in ({}, [], ""):
