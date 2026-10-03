@@ -1,8 +1,8 @@
 import json
 from datetime import datetime
 
-# hasHighRiskUserDetectionAPIAccess -- does Duo's API surface heuristic risk scoring of
-# authentication events, per user?
+# hasHighRiskUserDetectionAPIAccess -- do Duo authentication logs carry risk-based trust
+# assessments (Risk-Based Authentication) for authentication events?
 #
 # Source: GET /admin/v2/logs/authentication (method getAuthLogs, returnSpec
 # {"authlogs": [...], "metadata": {...}}). Each record may carry
@@ -13,13 +13,16 @@ from datetime import datetime
 # Prompt. The Trust Monitor events endpoint is not used: Duo closed it to customers
 # created after 2025-09-29 and ends its support on 2027-01-31.
 #
-# Verdict (risk events required): true only when Duo answers the authentication logs call
-# (an authlogs list with Duo's paging metadata) and at least one event carries a trust
-# assessment (riskScoredEventCount > 0); false when events are returned and none carries
-# one. riskAssessedAuthPercentage reports how much of the window was assessed. No authlogs
+# Reports whether Duo authentication logs carry risk-based trust assessments.
+# Verdict: true when Duo answers the authentication logs call (an authlogs list with Duo's
+# paging metadata) and at least one event carries a trust assessment (riskScoredEventCount
+# > 0). Events present but none assessed is NOT false: absence cannot tell "plan lacks
+# Risk-Based Authentication", "policy not enabled" and "no Universal Prompt apps" apart, and
+# none of them is a setting the customer got wrong, so it is reported as a data-collection
+# error with a null verdict (also when the window is truncated at the 1000-event request
+# limit). riskAssessedAuthPercentage reports how much of the window was assessed. No authlogs
 # key, no paging metadata, or an empty window proves nothing (an error body collapses to
-# the returnSpec defaults) and is reported as a data-collection error with a null verdict,
-# never judged.
+# the returnSpec defaults) and is likewise null. Only the 403/40301 refusal below is false.
 #
 # Duo answers 403 {"code": 40301, "message": "Access forbidden"} when the Admin API
 # application lacks "Grant read log". Integration-Service hands that one refusal over
@@ -29,6 +32,7 @@ from datetime import datetime
 # vendor error is a data-collection error with a null verdict.
 
 KEY = "hasHighRiskUserDetectionAPIAccess"
+REQUEST_LIMIT = 1000
 
 
 def extract_input(input_data):
@@ -173,19 +177,21 @@ def transform(input):
         "lowTrustAuthCount": low_trust,
         "riskAssessedUserCount": len(users),
     }
-    result = {KEY: assessed > 0}
-    result.update(summary)
     if assessed == 0:
+        window = ("the window is at the %d-event request limit, so assessments may lie beyond it; "
+                  % REQUEST_LIMIT) if total >= REQUEST_LIMIT else ""
+        result = {KEY: None}
+        result.update(summary)
         return create_response(
             result=result, validation=validation, input_summary=summary,
-            fail_reasons=["Duo Admin API v2 authentication logs (/admin/v2/logs/authentication) returned %d events "
-                          "and none carries a Risk-Based Authentication trust assessment "
-                          "(adaptive_trust_assessments), so no per-user risk scoring is surfaced." % total],
-            recommendations=[
-                "Duo surfaces per-event risk scoring through Risk-Based Authentication (Premier or Advantage plan) "
-                "on applications using the Universal Prompt; enable it so authentication logs carry trust assessments."
-            ],
+            api_errors=["Not evaluated: no risk-based trust assessments (adaptive_trust_assessments) were found in "
+                        "%d Duo v2 authentication log events (/admin/v2/logs/authentication). %sThis can mean the "
+                        "Duo plan lacks risk-based authentication, the feature is not enabled, or no applications "
+                        "use the Universal Prompt, so whether risk detection is available cannot be determined."
+                        % (total, window)],
         )
+    result = {KEY: True}
+    result.update(summary)
     reason = ("Duo Admin API v2 authentication logs (/admin/v2/logs/authentication) surface risk scoring: %d events "
               "returned, %d (%.1f%%) carry Risk-Based Authentication trust assessments "
               "(adaptive_trust_assessments), across %d users; %d rated LOW trust."

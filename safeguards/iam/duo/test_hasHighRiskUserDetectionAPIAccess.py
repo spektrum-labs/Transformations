@@ -1,7 +1,8 @@
 """hasHighRiskUserDetectionAPIAccess: Duo v2 authentication logs carry risk-scored events.
 
-true when the read is a Duo answer with at least one risk-scored event, false when events exist and
-none is risk-scored (or 403/40301), null when the read is missing, errored or empty.
+true when the read is a Duo answer with at least one risk-scored event, false only for the
+403/40301 refusal, null (Unevaluated) when the read is missing, errored, empty, or carries no
+risk assessment in any event.
 
 Shapes follow the Duo Admin API v2 authentication log example (getAuthLogs returnSpec
 {"authlogs": [...], "metadata": {"next_offset": ..., "total_objects": n}}).
@@ -58,23 +59,65 @@ class DuoHighRiskUserDetectionTests(unittest.TestCase):
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
         self.assertEqual(out["additionalInfo"]["evaluation"]["recommendations"], [])
 
-    def test_events_with_zero_risk_scored_is_false(self):
-        # events exist but none carries a trust assessment: a measured false, not reachability.
-        out = self.run_transform({"authlogs": [UNASSESSED, dict(UNASSESSED, txid="c")], "metadata": META})
+    def assert_unevaluated(self, out):
         tr = out["transformedResponse"]
-        self.assertIs(tr[KEY], False)
+        self.assertIsNone(tr[KEY])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
+        self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+        self.assertEqual(out["additionalInfo"]["evaluation"]["recommendations"], [])
+
+    def test_events_with_zero_risk_scored_is_unevaluated(self):
+        # events exist but none carries a trust assessment: cannot tell plan, policy or app causes apart.
+        out = self.run_transform({"authlogs": [UNASSESSED, dict(UNASSESSED, txid="c")], "metadata": META})
+        self.assert_unevaluated(out)
+        tr = out["transformedResponse"]
         self.assertEqual(tr["riskScoredEventCount"], 0)
         self.assertEqual(tr["riskAssessedAuthPercentage"], 0.0)
-        self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
-        self.assertIn("none carries", out["additionalInfo"]["evaluation"]["failReasons"][0])
-        self.assertIn("Risk-Based Authentication", out["additionalInfo"]["evaluation"]["recommendations"][0])
-        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        msg = out["additionalInfo"]["dataCollection"]["errors"][0]
+        self.assertIn("no risk-based trust assessments", msg)
+        self.assertIn("2 Duo v2 authentication log events", msg)
+        self.assertIn("cannot be determined", msg)
+        self.assertNotIn("buy", msg.lower())
+
+    def test_truncated_window_without_assessments_is_unevaluated(self):
+        events = [dict(UNASSESSED, txid=str(i)) for i in range(1000)]
+        out = self.run_transform({"authlogs": events, "metadata": {"next_offset": "x", "total_objects": 5000}})
+        self.assert_unevaluated(out)
+        self.assertIn("1000 Duo v2", out["additionalInfo"]["dataCollection"]["errors"][0])
+        self.assertIn("request limit", out["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_truncated_window_with_one_assessed_event_is_true(self):
+        events = [dict(UNASSESSED, txid=str(i)) for i in range(999)] + [ASSESSED]
+        out = self.run_transform({"authlogs": events, "metadata": {"next_offset": "x", "total_objects": 5000}})
+        self.assertIs(out["transformedResponse"][KEY], True)
+
+    def test_mixed_low_and_normal_trust_is_true(self):
+        normal = dict(ASSESSED, txid="n", adaptive_trust_assessments={
+            "more_secure_auth": {"trust_level": "NORMAL", "policy_enabled": True}})
+        out = self.run_transform({"authlogs": [ASSESSED, normal, UNASSESSED], "metadata": META})
+        tr = out["transformedResponse"]
+        self.assertIs(tr[KEY], True)
+        self.assertEqual(tr["riskScoredEventCount"], 2)
+        self.assertEqual(tr["lowTrustAuthCount"], 1)
 
     def test_assessment_without_trust_level_does_not_count(self):
         hollow = dict(UNASSESSED, adaptive_trust_assessments={"more_secure_auth": {}, "remember_me": None})
         out = self.run_transform({"authlogs": [hollow], "metadata": META})
-        self.assertIs(out["transformedResponse"][KEY], False)
+        self.assert_unevaluated(out)
         self.assertEqual(out["transformedResponse"]["riskScoredEventCount"], 0)
+
+    def test_nothing_but_the_403_refusal_is_ever_false(self):
+        payloads = (None, {}, [], "", "{}", "not json", 5, ["x"], {"authlogs": None, "metadata": None},
+                    {"authlogs": [], "metadata": META}, {"authlogs": [UNASSESSED], "metadata": META},
+                    {"authlogs": ["x", 3, None], "metadata": META},
+                    {"authlogs": [dict(UNASSESSED, adaptive_trust_assessments="junk")], "metadata": META},
+                    {"stat": "FAIL", "code": 50000, "message": "Internal Server Error"},
+                    {"vendorErrorAsResponse": {"status": 500, "body": "boom"}},
+                    {"vendorErrorAsResponse": "oops"})
+        for payload in payloads:
+            with self.subTest(payload=str(payload)[:60]):
+                self.assertIsNone(self.run_transform(payload)["transformedResponse"][KEY])
 
     def test_empty_window_is_not_evaluated(self):
         # no events in the window: nothing to score, so no verdict either way.
