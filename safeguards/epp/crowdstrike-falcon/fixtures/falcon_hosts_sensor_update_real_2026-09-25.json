@@ -1,0 +1,2221 @@
+{
+ "resources": [
+  {
+   "device_id": "host-0001",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:29:31Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0002",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:24:55Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0003",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:18:38Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0004",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:29:55Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0005",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:07:26Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0006",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:33:03Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0007",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T20:55:17Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0008",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-15T20:26:52Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0009",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:33:02Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0010",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:23:07Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0011",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.38.21003.0",
+   "last_seen": "2026-08-28T16:36:28Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0012",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T16:42:06Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0013",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-23T19:16:06Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0014",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:36:20Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0015",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-22T21:19:52Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0016",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-23T17:29:08Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0017",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-13T19:49:28Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0018",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:29:23Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0019",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:33:42Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0020",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-11T16:56:44Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0021",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T17:04:24Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0022",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T21:44:39Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0023",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:47:55Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0024",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:28:06Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0025",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:17:50Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0026",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:05:58Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0027",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-17T19:59:14Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0028",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:36:02Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0029",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:32:02Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0030",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:40:10Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0031",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:25:18Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0032",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:25:40Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0033",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:35:50Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0034",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:12:05Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0035",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:52:05Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0036",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:45:42Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0037",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:21:42Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0038",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:37:33Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0039",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:25:07Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0040",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:01:15Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0041",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:49:44Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0042",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-22T16:50:14Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0043",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-17T22:17:27Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0044",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:30:42Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0045",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:32:08Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0046",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:47:19Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0047",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:43:27Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0048",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:31:17Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0049",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:26:24Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0050",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T23:28:23Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0051",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:49:57Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0052",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:36:30Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0053",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.16.18635.0",
+   "last_seen": "2026-09-25T03:28:08Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "False",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0054",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.16.18635.0",
+   "last_seen": "2026-09-25T03:43:35Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "False",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0055",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.16.18635.0",
+   "last_seen": "2026-09-25T03:45:44Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "False",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0056",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T23:19:49Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0057",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:35:58Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0058",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.38.21003.0",
+   "last_seen": "2026-09-14T01:08:00Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0059",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T21:42:33Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0060",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:32:57Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0061",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:37:51Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0062",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:43:52Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0063",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:36:30Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0064",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:51:38Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0065",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T21:41:43Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0066",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T21:35:17Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0067",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:40:01Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0068",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:28:53Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0069",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:36:33Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0070",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:29:39Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0071",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T20:20:50Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0072",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:51:59Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0073",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:19:25Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0074",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T02:14:24Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0075",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:44:31Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0076",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:31:30Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0077",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-18T17:45:03Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0078",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:43:15Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0079",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:05:06Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0080",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:48:38Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0081",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:13:31Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0082",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:29:40Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0083",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:03:35Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0084",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-08-30T05:05:02Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0085",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-08-29T09:25:03Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0086",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:24:10Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0087",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-11T06:34:58Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0088",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:35:11Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0089",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T04:04:32Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0090",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:49:53Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0091",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:29:57Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0092",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:44:30Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0093",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:49:55Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0094",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:30:17Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0095",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:42:34Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0096",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:00:20Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0097",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T20:48:21Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0098",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:08:53Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0099",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-21T12:44:30Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0100",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-21T19:50:04Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0101",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T19:27:54Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0102",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:28:32Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0103",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:33:42Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0104",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T15:14:04Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0105",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T02:57:58Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0106",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-20T19:06:01Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0107",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:27:10Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0108",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:11:33Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0109",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-23T14:31:49Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0110",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T20:59:39Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0111",
+   "platform_name": "Windows",
+   "product_type_desc": "Domain Controller",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:40:50Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0112",
+   "platform_name": "Windows",
+   "product_type_desc": "Domain Controller",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:39:06Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0113",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-23T13:21:08Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0114",
+   "platform_name": "Windows",
+   "product_type_desc": "Domain Controller",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:21:20Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0115",
+   "platform_name": "Windows",
+   "product_type_desc": "Domain Controller",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:31:25Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0116",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-05T11:17:45Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0117",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-21T20:46:13Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0118",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": null,
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.36.20805.0",
+   "last_seen": "2026-08-12T14:55:50Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0119",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21113.0",
+   "last_seen": "2026-09-25T03:47:24Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0120",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": null,
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.35.20709.0",
+   "last_seen": "2026-08-17T12:55:27Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0121",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": null,
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.32.20403.0",
+   "last_seen": "2026-08-17T13:22:42Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0122",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:34:47Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0123",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.37.20907.0",
+   "last_seen": "2026-08-22T11:06:39Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "False",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0124",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.38.21003.0",
+   "last_seen": "2026-08-24T17:35:02Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0125",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-27T21:23:20Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0126",
+   "platform_name": "Windows",
+   "product_type_desc": "Server",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-27T21:22:07Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0127",
+   "platform_name": "Windows",
+   "product_type_desc": "Domain Controller",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-27T21:25:20Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-3",
+     "applied": "True",
+     "settings_hash": "tagged|2;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0128",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:50:37Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0129",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T22:40:44Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-1",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  },
+  {
+   "device_id": "host-0130",
+   "platform_name": "Windows",
+   "product_type_desc": "Workstation",
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T03:37:52Z",
+   "device_policies": {
+    "sensor_update": {
+     "policy_type": "sensor-update",
+     "policy_id": "policy-2",
+     "applied": "True",
+     "settings_hash": "tagged|1;101"
+    }
+   }
+  }
+ ],
+ "meta": {
+  "pagination": {
+   "offset": "",
+   "limit": 5000,
+   "total": "130"
+  }
+ }
+}
