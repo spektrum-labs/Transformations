@@ -8,8 +8,8 @@ isPatchManagementValid: true exactly when overdueCriticalHighVulnerabilitiesCoun
 
 WHY COUNTS AND NOT RECORDS. The *FromSpotlight.py files read every open critical/high record from
 GET /spotlight/combined/vulnerabilities/v1 (page size 5000, at most 20 pages = 100,000 records) and count them. Large
-estates hold more than that: on 2-3 Oct 2026 one passport had 955,551 open/reopened critical+high instances and another
-109,730, so every read stopped at the page cap and those checks were Unevaluated ("a partial read is not scored").
+estates hold more than that (on 2-3 Oct 2026 one estate held about 1M open/reopened critical+high instances and another
+about 100k), so every read stopped at the page cap and those checks were Unevaluated ("a partial read is not scored").
 Reading a million records with facet=cve on every evaluation is not workable. CrowdStrike already answers the exact
 question: GET /spotlight/queries/vulnerabilities/v1?filter=<FQL>&limit=1 returns meta.pagination.total, the number of
 vulnerability instances (one CVE on one host, the same record id the combined endpoint returns) that match the filter,
@@ -87,6 +87,9 @@ def unwrap(data):
     wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
     for i in range(3):
         if not isinstance(data, dict):
+            return data
+        # Never peel past a wrapper that reports an error: the caller must see it and fail closed.
+        if data.get("error") or data.get("errors"):
             return data
         unwrapped = False
         for key in wrapper_keys:
