@@ -47,6 +47,8 @@ NO_EVIDENCE = {
     "mdca_403": {"error": {"code": "Forbidden", "message": "Missing Investigation.read"}},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"hello": "world"},
+    "not_found_404": {"statusCode": 404, "error": "Not Found"},
+    "pagination_incomplete": {"error": True, "errorType": "pagination_incomplete", "status": "Error", "statusCode": 429},
     "no_total": {"data": [], "hasNext": False},
     "lower_bound": alerts(5000, more=True),
     "bool_total": {"data": [], "total": False},
@@ -58,3 +60,17 @@ CASES = [(COUNT, "openHighSeverityAlertCount"), (NONE_HIGH, "noHighFindings")]
 @pytest.mark.parametrize("module,key", CASES, ids=[k for m, k in CASES])
 def test_no_evidence_is_unevaluated(module, key, name):
     assert run(module, key, NO_EVIDENCE[name]) == (None, "error")
+
+
+def test_every_transform_reports_schema_version_2_0():
+    """transformedResponse envelope is the CONTRIBUTING.md schemaVersion 2.0 one, on answers and on errors."""
+    import importlib.util as iu
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        spec = iu.spec_from_file_location("schema_" + path.stem, path)
+        module = iu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        out = module.transform({})
+        assert out["additionalInfo"]["metadata"]["schemaVersion"] == "2.0", path.name
+        assert set(out["additionalInfo"]) == {"dataCollection", "validation", "transformation", "evaluation", "metadata"}
