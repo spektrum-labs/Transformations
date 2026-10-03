@@ -59,7 +59,7 @@ def scroll_body(count, total=None, **pagination):
     page = {"offset": "", "limit": 5000, "total": count if total is None else total}
     page.update(pagination)
     return {"meta": {"query_time": 0.05, "pagination": page, "powered_by": "device-api"},
-            "resources": ["estate-a-dev-%04d" % i for i in range(count)], "errors": []}
+            "resources": ["%032x" % (0xa0 + i) for i in range(count)], "errors": []}
 
 
 # GET /installation-tokens/entities/customer-settings/v1, the body getLicenseStatus returns
@@ -351,3 +351,23 @@ def test_both_files_compile_and_run_in_the_restricted_sandbox():
     for probe in (None, {}, AUTH_401, CUSTOMER_SETTINGS, {"response": dict(AUTH_403, error=True)}):
         assert edr(probe)["transformedResponse"]["isEDRDeployed"] is None
         assert epp(probe)["transformedResponse"]["isEPPDeployed"] is None
+
+
+# A list of bare strings that are not Falcon device IDs (32 hex characters) is a misrouted ID-list body.
+@pytest.mark.parametrize("ids", [
+    ["ldt:0000000000000000000000000000000a:1234"],             # detection ids
+    ["0000000000000000000000000000000a_cve-2024-0001"],         # vulnerability instance ids
+    ["estate-a-policy-1", "estate-a-policy-2"],                 # policy ids
+    ["0123456789abcdef"],                                       # too short
+])
+def test_epp_misrouted_id_list_is_unevaluated(ids):
+    out = EPP.transform({"meta": {"pagination": {"total": len(ids)}}, "resources": ids, "errors": []})
+    assert out["transformedResponse"]["isEPPDeployed"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "not Falcon device IDs" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+
+
+def test_epp_device_ids_are_counted_in_either_case():
+    ids = ["%032x" % (0xb0 + i) for i in range(3)] + ["%032X" % 0xc0]
+    out = EPP.transform({"meta": {"pagination": {"total": 4}}, "resources": ids, "errors": []})
+    assert out["transformedResponse"]["isEPPDeployed"] is True

@@ -151,6 +151,21 @@ def is_host_record(item):
     return False
 
 
+def is_device_id(item):
+    """True for a Falcon device ID (aid) as GET /devices/queries/devices-scroll returns it: 32 lowercase hex
+    characters. Other ID lists (detections, vulnerability instances, policies) do not match, so a misrouted
+    ID-list body is not read as hosts."""
+    if not isinstance(item, str):
+        return False
+    text = item.strip().lower()
+    if len(text) != 32:
+        return False
+    for ch in text:
+        if ch not in "0123456789abcdef":
+            return False
+    return True
+
+
 def pagination_of(data):
     meta = data.get("meta") if isinstance(data, dict) else None
     pagination = meta.get("pagination") if isinstance(meta, dict) else None
@@ -257,11 +272,19 @@ def evaluate(input):
     if not isinstance(resources, list) or len(resources) == 0:
         return unevaluated("CrowdStrike returned no host records. A failed or partial read returns an empty "
                            "list, so zero hosts is not evidence either way", validation)
-    # devices-scroll returns host IDs; the combined endpoints return host records. Either is a host.
+    # devices-scroll returns device IDs (aids); the combined endpoints return host records. Only those count:
+    # a list of other strings is a misrouted ID-list body (wrong method) and proves nothing about hosts.
     hosts_seen = 0
+    other_strings = 0
     for item in resources:
-        if is_host_record(item) or (isinstance(item, str) and len(item.strip()) > 0):
+        if is_host_record(item) or is_device_id(item):
             hosts_seen = hosts_seen + 1
+        elif isinstance(item, str):
+            other_strings = other_strings + 1
+    if hosts_seen == 0 and other_strings > 0:
+        return unevaluated("The response lists " + str(other_strings) + " ID(s) that are not Falcon device IDs "
+                           "(32 hex characters) and no host records: this is not a host list (wrong method), so "
+                           "nothing was measured", validation)
     if hosts_seen == 0:
         return unevaluated("The response carries no Falcon host records (for example the customer-settings "
                            "body of getLicenseStatus): nothing was measured", validation)
