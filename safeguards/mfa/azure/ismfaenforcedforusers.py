@@ -20,7 +20,9 @@ Not evaluated (value None, dataCollection.status "error"):
   failed: a read that failed is not evidence either way.
 
 FAIL stays only when both were read and they show no MFA: no Microsoft MFA method and no
-external method enabled, or no enabled Conditional Access policy requiring MFA for users.
+external method enabled, or, with no external method enabled, no enabled Conditional Access
+policy requiring MFA for users. An external method (e.g. Duo) with no Conditional Access policy
+requiring MFA reads not evaluated, not FAIL.
 """
 
 import json
