@@ -127,18 +127,28 @@ def respond(value, reason, extra=None):
         for k in extra:
             result[k] = extra[k]
     bad = value is None or value is False
+    measured = value is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "evaluation": {"passReasons": [] if bad else [reason], "failReasons": [reason] if bad else []},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [] if bad else [reason], "failReasons": [reason] if bad else [],
+                           "recommendations": [], "additionalFindings": []},
             "metadata": {"transformationId": KEY, "vendor": "Veeam", "product": PRODUCT, "method": METHOD,
-                         "evaluatedAt": datetime.now(timezone.utc).isoformat()},
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
         },
     }
 
 
 def transform(input):
+    # Reading input.get("data") marks this transform as new-format for Token-Service, which then hands it the
+    # undrilled response as {"data": <response>, "validation": ...}. Without it Token-Service drills into the
+    # VBR "data" array and pagination.total (the completeness proof) is lost.
     try:
+        if isinstance(input, dict) and "validation" in input and not isinstance(input.get("data"), list):
+            input = input.get("data")
         return evaluate(input)
     except Exception as e:
         return respond(FALLBACK, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})

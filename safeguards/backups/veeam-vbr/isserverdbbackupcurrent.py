@@ -10,7 +10,7 @@ Every method sends x-api-version: 1.2-rev0 and the OAuth bearer from POST {serve
 Role: Veeam Backup Viewer (read-only) is enough for every call this check makes.
 
 Fails closed: an error envelope, an empty or unrecognised body, an unread page or a filter the server did
-not apply gives False with the reason. Never a pass from missing data. Tested against the
+not apply gives None (not measured) with the reason. Never a pass from missing data. Tested against the
 documented response shapes only (no customer credentials yet).
 """
 import json
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 KEY = "isServerDbBackupCurrent"
 METHOD = "getConfigBackupSessions"
 PRODUCT = "Veeam Backup & Replication"
-FALLBACK = False
+FALLBACK = None
 
 WRAPPERS = ["apiResponse", "api_response", "response", "result", "Output"]
 
@@ -127,18 +127,28 @@ def respond(value, reason, extra=None):
         for k in extra:
             result[k] = extra[k]
     bad = value is None or value is False
+    measured = value is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "evaluation": {"passReasons": [] if bad else [reason], "failReasons": [reason] if bad else []},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [] if bad else [reason], "failReasons": [reason] if bad else [],
+                           "recommendations": [], "additionalFindings": []},
             "metadata": {"transformationId": KEY, "vendor": "Veeam", "product": PRODUCT, "method": METHOD,
-                         "evaluatedAt": datetime.now(timezone.utc).isoformat()},
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
         },
     }
 
 
 def transform(input):
+    # Reading input.get("data") marks this transform as new-format for Token-Service, which then hands it the
+    # undrilled response as {"data": <response>, "validation": ...}. Without it Token-Service drills into the
+    # VBR "data" array and pagination.total (the completeness proof) is lost.
     try:
+        if isinstance(input, dict) and "validation" in input and not isinstance(input.get("data"), list):
+            input = input.get("data")
         return evaluate(input)
     except Exception as e:
         return respond(FALLBACK, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
@@ -294,7 +304,7 @@ def encrypted(job):
 def evaluate(input):
     sessions, why = read_sessions(input, "ConfigurationBackup", 7, "configuration backup sessions (GET /api/v1/sessions)")
     if why:
-        return respond(False, why)
+        return respond(None, why)
     ok = [s for s in sessions if dig(s, "result.result") == "Success"]
     if len(ok) == 0:
         return respond(False, "No configuration backup session ended Success in the last 7 days (" + str(len(sessions)) + " finished)")
