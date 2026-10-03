@@ -79,7 +79,7 @@ PR_STRENGTH = {"id": "00000000-0000-0000-0000-000000000004", "displayName": "Phi
 
 
 def ca_policy(users=(), roles=(), state="enabled", combos=None, apps=("All",), builtin=(), exclude_groups=(),
-              exclude_roles=(), strength="default"):
+              exclude_roles=(), strength="default", exclude_users=("breakglass1",), guests_excluded=None):
     s = dict(PR_STRENGTH)
     if combos is not None:
         s["allowedCombinations"] = list(combos)
@@ -87,10 +87,10 @@ def ca_policy(users=(), roles=(), state="enabled", combos=None, apps=("All",), b
             "conditions": {"clientAppTypes": ["all"], "platforms": None, "locations": None, "signInRiskLevels": [],
                            "userRiskLevels": [], "servicePrincipalRiskLevels": [],
                            "applications": {"includeApplications": list(apps), "excludeApplications": []},
-                           "users": {"includeUsers": list(users), "excludeUsers": ["breakglass1"], "includeGroups": [],
+                           "users": {"includeUsers": list(users), "excludeUsers": list(exclude_users), "includeGroups": [],
                                      "excludeGroups": list(exclude_groups), "includeRoles": list(roles),
                                      "excludeRoles": list(exclude_roles), "includeGuestsOrExternalUsers": None,
-                                     "excludeGuestsOrExternalUsers": None}},
+                                     "excludeGuestsOrExternalUsers": guests_excluded}},
             "grantControls": {"operator": "OR", "builtInControls": list(builtin), "customAuthenticationFactors": [],
                               "termsOfUse": [], "authenticationStrength": s if strength == "default" else strength}}
 
@@ -220,6 +220,27 @@ class AadAdminPhishResistantTests(unittest.TestCase):
                      {"value": []}):
             with self.subTest(body=str(body)[:80]):
                 self.assert_unevaluated(body)
+
+    def test_ca_guest_exclusion_is_not_proven(self):
+        # review MEDIUM: a covering policy that excludes guests or external users does not prove coverage
+        guests = {"guestOrExternalUserTypes": "b2bCollaborationGuest,internalGuest", "externalTenants": {"membershipKind": "all"}}
+        self.assert_unevaluated(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), guests_excluded=guests)))
+        self.assert_unevaluated(ca_body(ca_policy(users=["All"], guests_excluded=guests)))
+
+    def test_ca_emergency_access_exclusions_are_bounded_and_listed(self):
+        # review MEDIUM: up to 2 excluded users PASS and are named; more than 2 (in total) or any group reads None
+        res = self.run_t(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_users=["bg-1", "bg-2"])))
+        self.assertIs(res["transformedResponse"][KEY], True)
+        self.assertEqual(res["transformedResponse"]["excludedEmergencyAccessAccounts"], ["bg-1", "bg-2"])
+        self.assertTrue(res["additionalInfo"]["evaluation"]["passReasons"][0].startswith(
+            "PASS with 2 excluded emergency-access accounts: bg-1, bg-2"))
+        res = self.run_t(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_users=[])))
+        self.assertIs(res["transformedResponse"][KEY], True)
+        self.assertEqual(res["transformedResponse"]["excludedEmergencyAccessAccounts"], [])
+        self.assert_unevaluated(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_users=["a", "b", "c"])))
+        self.assert_unevaluated(ca_body(ca_policy(roles=ADMIN_ROLE_IDS[:7], exclude_users=["a", "b"]),
+                                        ca_policy(roles=ADMIN_ROLE_IDS[7:], exclude_users=["c"])))
+        self.assert_unevaluated(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), exclude_groups=["g"], exclude_users=[])))
 
     def test_ca_paged_or_unreadable_is_not_evaluated(self):
         paged = ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS)))
