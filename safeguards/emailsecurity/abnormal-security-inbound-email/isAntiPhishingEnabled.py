@@ -20,8 +20,8 @@ Rules, in this order (a window of 90 calendar days, counted on dates):
   that also handles phishing is live and acting.
 - None (Unevaluated, reason in dataCollection.errors): an empty, missing or error response, and
   a newest threat with no remediated message in the window (Marked Safe, Remediation Attempted,
-  no timestamp, or older than 90 days), and a threat whose messages are paged (nextPageNumber set) or
-  truncated: an unacted phishing message on an unread page could change the answer. Reading a
+  no timestamp, or older than 90 days), and a threat whose messages are paged (nextPageNumber set, or a
+  page other than the first) or truncated: an unacted phishing message on an unread page could change the answer. Reading a
   no-evidence threat as False flipped a tenant from True to False on 2 Oct 2026 with no tenant or
   transform change.
 """
@@ -147,9 +147,12 @@ def transform(input):
         next_page = data.get("nextPageNumber") if isinstance(data, dict) else None
         truncated = isinstance(data, dict) and (data.get("paginationTruncated") is True
                                                 or str(data.get("truncated")).lower() == "true")
-        if (next_page not in (None, "", 0, "0", "None", "null")) or truncated:
-            reason = ("The Abnormal threat detail is paged (nextPageNumber=%r) or truncated, so an unacted "
-                      "phishing message on an unread page cannot be ruled out; not scored" % (next_page,))
+        page_number = data.get("pageNumber") if isinstance(data, dict) else None
+        later_page = page_number not in (None, "", 1, "1", "None", "null")
+        if (next_page not in (None, "", 0, "0", "None", "null")) or truncated or later_page:
+            reason = ("The Abnormal threat detail is paged (pageNumber=%r, nextPageNumber=%r) or truncated, so an "
+                      "unacted phishing message on an unread page cannot be ruled out; not scored"
+                      % (page_number, next_page))
             return create_response(
                 result={criteriaKey: None, "messagesEvaluated": len(messages)},
                 validation=validation, api_errors=[reason], fail_reasons=[reason],
