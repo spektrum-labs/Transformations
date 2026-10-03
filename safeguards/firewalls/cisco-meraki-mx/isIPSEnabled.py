@@ -125,6 +125,13 @@ def evaluate(data):
     passing, failing, unreadable = [], [], []
     modes = {}
     for name, response in pairs:
+        if isinstance(response, dict) and isinstance(response.get("vendorErrorAsResponse"), dict):
+            # The definition hands over exactly one refusal as data: 400 "Intrusion detection is
+            # not supported by this network". A network that cannot run the intrusion engine is
+            # unprotected, not unmeasured.
+            modes["not supported"] = modes.get("not supported", 0) + 1
+            failing.append({"network": name, "mode": "not supported"})
+            continue
         mode = response.get("mode") if isinstance(response, dict) else None
         if mode is None:
             unreadable.append(name)
