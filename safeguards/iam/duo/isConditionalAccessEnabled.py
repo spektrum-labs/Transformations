@@ -35,17 +35,19 @@ already required by the authentication policy, so they add no block). A policy t
 is not conditional access. Lower Duo tiers do not return user_location or anonymous_networks at all; an
 absent section is simply not a condition.
 
-Application-group (group_app) bindings: some users of an application get a different policy. When the group's
-effective policy (group, then application, then global, section by section) and the application-level answer
-disagree, the application is INDETERMINATE: counted neither covered nor uncovered, and while any application is
-indeterminate the boolean is never True.
+Application-group (group_app) bindings: some users of an application get a different policy, which
+application-level data cannot resolve. An application with any such binding is INDETERMINATE: counted neither
+covered nor uncovered, and while any application is indeterminate the boolean is never True. (Its group policies
+are still read, so an unreadable one fails closed.)
 
 Rule:
   isConditionalAccessEnabled
     True   every application is covered.
     False  the applications were fully enumerated and at least one is not covered.
     Not evaluated (null): an error body or vendorErrorAsResponse marker (a 403 means the Admin API application
-           lacks "Grant resource - Read"); integrations missing, empty or not a list; policies or summary
+           lacks "Grant resource - Read"); integrations missing, empty or not a list, or not read to the end
+           (paginationTruncated / truncated set, metadata.next_offset remaining, or metadata.total_objects
+           differing from the applications read); policies or summary
            missing; a truncated summary; a policy list whose size does not match summary.policy_count; no or
            several global policies; an application whose policy_key is not in the policy list; a section of a
            governing policy that is not an object, or a wrong-typed value or unrecognised enum in one; no
@@ -361,18 +363,63 @@ def summary_of(part):
     return part, ""
 
 
-def integration_list(part):
-    """(applications, error) from the getIntegrations output; every entry must be an application object."""
+def incomplete_text(container):
+    """Why a paged applications read is incomplete, '' when nothing says it is. Integration-Service marks a read it
+    stopped early with paginationTruncated (on the envelope or its response_metadata) and metadata.truncated, and
+    clears metadata.next_offset once every page is read."""
+    if not isinstance(container, dict):
+        return ""
+    meta_blocks = [container]
+    for key in ("response_metadata", "metadata"):
+        if isinstance(container.get(key), dict):
+            meta_blocks.append(container[key])
+    for block in meta_blocks:
+        for key in ("paginationTruncated", "truncated"):
+            if key in block and flag(block.get(key)) is not False:
+                return "GET /admin/v3/integrations was not read to the end (%s is set)" % key
+    metadata = container.get("metadata")
+    if isinstance(metadata, dict):
+        next_offset = metadata.get("next_offset")
+        if next_offset is not None and str(next_offset).strip() not in ("", "none", "null"):
+            return "GET /admin/v3/integrations was not read to the end (metadata.next_offset remains)"
+    return ""
+
+
+def expected_total(container):
+    """metadata.total_objects when the envelope carries it, else None; unreadable -> -1 (never matches)."""
+    if not isinstance(container, dict) or not isinstance(container.get("metadata"), dict):
+        return None
+    if "total_objects" not in container["metadata"]:
+        return None
+    value = container["metadata"].get("total_objects")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def integration_list(part, body=None):
+    """(applications, error) from the getIntegrations output; every entry must be an application object and the
+    list must be complete."""
     part = decode(part)
+    totals = []
+    for container in (body, part):
+        text = incomplete_text(container)
+        if text:
+            return None, text
     if isinstance(part, dict):
         text = error_text(part)
         if text:
             return None, text
+        totals.append(expected_total(part))
         part = part.get("response", part.get("integrations"))
         if isinstance(part, dict):
-            text = error_text(part)
+            text = error_text(part) or incomplete_text(part)
             if text:
                 return None, text
+            totals.append(expected_total(part))
             part = part.get("integrations", part.get("response"))
     if not isinstance(part, list):
         return None, "GET /admin/v3/integrations returned no application list"
@@ -386,6 +433,10 @@ def integration_list(part):
         if not isinstance(key, str) or key.strip() == "":
             return None, "GET /admin/v3/integrations returned an application without an integration_key"
         apps.append(entry)
+    for total in totals:
+        if total is not None and total != len(apps):
+            return None, ("GET /admin/v3/integrations reports %s applications but %d were read"
+                          % ("an unreadable count of" if total < 0 else str(total), len(apps)))
     return apps, ""
 
 
@@ -540,7 +591,7 @@ def transform(input):
         summary, text = summary_of(body.get("summary"))
         if text:
             return not_evaluated("GET /admin/v2/policies/summary failed: " + text + " (needs " + GRANT + ")")
-        apps, text = integration_list(body.get("integrations"))
+        apps, text = integration_list(body.get("integrations"), body)
         if text:
             return not_evaluated(text + " (needs " + GRANT + ")")
 
@@ -589,11 +640,11 @@ def transform(input):
                     on_global = on_global + 1
                 chain = [glob] if own is glob else [own, glob]
                 found = conditions_of(chain)
-                split = False
-                for group_policy in groups.get(str(app.get("integration_key")), []):
-                    if bool(conditions_of([group_policy] + chain)) != bool(found):
-                        split = True
-                if split:
+                bound = groups.get(str(app.get("integration_key")), [])
+                for group_policy in bound:
+                    # read every group policy so an unreadable one still fails closed
+                    conditions_of([group_policy] + chain)
+                if bound:
                     indeterminate.append(app_name(app))
                 elif found:
                     covered.append((app_name(app), found))
@@ -614,8 +665,9 @@ def transform(input):
         described = [label + ": " + "; ".join(found[:6]) for label, found in covered[:NAMED_LIMIT]]
         indeterminate_note = []
         if indeterminate:
-            indeterminate_note = ["Application-group policies give some users of these applications a different "
-                                  "answer, so they are counted neither covered nor uncovered: " + named(indeterminate)]
+            indeterminate_note = ["Application-group policies apply to some users of these applications, which "
+                                  "application-level data cannot resolve, so they are counted neither covered nor "
+                                  "uncovered: " + named(indeterminate)]
         user_group_note = ("User-group policies are not visible to this check, so coverage applied by user group "
                            "is understated")
 
@@ -635,7 +687,7 @@ def transform(input):
             return create_response(result, input_summary=info, findings=described + indeterminate_note,
                                    fail_reasons=["Not evaluated: no application is uncovered, but %d cannot be "
                                                  "decided from application-level data" % len(indeterminate)],
-                                   warnings=indeterminate_note)
+                                   api_errors=indeterminate_note, warnings=indeterminate_note)
         result[CRITERIA_KEY] = True
         return create_response(result, input_summary=info, findings=described, pass_reasons=[
             "All %d Duo applications have an access condition (location, network, device health, OS, browser or "

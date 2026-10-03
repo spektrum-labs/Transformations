@@ -345,10 +345,21 @@ class DuoConditionalAccessTests(unittest.TestCase):
                                             groups=[(GROUP_KEY, PORTAL)]))
         self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
 
-    def test_group_policy_agreeing_with_app_is_decided(self):
+    def test_any_group_binding_blocks_true_even_when_it_agrees(self):
         customs = [(GROUP_KEY, "Group remembered devices", {"remembered_devices": {}})]
         b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, groups=[(GROUP_KEY, PORTAL)])
-        self.assertIs(self.value(b)[0], True)
+        out = self.assertUnevaluated(b)
+        self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
+
+    def test_indeterminate_result_does_not_report_data_collection_success(self):
+        customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
+        out = self.assertUnevaluated(bodies(DEFAULTS, customs, groups=[(GROUP_KEY, PORTAL)]))
+        self.assertNotEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_unreadable_group_policy_is_unevaluated(self):
+        customs = [(GROUP_KEY, "Group broken", {"browsers": "ie"})]
+        self.assertUnevaluated(bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, groups=[(GROUP_KEY, PORTAL)]),
+                               "cannot be read")
 
     def test_indeterminate_with_an_uncovered_app_is_false(self):
         customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
@@ -403,6 +414,37 @@ class DuoConditionalAccessTests(unittest.TestCase):
                 b = bodies(with_sections(DEFAULTS, **GEO_BLOCK))
                 mutate(b)
                 self.assertUnevaluated(b)
+
+    def test_incomplete_applications_read_is_unevaluated_never_true(self):
+        def truncated_one_of_25(b):
+            b["integrations"]["paginationTruncated"] = True
+            b["integrations"]["metadata"]["total_objects"] = 25
+
+        cases = {
+            "paginationTruncated with 1 of 25": truncated_one_of_25,
+            "paginationTruncated alone": lambda b: b["integrations"].__setitem__("paginationTruncated", True),
+            "paginationTruncated string": lambda b: b["integrations"].__setitem__("paginationTruncated", "true"),
+            "response_metadata marker": lambda b: b["integrations"].__setitem__(
+                "response_metadata", {"paginationTruncated": True}),
+            "marker on merged body": lambda b: b.__setitem__("response_metadata", {"paginationTruncated": True}),
+            "metadata.truncated": lambda b: b["integrations"]["metadata"].update({"truncated": True,
+                                                                                  "scannedCount": 1}),
+            "next_offset remains": lambda b: b["integrations"]["metadata"].__setitem__("next_offset", 500),
+            "total_objects differs": lambda b: b["integrations"]["metadata"].__setitem__("total_objects", 25),
+            "total_objects unreadable": lambda b: b["integrations"]["metadata"].__setitem__("total_objects", "many"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label):
+                b = bodies(with_sections(DEFAULTS, **GEO_BLOCK))
+                self.assertIs(self.value(copy.deepcopy(b))[0], True)
+                mutate(b)
+                self.assertUnevaluated(b, "/admin/v3/integrations")
+
+    def test_complete_read_markers_are_accepted(self):
+        b = bodies(with_sections(DEFAULTS, **GEO_BLOCK))
+        b["integrations"]["paginationTruncated"] = False
+        b["integrations"]["metadata"].update({"next_offset": None, "truncated": False, "total_objects": 1})
+        self.assertIs(self.value(b)[0], True)
 
     def test_missing_policies_or_summary_is_unevaluated(self):
         for part in ("policies", "summary"):
