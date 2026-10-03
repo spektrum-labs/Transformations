@@ -136,6 +136,30 @@ class RbacTests(Base):
     def test_transformation_error_is_unevaluated(self):
         self.assert_unevaluated(b"\xff not json")
 
+    def test_many_full_admins_with_one_scoped_admin_fails_on_the_count(self):
+        # 10 full admins plus 1 Help Desk is not least privilege.
+        body = {"totalCount": 11, "results": [admin(i, "Administrator") for i in range(1, 11)] + [admin(11, "Help Desk")]}
+        full = self.full(body)
+        self.assertIs(full["transformedResponse"][self.NAME], False)
+        self.assertEqual(full["transformedResponse"]["fullAdminCount"], 10)
+        self.assertIn("at most 4", " ".join(full["additionalInfo"]["evaluation"]["failReasons"]))
+
+    def test_full_admin_bar_edges(self):
+        for n_full, want in ((1, True), (4, True), (5, False)):
+            body = {"totalCount": n_full + 1,
+                    "results": [admin(i, "Administrator With Billing") for i in range(1, n_full + 1)]
+                    + [admin(99, "Manager")]}
+            self.assertIs(self.value(body), want, n_full)
+
+    def test_unreadable_roles_that_could_breach_the_bar_are_unevaluated(self):
+        body = {"totalCount": 7, "results": [admin(i, "Administrator") for i in range(1, 4)]
+                + [admin(4, "Help Desk")] + [admin(i, None) for i in range(5, 8)]}
+        self.assert_unevaluated(body)
+
+    def test_scoped_admins_but_no_readable_full_admin_is_unevaluated(self):
+        body = {"totalCount": 2, "results": [admin(1, "Help Desk"), admin(2, "Manager")]}
+        self.assert_unevaluated(body)
+
 
 class SuperAdminMfaTests(Base):
     NAME = "superAdminMfaEnrollmentPercentage"
