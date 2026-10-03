@@ -141,9 +141,33 @@ class MS365AdminSeparationTests(unittest.TestCase):
         body = merged([assignment("u-bob", role=EXCHANGE_ADMIN)], [licensed])
         self.assertFalse(self.run_t(body)[1][KEY])
 
-    def test_mail_attribute_backstops_an_unlisted_sku(self):
-        mailbox = user("u-carol", "carol@contoso.com", mail="carol@contoso.com", skus=["00000000-0000-0000-0000-000000000001"])
-        self.assertFalse(self.run_t(merged([assignment("u-carol")], [mailbox]))[1][KEY])
+    # J.J. 3 Oct 2026 (AA-3): `mail` alone is a finding, not a fail. Fail only on a
+    # productivity licence or an enabled Exchange plan.
+    def test_mail_attribute_alone_is_a_finding_not_a_fail(self):
+        for skus, plans in (([ENTRA_P2], None), (["00000000-0000-0000-0000-000000000001"], None),
+                            ([], [{"service": "exchange", "capabilityStatus": "Deleted", "servicePlanId": "x"}])):
+            with self.subTest(skus=skus, plans=plans):
+                carol = user("u-carol", "carol-admin@contoso.com", mail="carol-admin@contoso.com", skus=skus, plans=plans)
+                out, result, info = self.run_t(merged([assignment("u-carol")], [carol]))
+                self.assertTrue(result[KEY], info)
+                self.assertEqual(info["dataCollection"]["status"], "success")
+                self.assertEqual(info["evaluation"]["failReasons"], [])
+                self.assertEqual(result["adminsWithMailboxOrLicence"], 0)
+                self.assertEqual(result["adminsWithMailAttributeOnly"], 1)
+                findings = " ".join(info["evaluation"]["additionalFindings"])
+                self.assertIn("carol-admin@contoso.com", findings)
+                self.assertIn("not a fail", findings)
+
+    def test_mail_attribute_alone_still_needs_a_complete_read(self):
+        carol = {"id": "u-carol", "userPrincipalName": "carol@contoso.com", "mail": "carol@contoso.com"}
+        self.assert_unevaluated(merged([assignment("u-carol")], [carol]))
+
+    def test_mail_with_productivity_licence_fails(self):
+        carol = user("u-carol", "carol@contoso.com", mail="carol@contoso.com", skus=[SPE_E3])
+        out, result, info = self.run_t(merged([assignment("u-carol")], [carol]))
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertIn("mail address", info["evaluation"]["failReasons"][0])
 
     def test_enabled_exchange_plan_fails(self):
         plans = [{"service": "exchange", "capabilityStatus": "Enabled", "servicePlanId": "x"}]
@@ -207,9 +231,12 @@ class MS365AdminSeparationTests(unittest.TestCase):
 
     def test_tenant_supplied_names_are_bounded(self):
         long_upn = "x" * 500 + "@contoso.com"
-        body = merged([assignment("u-long")], [user("u-long", long_upn, mail=long_upn)])
+        body = merged([assignment("u-long")], [user("u-long", long_upn, mail=long_upn, skus=[SPE_E3])])
         reason = self.run_t(body)[2]["evaluation"]["failReasons"][0]
         self.assertLess(len(reason), 400)
+        body = merged([assignment("u-long")], [user("u-long", long_upn, mail=long_upn)])
+        finding = self.run_t(body)[2]["evaluation"]["additionalFindings"][0]
+        self.assertLess(len(finding), 400)
 
 
 if __name__ == "__main__":
