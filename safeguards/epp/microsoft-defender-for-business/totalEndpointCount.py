@@ -10,7 +10,8 @@ GET https://api.securitycenter.microsoft.com/api/machines?$top=10000
 WindowsDefenderATP Machine.Read.All). Defender for Business uses the Defender for Endpoint API without
 advanced hunting (https://learn.microsoft.com/en-us/defender-endpoint/api/apis-intro). One page holds up to
 10,000 machines; Defender for Business is capped at 300 users. A response that still carries
-@odata.nextLink is treated as partial and returns None.
+@odata.nextLink is treated as partial and returns None. A non-empty list in which no item carries a
+recognised onboardingStatus is not a machines list and returns None, never a measured 0.
 Machine.onboardingStatus (https://learn.microsoft.com/en-us/defender-endpoint/api/machine): Onboarded,
 CanBeOnboarded (discovered by device discovery, not protected), Unsupported, InsufficientInfo.
 
@@ -56,7 +57,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
                            "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
                          "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
         },
     }
@@ -98,7 +99,12 @@ def load(input):
 
 
 def machine_counts(data):
-    """(onboarded, can_be_onboarded, listed) from a machines list body, or None when it is not one."""
+    """(onboarded, can_be_onboarded, listed, other_discovered) from a machines list body, or None.
+
+    None when the body is not a complete machines list, or when it lists items of which not one carries an
+    onboardingStatus Defender documents: a list we cannot read is not a measured zero.
+    other_discovered counts Unsupported and InsufficientInfo devices, which only device discovery reports.
+    """
     if not isinstance(data, dict):
         return None
     machines = data.get("value")
@@ -106,6 +112,7 @@ def machine_counts(data):
         return None
     onboarded = 0
     discovered = 0
+    other = 0
     for machine in machines:
         if not isinstance(machine, dict) or not machine.get("id"):
             continue
@@ -114,7 +121,11 @@ def machine_counts(data):
             onboarded = onboarded + 1
         elif status == "canbeonboarded":
             discovered = discovered + 1
-    return onboarded, discovered, len(machines)
+        elif status == "unsupported" or status == "insufficientinfo":
+            other = other + 1
+    if len(machines) > 0 and onboarded + discovered + other == 0:
+        return None
+    return onboarded, discovered, len(machines), other
 
 def transform(input):
     try:
@@ -127,7 +138,7 @@ def transform(input):
         onboarded = counts[0]
         discovered = counts[1]
         summary = {"onboardedDeviceCount": onboarded, "canBeOnboardedDeviceCount": discovered,
-                   "listedDeviceCount": counts[2]}
+                   "listedDeviceCount": counts[2], "otherDiscoveredDeviceCount": counts[3]}
         result = {KEY: onboarded, "canBeOnboardedDeviceCount": discovered}
         line = str(onboarded) + " devices are onboarded to Defender for Business"
         return create_response(result=result, validation=validation, pass_reasons=[line], input_summary=summary)

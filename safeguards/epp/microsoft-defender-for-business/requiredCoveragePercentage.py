@@ -15,9 +15,11 @@ Machine.onboardingStatus (https://learn.microsoft.com/en-us/defender-endpoint/ap
 CanBeOnboarded (discovered by device discovery, not protected), Unsupported, InsufficientInfo.
 
   requiredCoveragePercentage = Onboarded / (Onboarded + CanBeOnboarded) * 100, rounded DOWN to one decimal.
-Unsupported and InsufficientInfo devices are left out. Device discovery must be on for CanBeOnboarded
-devices to appear, so with discovery off this reads 100 for the devices Defender knows about.
-No onboarded or discovered device returns None.
+Unsupported and InsufficientInfo devices are left out of the ratio. Device discovery must be on for
+CanBeOnboarded devices to appear; with discovery off the ratio would read 100 for any fleet. So a list with no
+discovery-sourced device at all (no CanBeOnboarded, Unsupported or InsufficientInfo entry) returns None rather
+than 100: discovery cannot be shown to be on. A list whose items carry no recognised onboardingStatus, or with
+no onboarded or discovered device, also returns None.
 """
 import json
 from datetime import datetime
@@ -59,7 +61,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
                            "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
                          "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
         },
     }
@@ -101,7 +103,12 @@ def load(input):
 
 
 def machine_counts(data):
-    """(onboarded, can_be_onboarded, listed) from a machines list body, or None when it is not one."""
+    """(onboarded, can_be_onboarded, listed, other_discovered) from a machines list body, or None.
+
+    None when the body is not a complete machines list, or when it lists items of which not one carries an
+    onboardingStatus Defender documents: a list we cannot read is not a measured zero.
+    other_discovered counts Unsupported and InsufficientInfo devices, which only device discovery reports.
+    """
     if not isinstance(data, dict):
         return None
     machines = data.get("value")
@@ -109,6 +116,7 @@ def machine_counts(data):
         return None
     onboarded = 0
     discovered = 0
+    other = 0
     for machine in machines:
         if not isinstance(machine, dict) or not machine.get("id"):
             continue
@@ -117,7 +125,11 @@ def machine_counts(data):
             onboarded = onboarded + 1
         elif status == "canbeonboarded":
             discovered = discovered + 1
-    return onboarded, discovered, len(machines)
+        elif status == "unsupported" or status == "insufficientinfo":
+            other = other + 1
+    if len(machines) > 0 and onboarded + discovered + other == 0:
+        return None
+    return onboarded, discovered, len(machines), other
 
 def transform(input):
     try:
@@ -130,10 +142,14 @@ def transform(input):
         onboarded = counts[0]
         discovered = counts[1]
         summary = {"onboardedDeviceCount": onboarded, "canBeOnboardedDeviceCount": discovered,
-                   "listedDeviceCount": counts[2]}
+                   "listedDeviceCount": counts[2], "otherDiscoveredDeviceCount": counts[3]}
         known = onboarded + discovered
         if known <= 0:
             return not_measured("Defender lists no onboarded or discoverable device", validation)
+        if discovered + counts[3] == 0:
+            return not_measured("Defender lists no device that device discovery found (CanBeOnboarded, Unsupported or "
+                                "InsufficientInfo), so discovery cannot be shown to be on and unprotected devices "
+                                "would be invisible; coverage is not measured", validation)
         pct = ((onboarded * 1000) // known) / 10.0
         result = {KEY: pct, "onboardedDeviceCount": onboarded, "canBeOnboardedDeviceCount": discovered}
         line = str(onboarded) + " of " + str(known) + " known devices (" + str(pct) + "%) are onboarded"

@@ -50,7 +50,22 @@ def test_onboarded_fleet():
 def test_coverage_rounds_down():
     # 2 / 3 = 66.66.. -> 66.6
     assert run(COVERAGE, "requiredCoveragePercentage", machines(2, 1)) == (66.6, "success")
-    assert run(COVERAGE, "requiredCoveragePercentage", machines(12, 0)) == (100.0, "success")
+    assert run(COVERAGE, "requiredCoveragePercentage", machines(12, 0, unsupported=1)) == (100.0, "success")
+
+
+def test_coverage_without_discovery_evidence_is_unmeasured():
+    # Every listed device onboarded and nothing discovery-sourced (no CanBeOnboarded, Unsupported or
+    # InsufficientInfo): device discovery may be off, so unprotected devices would be invisible. Not 100.
+    assert run(COVERAGE, "requiredCoveragePercentage", machines(12, 0)) == (None, "error")
+    # The same fleet still counts and is still deployed.
+    assert run(TOTAL, "totalEndpointCount", machines(12, 0)) == (12, "success")
+    assert run(DEPLOYED, "isEPPDeployed", machines(12, 0)) == (True, "success")
+
+
+def test_insufficient_info_counts_as_discovery_evidence():
+    body = machines(5, 0)
+    body["value"].append(machine(300, "InsufficientInfo"))
+    assert run(COVERAGE, "requiredCoveragePercentage", body) == (100.0, "success")
 
 
 def test_nothing_onboarded_is_measured():
@@ -72,6 +87,11 @@ def test_lowercase_onboardingstatus_spelling():
     assert run(TOTAL, "totalEndpointCount", body) == (1, "success")
 
 
+def test_schema_version_is_2():
+    for module, key in [(DEPLOYED, "isEPPDeployed"), (COVERAGE, "requiredCoveragePercentage"), (TOTAL, "totalEndpointCount")]:
+        assert module.transform(machines(3, 1))["additionalInfo"]["metadata"]["schemaVersion"] == "2.0"
+
+
 # --- empty, error and partial shapes: never an answer ----------------------------------------------------------
 
 NO_EVIDENCE = {
@@ -82,6 +102,10 @@ NO_EVIDENCE = {
     "not_found_404": {"statusCode": 404, "error": "Not Found"},
     "auth_401": {"statusCode": 401, "error": "Unauthorized"},
     "unrelated": {"hello": "world"},
+    # A list that is not machines (a misrouted users body) must not read as a measured 0 endpoints.
+    "unrecognised_list": {"value": [{"id": "u1", "userPrincipalName": "a@contoso.com"}]},
+    "status_missing": {"value": [{"id": "m1", "computerDnsName": "pc1"}, {"id": "m2"}]},
+    "pagination_incomplete": {"error": True, "errorType": "pagination_incomplete", "status": "Error", "statusCode": 429},
     "paged": dict(machines(5, 0), **{"@odata.nextLink": "https://api.security.microsoft.com/api/machines?$skip=10000"}),
 }
 
@@ -92,3 +116,17 @@ CASES = [(DEPLOYED, "isEPPDeployed"), (COVERAGE, "requiredCoveragePercentage"), 
 @pytest.mark.parametrize("module,key", CASES, ids=[k for m, k in CASES])
 def test_no_evidence_is_unevaluated(module, key, name):
     assert run(module, key, NO_EVIDENCE[name]) == (None, "error")
+
+
+def test_every_transform_reports_schema_version_2_0():
+    """transformedResponse envelope is the CONTRIBUTING.md schemaVersion 2.0 one, on answers and on errors."""
+    import importlib.util as iu
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith("test_"):
+            continue
+        spec = iu.spec_from_file_location("schema_" + path.stem, path)
+        module = iu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        out = module.transform({})
+        assert out["additionalInfo"]["metadata"]["schemaVersion"] == "2.0", path.name
+        assert set(out["additionalInfo"]) == {"dataCollection", "validation", "transformation", "evaluation", "metadata"}
