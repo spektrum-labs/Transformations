@@ -14,6 +14,7 @@ from datetime import datetime
 # data-collection error, never judged.
 
 KEY = "isMFAEnforcedForUsers"
+USER_FIELDS = ("username", "email", "user_id")
 
 
 def extract_input(input_data):
@@ -101,6 +102,40 @@ def pct(part, whole):
     return round(100.0 * part / whole, 1) if whole else 0.0
 
 
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_name(obj, fields):
+    for field in fields:
+        value = obj.get(field)
+        if value not in (None, ""):
+            return str(value).strip()[:100]
+    return "unknown"
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Duo (<scope>): N of M <what>: a, b and K more'."""
+    return "Duo (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
+
+
 def transform(input):
     data, validation = load(input)
     users = objects_with(data, "user_id")
@@ -115,6 +150,8 @@ def transform(input):
     enforced = 0
     bypass = 0
     unenrolled = 0
+    bypass_names = []
+    unenrolled_names = []
     for u in users:
         status = str(u.get("status") or "").lower()
         if status in INACTIVE_STATUSES:
@@ -122,8 +159,10 @@ def transform(input):
         active = active + 1
         if status == "bypass":
             bypass = bypass + 1
+            bypass_names.append(account_name(u, USER_FIELDS))
         elif u.get("is_enrolled") is not True:
             unenrolled = unenrolled + 1
+            unenrolled_names.append(account_name(u, USER_FIELDS))
         else:
             enforced = enforced + 1
 
@@ -137,6 +176,8 @@ def transform(input):
     }
     result = {KEY: active > 0 and enforced == active}
     result.update(summary)
+    affected = bypass_names + unenrolled_names
+    summary = with_affected(dict(summary), affected)
 
     if result[KEY]:
         return create_response(
@@ -146,8 +187,10 @@ def transform(input):
     if active == 0:
         reasons = ["Duo returned %d users and none is active, so MFA enforcement covers no one." % len(users)]
     else:
-        reasons = ["%d of %d active Duo users (%.1f%%) are held to MFA: %d in bypass status, %d not enrolled."
-                   % (enforced, active, summary["mfaEnforcedUserPercentage"], bypass, unenrolled)]
+        reasons = ["%d of %d active Duo users (%.1f%%) are held to MFA: %d in bypass status, %d not enrolled; %s"
+                   % (enforced, active, summary["mfaEnforcedUserPercentage"], bypass, unenrolled,
+                      affected_line("active users", affected, active,
+                                    "active users are not held to MFA (bypass first, then not enrolled)"))]
     return create_response(
         result=result, validation=validation, input_summary=summary, fail_reasons=reasons,
         recommendations=["Take users out of bypass status and have unenrolled users complete Duo enrollment."],

@@ -67,6 +67,40 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_name(obj, fields):
+    for field in fields:
+        value = obj.get(field)
+        if value not in (None, ""):
+            return str(value).strip()[:100]
+    return "unknown"
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Duo (<scope>): N of M <what>: a, b and K more'."""
+    return "Duo (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
@@ -100,16 +134,15 @@ def transform(input):
             continue
         status = u.get("status")
         if isinstance(status, str) and status.strip().lower() == "bypass":
-            bypass_users.append(u.get("username") or u.get("user_id") or "unknown")
+            bypass_users.append(account_name(u, ("username", "email", "user_id")))
 
     bypass_count = len(bypass_users)
     total_users = len(users)
 
     if bypass_count > 0:
-        sample = bypass_users[:5]
         pass_reasons = [
-            f"Found {bypass_count} of {total_users} Duo user accounts with status='bypass' "
-            f"(sample usernames: {', '.join([str(s) for s in sample])})."
+            f"Found {bypass_count} of {total_users} Duo user accounts with status='bypass'; "
+            + affected_line("all users", bypass_users, total_users, "users are in bypass status (no second factor)")
         ]
         fail_reasons = []
         recommendations = [
@@ -131,6 +164,7 @@ def transform(input):
         "totalObjectsReported": total_objects,
         "bypassStatusUsersCount": bypass_count,
     }
+    input_summary = with_affected(input_summary, bypass_users)
 
     return create_response(
         result=result,
