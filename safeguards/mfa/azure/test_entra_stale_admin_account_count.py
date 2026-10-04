@@ -154,15 +154,40 @@ def test_never_signed_in_old_admin_is_stale(copy, mode):
 
 @pytest.mark.parametrize("copy,mode", CASES)
 def test_disabled_and_non_user_holders(copy, mode):
-    assignments = [assignment(1), assignment(2), assignment(7, "#microsoft.graph.servicePrincipal"),
-                   assignment(8, "#microsoft.graph.group")]
+    assignments = [assignment(1), assignment(2), assignment(7, "#microsoft.graph.servicePrincipal")]
     out = load(copy, mode)(body(assignments, [user(1), user(2, enabled=False, success=400)]))
     assert out_of(out) == 0
     summary = info(out)["transformation"]["inputSummary"]
     assert summary["disabledAdmins"] == ["admin002@x.test"]
-    assert summary["nonUserRoleHolderCount"] == 2
-    assert summary["groupRoleHolderCount"] == 1
+    assert summary["nonUserRoleHolderCount"] == 1
+    assert summary["groupRoleAssignmentCount"] == 0
     assert summary["adminCount"] == 1
+    assert "not expanded" not in json.dumps(info(out)["evaluation"])
+
+
+@pytest.mark.parametrize("copy,mode", CASES)
+def test_group_held_assignments_with_zero_stale_are_unevaluated(copy, mode):
+    # group principal: not in the users list, typed by the expand; must not read as a missing user (partial read)
+    assignments = [assignment(1), assignment(8, "#microsoft.graph.group"), assignment(9, "#microsoft.graph.group")]
+    out = load(copy, mode)(body(assignments, [user(1)]))
+    unevaluated(out, "2 role assignments are through groups; members not checked")
+    assert "not in the user list" not in " ".join(info(out)["dataCollection"]["errors"])
+    assert info(out)["transformation"]["inputSummary"]["groupRoleAssignmentCount"] == 2
+    # groups only, no direct user holder
+    out = load(copy, mode)(body([assignment(8, "#microsoft.graph.group")], [user(1)]))
+    unevaluated(out, "1 role assignments are through groups; members not checked")
+
+
+@pytest.mark.parametrize("copy,mode", CASES)
+def test_group_held_assignments_with_stale_user_still_fail(copy, mode):
+    assignments = [assignment(1), assignment(2), assignment(8, "#microsoft.graph.group")]
+    out = load(copy, mode)(body(assignments, [user(1), user(2, success=200)]))
+    assert out_of(out) == 1
+    first = info(out)["evaluation"]["failReasons"][0]
+    assert first.startswith("Microsoft Entra ID: 1 of 2 enabled active role holders")
+    assert "admin002@x.test" in first
+    assert first.endswith("(1 group-held role assignment(s) were not expanded; their members are not checked)")
+    assert info(out)["transformation"]["inputSummary"]["groupRoleAssignmentCount"] == 1
 
 
 @pytest.mark.parametrize("copy,mode", CASES)
