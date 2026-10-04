@@ -132,9 +132,11 @@ def refusal_in(body):
 def refusal_reason(marker):
     status = marker.get("status") if isinstance(marker, dict) else None
     if status == 403:
-        return ("Duo refused a Policies v2 read with HTTP 403; the Admin API application lacks the \""
-                + PERMISSION + "\" permission"), "permission_not_granted"
-    return "Duo refused a Policies v2 read (HTTP " + str(status)[:10] + ")", "vendor_refusal"
+        return ("Duo refused the read with HTTP 403. This key needs the Policies v2 reads (workflow "
+                "getStrongAuthPolicies), which need the Admin API permission \"" + PERMISSION + "\". If the refused "
+                "call was GET /admin/v1/settings, the key is still routed to the legacy settings read, whose flags "
+                "cannot answer it; the fix is the routing, not a permission"), "permission_not_granted"
+    return "Duo refused the read (HTTP " + str(status)[:10] + ")", "vendor_refusal"
 
 
 def error_text(body):
