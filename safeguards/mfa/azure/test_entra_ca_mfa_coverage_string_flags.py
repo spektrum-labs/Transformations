@@ -136,9 +136,93 @@ def test_restricted_python_executes_and_agrees():
                _getattr_=safer_getattr, _write_=lambda x: x, __name__="sandboxed", __metaclass__=type)
     exec(code, glb)
     for b in (body([(U1, "True"), (U2, "True")], [U1, U2]), body([(U1, "True"), (U2, "yes")], [U1, U2]),
-              body([(U1, "True"), (U2, "True"), (U3, "True")], [U1, U2]), {"conditionalAccessPolicies": None}):
+              body([(U1, "True"), (U2, "True"), (U3, "True")], [U1, U2]), {"conditionalAccessPolicies": None},
+              {"conditionalAccessPolicies": ca_of(all_users_policy("N", excludeGuestsOrExternalUsers="None"))},
+              {"conditionalAccessPolicies": ca_of(*[group_policy("P" * 90 + str(i), [G_STAFF],
+                                                                  platforms={"includePlatforms": ["iOS"]})
+                                                     for i in range(7)])}):
         sandboxed = glb["transform"](copy.deepcopy(b))
         plain = M.transform(copy.deepcopy(b))
         assert sandboxed["transformedResponse"] == plain["transformedResponse"]
         assert sandboxed["additionalInfo"]["evaluation"] == plain["additionalInfo"]["evaluation"]
         assert json.dumps(sandboxed["additionalInfo"]["dataCollection"]) == json.dumps(plain["additionalInfo"]["dataCollection"])
+
+
+# --- "None" as absent, and the set-aside reason (4 Oct 2026) ---------------------------------------------------------
+
+def all_users_policy(name, **users):
+    cond_users = {"includeUsers": ["All"], "includeGroups": [], "includeRoles": []}
+    cond_users.update(users)
+    return {"displayName": name, "state": "enabled",
+            "conditions": {"users": cond_users, "applications": {"includeApplications": ["All"]},
+                           "clientAppTypes": ["all"]},
+            "grantControls": {"operator": "OR", "builtInControls": ["mfa"]}}
+
+
+def group_policy(name, group_ids, **conditions):
+    p = {"displayName": name, "state": "enabled",
+         "conditions": {"users": {"includeUsers": [], "includeGroups": list(group_ids), "includeRoles": []},
+                        "applications": {"includeApplications": ["All"]}, "clientAppTypes": ["all"]},
+         "grantControls": {"operator": "OR", "builtInControls": ["mfa"]}}
+    p["conditions"].update(conditions)
+    return p
+
+
+def ca_of(*policies):
+    return {"@odata.context": CA_CTX, "value": list(policies)}
+
+
+@pytest.mark.parametrize("none", ["None", "none", " NONE "])
+def test_stringified_null_exclusions_are_absent(none):
+    p = all_users_policy("MFA everyone", excludeGuestsOrExternalUsers=none, excludeGroups=none, excludeRoles=none,
+                         excludeUsers=none)
+    p["conditions"]["devices"] = {"deviceFilter": {"mode": "include", "rule": none}}
+    res, _ = run({"conditionalAccessPolicies": ca_of(p)})
+    assert res["isMFARequiredForRemoteAccess"] is True
+    assert res["isRDPProtected"] is True
+
+
+@pytest.mark.parametrize("field,value", [("excludeGuestsOrExternalUsers", "someone"),
+                                         ("excludeGuestsOrExternalUsers", {"guestOrExternalUserTypes": "b2bCollaborationGuest"}),
+                                         ("excludeGroups", ["c0000000-0000-0000-0000-0000000000ee"]),
+                                         ("excludeUsers", "a list that is not a list")])
+def test_any_other_exclusion_value_still_blocks(field, value):
+    res, info = run({"conditionalAccessPolicies": ca_of(all_users_policy("MFA everyone", **{field: value}))})
+    assert res["isMFARequiredForRemoteAccess"] is None
+    assert 'policies set aside: "MFA everyone" (excludes ' in info["dataCollection"]["errors"][-1]
+
+
+def test_device_filter_rule_other_than_none_still_narrows():
+    p = all_users_policy("MFA everyone")
+    p["conditions"]["devices"] = {"deviceFilter": {"mode": "include", "rule": 'device.isCompliant -eq True'}}
+    res, info = run({"conditionalAccessPolicies": ca_of(p)})
+    assert res["isMFARequiredForRemoteAccess"] is None
+    assert '"MFA everyone" (narrowed by platform, device filter or client type)' in info["dataCollection"]["errors"][-1]
+
+
+def test_set_aside_names_why_caps_at_five_and_truncates_names():
+    long_name = "L" * 120
+    policies = [group_policy("Platform " + str(i), [G_STAFF], platforms={"includePlatforms": ["iOS"]}) for i in range(5)]
+    policies.append(group_policy(long_name, [G_STAFF], locations={"includeLocations": ["c0000000-0000-0000-0000-00000000000a"]}))
+    policies.append(group_policy("Empty group", ["c0000000-0000-0000-0000-0000000000e0"]))
+    b = {"conditionalAccessPolicies": ca_of(*policies), "groups": groups(),
+         "workforceUsers": workforce([(U1, "True")]),
+         "caPolicyGroups": {"groupIds": [{"id": G_STAFF}, {"id": "c0000000-0000-0000-0000-0000000000e0"}]},
+         "groupMembers": [members(U1), members()]}
+    res, info = run(b)
+    assert res["isMFARequiredForRemoteAccess"] is None
+    text = info["dataCollection"]["errors"][-1]
+    assert text.count('" (') == 5 and "and 2 more" in text
+    assert '"Platform 0" (narrowed by platform, device filter or client type)' in text
+    aside = res["remoteAccessPoliciesSetAside"]
+    assert len(aside) == 7
+    assert ("L" * 77 + "... (limited to named locations)") in aside
+    assert "Empty group (no user members read in its included groups)" in aside
+    assert all(len(entry.split(" (")[0]) <= 80 for entry in aside)
+
+
+def test_set_aside_never_turns_a_key_into_a_verdict():
+    for pol in (all_users_policy("X", excludeGroups=["c0000000-0000-0000-0000-0000000000ee"]),
+                group_policy("Y", [G_STAFF], platforms={"includePlatforms": ["android"]})):
+        res, _ = run({"conditionalAccessPolicies": ca_of(pol)})
+        assert res["isMFARequiredForRemoteAccess"] is None and res["isRDPProtected"] is None
