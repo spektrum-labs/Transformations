@@ -8,13 +8,14 @@ flags the healthCheck read returns: isEPPConfigured, isMDRConfigured and, when p
 isEmailConfigured / isEmailSecurityConfigured / isFirewallConfigured. Each flag may be a
 boolean or the string "true" / "false".
 
-  * any recognised product flag is true                -> True  (reason names each product)
   * every recognised product flag is explicitly false  -> False
-  * no recognised flag, empty or error body            -> None  (Not evaluated)
+  * any other product-flag body (including a true flag) -> None (Not evaluated)
+  * no recognised flag, empty or error body             -> None (Not evaluated)
 
-The input does not say which Sophos integration row asked, so the reason names the
-products the flags evidence rather than assuming MDR. A legacy `licensePurchased` key is
-still honoured first, and a body with no product flags keeps the earlier positive reading.
+The input does not say which Sophos integration row asked, so a true flag cannot prove the
+asking product's licence (an Endpoint Protection flag must not pass Firewall): that needs a
+per-product licence read (getLicenses). A legacy `licensePurchased` key is still honoured
+first, and a body with no product flags keeps the earlier positive reading.
 """
 
 import json
@@ -188,6 +189,9 @@ def affirmative_signal(data):
     return False
 
 
+NOT_PER_PRODUCT_REASON = ("Sophos healthCheck does not say which product is licensed; "
+                          "a per-product licence read (getLicenses) is needed")
+
 PRODUCT_FLAGS = (
     ("isEPPConfigured", "Endpoint Protection"),
     ("isMDRConfigured", "MDR"),
@@ -235,13 +239,13 @@ def sophos_license(data):
         elif value is False and label not in unlicensed:
             unlicensed.append(label)
 
-    if licensed:
-        return True, "Sophos licence confirmed: " + ", ".join(licensed) + " configured in Sophos Central", products
     if products and all(v is False for v in products.values()):
         return False, "Sophos Central reports no configured product: " + ", ".join(unlicensed) + " not configured", products
+    if products:
+        # A true flag names a Sophos product, but the input does not say which product row is
+        # asking: an Endpoint Protection flag must not pass a Firewall or Email Security licence.
+        return None, NOT_PER_PRODUCT_REASON, products
 
     if affirmative_signal(data):
         return True, "Sophos licence confirmed: the read returned an active licence signal", products
-    if products:
-        return None, "Not evaluated: the Sophos product flags were not readable as true or false", products
     return None, "Not evaluated: the Sophos licence read returned no product flags", products
