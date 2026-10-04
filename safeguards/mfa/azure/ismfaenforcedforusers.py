@@ -184,6 +184,80 @@ def set_aside_text(entries):
     return "policies set aside: " + ", ".join(shown) + (f" and {more} more" if more > 0 else "")
 
 
+# #101: findings name the affected accounts (same shape as legacyauthblocked.py). The first reason names
+# at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most MAX_AFFECTED, with
+# the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Microsoft Entra ID (<scope>): N of M <what>: a, b and K more'."""
+    return "Microsoft Entra ID (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
+
+
+EXCLUDE_FIELDS = [('excludeUsers', 'user'), ('excludeGroups', 'group'), ('excludeRoles', 'role')]
+INCLUDE_FIELDS = [('includeUsers', 'user'), ('includeGroups', 'group'), ('includeRoles', 'role')]
+# Graph keywords, not principals.
+SPECIAL_PRINCIPALS = {'user:All', 'user:all', 'user:None', 'user:GuestsOrExternalUsers', 'group:All', 'role:All'}
+
+
+def principals(users, fields):
+    found = []
+    for field, kind in fields:
+        values = users.get(field) if isinstance(users, dict) else None
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                found.append(kind + ":" + value.strip()[:64])
+    return found
+
+
+def mfa_coverage(user_conditions):
+    """Per-principal coverage across the MFA-for-users policies (same rule as legacyauthblocked.py): a
+    principal is covered when at least one policy includes it (directly or through All users) and that same
+    policy does not exclude it. Returns (uncovered principals, principals named, include scope or None when a
+    policy targets all users). Group and role membership is not expanded."""
+    all_users = False
+    scope = []
+    rules = []
+    candidates = []
+    for users in user_conditions:
+        excluded = set(principals(users, EXCLUDE_FIELDS))
+        included = principals(users, INCLUDE_FIELDS)
+        includes_all = "user:All" in included or "user:all" in included
+        if includes_all:
+            all_users = True
+        rules.append((includes_all, set(included), excluded))
+        for x in included:
+            if x not in scope:
+                scope.append(x)
+        for x in list(excluded) + included:
+            if x not in SPECIAL_PRINCIPALS and x not in candidates:
+                candidates.append(x)
+    uncovered = sorted(
+        x for x in candidates
+        if not any((includes_all or x in included) and x not in excluded
+                   for includes_all, included, excluded in rules)
+    )
+    return uncovered, len(candidates), (None if all_users else sorted(scope))
+
+
 def transform(input):
     criteriaKey = "isMFAEnforcedForUsers"
 
@@ -257,6 +331,7 @@ def transform(input):
         # 2. Check conditional access policies — is MFA enforced for all users?
         policies_enforcing_mfa_all_users = []
         set_aside = []
+        mfa_user_conditions = []
 
         for policy in policies:
             if not isinstance(policy, dict) or policy.get('state') != 'enabled':
@@ -280,6 +355,7 @@ def transform(input):
                     set_aside.append((short_name(policy.get('displayName')), why))
                     continue
                 policies_enforcing_mfa_all_users.append(policy.get('displayName'))
+                mfa_user_conditions.append(users)
 
         mfa_enforced_for_users = len(policies_enforcing_mfa_all_users) > 0
         input_summary = {
@@ -324,6 +400,10 @@ def transform(input):
                 validation, input_summary=input_summary, extra=details)
 
         is_enforced = methods_available and mfa_enforced_for_users
+        uncovered, named_total, mfa_scope = mfa_coverage(mfa_user_conditions)
+        input_summary = with_affected(dict(input_summary), uncovered)
+        if mfa_enforced_for_users and mfa_scope is not None:
+            input_summary["mfaScope"] = mfa_scope[:MAX_NAMED]
 
         if methods_available:
             pass_reasons.append(f"MFA methods enabled: {', '.join(enabled_methods)}")
@@ -337,6 +417,19 @@ def transform(input):
             fail_reasons.append("No enabled conditional access policies requiring MFA for all users"
                                 + ("; " + set_aside_text(set_aside) if set_aside else ""))
             recommendations.append("Create a conditional access policy requiring MFA that targets All Users or relevant groups")
+
+        if is_enforced and (uncovered or mfa_scope is not None):
+            line = ""
+            if uncovered:
+                line = "; " + affected_line("Conditional Access policies requiring MFA for users", uncovered,
+                                            named_total, "users, groups or roles named in those policies are "
+                                            "covered by none of them")
+            if mfa_scope is not None:
+                line = (line + "; no MFA policy targets all users, MFA reaches only: "
+                        + (name_list(mfa_scope) if mfa_scope else "no one named"))
+            pass_reasons[0] = pass_reasons[0] + line
+            recommendations.append("Review the accounts named above: remove each MFA exclusion that is not a "
+                                   "documented break-glass account, and target the MFA policy at All users")
 
         result = {criteriaKey: is_enforced}
         result.update(details)
