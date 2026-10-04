@@ -134,8 +134,9 @@ def test_strong_methods_enabled_unchanged(mode):
     value, status, out = run(body(enabled={"MicrosoftAuthenticator", "Fido2"}), mode)
     assert (value, status) == (True, "success")
     assert out["transformedResponse"]["enabledMethods"] == ["Fido2", "MicrosoftAuthenticator"]
-    # Group-targeted policy still counts; strong methods plus Duo still pass on the Microsoft evidence.
-    assert run(body(enabled={"Fido2"}, policies=[ca_policy("MFA", users=(), groups=("g1",))]), mode)[:2] == (True, "success")
+    # Group-targeted policy only: not evaluated since J.J.'s 4 Oct decision (ALL_USERS_TARGET_MODE "unevaluated");
+    # group membership is not read here. Strong methods plus Duo still pass on the Microsoft evidence.
+    assert run(body(enabled={"Fido2"}, policies=[ca_policy("MFA", users=(), groups=("g1",))]), mode)[:2] == (None, "error")
     assert run(body(enabled={"MicrosoftAuthenticator"}, extra=[DUO]), mode)[:2] == (True, "success")
     # Strong methods but no CA policy requiring MFA (or only a disabled / non-MFA one): FAIL, as before.
     for policies in ([], [ca_policy("off", state="disabled")], [ca_policy("block", grant=("block",))]):
