@@ -1,9 +1,10 @@
 """
-Transformation: isComplianceAPIEnabled
+Transformation: isAuditLoggingEnabled
 Vendor: Anthropic  |  Category: Artificial Intelligence
-Products: Claude, Claude Compliance API
-Evaluates: The organization's Compliance API Activity Feed is enabled and readable,
-providing a six-year audit trail.
+Product: Claude Compliance API
+Evaluates: The organization's Compliance API Activity Feed is recording now: its newest
+record is no older than RECENT_DAYS. Anthropic records nothing while the Compliance API
+is turned off, and what is not recorded cannot be recovered later.
 API Source: listComplianceActivities (GET /v1/compliance/activities?limit=1)
 """
 import json
@@ -83,7 +84,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 METADATA = {
-    "transformationId": "isComplianceAPIEnabled",
+    "transformationId": "isAuditLoggingEnabled",
     "vendor": "Anthropic",
     "category": "Artificial Intelligence",
 }
@@ -187,7 +188,7 @@ def api_not_enabled(data):
 def unknown_response(validation, reason, recommendation, input_summary):
     """Not evaluated: the value is None and dataCollection.status is "error"."""
     return create_response(
-        result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+        result={"isAuditLoggingEnabled": UNKNOWN, "evaluable": False},
         validation=validation,
         fail_reasons=[reason],
         recommendations=[recommendation],
@@ -223,21 +224,44 @@ def activity_items(data):
     return None
 
 
+# Every Compliance API call is itself recorded (activity type compliance_api_accessed),
+# so an organization whose recording is on always has a record at least as recent as
+# Spektrum's previous evaluation. A newest record older than this window means recording
+# stopped (the Compliance API toggle was turned off) or nothing has read the feed since.
+RECENT_DAYS = 7
+
+
+def parse_time(value):
+    """An RFC 3339 timestamp ("2026-04-10T08:09:10Z") as a naive UTC datetime, else None."""
+    # Parsed by hand: datetime.strptime imports the private _strptime module on first
+    # use, which the production sandbox's import guard refuses.
+    if not isinstance(value, str) or len(value) < 19:
+        return None
+    if value[4] != "-" or value[7] != "-" or value[10] not in ("T", " ") or value[13] != ":" or value[16] != ":":
+        return None
+    parts = [value[0:4], value[5:7], value[8:10], value[11:13], value[14:16], value[17:19]]
+    if not all(p.isdigit() for p in parts):
+        return None
+    try:
+        return datetime(int(parts[0]), int(parts[1]), int(parts[2]),
+                        int(parts[3]), int(parts[4]), int(parts[5]))
+    except ValueError:
+        return None
+
+
 def evaluate(input):
     data, validation = extract_input(input)
-    # Token-Service navigates into the response's "data" key (codeexecutor
-    # navigation_keys), so this transform usually receives the bare navigated
-    # value. Accept that, the returnSpec-mapped dict, and the raw API body.
     if api_not_enabled(data):
         return create_response(
-            result={"isComplianceAPIEnabled": False, "evaluable": True},
+            result={"isAuditLoggingEnabled": False, "evaluable": True, "complianceApiEnabled": False},
             validation=validation,
             fail_reasons=[
-                "Anthropic answered that the Compliance API is not enabled for this organization, "
-                "so no audit trail of Claude activity is being recorded."
+                "Anthropic answered that the Compliance API is not enabled for this organization. "
+                "No activity is recorded while it is off, and what is not recorded cannot be "
+                "recovered later."
             ],
             recommendations=["The primary owner enables the Compliance API at claude.ai > Organization settings > API."],
-            input_summary={"endpointReachable": True, "httpStatus": 400},
+            input_summary={"endpointReachable": True, "httpStatus": 400, "complianceApiEnabled": False},
             metadata=METADATA,
         )
     refused = refusal_response(validation, data, "Compliance API Activity Feed")
@@ -245,40 +269,81 @@ def evaluate(input):
         return refused
 
     items = activity_items(data)
+    if items is None:
+        return unknown_response(
+            validation,
+            "The Activity Feed response held no list of activity records, so recording could not be checked.",
+            "Confirm the Compliance Access Key carries read:compliance_activities, then re-run the evaluation.",
+            {"activityListPresent": False},
+        )
     if not items:
         return unknown_response(
             validation,
-            "The Activity Feed returned no records, so it could not be shown that the Compliance "
-            "API is recording for this organization. An empty page is not evidence either way.",
-            "Confirm the Compliance API is enabled at claude.ai > Organization settings > API and "
-            "that the key carries read:compliance_activities, then re-run the evaluation.",
+            "The Activity Feed returned no records. An empty page does not show whether recording "
+            "is on, so audit logging is not evaluated.",
+            "Confirm the Compliance API is enabled for the parent organization at claude.ai > "
+            "Organization settings > API, then re-run the evaluation.",
             {"activityCount": 0},
         )
 
-    newest = items[0] if isinstance(items[0], dict) else {}
-    created_at = newest.get("created_at") or ""
-    activity_type = newest.get("type") or ""
+    newest_at = None
+    newest_type = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        when = parse_time(item.get("created_at"))
+        if when is not None and (newest_at is None or when > newest_at):
+            newest_at = when
+            newest_type = item.get("type")
+    if newest_at is None:
+        return unknown_response(
+            validation,
+            "No activity record carried a readable created_at timestamp, so recording could not be dated.",
+            "Report this to the Spektrum integrations team with the raw API response.",
+            {"activityCount": len(items), "timestampReadable": False},
+        )
 
+    age_seconds = (datetime.utcnow() - newest_at).total_seconds()
+    age_days = max(0, int(age_seconds // 86400))
+    newest_iso = newest_at.isoformat() + "Z"
+    summary = {"activityCount": len(items), "newestActivityAt": newest_iso,
+               "newestActivityType": newest_type, "newestActivityAgeDays": age_days,
+               "recentWindowDays": RECENT_DAYS}
+    findings = [
+        "Only the newest record's timestamp and type are kept. Actor details in the raw "
+        "response (email address, IP address, user agent) are discarded."
+    ]
+
+    if age_seconds <= RECENT_DAYS * 86400:
+        return create_response(
+            result={"isAuditLoggingEnabled": True, "evaluable": True,
+                    "newestActivityAt": newest_iso, "newestActivityAgeDays": age_days},
+            validation=validation,
+            pass_reasons=[
+                "The Compliance API Activity Feed is recording: its newest record is a '" +
+                str(newest_type) + "' event at " + newest_iso + ", within the last " +
+                str(RECENT_DAYS) + " days. Anthropic retains activity records for six years."
+            ],
+            input_summary=summary,
+            additional_findings=findings,
+            metadata=METADATA,
+        )
     return create_response(
-        result={
-            "isComplianceAPIEnabled": True,
-            "evaluable": True,
-            "activityCount": len(items),
-            "mostRecentActivityAt": created_at,
-            "mostRecentActivityType": activity_type,
-        },
+        result={"isAuditLoggingEnabled": False, "evaluable": True,
+                "newestActivityAt": newest_iso, "newestActivityAgeDays": age_days},
         validation=validation,
-        pass_reasons=[
-            "The Compliance API Activity Feed is live and readable; the most recent record is a '" +
-            str(activity_type) + "' event at " + str(created_at) +
-            ". Activity records are retained for six years."
+        fail_reasons=[
+            "The newest Activity Feed record is " + str(age_days) + " days old (" + newest_iso +
+            "). Every Compliance API call is itself recorded, so a feed this stale means "
+            "recording has stopped. Activity is not recorded while the Compliance API is off "
+            "and cannot be recovered later."
         ],
-        input_summary={"activityCount": len(items), "mostRecentActivityType": activity_type},
-        additional_findings=[
-            "Only the record count and the newest record's timestamp and type are retained by this "
-            "transformation. The actor block (email address, IP address, user agent) present in the "
-            "raw response is deliberately discarded."
+        recommendations=[
+            "Ask the primary owner to confirm the Compliance API is turned on at claude.ai > "
+            "Organization settings > API."
         ],
+        input_summary=summary,
+        additional_findings=findings,
         metadata=METADATA,
     )
 
@@ -289,7 +354,7 @@ def transform(input):
     except Exception as exc:  # never raise into the pipeline
         message = "Transformation raised an unexpected error, so the control is not evaluated: " + str(exc)
         return create_response(
-            result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+            result={"isAuditLoggingEnabled": UNKNOWN, "evaluable": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             api_errors=[message],
