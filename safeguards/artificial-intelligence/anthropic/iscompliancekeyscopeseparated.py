@@ -1,10 +1,12 @@
 """
-Transformation: isComplianceAPIEnabled
+Transformation: isComplianceKeyScopeSeparated
 Vendor: Anthropic  |  Category: Artificial Intelligence
-Products: Claude, Claude Compliance API
-Evaluates: The organization's Compliance API Activity Feed is enabled and readable,
-providing a six-year audit trail.
-API Source: listComplianceActivities (GET /v1/compliance/activities?limit=1)
+Product: Claude Compliance API
+Evaluates: No active Compliance Access Key can both read and delete user content.
+Anthropic's guidance is that a workflow which reads and deletes uses two keys with
+separate scopes, so a leaked read key cannot delete data.
+API Source: getComplianceAccessKeys (the api_keys list of
+GET /v1/compliance/organizations/{uuid}/settings; key secrets are never returned)
 """
 import json
 from datetime import datetime
@@ -83,7 +85,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 METADATA = {
-    "transformationId": "isComplianceAPIEnabled",
+    "transformationId": "isComplianceKeyScopeSeparated",
     "vendor": "Anthropic",
     "category": "Artificial Intelligence",
 }
@@ -187,7 +189,7 @@ def api_not_enabled(data):
 def unknown_response(validation, reason, recommendation, input_summary):
     """Not evaluated: the value is None and dataCollection.status is "error"."""
     return create_response(
-        result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+        result={"isComplianceKeyScopeSeparated": UNKNOWN, "evaluable": False},
         validation=validation,
         fail_reasons=[reason],
         recommendations=[recommendation],
@@ -212,12 +214,16 @@ def refusal_response(validation, data, what):
     )
 
 
-def activity_items(data):
-    """The Activity Feed records as a list, or None when the body holds no list."""
+DELETE_SCOPE = "delete:compliance_user_data"
+CONTENT_READ_SCOPE = "read:compliance_user_data"
+
+
+def key_items(data):
+    """The api_keys entries as a list, or None when the body holds no list."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("data", "activities"):
+        for key in ("data", "api_keys", "apiKeys", "complianceApiKeys"):
             if isinstance(data.get(key), list):
                 return data[key]
     return None
@@ -225,60 +231,92 @@ def activity_items(data):
 
 def evaluate(input):
     data, validation = extract_input(input)
-    # Token-Service navigates into the response's "data" key (codeexecutor
-    # navigation_keys), so this transform usually receives the bare navigated
-    # value. Accept that, the returnSpec-mapped dict, and the raw API body.
-    if api_not_enabled(data):
-        return create_response(
-            result={"isComplianceAPIEnabled": False, "evaluable": True},
-            validation=validation,
-            fail_reasons=[
-                "Anthropic answered that the Compliance API is not enabled for this organization, "
-                "so no audit trail of Claude activity is being recorded."
-            ],
-            recommendations=["The primary owner enables the Compliance API at claude.ai > Organization settings > API."],
-            input_summary={"endpointReachable": True, "httpStatus": 400},
-            metadata=METADATA,
-        )
-    refused = refusal_response(validation, data, "Compliance API Activity Feed")
+    refused = refusal_response(validation, data, "Compliance Access Key list")
     if refused:
         return refused
 
-    items = activity_items(data)
-    if not items:
+    keys = key_items(data)
+    if not keys:
         return unknown_response(
             validation,
-            "The Activity Feed returned no records, so it could not be shown that the Compliance "
-            "API is recording for this organization. An empty page is not evidence either way.",
-            "Confirm the Compliance API is enabled at claude.ai > Organization settings > API and "
-            "that the key carries read:compliance_activities, then re-run the evaluation.",
-            {"activityCount": 0},
+            "The settings response listed no Compliance Access Keys. The key Spektrum uses is "
+            "always listed, so an empty list means the key inventory was not read.",
+            "Confirm the Compliance Access Key carries read:compliance_org_data and re-run the evaluation.",
+            {"keysReported": 0},
         )
 
-    newest = items[0] if isinstance(items[0], dict) else {}
-    created_at = newest.get("created_at") or ""
-    activity_type = newest.get("type") or ""
+    active = [k for k in keys if isinstance(k, dict) and k.get("is_active") is True]
+    inactive_count = len([k for k in keys if isinstance(k, dict) and k.get("is_active") is False])
+    if not active:
+        return unknown_response(
+            validation,
+            "No key in the list is marked active, yet the key Spektrum used to read it must be "
+            "active, so the key inventory is not trusted.",
+            "Report this to the Spektrum integrations team with the raw API response.",
+            {"keysReported": len(keys), "activeKeys": 0},
+        )
 
+    combined = []
+    unreadable = 0
+    content_readers = 0
+    for k in active:
+        scopes = k.get("scopes")
+        if not isinstance(scopes, list):
+            unreadable = unreadable + 1
+            continue
+        scope_set = [str(s) for s in scopes]
+        if CONTENT_READ_SCOPE in scope_set:
+            content_readers = content_readers + 1
+        reads = [s for s in scope_set if s.startswith("read:")]
+        if DELETE_SCOPE in scope_set and reads:
+            combined.append(str(k.get("name") or k.get("id") or "unnamed key"))
+
+    summary = {"keysReported": len(keys), "activeKeys": len(active), "inactiveKeys": inactive_count,
+               "keysReadingAndDeleting": len(combined), "keysWithUnreadableScopes": unreadable,
+               "keysReadingUserContent": content_readers}
+    findings = []
+    if content_readers:
+        findings.append(
+            str(content_readers) + " active key(s) carry " + CONTENT_READ_SCOPE + ", which reads "
+            "every chat, file, project and session transcript in the organizations the key covers."
+        )
+    if inactive_count:
+        findings.append(str(inactive_count) + " deactivated key(s) are listed; they cannot authenticate.")
+
+    if combined:
+        return create_response(
+            result={"isComplianceKeyScopeSeparated": False, "evaluable": True},
+            validation=validation,
+            fail_reasons=[
+                str(len(combined)) + " active Compliance Access Key(s) can both read and delete "
+                "user content: " + ", ".join(combined[:10]) + ". A leak of one of these keys "
+                "exposes content and allows its permanent deletion."
+            ],
+            recommendations=[
+                "Replace each of these keys with two keys: one with the read scopes and one with " +
+                DELETE_SCOPE + " only. Scopes cannot be changed on an existing key."
+            ],
+            input_summary=summary,
+            additional_findings=findings,
+            metadata=METADATA,
+        )
+    if unreadable:
+        return unknown_response(
+            validation,
+            str(unreadable) + " active key(s) had no readable scope list, so read/delete "
+            "separation is not proven.",
+            "Report this to the Spektrum integrations team with the raw API response.",
+            summary,
+        )
     return create_response(
-        result={
-            "isComplianceAPIEnabled": True,
-            "evaluable": True,
-            "activityCount": len(items),
-            "mostRecentActivityAt": created_at,
-            "mostRecentActivityType": activity_type,
-        },
+        result={"isComplianceKeyScopeSeparated": True, "evaluable": True},
         validation=validation,
         pass_reasons=[
-            "The Compliance API Activity Feed is live and readable; the most recent record is a '" +
-            str(activity_type) + "' event at " + str(created_at) +
-            ". Activity records are retained for six years."
+            "All " + str(len(active)) + " active Compliance Access Key(s) were read and none holds "
+            "both a read scope and " + DELETE_SCOPE + "."
         ],
-        input_summary={"activityCount": len(items), "mostRecentActivityType": activity_type},
-        additional_findings=[
-            "Only the record count and the newest record's timestamp and type are retained by this "
-            "transformation. The actor block (email address, IP address, user agent) present in the "
-            "raw response is deliberately discarded."
-        ],
+        input_summary=summary,
+        additional_findings=findings,
         metadata=METADATA,
     )
 
@@ -289,7 +327,7 @@ def transform(input):
     except Exception as exc:  # never raise into the pipeline
         message = "Transformation raised an unexpected error, so the control is not evaluated: " + str(exc)
         return create_response(
-            result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+            result={"isComplianceKeyScopeSeparated": UNKNOWN, "evaluable": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             api_errors=[message],
