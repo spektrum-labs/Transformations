@@ -5,7 +5,7 @@ Method: getEndpointSecurityEndpoints (GET {serverUrl}/v3.0/endpointSecurity/endp
 
 Evidence: the Endpoint Inventory list (response model: trendmicro/tm-v1-pytv1 EndpointSecurityEndpoint,
 EppAgent, EdrSensor; field values: trendmicro/vision-one-mcp-server FilterEndpoints table).
-Confirmed on a real Infraservices payload (417 endpoints, 2026-09-25).
+Confirmed on a real customer payload (2026-09-25).
 
 Verdict: true when every endpoint in the inventory reports a non-empty osName and osVersion.
 
