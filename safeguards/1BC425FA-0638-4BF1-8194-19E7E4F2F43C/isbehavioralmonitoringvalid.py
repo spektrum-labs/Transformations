@@ -93,6 +93,15 @@ def transform(input):
         # criterion and no input could make it false. Resolved from the payload now.
         default_value = affirmative_signal(data)
 
+        if not default_value and no_endpoints(data, ["isBehavioralMonitoringValid"]):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[NO_ENDPOINTS_REASON],
+                api_errors=[NO_ENDPOINTS_REASON],
+                input_summary={"behavioralMonitoringValid": None, "endpointCount": 0}
+            )
+
         is_behavioral_monitoring_valid = False
         if isinstance(data, dict):
             is_behavioral_monitoring_valid = data.get('isBehavioralMonitoringValid', default_value)
@@ -137,6 +146,13 @@ def affirmative_signal(data):
       * a non-empty population of records/settings   -> True
       * anything unrecognised                        -> False  (never True by default)
     """
+    if isinstance(data, list):
+        # A top-level JSON array is a population of records, as {"items": [...]} already is,
+        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
+        for item in data:
+            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
+                return False
+        data = {"items": [item for item in data if item]}
     if not isinstance(data, dict) or not data:
         return False
     for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
@@ -160,7 +176,7 @@ def affirmative_signal(data):
             return True
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
             return True
-    for key in ("items", "data", "records", "results", "logs", "events", "policies",
+    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
                 "settings", "configurations", "devices", "agents", "users", "licenses"):
         value = data.get(key)
         if isinstance(value, list) and value:
@@ -168,3 +184,23 @@ def affirmative_signal(data):
         if isinstance(value, dict) and value:
             return True
     return False
+
+
+NO_ENDPOINTS_REASON = "Not evaluated: no endpoints returned"
+
+
+def no_endpoints(data, keys):
+    """True when the read is an endpoint list with no endpoints in it and no explicit verdict key.
+
+    {"items": [], "pages": {...}} (or a bare []) says there is nothing to measure, not that the
+    control is off: per the answer model, no usable data is Not evaluated, never a fail.
+    """
+    if isinstance(data, list):
+        return len(data) == 0
+    if not isinstance(data, dict):
+        return False
+    for key in keys:
+        if key in data:
+            return False
+    items = data.get("items")
+    return isinstance(items, list) and len(items) == 0
