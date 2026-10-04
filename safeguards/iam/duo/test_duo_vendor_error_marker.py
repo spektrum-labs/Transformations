@@ -3,7 +3,8 @@
 Duo answers a missing Admin API permission with HTTP 403 {"stat": "FAIL", "code": 40301,
 "message": "Access forbidden"}. getDuoSettings needs "Grant settings"; getAdmins needs
 "Grant administrators - Read". When the method opts in, the refusal reaches the transformation as
-{"vendorErrorAsResponse": {"status", "bodyContains", "body"}}. These four checks must report it
+{"vendorErrorAsResponse": {"status", "bodyContains", "body"}}. These three checks must report it (authTypesAllowed reads Policies v2 now and has its own refusal tests in
+test_duo_authtypes_allowed_policies.py)
 Unevaluated (every value None, dataCollection error), name the permission only for 403/40301, and
 never return False or a pass.
 """
@@ -29,7 +30,6 @@ ADMINS_OK = {"stat": "OK", "response": [
 
 # file, criteria key, required permission, healthy payload, healthy value
 CASES = [
-    ("authTypesAllowed", "authTypesAllowed", "Grant settings", SETTINGS_OK, True),
     ("confirmPasswordPolicyEnforced", "confirmPasswordPolicyEnforced", "Grant settings", SETTINGS_OK, True),
     ("superAdminMfaEnrollmentPercentage", "superAdminMfaEnrollmentPercentage",
      "Grant administrators - Read", ADMINS_OK, 100.0),
@@ -147,7 +147,6 @@ class DuoVendorErrorMarkerTests(unittest.TestCase):
     def test_policy_failures_still_fail(self):
         weak = {"stat": "OK", "response": {"push_enabled": False, "mobile_otp_enabled": False,
                                            "minimum_password_length": 4}}
-        self.assertIs(load("authTypesAllowed").transform(weak)["transformedResponse"]["authTypesAllowed"], False)
         self.assertIs(load("confirmPasswordPolicyEnforced").transform(weak)
                       ["transformedResponse"]["confirmPasswordPolicyEnforced"], False)
         owners = {"stat": "OK", "response": [{"admin_id": "A1", "role": "Owner"}]}
