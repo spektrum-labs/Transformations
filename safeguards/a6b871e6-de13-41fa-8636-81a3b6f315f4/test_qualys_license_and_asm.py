@@ -93,6 +93,8 @@ class AsmVerdicts(unittest.TestCase):
         r = self.res(schedule_body([scan(1, False), scan(2, True), scan(3, False)]))
         self.assertIs(r["isASMEnabled"], True)
         self.assertIs(r["isASMLoggingEnabled"], True)
+        reasons = asm.transform(schedule_body([scan(1, False), scan(2, True)]))["additionalInfo"]["evaluation"]["passReasons"]
+        self.assertTrue(any(x.startswith("Logging inferred:") and "(1 active schedules)" in x for x in reasons), reasons)
 
     def test_single_active_scan_as_dict(self):
         self.assertIs(self.res(schedule_body(scan(1, True)))["isASMEnabled"], True)
