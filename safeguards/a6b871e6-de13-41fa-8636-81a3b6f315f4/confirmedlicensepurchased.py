@@ -1,9 +1,11 @@
 """
 Transformation: confirmedLicensePurchased
-Vendor: Attack Surface Management
+Vendor: Qualys (Attack Surface Management)
 Category: Security / Licensing
 
-Evaluates if the license has been purchased for Attack Surface Management.
+Reads GET /qps/rest/portal/version. Qualys serves the QPS API only to an active
+subscription, so ServiceResponse.responseCode SUCCESS proves the licence. A refused,
+failed or unrecognised answer is Not evaluated (None), never False by default.
 """
 
 import json
@@ -66,6 +68,62 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# The workflow stores the portal call's output under this key; older wiring passed the
+# body bare. Both are read.
+WORKFLOW_KEYS = ("licenseStatus",)
+
+# Qualys QPS answers every call with ServiceResponse.responseCode. Only these codes say the
+# SUBSCRIPTION itself is missing or lapsed, so only these read as "no licence". Qualys
+# documents no such QPS code today; they are recognised defensively and stay narrow.
+LICENCE_ABSENT_CODES = ("SUBSCRIPTION_EXPIRED", "SUBSCRIPTION_INACTIVE", "LICENSE_EXPIRED",
+                        "LICENSE_NOT_FOUND", "NO_SUBSCRIPTION", "SUBSCRIPTION_NOT_FOUND")
+
+
+def find_service_response(data):
+    """Return the QPS ServiceResponse dict, or None when the body carries none."""
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("ServiceResponse"), dict):
+        return data["ServiceResponse"]
+    for key in WORKFLOW_KEYS:
+        inner = data.get(key)
+        if isinstance(inner, dict) and isinstance(inner.get("ServiceResponse"), dict):
+            return inner["ServiceResponse"]
+    return None
+
+
+def portal_version(service_response):
+    payload = service_response.get("data")
+    if not isinstance(payload, dict):
+        return ""
+    version = payload.get("Portal-Version")
+    if not isinstance(version, dict):
+        return ""
+    value = version.get("PortalApplication-VERSION")
+    return value if isinstance(value, str) else ""
+
+
+def is_error_envelope(data):
+    if not isinstance(data, dict):
+        return False
+    if data.get("error") or data.get("errors"):
+        return True
+    message = data.get("message")
+    return isinstance(message, str) and message.startswith("Integration execution error")
+
+
+def not_evaluated(criteriaKey, validation, reason, recommendation=None, api_errors=None):
+    """None reads Unevaluated downstream: a call that proved nothing is not a missing licence."""
+    return create_response(
+        result={criteriaKey: None},
+        validation=validation,
+        fail_reasons=[reason],
+        recommendations=[recommendation] if recommendation else [],
+        api_errors=api_errors,
+        input_summary={"licensePurchased": None}
+    )
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
 
@@ -78,54 +136,83 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            return not_evaluated(criteriaKey, validation, "Input validation failed")
+
+        # Legacy shape: an explicit boolean still decides.
+        if isinstance(data, dict) and isinstance(data.get("licensePurchased"), bool):
+            if data["licensePurchased"]:
+                return create_response(
+                    result={criteriaKey: True},
+                    validation=validation,
+                    pass_reasons=["License has been purchased for Attack Surface Management"],
+                    input_summary={"licensePurchased": True}
+                )
             return create_response(
                 result={criteriaKey: False},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=["License has not been purchased"],
+                recommendations=["Purchase license for Attack Surface Management"],
+                input_summary={"licensePurchased": False}
             )
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
+        service_response = find_service_response(data)
 
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
+        if service_response is None:
+            if is_error_envelope(data) or (isinstance(data, dict) and is_error_envelope(data.get("licenseStatus"))):
+                return not_evaluated(
+                    criteriaKey, validation,
+                    "Qualys did not answer the portal call; licence not evaluated",
+                    "Verify the Qualys API credentials and base URL",
+                    api_errors=["Qualys portal call returned an error"]
+                )
+            # Kept from the previous rule so no body that passed before stops passing: a
+            # non-Qualys-shaped body that positively evidences a licence still reads True.
+            if affirmative_signal(data):
+                return create_response(
+                    result={criteriaKey: True},
+                    validation=validation,
+                    pass_reasons=["License has been purchased for Attack Surface Management"],
+                    input_summary={"licensePurchased": True}
+                )
+            return not_evaluated(criteriaKey, validation,
+                                 "No Qualys ServiceResponse in the body; licence not evaluated")
 
-        if isinstance(data, dict) and 'errors' in data:
-            default_value = False
+        code = service_response.get("responseCode")
+        code = code.strip().upper() if isinstance(code, str) else ""
 
-        if isinstance(data, dict) and 'error' in data and 'message' in data:
-            if isinstance(data['message'], str) and data['message'].startswith("Integration execution error"):
-                fail_reasons.append("Error authenticating with Attack Surface Management")
-                recommendations.append("Verify the credentials for Attack Surface Management")
-                default_value = False
+        if code == "SUCCESS":
+            version = portal_version(service_response)
+            reason = "Qualys answered the authenticated portal call with SUCCESS"
+            if version:
+                reason = reason + " (portal " + version + ")"
+            return create_response(
+                result={criteriaKey: True},
+                validation=validation,
+                pass_reasons=[reason],
+                input_summary={"licensePurchased": True, "responseCode": code}
+            )
 
-        license_purchased = False
-        if isinstance(data, dict):
-            license_purchased = data.get('licensePurchased', default_value)
-        else:
-            license_purchased = default_value
+        if code in LICENCE_ABSENT_CODES:
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                fail_reasons=["Qualys reports the subscription is not active (" + code + ")"],
+                recommendations=["Renew or purchase the Qualys subscription"],
+                input_summary={"licensePurchased": False, "responseCode": code}
+            )
 
-        if license_purchased:
-            pass_reasons.append("License has been purchased for Attack Surface Management")
-        else:
-            fail_reasons.append("License has not been purchased")
-            recommendations.append("Purchase license for Attack Surface Management")
-
-        return create_response(
-            result={criteriaKey: license_purchased},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased}
+        # Auth, permission, request or unknown codes: the call was refused or failed, which
+        # is not evidence that no licence exists.
+        return not_evaluated(
+            criteriaKey, validation,
+            "Qualys returned " + (code or "no responseCode") + "; licence not evaluated",
+            "Verify the Qualys API user's credentials and API access permission",
+            api_errors=["Qualys responseCode " + (code or "missing")]
         )
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
