@@ -3,7 +3,7 @@
 Fixture shapes follow the Microsoft Learn REST samples (no customer data; ids are all-zero GUIDs):
   secure score     https://learn.microsoft.com/en-us/rest/api/defenderforcloud/secure-scores/get
   assessments      https://learn.microsoft.com/en-us/rest/api/defenderforcloud/assessments/list
-  assessment meta  https://learn.microsoft.com/en-us/rest/api/defenderforcloud/assessments-metadata/list-by-subscription
+  assessment meta  https://learn.microsoft.com/en-us/rest/api/defenderforcloud/assessments-metadata/list (tenant scope)
   pricings         https://learn.microsoft.com/en-us/rest/api/defenderforcloud/pricings/list
   activity log     https://learn.microsoft.com/en-us/rest/api/monitor/subscription-diagnostic-settings/list
 
