@@ -18,8 +18,11 @@ response that still carries nextLink (pages left unread) all return false.
 
 Verdict: servers are taken as the critical systems (Vision One tags no criticality on
 this API). True when at least one endpoint has type "server" and every server has a
-protection agent whose status is "on". A server with no agent, or status "off" /
-"unknown", fails it. No servers in the inventory also fails: absence is not proof.
+protection agent whose status is "on". A server with no agent, or status "off", fails it.
+A server whose agent status is "unknown" is unmeasured (Vision One cannot see its state, for
+example a Worry-Free managed agent): with no measured failure and at least one unmeasured server
+the value is None (Not evaluated), never False. No servers in the inventory also fails: absence
+is not proof.
 
 What this proves: every server Vision One knows about has a connected Trend protection
 agent. What it does not prove: which individual protection features are enabled, or
@@ -151,14 +154,20 @@ def transform(input):
             return failed
         servers = [e for e in endpoints if str(e.get("type")) == "server"]
         unprotected = []
+        unknown = []
         for e in servers:
             agent = sub(e, "eppAgent")
             status = str(agent.get("status")) if agent else "no agent"
-            if status != "on":
+            if status == "unknown":
+                unknown.append(endpoint_name(e))
+            elif status != "on":
                 unprotected.append(endpoint_name(e) + " (" + status + ")")
         value = len(servers) > 0 and len(unprotected) == 0
+        if servers and not unprotected and unknown:
+            value = None
         summary = {"totalEndpoints": len(endpoints), "servers": len(servers),
-                   "serversWithoutActiveAgent": len(unprotected), "sampleServersWithoutActiveAgent": unprotected[:10]}
+                   "serversWithoutActiveAgent": len(unprotected), "sampleServersWithoutActiveAgent": unprotected[:10],
+                   "serversUnknownStatus": len(unknown)}
         pass_reasons = []
         fail_reasons = []
         recommendations = []
@@ -168,6 +177,11 @@ def transform(input):
         elif unprotected:
             fail_reasons.append("%d of %d servers have no active Trend protection agent: %s" % (len(unprotected), len(servers), ", ".join(unprotected[:10])))
             recommendations.append("Restore agent connectivity or deploy the protection agent on the listed servers")
+        elif unknown:
+            fail_reasons.append("%d of %d servers report protection agent status unknown (not visible to Vision One, "
+                                "e.g. Worry-Free managed), so protection of critical systems cannot be read here: %s"
+                                % (len(unknown), len(servers), ", ".join(unknown[:10])))
+            recommendations.append("Check these servers in the protection manager console, or attach evidence")
         else:
             pass_reasons.append("All %d servers have an active Trend protection agent" % len(servers))
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
