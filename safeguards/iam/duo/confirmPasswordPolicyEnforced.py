@@ -122,7 +122,123 @@ def evaluate(data):
         return {"confirmPasswordPolicyEnforced": False, "error": str(e)}
 
 
+# Integration-Service hands a vendor refusal over as data when the method opts in
+# (vendorErrorAsResponse): {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <vendor body>}}.
+# Duo answers a missing Admin API permission with HTTP 403 {"stat": "FAIL", "code": 40301,
+# "message": "Access forbidden"}. That says nothing about the tenant's posture, so every key stays None
+# (Unevaluated) and the error names the permission to grant. Any other handed-over refusal is Unevaluated
+# with errorCode "vendor_refusal" and names no permission.
+REFUSAL_FORBIDDEN_CODE = 40301
+PERMISSION_NOT_GRANTED = "permission_not_granted"
+VENDOR_REFUSAL = "vendor_refusal"
+REQUIRED_PERMISSION = "Grant settings"
+REFUSAL_KEYS = ["confirmPasswordPolicyEnforced", "minimumPasswordLength", "requiresUpperAlpha", "requiresLowerAlpha", "requiresNumeric", "requiresSpecial", "lengthPolicyMet", "complexityPolicyMet", "failingChecks"]
+REFUSAL_ENDPOINT = "GET /admin/v1/settings"
+
+
+def refusal_decoded(body):
+    """A vendor body or whole input as an object: dicts as they are, JSON text or bytes parsed, else None."""
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8")
+        except Exception:
+            return None
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except Exception:
+            return None
+    return body
+
+
+def refusal_envelope(value):
+    """The dict carrying vendorErrorAsResponse: the input itself or one level inside it, else None."""
+    value = refusal_decoded(value)
+    if not isinstance(value, dict):
+        return None
+    if "vendorErrorAsResponse" in value:
+        return value
+    for k in value:
+        inner = value[k]
+        if isinstance(inner, dict) and "vendorErrorAsResponse" in inner:
+            return inner
+    return None
+
+
+def refusal_unevaluated(envelope):
+    marker = envelope.get("vendorErrorAsResponse")
+    status = marker.get("status") if isinstance(marker, dict) else None
+    body = refusal_decoded(marker.get("body")) if isinstance(marker, dict) else None
+    forbidden = (status == 403 and isinstance(body, dict)
+                 and body.get("code") == REFUSAL_FORBIDDEN_CODE and body.get("message") == "Access forbidden")
+    result = {}
+    for k in REFUSAL_KEYS:
+        result[k] = None
+    if forbidden:
+        problem = ("PERMISSION-NOT-GRANTED: Duo refused the call to " + REFUSAL_ENDPOINT + " with HTTP 403 code 40301 "
+                   "(Access forbidden) because the Admin API application lacks the \"" + REQUIRED_PERMISSION
+                   + "\" permission. Nothing was measured; this is not a posture result.")
+        recommendation = ("In the Duo Admin Panel, open the Admin API application used for Spektrum and enable the \""
+                          + REQUIRED_PERMISSION + "\" permission; the integration key and secret do not change.")
+    else:
+        problem = ("Duo refused the call to " + REFUSAL_ENDPOINT + " (HTTP " + str(status)[:10]
+                   + "); nothing was measured.")
+        recommendation = "Confirm the Duo Admin API credentials are valid and the Admin API application is enabled."
+    out = create_response(result, None, fail_reasons=[problem], api_errors=[problem],
+                          recommendations=[recommendation])
+    collection = out["additionalInfo"]["dataCollection"]
+    if forbidden:
+        collection["errorCode"] = PERMISSION_NOT_GRANTED
+        collection["requiredPermission"] = REQUIRED_PERMISSION
+    else:
+        collection["errorCode"] = VENDOR_REFUSAL
+    return out
+
+
+# A read that measured nothing is Unevaluated, never False. getDuoSettings defaults an unreadable body to {}
+# (returnSpec default_to {}), so {} cannot be told from a failed read, and a real Duo settings response is never
+# empty. {}, empty or non-JSON input, an error body (stat FAIL, error, statusCode >= 400), a settings object
+# holding none of the fields this check reads, and any exception are all Unevaluated: every result key None and
+# dataCollection status "error".
+MEASURED_FIELDS = ["minimum_password_length", "password_requires_upper_alpha", "password_requires_lower_alpha", "password_requires_numeric", "password_requires_special"]
+
+
+def has_error_body(value):
+    if not isinstance(value, dict):
+        return False
+    if str(value.get("stat", "")).upper() == "FAIL" or value.get("error"):
+        return True
+    code = value.get("statusCode")
+    return isinstance(code, int) and not isinstance(code, bool) and code >= 400
+
+
+def measured_nothing(raw, data):
+    """A reason string when the input proves nothing about the settings, else None."""
+    if not isinstance(data, dict) or len(data) == 0:
+        return "Duo returned no settings object (empty, missing or unreadable body)"
+    if has_error_body(raw) or has_error_body(data):
+        return "Duo returned an error body instead of the account settings"
+    for k in MEASURED_FIELDS:
+        if k in data:
+            return None
+    return "the Duo settings response holds none of the fields this check reads (" + ", ".join(MEASURED_FIELDS) + ")"
+
+
+def unevaluated(reason):
+    result = {}
+    for k in REFUSAL_KEYS:
+        result[k] = None
+    problem = ("Duo account settings from " + REFUSAL_ENDPOINT + " could not be evaluated: " + reason
+               + ". Nothing was measured; this is not a posture result.")
+    return create_response(result, None, api_errors=[problem],
+                           recommendations=["Confirm the Duo Admin API credentials are valid, the application has the \""
+                                            + REQUIRED_PERMISSION + "\" permission, and the settings read succeeds."])
+
+
 def transform(input):
+    refusal = refusal_envelope(input)
+    if refusal is not None:
+        return refusal_unevaluated(refusal)
     criteriaKey = "confirmPasswordPolicyEnforced"
     try:
         if isinstance(input, str):
@@ -131,12 +247,13 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unevaluated("input validation failed")
+        reason = measured_nothing(input, data)
+        if reason is not None:
+            return unevaluated(reason)
         eval_result = evaluate(data)
+        if "error" in eval_result:
+            return unevaluated("evaluation raised " + str(eval_result["error"])[:200])
         result_value = eval_result.get(criteriaKey, False)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
         pass_reasons = []
@@ -176,9 +293,4 @@ def transform(input):
             additional_findings=additional_findings
         )
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
-        )
+        return unevaluated("transformation raised " + str(e)[:200])
