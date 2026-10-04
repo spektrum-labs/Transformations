@@ -28,8 +28,9 @@ requiring MFA reads not evaluated, not FAIL.
 import json
 from datetime import datetime
 
-# Two independent switches (4 Oct 2026). Both default to False, which is the behaviour before they existed:
-# output is byte-identical with both off. Turning one on is a separate, deliberate change.
+# Two independent switches (4 Oct 2026). With EXCLUDE_RISK_CONDITIONED = False and ALL_USERS_TARGET_MODE = "off" the
+# output is byte-identical to the behaviour before they existed. J.J. chose (a) + (b-unevaluated) on 4 Oct 2026:
+# EXCLUDE_RISK_CONDITIONED = True, ALL_USERS_TARGET_MODE = "unevaluated".
 #
 # EXCLUDE_RISK_CONDITIONED: a policy with a non-empty signInRiskLevels or userRiskLevels condition fires only on
 #   risk (for example the Microsoft-managed "Multifactor authentication and reauthentication for risky sign-ins"
@@ -48,8 +49,8 @@ from datetime import datetime
 #     reads False on group policies alone.
 # Set-aside policies are named in the fail reason (at most SET_ASIDE_SHOWN, then "and N more"; names cut to
 # SET_ASIDE_NAME_CHARS) and returned as policiesSetAside.
-EXCLUDE_RISK_CONDITIONED = False
-ALL_USERS_TARGET_MODE = "off"
+EXCLUDE_RISK_CONDITIONED = True
+ALL_USERS_TARGET_MODE = "unevaluated"
 RISK_REASON = "fires only on sign-in or user risk"
 MAX_EXCLUDED_ACCOUNTS = 2
 SET_ASIDE_SHOWN = 5

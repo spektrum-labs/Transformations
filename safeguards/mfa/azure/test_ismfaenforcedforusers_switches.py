@@ -21,6 +21,9 @@ def load(**switches):
     spec = importlib.util.spec_from_file_location("ismfa_switches", HERE / "ismfaenforcedforusers.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # Baseline: both off (the pre-switch behaviour); each test sets what it exercises.
+    module.EXCLUDE_RISK_CONDITIONED = False
+    module.ALL_USERS_TARGET_MODE = "off"
     for name, value in switches.items():
         setattr(module, name, value)
     return module
@@ -59,9 +62,12 @@ def run(module, b):
     return out
 
 
-def test_defaults_are_off():
-    m = load()
-    assert m.EXCLUDE_RISK_CONDITIONED is False and m.ALL_USERS_TARGET_MODE == "off"
+def test_shipped_values_are_jj_decision_of_4_oct():
+    # J.J. chose (a) + (b-unevaluated) on 4 Oct 2026.
+    spec = importlib.util.spec_from_file_location("ismfa_shipped", HERE / "ismfaenforcedforusers.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.EXCLUDE_RISK_CONDITIONED is True and module.ALL_USERS_TARGET_MODE == "unevaluated"
 
 
 @pytest.mark.parametrize("p", [RISKY, USER_RISK, GROUP, ALL])
@@ -164,6 +170,7 @@ def test_restricted_python_executes_and_agrees(switches):
                _iter_unpack_sequence_=guarded_iter_unpack_sequence, _unpack_sequence_=guarded_unpack_sequence,
                _getattr_=safer_getattr, _write_=lambda x: x, __name__="sandboxed", __metaclass__=type)
     exec(code, glb)
+    glb.update(EXCLUDE_RISK_CONDITIONED=False, ALL_USERS_TARGET_MODE="off")
     glb.update(switches)
     plain = load(**switches)
     for b in (body(RISKY), body(GROUP), body(ALL, RISKY), body(policy("x", excludeGroups=[G1])),
