@@ -120,9 +120,34 @@ def active_users(input):
             and not is_true(u.get("archived"))], None
 
 
-def names(users, limit=10):
-    shown = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in users]
-    return ", ".join(shown[:limit]) + (" (and more)" if len(shown) > limit else "")
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_names(users):
+    return [str(u.get("primaryEmail") or u.get("id") or "unknown").strip()[:100] for u in users]
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Google Workspace (<scope>): N of M <what>: a, b and K more'."""
+    return "Google Workspace (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
 
 
 def transform(input):
@@ -143,7 +168,9 @@ def evaluate(users):
     enrolled = [u for u in users if is_true(u.get("isEnrolledIn2Sv"))]
     value = round(100.0 * len(enrolled) / len(users), 2)
     missing = [u for u in users if not is_true(u.get("isEnrolledIn2Sv"))]
+    affected = account_names(missing)
     reason = "%d of %d active users are enrolled in 2-Step Verification (%s%%)" % (len(enrolled), len(users), value)
+    line = affected_line("active users", affected, len(users), "users are not enrolled in 2-Step Verification")
     return create_response(result={CRITERIA_KEY: value}, pass_reasons=[reason] if not missing else [],
-                           fail_reasons=[reason + "; not enrolled: " + names(missing)] if missing else [],
-                           input_summary={"activeUsers": len(users), "enrolled": len(enrolled)})
+                           fail_reasons=[reason + "; " + line] if missing else [],
+                           input_summary=with_affected({"activeUsers": len(users), "enrolled": len(enrolled)}, affected))

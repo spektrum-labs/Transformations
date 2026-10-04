@@ -236,6 +236,32 @@ def user_has_mail_attribute(user):
     return bool(mail and str(mail).strip())
 
 
+# #101: findings name the affected accounts (same shape as legacyauthblocked.py). The first reason names
+# at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most MAX_AFFECTED, with
+# the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Microsoft Entra ID (<scope>): N of M <what>: a, b and K more'."""
+    return "Microsoft Entra ID (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
+
+
 def transform(input):
     # FEED CAVEAT: the integration's stated intent ("admins hold no mail/Exchange license")
     # needs role membership + assignedLicenses, but the current getUsers feed is a bare
@@ -321,6 +347,7 @@ def transform(input):
 
         admin_count = 0
         admins_with_mail_license = 0
+        admins_with_mail_license_names = []
         admins_with_mail_attribute_only = []
         admins_unclassified = []
         admins_missing_from_user_feed = 0
@@ -336,6 +363,7 @@ def transform(input):
                 name = str(user.get("userPrincipalName") or user.get("displayName") or principal_id)[:100]
                 if user_has_mail_or_exchange_license(user):
                     admins_with_mail_license += 1
+                    admins_with_mail_license_names.append(name)
                 elif user_has_mail_attribute(user):
                     if mail_only_is_classified(user):
                         admins_with_mail_attribute_only.append(name)
@@ -360,7 +388,9 @@ def transform(input):
                 # A proven mailbox/productivity licence on ANY admin is a measured fail, whatever
                 # else is unresolved; the unresolved admins are named in the reason.
                 reason = (f"{admins_with_mail_license} of {admin_count} admin account(s) have mail/Exchange "
-                          f"Online licenses")
+                          f"Online licenses; "
+                          + affected_line("privileged directory roles", admins_with_mail_license_names, admin_count,
+                                          "admin accounts hold a mailbox or productivity licence"))
                 if unresolved:
                     reason += "; also unresolved: " + "; ".join(unresolved)
                 fail_reasons.append(reason)
@@ -404,7 +434,9 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data},
+            input_summary=with_affected(
+                {"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data},
+                admins_with_mail_license_names),
             api_errors=no_evidence,
             additional_findings=findings,
         )
