@@ -19,8 +19,13 @@ what that policy enables.
 Unmeasured agents: Vision One does not receive the policy of agents managed by Trend Micro
 Worry-Free Business Security (eppAgent.protectionManager names Worry-Free; policyName is empty
 for all of them on real payloads). Such an agent with no policyName is not visible, not
-unconfigured, so it is left out of the percentage. When every protected endpoint is unmeasured
-the value is None (Not evaluated), never 0.
+unconfigured. Fail-closed handling of unmeasured agents (never a pass on partial data):
+  * no unmeasured agent: the percentage over all protected agents, as before;
+  * unmeasured agents and no measured agent without a policy: None (Not evaluated), with the
+    unmeasured count and the measured coverage in the result;
+  * unmeasured agents and at least one measured agent without a policy: a lower bound that counts
+    every unmeasured agent as not configured, so it can only meet a bar it would meet in the worst
+    case.
 
 Not evaluated (dataCollection error, no value): an error body, an unrecognised body, an empty
 endpoint list, no installed protection agent, or a merged response that still carries nextLink
@@ -181,8 +186,18 @@ def transform(input):
                 unmeasured.append(endpoint_name(e))
             else:
                 no_policy.append(endpoint_name(e))
-        protected = len(endpoints) - len(no_agent) - len(unmeasured)
-        configured = protected - len(no_policy)
+        measured = len(endpoints) - len(no_agent) - len(unmeasured)
+        configured = measured - len(no_policy)
+        protected = measured + len(unmeasured)
+        if unmeasured and not no_policy:
+            coverage = (measured * 100) // protected if protected else 0
+            reason = ("%d of %d protection agents are managed by Worry-Free Business Security, which does not report its "
+                      "policy to Vision One (%d%% measured), so configuration cannot be read here"
+                      % (len(unmeasured), protected, coverage))
+            return create_response(criteriaKey, {criteriaKey: None, "unmeasuredAgents": len(unmeasured),
+                                                 "measuredAgents": measured, "measuredCoveragePercentage": coverage},
+                                   validation=validation, api_errors=[reason], fail_reasons=[reason],
+                                   recommendations=["Check the policy in the Worry-Free console, or attach evidence"])
         if protected == 0:
             if unmeasured:
                 reason = ("%d protection agents are managed by Worry-Free Business Security, which does not report its "
@@ -208,6 +223,9 @@ def transform(input):
                 fail_reasons.append("%d endpoints have no installed protection agent: %s" % (len(no_agent), ", ".join(no_agent[:10])))
             if no_policy:
                 fail_reasons.append("%d protection agents report no applied policy: %s" % (len(no_policy), ", ".join(no_policy[:10])))
+            if unmeasured:
+                fail_reasons.append("%d Worry-Free managed agents do not report a policy to Vision One and are counted as not "
+                                    "configured, so this is a lower bound" % len(unmeasured))
             recommendations.append("Assign a protection policy in the protection manager and confirm Vision One shows it on each endpoint")
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
