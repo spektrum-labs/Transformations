@@ -13,14 +13,18 @@ API: GET /v1.0/identity/conditionalAccess/policies
 import json
 from datetime import datetime
 
-# Well-known Microsoft Entra security admin role template IDs
+# Well-known Microsoft Entra security admin role template IDs (built-in roles; the same in every tenant).
+# Source: https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/permissions-reference
+# Conditional Access Administrator is b1be1c3e-... and Privileged Authentication Administrator is 7be44c8a-...;
+# earlier versions held f28a1f50-... (SharePoint Administrator) and 7698a772-... (Cloud Device Administrator)
+# under those names.
 SECURITY_ADMIN_ROLES = {
     "62e90394-69f5-4237-9190-012177145e10": "Global Administrator",
     "194ae4cb-b126-40b2-bd5b-6091b380977d": "Security Administrator",
-    "f28a1f50-f6e7-4571-818b-6a12f2af6b6c": "Conditional Access Administrator",
+    "b1be1c3e-b65d-4f19-8427-f6fa0d97feb9": "Conditional Access Administrator",
     "e8611ab8-c189-46e8-94e1-60213ab1f814": "Privileged Role Administrator",
     "c4e39bd9-1100-46d3-8c65-fb160da0071f": "Authentication Administrator",
-    "7698a772-787b-4ac8-901f-60d6b08affd2": "Privileged Authentication Administrator",
+    "7be44c8a-adaf-4e2a-84d6-ab2649e08a13": "Privileged Authentication Administrator",
 }
 
 
