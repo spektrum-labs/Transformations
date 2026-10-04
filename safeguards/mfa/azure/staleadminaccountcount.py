@@ -15,8 +15,13 @@ so this transform receives {"roleAssignments": <body>, "users": <body>}:
 staleAdminAccountCount = the number of ENABLED active role holders with no successful sign-in in the last
 STALE_DAYS (90) days:
   * an admin is a USER that is the principal of an active directory role assignment (any directory role, any
-    scope). Service principals and groups holding a role are not users and are not counted (their numbers are in
-    inputSummary); members of role-assignable groups are not expanded;
+    scope). Service principals holding a role are not users and are not counted (their number is in inputSummary);
+  * GROUP-HELD assignments (principal @odata.type #microsoft.graph.group): role-assignable group members are not
+    expanded, so they could hide a stale admin. With any group-held assignment, a user-level count of 0 is
+    Unevaluated ("N role assignments are through groups; members not checked"), never a pass; a count above 0 is
+    still a fail with the accounts found, and the first reason adds that N group-held assignments were not
+    expanded. inputSummary.groupRoleAssignmentCount carries N. A principal with no @odata.type that is not in the
+    user list is Unevaluated (type cannot be told), never a pass;
   * enabled = accountEnabled true; disabled role holders are not counted and are listed in
     inputSummary.disabledAdmins;
   * last sign-in = signInActivity.lastSuccessfulSignInDateTime; when it is absent, the later of
@@ -450,10 +455,11 @@ def evaluate(data, now):
             return unevaluated("a role assignment carries no principalId")
         pid = str(pid).lower()
         kind = str(principal.get("@odata.type") or "").strip().lower()
+        if kind == "#microsoft.graph.group":
+            groups += 1
+            continue
         if kind in NON_USER_TYPES:
             non_user += 1
-            if kind == "#microsoft.graph.group":
-                groups += 1
             continue
         if kind == USER_TYPE or (kind == "" and pid in users_by_id):
             if pid not in users_by_id:
@@ -473,6 +479,9 @@ def evaluate(data, now):
     if missing:
         return unevaluated(str(len(missing)) + " user role holder(s) are not in the user list (a partial read), so "
                            "their sign-in cannot be read: " + name_list([clip(m) for m in missing]))
+    if not admin_ids and groups:
+        return unevaluated(group_text(groups) + "; no user holds an active directory role directly",
+                           {"groupRoleAssignmentCount": groups})
     if not admin_ids:
         return unevaluated("no user holds an active directory role in the read (" + str(len(assignments))
                            + " assignment(s)); a tenant always has a Global Administrator, so this is a failed or "
@@ -511,12 +520,17 @@ def evaluate(data, now):
 
     if enabled == 0:
         return unevaluated("no enabled user holds an active directory role (" + str(len(admin_ids))
-                           + " role holder(s), all disabled)")
+                           + " role holder(s), all disabled)", {"groupRoleAssignmentCount": groups})
 
-    return finish(
+    if groups and not stale:
+        return unevaluated(group_text(groups) + "; " + str(enabled) + " directly assigned role holder(s) all signed "
+                           "in within " + str(STALE_DAYS) + " days, but that is not the whole admin population",
+                           {"groupRoleAssignmentCount": groups, "adminCount": enabled})
+
+    out = finish(
         stale, enabled, never, disabled,
         {"roleAssignmentCount": len(assignments), "nonUserRoleHolderCount": non_user,
-         "groupRoleHolderCount": groups, "userCount": len(users), "pimEligibleCovered": False},
+         "groupRoleAssignmentCount": groups, "userCount": len(users), "pimEligibleCovered": False},
         now,
         TOOL + ": %d of %d enabled active role holders (users with an active directory role assignment) have "
         "no successful sign-in in " + str(STALE_DAYS) + "+ days",
@@ -525,6 +539,15 @@ def evaluate(data, now):
          "are counted too; keep them only with documented sign-in monitoring."],
         NOT_COVERED,
     )
+    if groups:
+        fails = out["additionalInfo"]["evaluation"]["failReasons"]
+        fails[0] = fails[0] + " (" + str(groups) + " group-held role assignment(s) were not expanded; their members " \
+            "are not checked)"
+    return out
+
+
+def group_text(groups):
+    return str(groups) + " role assignments are through groups; members not checked"
 
 
 def transform(input):
