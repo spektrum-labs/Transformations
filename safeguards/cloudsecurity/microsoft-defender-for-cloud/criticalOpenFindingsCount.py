@@ -7,9 +7,9 @@ Method: getAssessmentsWithMetadata (workflow: getAssessments -> "assessments",
   GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Security/assessments
       ?api-version=2020-01-01
   https://learn.microsoft.com/en-us/rest/api/defenderforcloud/assessments/list
-  GET https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Security/assessmentMetadata
-      ?api-version=2020-01-01
-  https://learn.microsoft.com/en-us/rest/api/defenderforcloud/assessments-metadata/list-by-subscription
+  GET https://management.azure.com/providers/Microsoft.Security/assessmentMetadata?api-version=2020-01-01
+      (tenant scope: the built-in catalogue; the subscription-scope list holds only custom types)
+  https://learn.microsoft.com/en-us/rest/api/defenderforcloud/assessments-metadata/list
 
 Defender for Cloud has no Critical severity (Low / Medium / High only), so this counts Unhealthy
 assessments whose severity is High: a different scale from AWS Security Hub's CRITICAL. Severity is read
