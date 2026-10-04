@@ -1,9 +1,20 @@
 """
 Transformation: confirmedLicensePurchased
-Vendor: MDR / Managed Detection and Response
+Vendor: Sophos Central (shared by the Sophos product integrations)
 Category: Licensing
 
-Evaluates if the license has been purchased for the MDR service.
+Evaluates whether Sophos Central reports a licensed, configured product, from the product
+flags the healthCheck read returns: isEPPConfigured, isMDRConfigured and, when present,
+isEmailConfigured / isEmailSecurityConfigured / isFirewallConfigured. Each flag may be a
+boolean or the string "true" / "false".
+
+  * any recognised product flag is true                -> True  (reason names each product)
+  * every recognised product flag is explicitly false  -> False
+  * no recognised flag, empty or error body            -> None  (Not evaluated)
+
+The input does not say which Sophos integration row asked, so the reason names the
+products the flags evidence rather than assuming MDR. A legacy `licensePurchased` key is
+still honoured first, and a body with no product flags keeps the earlier positive reading.
 """
 
 import json
@@ -62,7 +73,7 @@ def transform(input):
                     "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                     "schemaVersion": "1.0",
                     "transformationId": "confirmedLicensePurchased",
-                    "vendor": "MDR Provider",
+                    "vendor": "Sophos",
                     "category": "Licensing"
                 }
             }
@@ -87,23 +98,23 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # Default to True if data is present (indicates active integration)
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
+        license_purchased, reason, products = sophos_license(data)
+        summary = {"licensePurchased": license_purchased, "productFlags": products}
 
-        license_purchased = False
-        if isinstance(data, dict):
-            license_purchased = data.get('licensePurchased', default_value)
-        else:
-            license_purchased = default_value
+        if license_purchased is None:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[reason],
+                api_errors=[reason],
+                input_summary=summary
+            )
 
         if license_purchased:
-            pass_reasons.append("MDR license active and confirmed")
+            pass_reasons.append(reason)
         else:
-            fail_reasons.append("MDR license has not been purchased or confirmed")
-            recommendations.append("Ensure valid MDR license is purchased")
+            fail_reasons.append(reason)
+            recommendations.append("Confirm the Sophos Central product licence for this integration is purchased and configured")
 
         return create_response(
             result={criteriaKey: license_purchased},
@@ -111,7 +122,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased}
+            input_summary=summary
         )
 
     except Exception as e:
@@ -137,6 +148,13 @@ def affirmative_signal(data):
       * a non-empty population of records/settings   -> True
       * anything unrecognised                        -> False  (never True by default)
     """
+    if isinstance(data, list):
+        # A top-level JSON array is a population of records, as {"items": [...]} already is,
+        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
+        for item in data:
+            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
+                return False
+        data = {"items": [item for item in data if item]}
     if not isinstance(data, dict) or not data:
         return False
     for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
@@ -160,7 +178,7 @@ def affirmative_signal(data):
             return True
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
             return True
-    for key in ("items", "data", "records", "results", "logs", "events", "policies",
+    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
                 "settings", "configurations", "devices", "agents", "users", "licenses"):
         value = data.get(key)
         if isinstance(value, list) and value:
@@ -168,3 +186,62 @@ def affirmative_signal(data):
         if isinstance(value, dict) and value:
             return True
     return False
+
+
+PRODUCT_FLAGS = (
+    ("isEPPConfigured", "Endpoint Protection"),
+    ("isMDRConfigured", "MDR"),
+    ("isEmailConfigured", "Email Security"),
+    ("isEmailSecurityConfigured", "Email Security"),
+    ("isFirewallConfigured", "Firewall"),
+)
+
+
+def flag_value(value):
+    """True / False for a boolean or "true" / "false" string, else None."""
+    if value is True or value is False:
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+    return None
+
+
+def sophos_license(data):
+    """(True | False | None, reason, {flag: value}) for the Sophos healthCheck body."""
+    if not isinstance(data, dict):
+        if affirmative_signal(data):
+            return True, "Sophos licence confirmed: the read returned a populated product list", {}
+        return None, "Not evaluated: the Sophos licence read returned no data", {}
+    if "licensePurchased" in data:
+        legacy = data.get("licensePurchased")
+        if legacy:
+            return legacy, "Sophos licence confirmed (licensePurchased: true)", {}
+        return legacy, "Sophos licence not purchased (licensePurchased: false)", {}
+
+    products = {}
+    licensed = []
+    unlicensed = []
+    for key, label in PRODUCT_FLAGS:
+        if key not in data:
+            continue
+        value = flag_value(data.get(key))
+        products[key] = value
+        if value is True and label not in licensed:
+            licensed.append(label)
+        elif value is False and label not in unlicensed:
+            unlicensed.append(label)
+
+    if licensed:
+        return True, "Sophos licence confirmed: " + ", ".join(licensed) + " configured in Sophos Central", products
+    if products and all(v is False for v in products.values()):
+        return False, "Sophos Central reports no configured product: " + ", ".join(unlicensed) + " not configured", products
+
+    if affirmative_signal(data):
+        return True, "Sophos licence confirmed: the read returned an active licence signal", products
+    if products:
+        return None, "Not evaluated: the Sophos product flags were not readable as true or false", products
+    return None, "Not evaluated: the Sophos licence read returned no product flags", products
