@@ -1,4 +1,4 @@
-"""mfa/azure/ismfaenforcedforusers.py: EXCLUDE_RISK_CONDITIONED and REQUIRE_ALL_USERS_TARGET (4 Oct 2026).
+"""mfa/azure/ismfaenforcedforusers.py: EXCLUDE_RISK_CONDITIONED and ALL_USERS_TARGET_MODE (4 Oct 2026).
 
 Both default to False (today's behaviour). Each is tested off and on, alone and together, plain and under
 RestrictedPython. Synthetic estate only.
@@ -61,7 +61,7 @@ def run(module, b):
 
 def test_defaults_are_off():
     m = load()
-    assert m.EXCLUDE_RISK_CONDITIONED is False and m.REQUIRE_ALL_USERS_TARGET is False
+    assert m.EXCLUDE_RISK_CONDITIONED is False and m.ALL_USERS_TARGET_MODE == "off"
 
 
 @pytest.mark.parametrize("p", [RISKY, USER_RISK, GROUP, ALL])
@@ -74,7 +74,7 @@ def test_switches_off_count_every_mfa_policy_as_before(p):
 def test_switches_off_output_is_identical_to_explicit_false():
     for b in (body(RISKY), body(GROUP, ALL), body()):
         assert json.dumps(run(load(), b), sort_keys=True) == json.dumps(
-            run(load(EXCLUDE_RISK_CONDITIONED=False, REQUIRE_ALL_USERS_TARGET=False), b), sort_keys=True)
+            run(load(EXCLUDE_RISK_CONDITIONED=False, ALL_USERS_TARGET_MODE="off"), b), sort_keys=True)
 
 
 def test_exclude_risk_on_sets_risk_policies_aside():
@@ -91,7 +91,7 @@ def test_exclude_risk_on_sets_risk_policies_aside():
 
 
 def test_require_all_users_on_sets_group_policies_aside():
-    m = load(REQUIRE_ALL_USERS_TARGET=True)
+    m = load(ALL_USERS_TARGET_MODE="not_met")
     out = run(m, body(GROUP))
     assert out["transformedResponse"][KEY] is False
     assert '"MFA pilot group" (targets groups, not all users)' in out["additionalInfo"]["evaluation"]["failReasons"][-1]
@@ -110,14 +110,14 @@ def test_require_all_users_on_sets_group_policies_aside():
     ({"excludeUsers": "not a list"}, False),
 ])
 def test_all_users_exclusions_follow_the_coverage_convention(users, expect):
-    out = run(load(REQUIRE_ALL_USERS_TARGET=True), body(policy("MFA all users", **users)))
+    out = run(load(ALL_USERS_TARGET_MODE="not_met"), body(policy("MFA all users", **users)))
     assert out["transformedResponse"][KEY] is expect
     if not expect:
         assert '"MFA all users" (excludes ' in out["additionalInfo"]["evaluation"]["failReasons"][-1]
 
 
 def test_both_on_and_reason_is_capped_with_truncated_names():
-    m = load(EXCLUDE_RISK_CONDITIONED=True, REQUIRE_ALL_USERS_TARGET=True)
+    m = load(EXCLUDE_RISK_CONDITIONED=True, ALL_USERS_TARGET_MODE="not_met")
     many = [policy("G" * 100 + str(i), include_users=(), include_groups=(G1,)) for i in range(6)] + [RISKY]
     out = run(m, body(*many))
     assert out["transformedResponse"][KEY] is False
@@ -130,13 +130,15 @@ def test_both_on_and_reason_is_capped_with_truncated_names():
 
 
 def test_switches_never_rescue_unread_or_external_inputs():
-    m = load(EXCLUDE_RISK_CONDITIONED=True, REQUIRE_ALL_USERS_TARGET=True)
+    m = load(EXCLUDE_RISK_CONDITIONED=True, ALL_USERS_TARGET_MODE="not_met")
     assert m.transform({"authMethodsPolicy": methods()})["transformedResponse"][KEY] is None
     assert m.transform({"error": {"code": "Forbidden"}})["transformedResponse"][KEY] is None
 
 
-@pytest.mark.parametrize("switches", [{}, {"EXCLUDE_RISK_CONDITIONED": True}, {"REQUIRE_ALL_USERS_TARGET": True},
-                                      {"EXCLUDE_RISK_CONDITIONED": True, "REQUIRE_ALL_USERS_TARGET": True}])
+@pytest.mark.parametrize("switches", [{}, {"EXCLUDE_RISK_CONDITIONED": True}, {"ALL_USERS_TARGET_MODE": "not_met"},
+                                      {"ALL_USERS_TARGET_MODE": "unevaluated"},
+                                      {"EXCLUDE_RISK_CONDITIONED": True, "ALL_USERS_TARGET_MODE": "not_met"},
+                                      {"EXCLUDE_RISK_CONDITIONED": True, "ALL_USERS_TARGET_MODE": "unevaluated"}])
 def test_restricted_python_executes_and_agrees(switches):
     pytest.importorskip("RestrictedPython")
     from RestrictedPython import compile_restricted, limited_builtins, safe_globals, utility_builtins
@@ -170,3 +172,51 @@ def test_restricted_python_executes_and_agrees(switches):
         p_out = plain.transform(copy.deepcopy(b))
         assert s_out["transformedResponse"] == p_out["transformedResponse"]
         assert s_out["additionalInfo"]["evaluation"] == p_out["additionalInfo"]["evaluation"]
+
+
+# --- ALL_USERS_TARGET_MODE = "unevaluated" ---------------------------------------------------------------------------
+
+def test_unevaluated_mode_reads_group_only_coverage_as_not_evaluated():
+    m = load(ALL_USERS_TARGET_MODE="unevaluated")
+    out = run(m, body(GROUP))
+    assert out["transformedResponse"][KEY] is None
+    err = out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert err.startswith('MFA is required only by policies scoped to groups or with exclusions ("MFA pilot group")')
+    assert "group membership is not read, so coverage of all users cannot be confirmed" in err
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_unevaluated_mode_all_users_with_excluded_group_is_not_evaluated():
+    out = run(load(ALL_USERS_TARGET_MODE="unevaluated"), body(policy("MFA all users", excludeGroups=[G1])))
+    assert out["transformedResponse"][KEY] is None
+
+
+def test_unevaluated_mode_still_passes_and_fails_where_it_can():
+    m = load(ALL_USERS_TARGET_MODE="unevaluated")
+    assert run(m, body(GROUP, ALL))["transformedResponse"][KEY] is True
+    # No MFA policy at all: still Not met (nothing was set aside).
+    assert run(m, body())["transformedResponse"][KEY] is False
+    # No MFA method enabled: still Not met, whatever the policies.
+    b = body(GROUP)
+    b["authMethodsPolicy"] = {"authenticationMethodConfigurations": [{"id": "Sms", "state": "enabled"}]}
+    assert run(m, b)["transformedResponse"][KEY] is False
+
+
+def test_unevaluated_mode_names_are_capped():
+    many = [policy("G" * 100 + str(i), include_users=(), include_groups=(G1,)) for i in range(7)]
+    err = run(load(ALL_USERS_TARGET_MODE="unevaluated"), body(*many))["additionalInfo"]["dataCollection"]["errors"][0]
+    assert "and 2 more" in err and ("G" * 77 + "...") in err
+
+
+def test_risk_switch_is_independent_of_the_target_mode():
+    # Risk-only set-asides never make the key not evaluated; they make it Not met.
+    m = load(EXCLUDE_RISK_CONDITIONED=True, ALL_USERS_TARGET_MODE="unevaluated")
+    assert run(m, body(RISKY))["transformedResponse"][KEY] is False
+    assert run(m, body(RISKY, GROUP))["transformedResponse"][KEY] is None
+    assert run(load(ALL_USERS_TARGET_MODE="unevaluated"), body(RISKY))["transformedResponse"][KEY] is True
+
+
+@pytest.mark.parametrize("mode", ["off", "unevaluated", "not_met"])
+def test_unknown_inputs_stay_not_evaluated_in_every_mode(mode):
+    m = load(ALL_USERS_TARGET_MODE=mode, EXCLUDE_RISK_CONDITIONED=True)
+    assert m.transform({"authMethodsPolicy": methods()})["transformedResponse"][KEY] is None
