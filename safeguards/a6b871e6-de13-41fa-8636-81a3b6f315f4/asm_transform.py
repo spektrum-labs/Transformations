@@ -240,6 +240,7 @@ def transform(input):
         recognised = False
         scan_count = 0
         active_count = 0
+        logging_from_schedule = False
 
         # Explicit flags, when a caller supplies them, decide.
         if isinstance(data.get("isASMEnabled"), bool):
@@ -263,6 +264,8 @@ def transform(input):
                 # the same evidence for both keys.
                 if verdict:
                     is_asm_enabled = True
+                    if is_asm_logging_enabled is not True:
+                        logging_from_schedule = True
                     is_asm_logging_enabled = True
                 else:
                     if is_asm_enabled is None:
@@ -279,6 +282,7 @@ def transform(input):
                 is_asm_enabled = False
             if has_detections:
                 is_asm_logging_enabled = True
+                logging_from_schedule = False
             elif is_asm_logging_enabled is None:
                 is_asm_logging_enabled = False
 
@@ -308,7 +312,16 @@ def transform(input):
         else:
             fail_reasons.append("Attack Surface Management not evaluated")
 
-        if is_asm_logging_enabled:
+        if is_asm_logging_enabled and logging_from_schedule:
+            logging_reason = ("Logging inferred: Qualys keeps results for scans launched by an active schedule ("
+                              + str(active_count) + " active schedules); this is not a direct logging setting")
+            pass_reasons.append(logging_reason)
+            additional_findings.append({
+                "metric": "isASMLoggingEnabled",
+                "status": "pass",
+                "reason": logging_reason
+            })
+        elif is_asm_logging_enabled:
             additional_findings.append({
                 "metric": "isASMLoggingEnabled",
                 "status": "pass",
