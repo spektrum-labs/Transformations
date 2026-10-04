@@ -10,9 +10,20 @@
 #   usePersistentCookie}}. maxSessionLifetimeMinutes: "Maximum number of minutes (from when the user signs in)
 #   that a user's session is active ... Disable by setting to 0" (default 0, i.e. no maximum lifetime).
 #   Integration-Service returns these values as strings ("240", "0", "False"); both forms are read.
+# Default Policy and Default Rule (same spec, Policy tag): "Only the default policy contains a default rule", and
+#   "The default rule is required and is always the last rule in the priority order". Custom global session
+#   policies carry no Default Rule.
+# Paging: listPolicyRules takes `limit` ("Defines the number of policy rules returned") with no documented default
+#   or maximum and no `after` cursor, and the read follows no Link header. A rule list exactly one page long cannot
+#   be told from a list cut at that page, so it is not judged. Page sizes: DEFAULT_PAGE_SIZE (Okta documents
+#   `default: 20` for `limit` on its other list endpoints that state one) and LIMIT_PAGE_SIZE (the `limit=200` the
+#   definition may send).
 
 KEY = "isSessionTimeoutConfigured"
 UNLIMITED = "unlimited"
+DEFAULT_PAGE_SIZE = 20
+LIMIT_PAGE_SIZE = 200
+PAGE_SIZES = (DEFAULT_PAGE_SIZE, LIMIT_PAGE_SIZE)
 
 
 def transform(input):
@@ -36,7 +47,16 @@ def transform(input):
 
     Unevaluated (value None, dataCollection status "error") on: an error body, missing policy or rule lists, rule
     lists that do not line up with the policies, no active global session policy, no active ALLOW rule, an ALLOW
-    rule without session settings, or a lifetime that is not a whole number of minutes.
+    rule without session settings, or a lifetime that is not a whole number of minutes. Also on a list that may be
+    incomplete:
+      * the policy list has no Default Policy (system: true). Okta always returns it, so the list was cut short;
+      * the Default Policy's rule list has no Default Rule (system: true). Only the Default Policy has one, and it
+        is always last, so its rule list was cut short;
+      * an active policy returned no rules, or exactly a page of rules (a length in PAGE_SIZES), which cannot be
+        told apart from a first page cut short.
+    Custom policies are judged on the rules they return: Okta gives them no Default Rule, and a user who matches
+    none of a custom policy's rules falls through to a later policy, ending at the Default Policy, whose rules are
+    always judged.
 
     Does not prove: which groups each policy applies to, app-level re-authentication (authentication policy
     reauthenticateIn), or the separate 24-hour administrator limit some requirements describe.
@@ -51,16 +71,18 @@ def transform(input):
     where = state["where"]
     summary = state["inputSummary"]
     if worst == UNLIMITED:
-        fails = ["No maximum global session lifetime: " + str(len(where)) + " active ALLOW rule(s) set "
-                 "maxSessionLifetimeMinutes to 0 (no limit)"]
-        for item in where[:10]:
-            fails.append("No lifetime limit: " + item)
+        fails = ["Okta global session policies: " + str(len(where)) + " active ALLOW rule(s) allow an unlimited "
+                 "session lifetime (maxSessionLifetimeMinutes 0)"]
+        for policy_name, rule_name in where[:10]:
+            fails.append("Okta session policy: '" + policy_name + "' allows an unlimited session lifetime (rule '"
+                         + rule_name + "')")
         return respond(UNLIMITED, summary, [], fails,
                        ["Set a maximum Okta global session lifetime on every active ALLOW rule of every active "
                         "global session policy (Security > Global Session Policy > rule > Maximum Okta global "
                         "session lifetime)"])
-    passes = ["Longest global session lifetime among " + str(summary["allowRuleCount"]) + " active ALLOW rule(s): "
-              + str(worst) + " minutes (" + ", ".join(where[:3]) + ")"]
+    passes = ["Okta global session policies: the longest session lifetime among " + str(summary["allowRuleCount"])
+              + " active ALLOW rule(s) is " + str(worst) + " minutes ("
+              + ", ".join(["'" + p + "' / '" + r + "'" for (p, r) in where[:3]]) + ")"]
     return respond(worst, summary, passes, [], [])
 
 
@@ -132,7 +154,7 @@ def rule_list(item):
 
 
 def pair(policies, rules):
-    label = "Global session (OKTA_SIGN_ON)"
+    label = "Okta global session (OKTA_SIGN_ON)"
     if not isinstance(policies, list):
         return None, label + " policy list is missing"
     if not isinstance(rules, list) or len(rules) != len(policies):
@@ -153,6 +175,33 @@ def active(obj):
     return text(obj.get("status")).upper() == "ACTIVE"
 
 
+def system(obj):
+    return truthy(obj.get("system"))
+
+
+def incomplete(pairs):
+    """Why the policy or rule lists may be cut short, or None when they read as complete."""
+    defaults = [(p, r) for (p, r) in pairs if system(p)]
+    if not defaults:
+        return ("Okta global session policies: the policy list does not include the Default Policy (system: true); "
+                "Okta always returns it, so the list is incomplete and the longest session cannot be read")
+    for policy, rules in defaults:
+        if not any(system(rule) for rule in rules):
+            return ("Okta session policy: '" + text(policy.get("name")) + "' (the Default Policy) returned no "
+                    "Default Rule (system: true); Okta always lists it last, so the rule list is incomplete and the "
+                    "longest session cannot be read")
+    for policy, rules in pairs:
+        if not active(policy):
+            continue
+        if not rules:
+            return ("Okta session policy: '" + text(policy.get("name")) + "' is active but returned no rules, so the "
+                    "sessions it starts cannot be read")
+        if len(rules) in PAGE_SIZES:
+            return ("Okta session policy: '" + text(policy.get("name")) + "' returned exactly " + str(len(rules))
+                    + " rules, one full page; the rule list may be cut short, so the longest session cannot be read")
+    return None
+
+
 def evaluate(raw):
     data = parse(raw)
     state = {"error": None, "worst": None, "where": [], "inputSummary": {}}
@@ -164,42 +213,42 @@ def evaluate(raw):
     if problem is not None:
         state["error"] = problem
         return state
+    problem = incomplete(pairs)
+    if problem is not None:
+        state["error"] = problem
+        return state
     judged = [(p, r) for (p, r) in pairs if active(p)]
     if not judged:
-        state["error"] = "No active global session (OKTA_SIGN_ON) policy was returned"
+        state["error"] = "Okta global session policies: no active global session (OKTA_SIGN_ON) policy was returned"
         return state
     lifetimes = []
     idles = []
     for policy, rules in judged:
-        # Okta lists a policy's Default Rule (system: true, usually no lifetime limit) last. A rule list without it
-        # was cut short (paging), and the rule most likely to be the longest session is the one missing.
-        if not any(rule.get("system") is True or text(rule.get("system")).lower() == "true" for rule in rules):
-            state["error"] = ("The rule list for policy '" + text(policy.get("name")) + "' does not include its "
-                              "Default Rule (system: true); Okta lists it last, so the list is incomplete and the "
-                              "longest session cannot be read")
-            return state
         for rule in rules:
             if not active(rule):
                 continue
             sign_on = as_dict(as_dict(rule.get("actions")).get("signon"))
             if text(sign_on.get("access")).upper() != "ALLOW":
                 continue
-            label = text(policy.get("name")) + " / " + text(rule.get("name"))
+            label = (text(policy.get("name")), text(rule.get("name")))
             session = sign_on.get("session")
             if not isinstance(session, dict):
-                state["error"] = "ALLOW rule '" + label + "' carries no session settings"
+                state["error"] = ("Okta session policy: '" + label[0] + "' ALLOW rule '" + label[1] + "' carries no "
+                                  "session settings")
                 return state
             lifetime = minutes(session.get("maxSessionLifetimeMinutes"))
             if lifetime is None:
-                state["error"] = ("ALLOW rule '" + label + "' has a session lifetime that is not a whole number of "
-                                  "minutes: " + text(session.get("maxSessionLifetimeMinutes"))[:40])
+                state["error"] = ("Okta session policy: '" + label[0] + "' ALLOW rule '" + label[1] + "' has a "
+                                  "session lifetime that is not a whole number of minutes: "
+                                  + text(session.get("maxSessionLifetimeMinutes"))[:40])
                 return state
             idle = minutes(session.get("maxSessionIdleMinutes"))
             if idle is not None:
                 idles.append(idle)
             lifetimes.append((lifetime, label))
     if not lifetimes:
-        state["error"] = "No active ALLOW rule in the active global session policies; no session is started to measure"
+        state["error"] = ("Okta global session policies: no active ALLOW rule in the active policies; no session is "
+                          "started to measure")
         return state
     unlimited = [label for (value, label) in lifetimes if value == 0]
     if unlimited:
