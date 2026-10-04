@@ -525,6 +525,48 @@ def group_candidates(enabled, app_ids, groups):
     return out
 
 
+SET_ASIDE_SHOWN = 5
+SET_ASIDE_NAME_CHARS = 80
+EXCLUSION_LABELS = (("users in a list that cannot be read", "users in a list that cannot be read"),
+                    ("all users", "all users"),
+                    ("a group (its size is not counted here)", "a group"),
+                    ("a directory role (every holder of it, admins included)", "a directory role"),
+                    ("guests or external users", "guests or external users"))
+
+
+def short_name(policy):
+    name = policy_name(policy)
+    return name if len(name) <= SET_ASIDE_NAME_CHARS else name[:SET_ASIDE_NAME_CHARS - 3] + "..."
+
+
+def set_aside_reason(policy, groups, candidate, contributed):
+    """Why a workforce MFA policy that could not be judged 'full' did not count towards coverage."""
+    block = exclusion_block(policy)
+    if block:
+        labels = [label for long_text, label in EXCLUSION_LABELS if long_text in block]
+        return "excludes " + ", ".join(labels or [block])
+    conditions = as_dict(policy.get("conditions"))
+    why = []
+    if not unnarrowed(conditions):
+        why.append("narrowed by platform, device filter or client type")
+    if not covers_remote(conditions):
+        why.append("limited to named locations")
+    if why:
+        return " and ".join(why)
+    if candidate and not contributed:
+        return "no user members read in its included groups"
+    if user_scope(conditions, groups) != "groups":
+        return "its user scope cannot be judged here"
+    return ""
+
+
+def set_aside_text(entries):
+    """'policies set aside: "A" (why), "B" (why) and N more', at most SET_ASIDE_SHOWN named."""
+    shown = ['"' + name + '" (' + why + ")" for name, why in entries[:SET_ASIDE_SHOWN]]
+    more = len(entries) - SET_ASIDE_SHOWN
+    return "policies set aside: " + ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+
+
 def group_coverage(candidates, workforce, memberships, groups):
     """Whether group-scoped MFA policies together reach every enabled member account: (counts, contributing
     policies). The candidates exclude no group, role or guests (group_candidates), only named accounts."""
@@ -587,11 +629,25 @@ def evaluate(policies, groups=None, security_defaults=None, membership=None, acc
                                                for p in partial if exclusion_block(p)]
         if not covering:
             candidates = group_candidates(enabled, app_ids, groups) if membership is not None else []
+            contributing = []
             if candidates:
                 coverage, contributing = group_coverage(candidates, membership[0], membership[1], groups)
                 result[names + "GroupCoverage"] = coverage
                 if coverage["coversAll"]:
                     covering = contributing
+            if not covering:
+                aside = []
+                for p in partial:
+                    is_candidate = any(p is c for c in candidates)
+                    if is_candidate and any(p is c for c in contributing):
+                        continue
+                    if is_candidate and membership is None:
+                        continue
+                    why = set_aside_reason(p, groups, is_candidate, False)
+                    if why:
+                        aside.append((short_name(p), why))
+                result[names + "SetAside"] = [name + " (" + why + ")" for name, why in aside]
+                result[names + "SetAsideText"] = set_aside_text(aside) if aside else ""
         if covering:
             accounts = excluded_accounts(covering)
             if len(accounts) > MAX_EXCLUDED_ACCOUNTS:
@@ -713,8 +769,11 @@ def transform(input):
                     parts.append("MFA for all apps is required by policies scoped to user groups, platforms, "
                                  "client types or named locations (" + ", ".join(result[names + "PartialScoped"])
                                  + "); " + group_detail(coverage))
-                for finding in result[names + "ExclusionFindings"]:
-                    parts.append(finding + ", so it does not prove coverage")
+                if result.get(names + "SetAsideText"):
+                    parts.append(result[names + "SetAsideText"])
+                else:
+                    for finding in result[names + "ExclusionFindings"]:
+                        parts.append(finding + ", so it does not prove coverage")
                 errors.append(key + ": " + "; ".join(parts))
             elif result["securityDefaultsEnabled"] is True and key == "isRDPProtected":
                 errors.append(key + ": Security defaults are on, but they do not target Remote Desktop sign-ins and "
