@@ -16,10 +16,20 @@ phished into approving a push or typing a number, so they are not phishing-resis
 Until 2 Oct they counted as strong, which passed 7 tenants with no phishing-resistant method enabled at all.
 Conditional Access authentication strength (what sign-in actually requires) is the next-round version.
 
+Legacy migration states (4 Oct 2026): when neither strong method is enabled, policyMigrationState
+preMigration or migrationInProgress no longer makes the key not evaluated. The phishing-resistant methods
+exist only in this policy: Microsoft, "How to migrate to the Authentication methods policy": "The
+Authentication methods policy has other methods that aren't available in the legacy policies, such as
+FIDO2 security key, Temporary Access Pass, and Microsoft Entra certificate-based authentication." The legacy
+MFA and SSPR policies still govern the phishable methods (call, text, app notification, OATH codes), but
+they cannot enable a phishing-resistant one, so the key reads False with that reason. When an external
+authentication method is also enabled during migration, the result is unchanged (not evaluated, with the
+migration reason).
+
 Not evaluated (dataCollection error, value None):
 - an error or unrecognised body (no non-empty authenticationMethodConfigurations array);
-- neither strong method enabled while policyMigrationState is preMigration or migrationInProgress: the
-  legacy per-user MFA and SSPR policies still govern and this endpoint cannot read them;
+- neither strong method enabled while policyMigrationState is preMigration or migrationInProgress AND an
+  external authentication method is enabled (unchanged reason: the legacy policies still apply);
 - neither strong method enabled but an external authentication method (for example Cisco Duo) is
   enabled: the factor is enforced by that provider, which Entra cannot grade.
 """
@@ -110,10 +120,23 @@ def transform(input):
             result.update(summary)
             return create_response(result, validation, passed=["Strong method(s) enabled: " + ", ".join(strong)],
                                    summary=summary)
-        if migration.lower() in LEGACY_STATES:
+        if migration.lower() in LEGACY_STATES and external:
             raise ValueError("No strong method is enabled in the authentication methods policy, but its migration "
                              "state is " + migration + ": the legacy MFA and SSPR policies still apply and cannot "
                              "be read here")
+        if migration.lower() in LEGACY_STATES:
+            result = {CRITERIA_KEY: False}
+            result.update(summary)
+            return create_response(result, validation,
+                                   failed=["No phishing-resistant method (FIDO2 / passkeys or certificate-based "
+                                           "authentication) is enabled in the authentication methods policy. Its "
+                                           "migration state is " + migration + ", but Microsoft documents that "
+                                           "FIDO2 security keys, Temporary Access Pass and certificate-based "
+                                           "authentication aren't available in the legacy MFA and SSPR policies, so "
+                                           "none can be enabled there"
+                                           + ("; enabled methods are phishable: " + ", ".join(phishable)
+                                              if phishable else "")],
+                                   summary=summary)
         if external:
             raise ValueError("No Microsoft strong method is enabled; the external authentication method(s) "
                              + ", ".join(external) + " enforce the factor and cannot be graded from Entra")
