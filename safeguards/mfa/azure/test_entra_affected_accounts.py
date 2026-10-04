@@ -3,13 +3,16 @@
 areAdminAccountsSeparate names the privileged role holders that hold a mailbox or productivity licence.
 isMFAEnforcedForUsers names the users, groups and roles that the Conditional Access MFA policies name but none
 of them covers (per-principal coverage, the rule legacyauthblocked.py uses), and the MFA scope when no policy
-targets all users. Same shape as legacyauthblocked.py (#891): the first reason names at most 20, then
+targets all users. The verdict comes from the transform's shipped switches (EXCLUDE_RISK_CONDITIONED,
+ALL_USERS_TARGET_MODE, 4 Oct 2026): only the policies that still count feed the naming. The scope line and the
+50-name cap are reachable only with ALL_USERS_TARGET_MODE = "off", so those two cases set it. Same shape as legacyauthblocked.py (#891): the first reason names at most 20, then
 "and N more", inside one line that names the tool and its scope; inputSummary.affectedAccounts carries at most
 50, with the full count in affectedAccountCount. Verdicts are unchanged. Synthetic data only (example.com
 users, zero-filled object ids). Each case runs as plain Python and in the Token-Service sandbox replica.
 """
 import importlib.util
 import pathlib
+import re
 
 import pytest
 
@@ -35,13 +38,21 @@ SPE_E3 = "05e9a617-0261-4cee-bb44-138d3ef5d965"
 ENTRA_P2 = "84a661c4-e949-4bd2-a560-ed7766fcaf2b"
 
 
-def load(name, mode):
+def load(name, mode, **switches):
+    """switches override module-level constants (for example ALL_USERS_TARGET_MODE="off")."""
     path = HERE / (name + ".py")
     if mode == "sandbox":
-        return load_code(path.read_text(), "<transformation>")["transform"]
+        code = path.read_text()
+        for key, value in switches.items():
+            code, n = re.subn(r"(?m)^" + key + r" = .*$", key + " = " + repr(value), code)
+            assert n == 1, key
+        return load_code(code, "<transformation>")["transform"]
     spec = importlib.util.spec_from_file_location(TAG + "_" + name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    for key, value in switches.items():
+        assert hasattr(module, key), key
+        setattr(module, key, value)
     return module.transform
 
 
@@ -121,27 +132,40 @@ def mfa_body(*policies):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_mfa_users_names_uncovered_principals(mode):
+    # Two All-users policies, each excluding two accounts (within MAX_EXCLUDED_ACCOUNTS, so both count):
+    # oid(2) is excluded by both, oid(1) and oid(4) are covered by the other policy.
     out = load("ismfaenforcedforusers", mode)(mfa_body(
-        ca_policy(exclude_users=[oid(1), oid(2)], exclude_groups=[oid(3)]),
-        ca_policy(include_users=[oid(2)], include_groups=[oid(7)])))
+        ca_policy(exclude_users=[oid(1), oid(2)]),
+        ca_policy(exclude_users=[oid(2), oid(4)])))
     assert out["transformedResponse"]["isMFAEnforcedForUsers"] is True
     assert "affectedAccounts" not in out["transformedResponse"]
     summary = info(out)["transformation"]["inputSummary"]
-    assert summary["affectedAccounts"] == ["group:" + oid(3), "user:" + oid(1)]
-    assert summary["affectedAccountCount"] == 2
+    assert summary["affectedAccounts"] == ["user:" + oid(2)]
+    assert summary["affectedAccountCount"] == 1
     assert "mfaScope" not in summary
     first = info(out)["evaluation"]["passReasons"][0]
     assert first.startswith("MFA methods enabled: MicrosoftAuthenticator; ")
-    assert first.endswith("Microsoft Entra ID (Conditional Access policies requiring MFA for users): 2 of 4 users, "
-                          "groups or roles named in those policies are covered by none of them: group:" + oid(3)
-                          + ", user:" + oid(1))
-    assert "user:" + oid(2) not in first
+    assert first.endswith("Microsoft Entra ID (Conditional Access policies requiring MFA for users): 1 of 3 users, "
+                          "groups or roles named in those policies are covered by none of them: user:" + oid(2))
+    assert oid(1) not in first and oid(4) not in first
     assert info(out)["evaluation"]["recommendations"]
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_mfa_users_set_aside_policies_stay_unevaluated_and_name_no_one(mode):
+    # Shipped switches: a group-scoped policy, or an All-users policy excluding a group, is set aside and the
+    # check is not evaluated, exactly as before #101; nothing is named.
+    for policy in (ca_policy(include_users=[], include_groups=[oid(8)]),
+                   ca_policy(exclude_users=[oid(1)], exclude_groups=[oid(3)])):
+        out = load("ismfaenforcedforusers", mode)(mfa_body(policy))
+        assert out["transformedResponse"]["isMFAEnforcedForUsers"] is None
+        summary = info(out)["transformation"]["inputSummary"]
+        assert "affectedAccounts" not in summary and "mfaScope" not in summary
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_mfa_users_cap(mode):
-    out = load("ismfaenforcedforusers", mode)(mfa_body(ca_policy(exclude_users=[oid(n) for n in range(100, 160)])))
+    out = load("ismfaenforcedforusers", mode, ALL_USERS_TARGET_MODE="off")(mfa_body(ca_policy(exclude_users=[oid(n) for n in range(100, 160)])))
     assert out["transformedResponse"]["isMFAEnforcedForUsers"] is True
     summary = info(out)["transformation"]["inputSummary"]
     assert len(summary["affectedAccounts"]) == 50
@@ -154,7 +178,7 @@ def test_mfa_users_cap(mode):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_mfa_users_group_scoped_policy_names_scope(mode):
-    out = load("ismfaenforcedforusers", mode)(mfa_body(ca_policy(include_users=[], include_groups=[oid(8)])))
+    out = load("ismfaenforcedforusers", mode, ALL_USERS_TARGET_MODE="off")(mfa_body(ca_policy(include_users=[], include_groups=[oid(8)])))
     assert out["transformedResponse"]["isMFAEnforcedForUsers"] is True
     summary = info(out)["transformation"]["inputSummary"]
     assert summary["affectedAccountCount"] == 0
