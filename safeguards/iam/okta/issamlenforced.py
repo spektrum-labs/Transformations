@@ -9,7 +9,7 @@ Docs:   https://developer.okta.com/docs/api/openapi/okta-management/management/t
         settings.oauthClient.application_type}
 
 isSAMLEnforced is True only when every ACTIVE, user-facing app in Okta signs users in through federation, so no
-app holds a password of its own:
+app holds a password of its own, and False as soon as one active user-facing app uses a known password mode:
   * federated:     SAML_2_0, OPENID_CONNECT, SAML_1_1, WS_FEDERATION (the app trusts an Okta-signed assertion or
                    token; WS_FEDERATION is how Okta signs users in to Microsoft 365);
   * not federated: AUTO_LOGIN, BROWSER_PLUGIN, BASIC_AUTH, SECURE_PASSWORD_STORE (password / SWA apps: Okta
@@ -18,6 +18,8 @@ Not judged, and listed in additionalFindings so nothing is hidden:
   * INACTIVE apps (nobody can sign in through them);
   * BOOKMARK apps (a link; Okta signs no one in to it);
   * OAuth service apps (OPENID_CONNECT with application_type "service": machine-to-machine, no user);
+  * MFA_AS_SERVICE apps (Okta MFA as a service, e.g. the RDP / ADFS MFA integrations: Okta supplies a second
+    factor to another system's own sign-in; it is not a user sign-on app);
   * Okta's own built-in apps, matched on Application.name, which Okta reserves (customer apps get generated,
     org-prefixed names): saasure (Okta Admin Console), okta_enduser (Okta Dashboard), okta_browser_plugin
     (Okta Browser Plugin), okta_flow_sso and okta_workflows_oauth (Okta Workflows), okta_atspoke_sso,
@@ -28,6 +30,13 @@ Findings name the affected objects: the first fail reason names at most MAX_NAME
 label and sign-on mode, then "and N more"; inputSummary.affectedApps carries the same 50 and
 inputSummary.affectedAppCount the full total.
 
+Unknown sign-on mode: an active, user-facing app whose signOnMode is missing, null or not one of the modes above
+is listed as "unknown sign-on mode" (inputSummary.unknownSignOnModeApps, at most 50, and
+unknownSignOnModeAppCount). It never makes the answer True:
+  * one or more password / SWA apps are active -> False, a definitive answer the unknown apps cannot change
+    (they are listed in additionalFindings);
+  * every judged app is federated but unknown apps exist -> Not evaluated, naming the unknown apps.
+
 Scope: Okta speaks only for the apps integrated in Okta. An app that signs users in on its own, outside Okta,
 is not seen here.
 
@@ -36,8 +45,9 @@ an error body, an HTTP status of 400 or more, or Integration-Service's vendorErr
 the API credential cannot read apps: okta.apps.read plus an admin role); a body that is not a list of apps; a
 read that was not finished (paginationTruncated / truncated set at any level, or an unread next link); a list
 of READ_CAP (2000 = limit 200 x maxPages 10) apps or more, because the read may have stopped at maxPages; an app
-record that is not an object or carries an unrecognised status or sign-on mode; no active user-facing app left
-to judge after the exclusions above; any exception.
+record that is not an object or carries an unrecognised status; no password / SWA app but one or more apps with
+an unknown sign-on mode (above); no active user-facing app left to judge after the exclusions above; any
+exception.
 """
 
 import json
@@ -52,6 +62,7 @@ READ_CAP = 2000
 FEDERATED_MODES = ["SAML_2_0", "OPENID_CONNECT", "SAML_1_1", "WS_FEDERATION"]
 PASSWORD_MODES = ["AUTO_LOGIN", "BROWSER_PLUGIN", "BASIC_AUTH", "SECURE_PASSWORD_STORE"]
 BOOKMARK_MODES = ["BOOKMARK"]
+MFA_SERVICE_MODES = ["MFA_AS_SERVICE"]
 ACTIVE_STATUSES = ["ACTIVE"]
 INACTIVE_STATUSES = ["INACTIVE", "DELETED"]
 OKTA_BUILTIN_APP_NAMES = [
@@ -96,11 +107,12 @@ def create_response(result, pass_reasons=None, fail_reasons=None, recommendation
     }
 
 
-def unevaluated(reason, summary=None, transformation_errors=None):
+def unevaluated(reason, summary=None, transformation_errors=None, additional_findings=None, limit=500):
     """Nothing was measured: the key is None, never True and never False."""
-    text = str(reason)[:500]
+    text = str(reason)[:limit]
     return create_response({KEY: None}, fail_reasons=["Not evaluated: " + text], api_errors=[text],
-                           input_summary=summary, transformation_errors=transformation_errors)
+                           input_summary=summary, transformation_errors=transformation_errors,
+                           additional_findings=additional_findings)
 
 
 def decode(raw):
@@ -248,6 +260,8 @@ def evaluate(input):
     inactive = []
     bookmarks = []
     service = []
+    mfa_service = []
+    unknown = []
     builtin = []
     for app in apps:
         if not isinstance(app, dict):
@@ -266,6 +280,9 @@ def evaluate(input):
         if mode in BOOKMARK_MODES:
             bookmarks.append(label)
             continue
+        if mode in MFA_SERVICE_MODES:
+            mfa_service.append(label)
+            continue
         if mode in FEDERATED_MODES:
             if mode == "OPENID_CONNECT" and is_service_app(app):
                 service.append(label)
@@ -275,7 +292,8 @@ def evaluate(input):
         if mode in PASSWORD_MODES:
             affected.append(label + " (" + mode + ")")
             continue
-        return unevaluated("app " + label + " has an unrecognised sign-on mode '" + clip(mode) + "'")
+        unknown.append(label + " (signOnMode " + (clip(mode) if mode not in ("", "NONE", "NULL") else "missing")
+                       + ")")
 
     judged = len(federated) + len(affected)
     summary = {
@@ -287,14 +305,13 @@ def evaluate(input):
         "inactiveAppCount": len(inactive),
         "bookmarkAppCount": len(bookmarks),
         "serviceAppCount": len(service),
+        "mfaAsServiceAppCount": len(mfa_service),
+        "unknownSignOnModeApps": unknown[:MAX_NAMED],
+        "unknownSignOnModeAppCount": len(unknown),
         "oktaBuiltInApps": builtin[:MAX_NAMED],
         "federatedModes": FEDERATED_MODES,
         "passwordModes": PASSWORD_MODES,
     }
-    if judged == 0:
-        return unevaluated("no active user-facing app was found to judge (only Okta built-in, bookmark, service "
-                           "or inactive apps were read)", summary=summary)
-
     findings = []
     if builtin:
         findings.append(TOOL + ": " + str(len(builtin)) + " Okta built-in app(s) not judged: "
@@ -305,19 +322,39 @@ def evaluate(input):
     if service:
         findings.append(TOOL + ": " + str(len(service)) + " OAuth service app(s) not judged (machine-to-machine, "
                         "no user sign-in)")
+    if mfa_service:
+        findings.append(TOOL + ": " + str(len(mfa_service)) + " MFA-as-a-service app(s) not judged (Okta adds a "
+                        "second factor to another system's own sign-in; not a user sign-on app): "
+                        + name_list(mfa_service, MAX_NAMED))
     if inactive:
         findings.append(TOOL + ": " + str(len(inactive)) + " inactive app(s) not judged")
+    unknown_line = ""
+    if unknown:
+        unknown_line = (TOOL + ": " + str(len(unknown)) + " active app(s) with an unknown sign-on mode (missing or "
+                        "unrecognised sign-on mode), not judged: " + name_list(unknown, MAX_NAMED))
 
     scope = TOOL + " (apps integrated in Okta)"
     if affected:
         line = (scope + ": " + str(len(affected)) + " of " + str(judged) + " active user-facing apps sign users in "
                 "with a password (password / SWA apps), not through SAML or OIDC federation: "
                 + name_list(affected, MAX_NAMED))
+        if unknown_line:
+            findings.append(unknown_line)
         return create_response(
             {KEY: False}, fail_reasons=[line], input_summary=summary, additional_findings=findings,
             recommendations=["Move each named app to SAML 2.0 or OpenID Connect sign-on in Okta (Applications > "
                              "the app > Sign On), or retire it. Password and SWA apps keep a password the app "
                              "itself checks."])
+    if unknown:
+        others = ("the other " + str(judged) + " active user-facing app(s) are federated (SAML / OIDC)" if judged
+                  else "no other active user-facing app was found")
+        return unevaluated(unknown_line + ". No password / SWA app is active and " + others + ", but an app whose "
+                           "sign-on mode cannot be read may hold a password, so SAML / OIDC enforcement cannot be "
+                           "confirmed", summary=summary, additional_findings=findings, limit=12000)
+    if judged == 0:
+        return unevaluated("no active user-facing app was found to judge (only Okta built-in, bookmark, service, "
+                           "MFA-as-a-service or inactive apps were read)", summary=summary,
+                           additional_findings=findings)
     line = (scope + ": all " + str(judged) + " active user-facing apps sign users in through SAML or OIDC "
             "federation; no password / SWA app is active. Apps that sign users in outside Okta are not seen.")
     return create_response({KEY: True}, pass_reasons=[line], input_summary=summary, additional_findings=findings)
