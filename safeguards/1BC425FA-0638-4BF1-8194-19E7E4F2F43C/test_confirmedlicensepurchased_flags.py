@@ -3,7 +3,9 @@
 The Sophos Email Security and Firewall integrations bind this file to the healthCheck read,
 which returns {"isEPPConfigured": "true", "isMDRConfigured": "true"} (strings or booleans).
 Before this fix none of those keys was recognised and every such body read False with an
-MDR-only reason. Synthetic bodies only.
+MDR-only reason. The read does not say which product row asked, so a true flag is Not
+evaluated (it cannot prove a Firewall licence from an EPP flag); only all-false is False.
+Synthetic bodies only.
 """
 import importlib.util
 import json
@@ -28,15 +30,13 @@ def run(body):
                                   {"isFirewallConfigured": "true"},
                                   {"isEmailConfigured": True}],
                          ids=lambda b: json.dumps(b)[:40])
-def test_a_true_product_flag_is_true(body):
+def test_a_true_flag_is_not_evaluated_because_the_product_is_unknown(body):
     out = run(body)
-    assert out["transformedResponse"][KEY] is True
-    assert out["additionalInfo"]["evaluation"]["passReasons"][0].startswith("Sophos licence confirmed")
-
-
-def test_reason_names_the_products_returned_not_only_mdr():
-    reason = run({"isEPPConfigured": "true", "isMDRConfigured": "false"})["additionalInfo"]["evaluation"]["passReasons"][0]
-    assert "Endpoint Protection" in reason and "MDR" not in reason
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["evaluation"]["failReasons"][0] == (
+        "Sophos healthCheck does not say which product is licensed; "
+        "a per-product licence read (getLicenses) is needed")
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 @pytest.mark.parametrize("body", [{"isEPPConfigured": "false", "isMDRConfigured": "false"},
@@ -59,7 +59,7 @@ def test_no_readable_flag_is_not_evaluated(body):
 
 
 def test_string_body_is_parsed():
-    assert run(json.dumps({"isEPPConfigured": "true"}))["transformedResponse"][KEY] is True
+    assert run(json.dumps({"isEPPConfigured": "false"}))["transformedResponse"][KEY] is False
 
 
 def test_legacy_license_purchased_key_still_honoured():
