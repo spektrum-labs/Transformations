@@ -165,6 +165,126 @@ def test_just_under_the_read_cap_is_judged(mode):
     assert summary(out)["appsRead"] == 1999
 
 
+# ---------------------------------------------------------------- unknown sign-on modes and MFA as a service
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("password_mode", ["AUTO_LOGIN", "BROWSER_PLUGIN", "BASIC_AUTH", "SECURE_PASSWORD_STORE"])
+def test_known_password_app_is_false_even_with_unknown_modes(mode, password_mode):
+    apps = [app(1, "SAML_2_0"), app(2, password_mode), app(3, None), app(4, "SOMETHING_NEW")] + builtins()
+    out = load(mode)(apps)
+    assert verdict(out) is False
+    assert info(out)["dataCollection"]["status"] == "success"
+    first = info(out)["evaluation"]["failReasons"][0]
+    assert first.startswith("Okta (apps integrated in Okta): 1 of 2 active user-facing apps sign users in with a "
+                            "password")
+    assert "App 002 (" + password_mode + ")" in first
+    assert "App 003" not in first and "App 004" not in first
+    s = summary(out)
+    assert s["affectedApps"] == ["App 002 (" + password_mode + ")"]
+    assert s["affectedAppCount"] == 1
+    assert s["unknownSignOnModeApps"] == ["App 003 (signOnMode missing)", "App 004 (signOnMode SOMETHING_NEW)"]
+    assert s["unknownSignOnModeAppCount"] == 2
+    findings = " ".join(info(out)["evaluation"]["additionalFindings"])
+    assert "2 active app(s) with an unknown sign-on mode" in findings
+    assert "App 003 (signOnMode missing)" in findings and "App 004 (signOnMode SOMETHING_NEW)" in findings
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_password_apps_with_null_mode_and_mfa_as_service_is_false(mode):
+    """The shape seen live: password / SWA apps, one null signOnMode app and one MFA_AS_SERVICE app."""
+    apps = ([app(1, "SAML_2_0"), app(2, "OPENID_CONNECT"), app(3, "BROWSER_PLUGIN"), app(4, "AUTO_LOGIN"),
+             app(5, None), app(6, "MFA_AS_SERVICE")] + builtins())
+    out = load(mode)(apps)
+    assert verdict(out) is False
+    first = info(out)["evaluation"]["failReasons"][0]
+    assert "2 of 4 active user-facing apps" in first
+    assert "App 003 (BROWSER_PLUGIN)" in first and "App 004 (AUTO_LOGIN)" in first
+    s = summary(out)
+    assert (s["mfaAsServiceAppCount"], s["unknownSignOnModeAppCount"]) == (1, 1)
+    findings = " ".join(info(out)["evaluation"]["additionalFindings"])
+    assert "1 MFA-as-a-service app(s) not judged" in findings and "App 006" in findings
+    assert "App 005 (signOnMode missing)" in findings
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mfa_as_service_is_not_judged(mode):
+    out = load(mode)([app(1, "SAML_2_0"), app(2, "OPENID_CONNECT"), app(3, "MFA_AS_SERVICE")] + builtins())
+    assert verdict(out) is True
+    s = summary(out)
+    assert (s["activeUserFacingAppCount"], s["mfaAsServiceAppCount"], s["unknownSignOnModeAppCount"]) == (2, 1, 0)
+    findings = " ".join(info(out)["evaluation"]["additionalFindings"])
+    assert "1 MFA-as-a-service app(s) not judged" in findings
+    assert "not a user sign-on app" in findings
+    assert "App 003" in findings
+    assert "App 003" not in info(out)["evaluation"]["passReasons"][0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("unknown_mode,shown", [
+    (None, "missing"), ("", "missing"), ("null", "missing"), ("None", "missing"), ("SOMETHING_NEW", "SOMETHING_NEW"),
+])
+def test_federated_plus_unknown_mode_is_not_evaluated_and_names_the_app(mode, unknown_mode, shown):
+    apps = [app(1, "SAML_2_0"), app(2, "OPENID_CONNECT"), app(3, "WS_FEDERATION"), app(4, unknown_mode),
+            app(5, "MFA_AS_SERVICE")] + builtins()
+    out = load(mode)(apps)
+    unevaluated(out, "unknown sign-on mode")
+    text = info(out)["evaluation"]["failReasons"][0]
+    assert "App 004 (signOnMode " + shown + ")" in text
+    assert "the other 3 active user-facing app(s) are federated" in text
+    s = summary(out)
+    assert s["unknownSignOnModeApps"] == ["App 004 (signOnMode " + shown + ")"]
+    assert (s["federatedAppCount"], s["affectedAppCount"], s["unknownSignOnModeAppCount"]) == (3, 0, 1)
+    findings = " ".join(info(out)["evaluation"]["additionalFindings"])
+    assert "MFA-as-a-service app(s) not judged" in findings
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_unknown_mode_names_at_most_50_then_total(mode):
+    apps = [app(1, "SAML_2_0")] + [app(n, "SOMETHING_NEW") for n in range(100, 160)]
+    out = load(mode)(apps)
+    unevaluated(out, "60 active app(s) with an unknown sign-on mode")
+    text = info(out)["evaluation"]["failReasons"][0]
+    assert "App 149 (signOnMode SOMETHING_NEW) and 10 more" in text
+    assert "App 150" not in text
+    assert len(summary(out)["unknownSignOnModeApps"]) == 50
+    assert summary(out)["unknownSignOnModeAppCount"] == 60
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_only_unknown_modes_is_not_evaluated(mode):
+    out = load(mode)([app(1, None), app(2, "MFA_AS_SERVICE")] + builtins())
+    unevaluated(out, "App 001 (signOnMode missing)")
+    assert "no other active user-facing app was found" in info(out)["evaluation"]["failReasons"][0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_only_mfa_as_service_is_not_evaluated(mode):
+    out = load(mode)([app(1, "MFA_AS_SERVICE")] + builtins())
+    unevaluated(out, "no active user-facing app")
+    assert summary(out)["mfaAsServiceAppCount"] == 1
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_unknown_mode_on_inactive_or_builtin_app_does_not_block(mode):
+    apps = [app(1, "SAML_2_0"), app(2, None, status="INACTIVE"), app(905, None, name="okta_enduser")]
+    out = load(mode)(apps)
+    assert verdict(out) is True
+    assert summary(out)["unknownSignOnModeAppCount"] == 0
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("body,needle", [
+    ({"apiResponse": [app(1, "AUTO_LOGIN"), app(2, None)], "response_metadata": {"paginationTruncated": True}},
+     "paginationTruncated is set"),
+    ({"data": [app(1, "AUTO_LOGIN")], "_links": {"next": {"href": "https://tenant.x.test/api/v1/apps?after=0oa1"}}},
+     "next page link remains"),
+    ({"vendorErrorAsResponse": {"status": 403, "body": [app(1, "AUTO_LOGIN")]}}, "okta.apps.read"),
+    ({"statusCode": 500, "data": [app(1, "AUTO_LOGIN")]}, "HTTP 500"),
+])
+def test_unfinished_or_failed_read_with_password_apps_is_still_not_evaluated(mode, body, needle):
+    unevaluated(load(mode)(body), needle)
+
+
 # ---------------------------------------------------------------- wrappers
 
 @pytest.mark.parametrize("mode", MODES)
