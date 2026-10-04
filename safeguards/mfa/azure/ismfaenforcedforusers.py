@@ -35,16 +35,22 @@ from datetime import datetime
 #   risk (for example the Microsoft-managed "Multifactor authentication and reauthentication for risky sign-ins"
 #   policy, or a user-risk password-change policy), so it does not enforce MFA for users' sign-ins. When True,
 #   such policies do not count.
-# REQUIRE_ALL_USERS_TARGET: when True, a policy counts only if conditions.users.includeUsers contains "All".
-#   Group-targeted policies do not count (their reach is not read here; entra_ca_mfa_coverage.py resolves group
-#   membership for the remote-access keys). Exclusions follow the repo convention of entra_ca_mfa_coverage.py
-#   (master review, 3 Oct 2026): at most MAX_EXCLUDED_ACCOUNTS user accounts excluded by name in total per policy
-#   (emergency-access / break-glass) are allowed; any excluded group, directory role, guests or external users, or
-#   "All" in excludeUsers sets the policy aside.
+# ALL_USERS_TARGET_MODE: "off" (default), "unevaluated" or "not_met". When not "off", a policy counts only if
+#   conditions.users.includeUsers contains "All". Group-targeted policies are set aside (their reach is not read
+#   here; entra_ca_mfa_coverage.py resolves group membership for the remote-access keys). Exclusions follow the
+#   repo convention of entra_ca_mfa_coverage.py (master review, 3 Oct 2026): at most MAX_EXCLUDED_ACCOUNTS user
+#   accounts excluded by name in total per policy (emergency-access / break-glass) are allowed; any excluded group,
+#   directory role, guests or external users, or "All" in excludeUsers sets the policy aside.
+#   - "not_met": with no counting policy left, the key reads False (as before for "no policy").
+#   - "unevaluated": with MFA methods enabled and no counting policy left, but at least one policy set aside for
+#     its target or its exclusions (not for risk), the key reads not evaluated: MFA is required only for groups
+#     (or with exclusions) whose membership is not read, so coverage of all users cannot be confirmed. It never
+#     reads False on group policies alone.
 # Set-aside policies are named in the fail reason (at most SET_ASIDE_SHOWN, then "and N more"; names cut to
 # SET_ASIDE_NAME_CHARS) and returned as policiesSetAside.
 EXCLUDE_RISK_CONDITIONED = False
-REQUIRE_ALL_USERS_TARGET = False
+ALL_USERS_TARGET_MODE = "off"
+RISK_REASON = "fires only on sign-in or user risk"
 MAX_EXCLUDED_ACCOUNTS = 2
 SET_ASIDE_SHOWN = 5
 SET_ASIDE_NAME_CHARS = 80
@@ -161,8 +167,8 @@ def all_users_exclusions(users):
 
 def set_aside_reason(conditions, users, targets_all):
     if EXCLUDE_RISK_CONDITIONED and risk_conditioned(conditions):
-        return "fires only on sign-in or user risk"
-    if REQUIRE_ALL_USERS_TARGET:
+        return RISK_REASON
+    if ALL_USERS_TARGET_MODE in ("unevaluated", "not_met"):
         if not targets_all:
             return "targets groups, not all users"
         excluded = all_users_exclusions(users)
@@ -303,6 +309,18 @@ def transform(input):
                 "Enabled external method(s): " + ", ".join(external_methods)
                 + "; no Microsoft MFA method is enabled in the authentication methods policy",
                 validation, input_summary=input_summary, extra=details, findings=findings)
+
+        scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
+        if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
+                and scope_unknown):
+            names = ", ".join('"' + name + '"' for name, _ in scope_unknown[:SET_ASIDE_SHOWN])
+            more = len(scope_unknown) - SET_ASIDE_SHOWN
+            return not_evaluated(
+                criteriaKey,
+                "MFA is required only by policies scoped to groups or with exclusions (" + names
+                + (f" and {more} more" if more > 0 else "") + "); group membership is not read, so coverage of "
+                "all users cannot be confirmed; " + set_aside_text(set_aside),
+                validation, input_summary=input_summary, extra=details)
 
         is_enforced = methods_available and mfa_enforced_for_users
 
