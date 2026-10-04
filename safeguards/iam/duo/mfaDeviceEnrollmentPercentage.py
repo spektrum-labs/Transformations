@@ -66,6 +66,40 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_name(obj, fields):
+    for field in fields:
+        value = obj.get(field)
+        if value not in (None, ""):
+            return str(value).strip()[:100]
+    return "unknown"
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Duo (<scope>): N of M <what>: a, b and K more'."""
+    return "Duo (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
@@ -84,6 +118,7 @@ def transform(input):
     total_active = 0
     active_with_device = 0
     unknown_device_signal = 0
+    without_device = []
 
     for u in users:
         if not isinstance(u, dict):
@@ -122,6 +157,8 @@ def transform(input):
 
         if has_device:
             active_with_device = active_with_device + 1
+        else:
+            without_device.append(account_name(u, ("username", "email", "user_id")))
 
     percentage = 0.0
     if total_active > 0:
@@ -150,7 +187,8 @@ def transform(input):
             missing = total_active - active_with_device
             fail_reasons.append(
                 f"{missing} of {total_active} active Duo users show no enrolled authentication device "
-                f"(is_enrolled=false/absent and empty phones/tokens/u2ftokens/webauthncredentials/desktop_authenticators)."
+                f"(is_enrolled=false/absent and empty phones/tokens/u2ftokens/webauthncredentials/desktop_authenticators); "
+                + affected_line("active users", without_device, total_active, "active users have no MFA device enrolled")
             )
             recommendations.append(
                 "Prompt the users lacking an enrolled MFA device to complete Duo enrollment "
@@ -177,7 +215,8 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"activeUsers": total_active, "usersWithEnrolledDevice": active_with_device, "unknownDeviceSignal": unknown_device_signal},
+        input_summary=with_affected({"activeUsers": total_active, "usersWithEnrolledDevice": active_with_device,
+                                     "unknownDeviceSignal": unknown_device_signal}, without_device),
         transformation_errors=validation_errors if total_active == 0 else [],
         metadata={
             "transformationId": "mfaDeviceEnrollmentPercentage",
