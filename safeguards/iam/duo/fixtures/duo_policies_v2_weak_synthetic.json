@@ -1,0 +1,96 @@
+{
+ "policies": {
+  "stat": "OK",
+  "response": [
+   {
+    "policy_key": "POEXAMPLEGLOBAL00001",
+    "policy_name": "Global Policy",
+    "is_global_policy": true,
+    "sections": {
+     "authentication_methods": {
+      "allowed_auth_list": [
+       "duo-push",
+       "duo-passcode",
+       "webauthn-platform",
+       "webauthn-roaming"
+      ],
+      "blocked_auth_list": [
+       "sms",
+       "phonecall",
+       "bypass",
+       "bypass-pwl"
+      ],
+      "require_verified_push": true,
+      "auto_retry_sms": false,
+      "verified_push_digits": 3
+     },
+     "authentication_policy": {
+      "user_auth_behavior": "enforce"
+     },
+     "new_user": {
+      "new_user_behavior": "enroll"
+     }
+    }
+   },
+   {
+    "policy_key": "POEXAMPLECUSTOM00001",
+    "policy_name": "Example Custom Policy",
+    "is_global_policy": false,
+    "sections": {
+     "authentication_methods": {
+      "allowed_auth_list": [
+       "bypass",
+       "bypass-pwl",
+       "duo-push",
+       "duo-push-pwl",
+       "hardware-token",
+       "sms",
+       "webauthn-platform",
+       "webauthn-platform-pwl",
+       "webauthn-roaming",
+       "webauthn-roaming-pwl"
+      ],
+      "blocked_auth_list": [
+       "desktop",
+       "duo-passcode",
+       "phonecall"
+      ],
+      "require_verified_push": true,
+      "auto_retry_sms": false,
+      "verified_push_digits": 3
+     }
+    }
+   }
+  ],
+  "metadata": {
+   "total_objects": 2
+  }
+ },
+ "summary": {
+  "stat": "OK",
+  "response": {
+   "policies": [
+    {
+     "policy_key": "POEXAMPLEGLOBAL00001",
+     "policy_name": "Global Policy",
+     "policy_applies_to": []
+    },
+    {
+     "policy_key": "POEXAMPLECUSTOM00001",
+     "policy_name": "Example Custom Policy",
+     "policy_applies_to": [
+      {
+       "app_integration_key": "DIEXAMPLEAPP0000001",
+       "app_name": "Example App",
+       "apply_type": "app"
+      }
+     ]
+    }
+   ],
+   "policy_count": 2,
+   "response_is_truncated": false,
+   "warnings": []
+  }
+ },
+ "_comment": "SYNTHETIC. Shape of the Duo Admin API Policies v2 reads (GET /admin/v2/policies, GET /admin/v2/policies/summary) merged by the getStrongAuthPolicies workflow. Keys, names and values are invented; no customer data. Expected authTypesAllowed: false (the applied custom policy keeps Duo's documented default methods, which permit SMS and bypass codes)."
+}
