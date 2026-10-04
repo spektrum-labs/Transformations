@@ -415,10 +415,26 @@ def read_ids(body):
     return ids
 
 
+def read_flag(value):
+    """True or False from a JSON boolean or the strings "true" / "false" (any case, surrounding whitespace ignored);
+    None for anything else. The workflow delivers accountEnabled as the string "True" (4 Oct 2026, every One-Click
+    tenant), so a bool-only check left the workforce list unread everywhere."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+    return None
+
+
 def read_workforce(body):
     """Lower-case ids of the enabled member accounts in GET /v1.0/users (filtered to accountEnabled true and
     userType Member); None when the list was not read whole or an item does not say whether it is an enabled
-    member. Items that say they are disabled or guests are left out, whatever the filter did."""
+    member (accountEnabled a boolean or "true"/"false"; userType a string). Items that say they are disabled or
+    guests are left out, whatever the filter did."""
     pages = list_pages(body)
     if pages is None:
         return None
@@ -427,9 +443,9 @@ def read_workforce(body):
         for item in page["value"]:
             if not isinstance(item, dict) or not str(item.get("id") or "").strip():
                 return None
-            enabled = item.get("accountEnabled")
+            enabled = read_flag(item.get("accountEnabled"))
             kind = item.get("userType")
-            if not isinstance(enabled, bool) or not isinstance(kind, str):
+            if enabled is None or not isinstance(kind, str):
                 return None
             if enabled and kind.strip().lower() == "member":
                 ids.add(str(item["id"]).strip().lower())
