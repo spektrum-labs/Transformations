@@ -227,3 +227,134 @@ def test_risk_switch_is_independent_of_the_target_mode():
 def test_unknown_inputs_stay_not_evaluated_in_every_mode(mode):
     m = load(ALL_USERS_TARGET_MODE=mode, EXCLUDE_RISK_CONDITIONED=True)
     assert m.transform({"authMethodsPolicy": methods()})["transformedResponse"][KEY] is None
+
+
+# --- ALL_USERS_TARGET_MODE = "membership" ----------------------------------------------------------------------------
+U1, U2, U3 = ("b0000000-0000-0000-0000-00000000000" + str(i) for i in (1, 2, 3))
+G2 = "c0000000-0000-0000-0000-000000000002"
+
+
+def workforce(*ids, extra=()):
+    value = [{"id": i, "accountEnabled": True, "userType": "Member", "displayName": "User " + i[-1]} for i in ids]
+    value += list(extra)
+    return {"@odata.count": len(value), "value": value}
+
+
+def members(*ids):
+    return {"@odata.count": len(ids), "value": [{"@odata.type": "#microsoft.graph.user", "id": i} for i in ids]}
+
+
+def with_membership(b, wf, groups):
+    b = copy.deepcopy(b)
+    b["workforceUsers"] = wf
+    b["caPolicyGroups"] = {"groupIds": [{"id": g} for g, _ in groups]}
+    b["groupMembers"] = [m for _, m in groups]
+    return b
+
+
+MEM = dict(ALL_USERS_TARGET_MODE="membership")
+
+
+def test_membership_covers_every_member_reads_met():
+    out = run(load(**MEM), with_membership(body(GROUP), workforce(U1, U2), [(G1, members(U1, U2))]))
+    assert out["transformedResponse"][KEY] is True
+    assert out["transformedResponse"]["membersOutsideGroups"] == 0
+    assert "group membership read" in out["additionalInfo"]["evaluation"]["passReasons"][-1]
+
+
+def test_membership_ignores_guests_and_disabled_accounts():
+    extra = ({"id": U3, "accountEnabled": False, "userType": "Member"},
+             {"id": "b0000000-0000-0000-0000-0000000000f1", "accountEnabled": True, "userType": "Guest"})
+    out = run(load(**MEM), with_membership(body(GROUP), workforce(U1, extra=extra), [(G1, members(U1))]))
+    assert out["transformedResponse"][KEY] is True
+
+
+def test_members_outside_read_not_met_and_are_named_capped():
+    ids = ["b1000000-0000-0000-0000-0000000000" + str(10 + i) for i in range(25)]
+    out = run(load(**MEM), with_membership(body(GROUP), workforce(U1, *ids), [(G1, members(U1))]))
+    assert out["transformedResponse"][KEY] is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert reason.startswith("25 of 26 enabled member accounts are outside every group")
+    assert reason.endswith("and 5 more")
+
+
+def test_up_to_two_named_exclusions_are_allowed():
+    p = policy("MFA pilot group", include_users=(), include_groups=(G1,), excludeUsers=[U2])
+    out = run(load(**MEM), with_membership(body(p), workforce(U1, U2), [(G1, members(U1))]))
+    assert out["transformedResponse"][KEY] is True
+
+
+def test_outside_members_with_an_unresolved_policy_stay_not_evaluated():
+    other = policy("MFA all users", excludeGroups=[G2])
+    out = run(load(**MEM), with_membership(body(GROUP, other), workforce(U1, U2), [(G1, members(U1)), (G2, members())]))
+    assert out["transformedResponse"][KEY] is None
+
+
+@pytest.mark.parametrize("damage", ["no_reads", "next_link", "count_mismatch", "member_error", "unpaired",
+                                    "item_errors", "truncated", "string_flag", "duplicate_group"])
+def test_any_unreadable_membership_falls_back_to_unevaluated(damage):
+    b = with_membership(body(GROUP), workforce(U1, U2), [(G1, members(U1, U2))])
+    if damage == "no_reads":
+        b = body(GROUP)
+    elif damage == "next_link":
+        b["workforceUsers"]["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/users?$skiptoken=x"
+    elif damage == "count_mismatch":
+        b["groupMembers"][0]["@odata.count"] = 5
+    elif damage == "member_error":
+        b["groupMembers"][0] = {"vendorErrorAsResponse": {"status": 403}}
+    elif damage == "unpaired":
+        b["groupMembers"].append(members())
+    elif damage == "item_errors":
+        b["itemErrors"] = 1
+    elif damage == "truncated":
+        b["workforceUsers"]["paginationTruncated"] = True
+    elif damage == "string_flag":
+        b["workforceUsers"]["value"][0]["accountEnabled"] = "True"
+    elif damage == "duplicate_group":
+        b["caPolicyGroups"]["groupIds"].append({"id": G1})
+        b["groupMembers"].append(members(U1))
+    out = run(load(**MEM), b)
+    assert out["transformedResponse"][KEY] is None
+    assert "group membership is not read" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def test_membership_mode_without_reads_equals_unevaluated_mode():
+    for b in (body(GROUP), body(GROUP, ALL), body(RISKY, GROUP), body(), body(policy("x", excludeGroups=[G1]))):
+        assert json.dumps(run(load(**MEM), b), sort_keys=True) == json.dumps(
+            run(load(ALL_USERS_TARGET_MODE="unevaluated"), b), sort_keys=True)
+
+
+def test_membership_restricted_python_agrees():
+    pytest.importorskip("RestrictedPython")
+    from RestrictedPython import compile_restricted, limited_builtins, safe_globals, utility_builtins
+    from RestrictedPython.Eval import default_guarded_getitem, default_guarded_getiter
+    from RestrictedPython.Guards import guarded_iter_unpack_sequence, guarded_unpack_sequence, safer_getattr
+    code = compile_restricted(SOURCE, "<ismfaenforcedforusers>", "exec")
+
+    def guarded_import(name, *args, **kwargs):
+        if name not in {"json", "datetime", "warnings"}:
+            raise ImportError(name)
+        return real_builtins.__import__(name, *args, **kwargs)
+
+    names = dict(safe_globals["__builtins__"])
+    names.update(limited_builtins)
+    names.update(utility_builtins)
+    names.update(__import__=guarded_import, isinstance=isinstance, list=list, dict=dict, str=str, any=any,
+                 all=all, bytes=bytes, set=set, sorted=sorted, len=len, min=min, max=max, int=int, bool=bool,
+                 ValueError=ValueError, Exception=Exception, enumerate=enumerate, tuple=tuple)
+    glb = dict(safe_globals)
+    glb.update(__builtins__=names, _getitem_=default_guarded_getitem, _getiter_=default_guarded_getiter,
+               _iter_unpack_sequence_=guarded_iter_unpack_sequence, _unpack_sequence_=guarded_unpack_sequence,
+               _getattr_=safer_getattr, _write_=lambda x: x, __name__="sandboxed", __metaclass__=type)
+    exec(code, glb)
+    glb.update(MEM)
+    plain = load(**MEM)
+    ids = ["b1000000-0000-0000-0000-0000000000" + str(10 + i) for i in range(25)]
+    for b in (with_membership(body(GROUP), workforce(U1, U2), [(G1, members(U1, U2))]),
+              with_membership(body(GROUP), workforce(U1, *ids), [(G1, members(U1))]),
+              with_membership(body(GROUP), workforce(U1), [(G1, {"vendorErrorAsResponse": {}})]), body(GROUP)):
+        s_out = glb["transform"](copy.deepcopy(b))
+        p_out = plain.transform(copy.deepcopy(b))
+        assert s_out["transformedResponse"] == p_out["transformedResponse"]
+        assert s_out["additionalInfo"]["evaluation"] == p_out["additionalInfo"]["evaluation"]
+        assert s_out["additionalInfo"]["dataCollection"] == p_out["additionalInfo"]["dataCollection"]
