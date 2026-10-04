@@ -2,8 +2,9 @@
 
 The verdict comes from the org factor list (GET /api/v1/org/factors) and never changes. When the
 isAdminMFAPhishingResistantAccounts workflow also merges the admin list (adminAssignees) and, per admin, the user
-record (adminUsers) and the factor list (adminFactors), the first reason names the admins with no ACTIVE FIDO2/WebAuthn
-or FIDO U2F factor: at most 20, then "and N more", in one line that names the tool and its scope.
+record (adminUsers) and the factor list (adminFactors), the first reason names the admins with no ACTIVE FIDO2/WebAuthn,
+FIDO U2F, Okta FastPass or smart card factor (the set the verdict counts): at most 20, then "and N more", in one
+line that names the tool and its scope.
 inputSummary.affectedAccounts carries at most 50, with the full count in affectedAccountCount. A missing, error,
 truncated or out-of-line per-admin read names no one and says the account read was partial. Synthetic data only
 (x.test logins, zero-filled ids). Each case runs as plain Python and in the Token-Service sandbox replica.
@@ -35,14 +36,18 @@ except ImportError:
 MODES = ["python", "sandbox"]
 
 
-def load(mode):
+def namespace(mode):
     path = HERE / "isAdminMFAPhishingResistant.py"
     if mode == "sandbox":
-        return load_code(path.read_text(), "<transformation>")["transform"]
+        return load_code(path.read_text(), "<transformation>")
     spec = importlib.util.spec_from_file_location(TAG + "_transform", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.transform
+    return vars(module)
+
+
+def load(mode):
+    return namespace(mode)["transform"]
 
 
 def uid(n):
@@ -175,9 +180,54 @@ def test_pass_with_an_affected_admin_says_so(run):
     assert "admin002@x.test" in res["additionalInfo"]["evaluation"]["passReasons"][0]
 
 
-def test_okta_verify_fastpass_alone_does_not_count(run):
-    body = merged("mixed", [(1, [factor(1, "signed_nonce"), factor(1, "push")])])
-    assert summary(run(body))["affectedAccounts"] == ["admin001@x.test"]
+@pytest.mark.parametrize("factor_type", ["signed_nonce", "smart_card", "webauthn", "u2f"])
+def test_every_type_the_verdict_counts_is_not_named(run, factor_type):
+    # Okta FastPass (signed_nonce) and smart card count exactly as the org-level verdict counts them.
+    body = merged("mixed", [(1, [factor(1, factor_type)]), (2, [factor(2, factor_type), factor(2, "push")]),
+                            (3, [factor(3, "push")])])
+    res = run(body)
+    assert summary(res)["affectedAccounts"] == ["admin003@x.test"]
+    assert "admin001@x.test" not in reasons(res)[0] and "admin002@x.test" not in reasons(res)[0]
+
+
+def test_per_admin_set_is_the_verdict_set():
+    for mode in MODES:
+        ns = namespace(mode)
+        assert ns["ADMIN_PHISH_RESISTANT_TYPES"] is ns["PHISH_RESISTANT_TYPES"]
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("broken", ["no_info", "no_evaluation", "no_summary", "reasons_not_list", "not_dict"])
+def test_with_accounts_never_changes_a_response_it_cannot_read(mode, broken):
+    ns = namespace(mode)
+    good = ns["transform"](standard("phishable"))
+    named = ns["named_accounts"](standard("phishable"))
+    assert named is not None
+    response = copy.deepcopy(good)
+    if broken == "no_info":
+        del response["additionalInfo"]
+    elif broken == "no_evaluation":
+        del response["additionalInfo"]["evaluation"]
+    elif broken == "no_summary":
+        del response["additionalInfo"]["transformation"]["inputSummary"]
+    elif broken == "reasons_not_list":
+        response["additionalInfo"]["evaluation"]["failReasons"] = "x"
+    else:
+        response = ["not", "a", "dict"]
+    before = copy.deepcopy(response)
+    out = ns["with_accounts"](response, named, False)
+    assert out == before
+    if isinstance(out, dict):
+        assert out["transformedResponse"] == good["transformedResponse"]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_with_accounts_ignores_a_broken_named_block(mode):
+    ns = namespace(mode)
+    response = ns["transform"](org("phishable"))
+    before = copy.deepcopy(response)
+    for named in [{}, {"accounts": {}, "line": "x"}, {"accounts": {"read": True}, "line": None}, "x"]:
+        assert ns["with_accounts"](response, named, False) == before
 
 
 def test_inactive_and_pending_keys_do_not_count(run):
