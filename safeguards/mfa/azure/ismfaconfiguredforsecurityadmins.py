@@ -9,6 +9,10 @@ roles either by targeting "All" users without excluding admin roles
 or by explicitly including admin role IDs.
 
 API: GET /v1.0/identity/conditionalAccess/policies
+
+Named accounts (#101): when the workflow merges the policy list as conditionalAccessPolicies with the role
+assignments and the MFA registration report (see below), the first reason and inputSummary name the holders of
+these roles the finding is about. The verdict is unchanged.
 """
 import json
 from datetime import datetime
@@ -22,6 +26,152 @@ SECURITY_ADMIN_ROLES = {
     "c4e39bd9-1100-46d3-8c65-fb160da0071f": "Authentication Administrator",
     "7698a772-787b-4ac8-901f-60d6b08affd2": "Privileged Authentication Administrator",
 }
+
+
+# #101: the finding names the affected accounts when the workflow merges the policy list (conditionalAccessPolicies)
+# with two per-account reads:
+#   roleAssignments      GET /v1.0/roleManagement/directory/roleAssignments?$expand=principal($select=id)
+#                        (RoleManagement.Read.Directory or Directory.Read.All; active assignments only)
+#   registrationDetails  GET /v1.0/reports/authenticationMethods/userRegistrationDetails
+#                        (AuditLog.Read.All; Entra ID P1 or P2; disabled users are not listed; up to 36 h behind)
+# Docs: https://learn.microsoft.com/en-us/graph/api/rbacapplication-list-roleassignments
+#       https://learn.microsoft.com/en-us/graph/api/authenticationmethodsroot-list-userregistrationdetails
+# An affected account is an active holder of one of the SECURITY_ADMIN_ROLES ids that is either in a role no
+# enabled MFA policy covers, or has no MFA method registered (isMfaRegistered false). The ids are the ones the
+# verdict uses, so the names match what the verdict judged. Same shape as #891 / #899: the first reason
+# names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most MAX_AFFECTED, with
+# the full count in affectedAccountCount. The verdict never reads them, and when the input is the bare policy
+# list (today's workflow) the output is exactly what it was.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+BODY_WRAPPERS = ["apiResponse", "rawResponse", "response", "result", "data"]
+
+
+def collection(block):
+    """(rows, partial) for a Graph collection read, or (None, False) when it was not read."""
+    for attempt in range(4):
+        if not isinstance(block, dict) or isinstance(block.get("value"), list):
+            break
+        moved = False
+        for key in BODY_WRAPPERS:
+            if isinstance(block.get(key), (dict, list)):
+                block = block[key]
+                moved = True
+                break
+        if not moved:
+            break
+    if isinstance(block, list):
+        return block, False
+    if isinstance(block, dict) and isinstance(block.get("value"), list) and not block.get("error"):
+        return block.get("value"), bool(block.get("@odata.nextLink"))
+    return None, False
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def admin_accounts(data, role_ids, uncovered):
+    """None when the per-account reads are not in the input; otherwise who is affected and why."""
+    if not isinstance(data, dict) or "roleAssignments" not in data:
+        return None
+    rows, rows_partial = collection(data.get("roleAssignments"))
+    if rows is None:
+        return {"read": False}
+    reg_rows, reg_partial = collection(data.get("registrationDetails"))
+    registration = {}
+    for reg in reg_rows or []:
+        if isinstance(reg, dict) and reg.get("id"):
+            registration[str(reg.get("id")).strip().lower()] = reg
+    holders = {}
+    order = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("roleDefinitionId") or "").strip().lower()
+        pid = str(row.get("principalId") or "").strip().lower()
+        if role not in role_ids or not pid:
+            continue
+        principal = row.get("principal") if isinstance(row.get("principal"), dict) else {}
+        kind = str(principal.get("@odata.type") or "").lower()
+        if "serviceprincipal" in kind:
+            continue
+        if pid not in holders:
+            holders[pid] = {"uncovered": False, "group": "group" in kind}
+            order.append(pid)
+        if role in uncovered:
+            holders[pid]["uncovered"] = True
+    both = []
+    uncovered_only = []
+    unregistered_only = []
+    not_in_report = 0
+    for pid in order:
+        holder = holders[pid]
+        reg = registration.get(pid)
+        registered = None
+        if holder["group"]:
+            name = "group:" + pid[:64]
+        elif reg is None:
+            name = pid[:64]
+            if reg_rows is not None:
+                not_in_report = not_in_report + 1
+        else:
+            name = str(reg.get("userPrincipalName") or reg.get("userDisplayName") or pid)[:100]
+            registered = reg.get("isMfaRegistered")
+        unregistered = registered is False
+        if holder["uncovered"] and unregistered:
+            both.append(name)
+        elif holder["uncovered"]:
+            uncovered_only.append(name)
+        elif unregistered:
+            unregistered_only.append(name)
+    return {"read": True, "total": len(order), "affected": both + uncovered_only + unregistered_only,
+            "uncovered": len(both) + len(uncovered_only), "unregistered": len(both) + len(unregistered_only),
+            "registrationRead": reg_rows is not None, "notInReport": not_in_report,
+            "partial": rows_partial, "registrationPartial": reg_partial}
+
+
+def accounts_line(accounts, scope, what):
+    """One line naming the tool and its scope, or None when there is nothing to say."""
+    if not accounts["read"]:
+        return "Microsoft Entra ID (" + scope + "): accounts not named, the directory role assignments were not read"
+    line = ("Microsoft Entra ID (" + scope + "): " + str(len(accounts["affected"])) + " of " + str(accounts["total"])
+            + " " + what + " (" + str(accounts["uncovered"]) + " in a role no enforced policy covers, "
+            + str(accounts["unregistered"]) + " with no MFA method registered)")
+    if accounts["affected"]:
+        line = line + ": " + name_list(accounts["affected"])
+    notes = []
+    if accounts["partial"]:
+        notes.append("the role assignment list is partial (unread pages), so more holders may exist")
+    if not accounts["registrationRead"]:
+        notes.append("MFA registration not read (the report needs Entra ID P1 or P2), so only role coverage is judged")
+    elif accounts["registrationPartial"]:
+        notes.append("the registration report is partial (unread pages)")
+    if accounts["notInReport"]:
+        notes.append(str(accounts["notInReport"]) + " role holder(s) are not in the registration report (disabled, "
+                     "deleted, or up to 36 h report lag), named by object id")
+    if notes:
+        line = line + "; " + "; ".join(notes)
+    return line
+
+
+def with_affected(summary, accounts):
+    if accounts is not None and accounts["read"]:
+        summary["affectedAccounts"] = accounts["affected"][:MAX_AFFECTED]
+        summary["affectedAccountCount"] = len(accounts["affected"])
+    return summary
+
+
+def named_accounts(data, uncovered):
+    """Never lets the naming change the verdict: any surprise here names no one."""
+    try:
+        return admin_accounts(data, SECURITY_ADMIN_ROLES, uncovered)
+    except Exception:
+        return None
 
 
 def extract_input(input_data):
@@ -141,7 +291,12 @@ def transform(input):
                 fail_reasons=["Input validation failed"]
             )
 
-        # Extract policies from the conditional access response
+        # Extract policies from the conditional access response. The #101 workflow merges it under
+        # conditionalAccessPolicies next to the per-account reads; it is unwrapped exactly as a bare body is.
+        accounts_data = None
+        if isinstance(data, dict) and "conditionalAccessPolicies" in data:
+            accounts_data = data
+            data = extract_input(data.get("conditionalAccessPolicies"))["data"]
         policies = []
         if isinstance(data, dict):
             policies = data.get("value", [])
@@ -211,6 +366,25 @@ def transform(input):
                 "Report-only (not enforced) MFA policies targeting admins: " + ", ".join(report_only_policies)
             )
 
+        input_summary = {
+            "totalPolicies": len(policies),
+            "enabledMfaAdminPolicies": len(matching_policies),
+            "reportOnlyMfaAdminPolicies": len(report_only_policies),
+            "coveredRoleCount": len(all_covered_roles),
+        }
+        accounts = None
+        if accounts_data is not None:
+            accounts = named_accounts(accounts_data, [r for r in SECURITY_ADMIN_ROLES
+                                                      if SECURITY_ADMIN_ROLES[r] not in all_covered_roles])
+        if accounts is not None:
+            line = accounts_line(accounts, "active holders of the security admin roles this check targets",
+                                 "security admin role holders lack enforced or registered MFA")
+            input_summary = with_affected(input_summary, accounts)
+            if fail_reasons:
+                fail_reasons[0] = fail_reasons[0] + "; " + line
+            elif pass_reasons and (not accounts["read"] or accounts["affected"]):
+                pass_reasons[0] = pass_reasons[0] + "; " + line
+
         return create_response(
             result={
                 criteriaKey: is_configured,
@@ -222,12 +396,7 @@ def transform(input):
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             additional_findings=additional_findings,
-            input_summary={
-                "totalPolicies": len(policies),
-                "enabledMfaAdminPolicies": len(matching_policies),
-                "reportOnlyMfaAdminPolicies": len(report_only_policies),
-                "coveredRoleCount": len(all_covered_roles),
-            }
+            input_summary=input_summary
         )
 
     except Exception as e:
