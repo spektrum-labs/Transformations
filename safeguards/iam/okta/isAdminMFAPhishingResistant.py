@@ -105,8 +105,8 @@ KEY = "isAdminMFAPhishingResistant"
 #   adminFactors    GET /api/v1/users/{id}/factors per admin, in admin order (okta.users.read; not paginated)
 # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tag/RoleAssignmentBUser/
 #       https://developer.okta.com/docs/api/openapi/okta-management/management/tag/UserFactor/
-# An affected admin has no ACTIVE FIDO2/WebAuthn (webauthn) or FIDO U2F security key (u2f) factor. Push, SMS,
-# TOTP and every other factor do not count. Okta lists only the factors the highest-priority enrollment policy
+# An affected admin has no ACTIVE factor of a PHISH_RESISTANT_TYPES type (webauthn, u2f, signed_nonce, smart_card:
+# the set the verdict counts). Push, SMS, TOTP and every other factor do not count. Okta lists only the factors the highest-priority enrollment policy
 # allows (evaluated for the calling admin), so the line says a key enrolled outside it is not shown.
 # Fails closed on the naming only: a per-admin result that is missing, an error (403/429/5xx arrive as
 # {"vendorErrorAsResponse": ...}), out of line with the admin list, or for another user names no one and says
@@ -114,7 +114,7 @@ KEY = "isAdminMFAPhishingResistant"
 # "and N more"; inputSummary.affectedAccounts carries at most MAX_AFFECTED, with the full count in
 # affectedAccountCount. The verdict never reads any of this, and without adminAssignees (today's workflow) the
 # output is exactly what it was.
-ADMIN_PHISH_RESISTANT_TYPES = ["webauthn", "u2f"]
+ADMIN_PHISH_RESISTANT_TYPES = PHISH_RESISTANT_TYPES  # the verdict's own set, so the two cannot drift
 MAX_NAMED = 20
 MAX_AFFECTED = 50
 ADMIN_CAP = 100
@@ -241,7 +241,8 @@ def accounts_line(accounts):
                     + accounts["why"] + ")")
         return ACCOUNT_SCOPE + ": accounts not named, " + accounts["why"]
     line = (ACCOUNT_SCOPE + ": " + str(len(accounts["affected"])) + " of " + str(accounts["total"])
-            + " admins have no ACTIVE phishing-resistant factor (FIDO2/WebAuthn or FIDO U2F security key) enrolled ("
+            + " admins have no ACTIVE phishing-resistant factor (FIDO2/WebAuthn, FIDO U2F, Okta FastPass or "
+            + "smart card) enrolled ("
             + str(accounts["phishableOnly"]) + " with only phishable factors such as push, "
             + str(accounts["noFactor"]) + " with no active factor)")
     if accounts["affected"]:
@@ -269,24 +270,42 @@ def named_accounts(data):
 
 
 def with_accounts(response, named, passed):
-    """Adds the line to the first reason and the names to inputSummary. Verdict fields are not touched."""
-    if named is None:
+    """Adds the line to the first reason and the names to inputSummary. Verdict fields are not touched.
+
+    Never lets the naming change the verdict: every lookup and type check runs before the first write, and any
+    surprise returns the response exactly as it came in.
+    """
+    try:
+        if named is None:
+            return response
+        accounts = named["accounts"]
+        line = named["line"]
+        evaluation = response["additionalInfo"]["evaluation"]
+        summary = response["additionalInfo"]["transformation"]["inputSummary"]
+        fail_reasons = evaluation["failReasons"]
+        pass_reasons = evaluation["passReasons"]
+        if not isinstance(summary, dict) or not isinstance(fail_reasons, list) or not isinstance(pass_reasons, list):
+            return response
+        if not isinstance(line, str):
+            return response
+        reasons = None
+        if fail_reasons:
+            reasons = fail_reasons
+        elif passed and pass_reasons and (not accounts["read"] or accounts["affected"] or accounts["capped"]):
+            reasons = pass_reasons
+        if reasons is not None and not isinstance(reasons[0], str):
+            return response
+        affected = None
+        if accounts["read"]:
+            affected = list(accounts["affected"])
+        if affected is not None:
+            summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+            summary["affectedAccountCount"] = len(affected)
+        if reasons is not None:
+            reasons[0] = reasons[0] + "; " + line
         return response
-    accounts = named["accounts"]
-    info = response["additionalInfo"]
-    evaluation = info["evaluation"]
-    if accounts["read"]:
-        summary = info["transformation"]["inputSummary"]
-        summary["affectedAccounts"] = accounts["affected"][:MAX_AFFECTED]
-        summary["affectedAccountCount"] = len(accounts["affected"])
-    if evaluation["failReasons"]:
-        reasons = evaluation["failReasons"]
-        reasons[0] = reasons[0] + "; " + named["line"]
-    elif passed and evaluation["passReasons"] and (not accounts["read"] or accounts["affected"]
-                                                    or accounts["capped"]):
-        reasons = evaluation["passReasons"]
-        reasons[0] = reasons[0] + "; " + named["line"]
-    return response
+    except Exception:
+        return response
 
 
 def factor_list(data):
