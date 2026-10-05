@@ -138,18 +138,16 @@ def transform(input):
         # changes/2026-10-03-false-fail-check, with J.J.'s decisions of 3 Oct 00:55 ET):
         #  * A method that is enabled but whose includeTargets list is EMPTY targets nobody,
         #    so it is not counted -- neither weak nor strong. (Josh's decision, 5 Oct 2026,
-        #    superseding the 3 Oct rule that zero-target Email OTP fails.) Measured that day
-        #    across the 18 failing Azure AD (One-Click) tenants: 10 had Email enabled with
-        #    empty includeTargets and 7 had it targeted at all_users or a group, so the
-        #    distinction is real and the check still fails every tenant where a member can
+        #    superseding the 3 Oct rule that zero-target Email OTP fails.) Both shapes occur
+        #    in real tenants -- Email enabled with empty includeTargets, and Email targeted at
+        #    all_users or a group -- so the check still fails every tenant where a member can
         #    actually use email OTP. Removing a zero-target method can leave nothing enabled;
         #    that falls to the "no member method" rule below and is not evaluated -- which is
-        #    also correct on its own terms, since all three tenants in that position were at
+        #    also correct on its own terms, since tenants in that position are typically at
         #    policyMigrationState migrationInProgress, where legacy per-user MFA governs.
         #    The B2B guest email-OTP path the 3 Oct rule worried about is kept as an
         #    additional finding when allowExternalIdToUseEmailOtp is explicitly "enabled" (an
-        #    admin choice), and not raised when it is "default" (Microsoft's tenant default,
-        #    which it was in 14 of those 18).
+        #    admin choice), and not raised when it is "default" (Microsoft's tenant default).
         #    Only a PRESENT and EMPTY list counts as targeting nobody; a missing
         #    includeTargets key is unknown, not empty, and the method is still classified.
         #  * An external authentication method (for example Cisco Duo) enforces its own

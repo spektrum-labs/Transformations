@@ -66,9 +66,9 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
 
     # Josh, 5 Oct 2026, superseding J.J.'s 3 Oct rule: a method enabled with an EMPTY
     # includeTargets list targets nobody, so it is not counted -- neither weak nor strong.
-    # Fleet measurement that day: of 18 failing Azure AD (One-Click) tenants, 10 had Email
-    # enabled with empty targets and 7 had it targeted at all_users or a group, so member-
-    # targeted email OTP still occurs and still fails (test_member_targeted_email_otp_fails).
+    # Both shapes occur in real tenants (Email with empty targets, and Email targeted at
+    # all_users or a group), so member-targeted email OTP still occurs and still fails
+    # (test_member_targeted_email_otp_fails).
     def test_zero_target_email_otp_is_not_counted(self):
         configs = [self.cfg(id="MicrosoftAuthenticator"),
                    self.cfg(id="Email", allowExternalIdToUseEmailOtp="default", includeTargets=[])]
@@ -79,8 +79,8 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
 
     def test_zero_target_email_otp_as_only_method_is_not_evaluated(self):
         # Removing the zero-target method leaves nothing enabled, which is the existing
-        # "no member method" rule: not evaluated. In the fleet, all three tenants in this
-        # position were migrationInProgress, where legacy per-user MFA governs sign-in.
+        # "no member method" rule: not evaluated. Tenants in this position are typically
+        # migrationInProgress, where legacy per-user MFA governs sign-in.
         configs = [self.cfg(id="Email", includeTargets=[]), {"id": "Sms", "state": "disabled"}]
         for migration in ("preMigration", "migrationInProgress", "migrationComplete"):
             with self.subTest(migration=migration):
@@ -96,7 +96,7 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
         self.assertTrue(any("B2B guest" in f for f in info["evaluation"]["additionalFindings"]))
 
     def test_guest_email_otp_on_microsofts_default_raises_nothing(self):
-        # "default" is Microsoft's tenant default, not an admin choice (14 of 18 in the fleet).
+        # "default" is Microsoft's tenant default, not an admin choice.
         default = [self.cfg(id="MicrosoftAuthenticator"),
                    self.cfg(id="Email", allowExternalIdToUseEmailOtp="default", includeTargets=[])]
         findings = self.info(self.body(default))["evaluation"]["additionalFindings"]
@@ -138,7 +138,7 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
                 self.assertEqual(self.verdict(self.body(configs)), (True, "success"))
 
     def test_bounded_temporary_access_pass_with_zero_target_email_passes(self):
-        # The fleet's commonest "case B" shape: strong methods for everyone, a bounded TAP,
+        # A common "case B" shape: strong methods for everyone, a bounded TAP,
         # and Email enabled with empty targets. Neither the TAP nor the Email is counted.
         configs = [self.cfg(id="Fido2"), self.cfg(id="MicrosoftAuthenticator"),
                    self.cfg(id="TemporaryAccessPass", maximumLifetimeInMinutes=480),
