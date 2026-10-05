@@ -81,7 +81,10 @@ def cov(payload):
 
 
 def test_coverage_reads_nested_monitoring_status_and_meta_total_items():
-    assert cov(body(80, 16)) == (True, 80, 83.3)
+    # 80 of 96 live endpoints monitored (83.3%) is below the 95% threshold (2026-10-05: it used
+    # to read True because any monitored endpoint passed)
+    assert cov(body(80, 16)) == (False, 80, 83.3)
+    assert cov(body(96, 0)) == (True, 96, 100.0)
 
 
 def test_coverage_no_longer_assumes_monitored_when_status_is_absent():
