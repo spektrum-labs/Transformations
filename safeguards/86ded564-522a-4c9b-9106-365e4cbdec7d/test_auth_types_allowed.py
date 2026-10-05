@@ -4,7 +4,7 @@ It passes only when every ACTIVE factorType is on the allowlist. The allowlist o
 token:hardware and smart_card, so a hardware OTP token and a PIV/CAC smart card were counted as
 violations alongside SMS.
 
-MOTUS mirrors a real customer read of 2026-10-05 (factorType/provider/status only): a YubiKey,
+YUBIKEY_TENANT mirrors a real tenant read of 2026-10-05 (factorType/provider/status only): a YubiKey,
 Okta Verify push, TOTP, SMS and a security question are ACTIVE. The stored failReason was
 "Authentication types that are not allowed are active: token:hardware, sms, question". After this
 change the YubiKey must drop out of that list, while sms and question must remain -- the fix must
@@ -44,8 +44,8 @@ def f(kind, provider, status):
     return {"factorType": kind, "provider": provider, "status": status}
 
 
-# Motus LLC, 2026-10-05. The five ACTIVE rows; catalogue rows that were INACTIVE/NOT_SETUP omitted.
-MOTUS = [
+# Real tenant, 2026-10-05. The five ACTIVE rows; catalogue rows that were INACTIVE/NOT_SETUP omitted.
+YUBIKEY_TENANT = [
     f("token:hardware", "YUBICO", "ACTIVE"),
     f("push", "OKTA", "ACTIVE"),
     f("token:software:totp", "OKTA", "ACTIVE"),
@@ -90,26 +90,26 @@ class HardwareTokensAndSmartCardsAreNotViolations(unittest.TestCase):
         self.assertTrue(verdict(self.transform(body)))
 
 
-class TheMotusRegression(unittest.TestCase):
+class TheYubiKeyTenantRegression(unittest.TestCase):
     """The fix must narrow the complaint, not clear the failure."""
 
     def setUp(self):
         self.transform = load().transform
 
-    def test_motus_still_fails(self):
-        self.assertFalse(verdict(self.transform(MOTUS)))
+    def test_yubikey_tenant_still_fails(self):
+        self.assertFalse(verdict(self.transform(YUBIKEY_TENANT)))
 
     def test_the_yubikey_is_no_longer_named_as_a_violation(self):
-        self.assertNotIn("token:hardware", reasons(self.transform(MOTUS)))
+        self.assertNotIn("token:hardware", reasons(self.transform(YUBIKEY_TENANT)))
 
     def test_sms_and_question_are_still_named(self):
-        text = reasons(self.transform(MOTUS))
+        text = reasons(self.transform(YUBIKEY_TENANT))
         self.assertIn("sms", text)
         self.assertIn("question", text)
 
     def test_the_counts_move_by_exactly_the_hardware_token(self):
         """Was {total 5, secure 2, insecure 3}; the YubiKey moves from insecure to secure."""
-        got = summary(self.transform(MOTUS))
+        got = summary(self.transform(YUBIKEY_TENANT))
         self.assertEqual(got["totalAuthTypes"], 5)
         self.assertEqual(got["secureAuthTypes"], 3)
         self.assertEqual(got["insecureAuthTypes"], 2)
@@ -155,8 +155,8 @@ class RunsUnderTheSandbox(unittest.TestCase):
     def setUp(self):
         self.transform = SandboxModule().transform
 
-    def test_motus_still_fails(self):
-        self.assertFalse(verdict(self.transform(MOTUS)))
+    def test_yubikey_tenant_still_fails(self):
+        self.assertFalse(verdict(self.transform(YUBIKEY_TENANT)))
 
     def test_yubikey_passes(self):
         self.assertTrue(verdict(self.transform([f("token:hardware", "YUBICO", "ACTIVE")])))
