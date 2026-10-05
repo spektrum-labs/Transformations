@@ -125,7 +125,9 @@ def test_a_partner_login_is_refused(key):
 def test_a_login_for_another_organization_is_refused(key):
     value, info = verdict(key, estate(me=dict(ME, entity_primary_domain="other.example")))
     assert value is None
-    assert "other.example" in text(info)
+    assert info["dataCollection"]["errors"] == [
+        "the connected login belongs to other.example, not to example.com; "
+        "connect with an Organization Admin of example.com"]
 
 
 @pytest.mark.parametrize("key", [k for k in KEYS if k not in ("confirmedLicensePurchased",)])
@@ -253,19 +255,24 @@ def test_warning_tag_fields_missing_is_not_evaluated():
 def test_dkim_primary_unsigned_fails_when_essentials_signs_for_another_domain():
     dkim = [[], DKIM[1]]
     value, info = verdict("isDKIMConfigured", estate(dkim=dkim))
-    assert value is False and "example.com" in text(info)
+    summary = info["transformation"]["inputSummary"]
+    assert value is False
+    assert summary["primaryDomain"] == "example.com" and summary["unsignedDomains"] == ["example.com"]
+    assert summary["validDomains"] == ["example.net"]
 
 
 def test_dkim_invalid_keys_fail():
     dkim = [DKIM[0], [{"domain": "example.net", "is_valid": False, "selector": "s1"}]]
     value, info = verdict("isDKIMConfigured", estate(dkim=dkim))
-    assert value is False and "example.net" in text(info)
+    assert value is False
+    assert info["transformation"]["inputSummary"]["invalidDomains"] == ["example.net"]
 
 
 def test_dkim_unsigned_secondary_domain_still_passes_and_is_named():
     out = T["isDKIMConfigured"](estate(dkim=[DKIM[0], []]))
     assert out["transformedResponse"]["isDKIMConfigured"] is True
-    assert "example.net" in json.dumps(out["additionalInfo"]["evaluation"]["additionalFindings"])
+    findings = out["additionalInfo"]["evaluation"]["additionalFindings"]
+    assert findings[-1] == "Domains with no Proofpoint Essentials DKIM key: example.net"
 
 
 def test_dkim_wrapped_responses_read_the_same():
