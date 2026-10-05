@@ -24,6 +24,8 @@ Fail closed: anything that is not a complete export read returns every count as 
 (IS stopped at maxPages or a page failed, so the merge is partial), a truncated marker, an empty export
 (Defender Vulnerability Management has assessed nothing, which is not a measured zero), or a record without
 a severity -- or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
+An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
+dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
 import json
 from datetime import datetime
@@ -213,4 +215,5 @@ def transform(input):
     except Exception as e:
         return create_response(unevaluated_result(), {"status": "error", "errors": [], "warnings": []},
                                fail_reasons=["Transformation error: " + str(e)],
+                               api_errors=["Transformation error: " + str(e)],
                                transformation_errors=[str(e)])
