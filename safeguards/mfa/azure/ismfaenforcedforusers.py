@@ -49,6 +49,23 @@ from datetime import datetime
 #     reads False on group policies alone.
 # Set-aside policies are named in the fail reason (at most SET_ASIDE_SHOWN, then "and N more"; names cut to
 # SET_ASIDE_NAME_CHARS) and returned as policiesSetAside.
+#
+# Group membership (5 Oct 2026, J.J. "get them fixed"; ported from entra_ca_mfa_coverage.py, TX #870): when the
+# merged input also carries the group-membership reads, in the same shapes entra_ca_mfa_coverage.py reads
+#   "workforceUsers": the enabled Member accounts (GET /v1.0/users?$select=id,accountEnabled,userType&$filter=...),
+#   "caPolicyGroups": {"groupIds": [{"id": ...}, ...]}, the group ids the enabled policies name,
+#   "groupMembers": one GET /v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$select=id body per group id,
+#                   paired with groupIds by position,
+# the policies set aside only because they target groups are judged from membership. A policy counts towards
+# group coverage only when it is enabled, grants MFA (and under operator OR offers no other control), applies to
+# All cloud apps, is not risk-only, is narrowed by no platform, device filter, client type or location, includes no
+# directory role, and excludes no group, role, guests or "All" (at most MAX_EXCLUDED_ACCOUNTS named accounts, in
+# total across the counting policies). Together (a union) they cover the workforce when every enabled Member account
+# is in an included group, is an included user, or is one of those excluded named accounts: the key reads True.
+# Group math can pass the key; it NEVER fails it. Members left outside, a list not read whole (an error, a vendor
+# error returned as data, @odata.nextLink still present, paginationTruncated, an @odata.count that disagrees, an
+# item with no id), lists that cannot be paired with the group ids, or a group read twice, keep the key not evaluated
+# with the reason and counts. With none of the three keys present the output is byte-identical to before.
 EXCLUDE_RISK_CONDITIONED = True
 ALL_USERS_TARGET_MODE = "unevaluated"
 RISK_REASON = "fires only on sign-in or user risk"
@@ -56,6 +73,8 @@ MAX_EXCLUDED_ACCOUNTS = 2
 SET_ASIDE_SHOWN = 5
 SET_ASIDE_NAME_CHARS = 80
 USER_KEYWORDS = ("all", "none", "guestsorexternalusers")
+GROUP_REASON = "targets groups, not all users"
+MEMBERSHIP_KEYS = ("workforceUsers", "caPolicyGroups", "groupMembers")
 
 
 def extract_input(input_data):
@@ -171,7 +190,7 @@ def set_aside_reason(conditions, users, targets_all):
         return RISK_REASON
     if ALL_USERS_TARGET_MODE in ("unevaluated", "not_met"):
         if not targets_all:
-            return "targets groups, not all users"
+            return GROUP_REASON
         excluded = all_users_exclusions(users)
         if excluded:
             return "excludes " + excluded
@@ -182,6 +201,255 @@ def set_aside_text(entries):
     shown = ['"' + name + '" (' + why + ")" for name, why in entries[:SET_ASIDE_SHOWN]]
     more = len(entries) - SET_ASIDE_SHOWN
     return "policies set aside: " + ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+
+
+def as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def as_list(value):
+    return value if isinstance(value, list) else []
+
+
+def lowered(values):
+    return [str(v).strip().lower() for v in as_list(values)]
+
+
+def present(value):
+    """True when a condition value says something: not None or False, and not an empty list, dict or string."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (list, dict, str)):
+        return len(value) > 0
+    return True
+
+
+def mfa_only_grant(policy):
+    """'mfa' is required: under operator OR no other control could satisfy the policy instead."""
+    grant = as_dict(policy.get("grantControls"))
+    controls = lowered(grant.get("builtInControls"))
+    if "mfa" not in controls:
+        return False
+    others = [c for c in controls if c != "mfa"] + lowered(grant.get("customAuthenticationFactors")) \
+        + lowered(grant.get("termsOfUse"))
+    if str(grant.get("operator") or "").upper() == "OR" and others:
+        return False
+    return True
+
+
+def unnarrowed(conditions):
+    """No device filter, platform scope, client-type narrowing or location scope (entra_ca_mfa_coverage.py)."""
+    device_filter = as_dict(as_dict(conditions.get("devices")).get("deviceFilter"))
+    if str(device_filter.get("rule") or "").strip():
+        return False
+    platforms = as_dict(conditions.get("platforms"))
+    included_platforms = lowered(platforms.get("includePlatforms"))
+    if (included_platforms and "all" not in included_platforms) or present(platforms.get("excludePlatforms")):
+        return False
+    apps = lowered(conditions.get("clientAppTypes"))
+    if apps and "all" not in apps and not ("browser" in apps and "mobileappsanddesktopclients" in apps):
+        return False
+    locations = conditions.get("locations")
+    if isinstance(locations, dict):
+        include = lowered(locations.get("includeLocations"))
+        if include and "all" not in include:
+            return False
+    return True
+
+
+def group_candidate(policy, conditions, users):
+    """A group-targeted MFA policy whose reach the membership read can decide (see the header)."""
+    if all_users_exclusions(users) or present(users.get("includeRoles")):
+        return False
+    if not as_list(users.get("includeGroups")):
+        return False
+    if "all" not in lowered(as_dict(conditions.get("applications")).get("includeApplications")):
+        return False
+    if risk_conditioned(conditions) or not mfa_only_grant(policy):
+        return False
+    return unnarrowed(conditions)
+
+
+def unpaged(page):
+    next_link = page.get("@odata.nextLink")
+    return not (isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"))
+
+
+def declared_count(value):
+    """An @odata.count as an int; None when absent; -1 when present but unreadable (never matches a list)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return -1
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    return -1
+
+
+def list_pages(body):
+    """The pages of a Graph list read whole; None when absent, an error, a vendor error returned as data, still paged,
+    truncated, missing a value array, or with an @odata.count that disagrees with the items."""
+    pages = body if isinstance(body, list) else [body]
+    if not pages:
+        return None
+    count = 0
+    for page in pages:
+        if not isinstance(page, dict) or "error" in page or "vendorErrorAsResponse" in page:
+            return None
+        if page.get("paginationTruncated") is True or not unpaged(page):
+            return None
+        if not isinstance(page.get("value"), list):
+            return None
+        count = count + len(page["value"])
+    declared = declared_count(pages[0].get("@odata.count"))
+    if declared is not None and declared != count:
+        return None
+    return pages
+
+
+def read_ids(body):
+    """Lower-case ids from a Graph list read whole; None when it was not, or an item carries no id."""
+    pages = list_pages(body)
+    if pages is None:
+        return None
+    ids = set()
+    for page in pages:
+        for item in page["value"]:
+            if not isinstance(item, dict) or not str(item.get("id") or "").strip():
+                return None
+            ids.add(str(item["id"]).strip().lower())
+    return ids
+
+
+def read_workforce(body):
+    """Lower-case ids of the enabled Member accounts, read whole; None otherwise. Disabled or guest items are left
+    out whatever the filter did; an item that does not say both is not read."""
+    pages = list_pages(body)
+    if pages is None:
+        return None
+    ids = set()
+    for page in pages:
+        for item in page["value"]:
+            if not isinstance(item, dict) or not str(item.get("id") or "").strip():
+                return None
+            enabled = item.get("accountEnabled")
+            kind = item.get("userType")
+            if not isinstance(enabled, bool) or not isinstance(kind, str):
+                return None
+            if enabled and kind.strip().lower() == "member":
+                ids.add(str(item["id"]).strip().lower())
+    return ids
+
+
+def refused_403(body):
+    """True when a member read came back as Graph's 403 Authorization_RequestDenied (returned as data)."""
+    holder = as_dict(as_dict(body).get("vendorErrorAsResponse"))
+    return str(holder.get("status") or "") == "403"
+
+
+def read_memberships(data):
+    """({lower-case group id: member ids, or None when that list was not read whole}, refused count). Lists that
+    cannot be paired with the group ids, or a fan-out that reports item errors or truncation, pair nothing."""
+    ids = as_dict(data.get("caPolicyGroups")).get("groupIds")
+    bodies = data.get("groupMembers")
+    out = {}
+    refused = 0
+    if not isinstance(ids, list) or not isinstance(bodies, list) or len(ids) != len(bodies):
+        return out, refused
+    if data.get("itemErrors") or data.get("iterateTruncated") is True:
+        return out, refused
+    seen = set()
+    for index in range(len(ids)):
+        entry = ids[index]
+        gid = str((entry.get("id") if isinstance(entry, dict) else entry) or "").strip().lower()
+        if not gid:
+            continue
+        if gid in seen:
+            out[gid] = None
+            continue
+        seen.add(gid)
+        if refused_403(bodies[index]):
+            refused = refused + 1
+        out[gid] = read_ids(bodies[index])
+    return out, refused
+
+
+def object_ids(values):
+    out = set()
+    for value in as_list(values):
+        text = str(value or "").strip().lower()
+        if text and text not in USER_KEYWORDS:
+            out.add(text)
+    return out
+
+
+def group_coverage(data, candidates):
+    """Whether the candidate policies together reach every enabled Member account. Returns a dict of counts
+    (no user ids or names). coversAll is True only on a whole read with nobody left outside."""
+    workforce = read_workforce(data.get("workforceUsers"))
+    memberships, refused = read_memberships(data)
+    covered = set()
+    exempt = set()
+    unread = set()
+    used = set()
+    contributing = []
+    for name, users in candidates:
+        reached = object_ids(users.get("includeUsers"))
+        for gid in sorted(object_ids(users.get("includeGroups"))):
+            members = memberships.get(gid)
+            if members is None:
+                unread.add(gid)
+            else:
+                reached = reached | members
+                used.add(gid)
+        if not reached:
+            continue
+        excluded = object_ids(users.get("excludeUsers"))
+        covered = covered | (reached - excluded)
+        exempt = exempt | excluded
+        contributing.append(name)
+    out = {"policies": contributing, "memberListRead": workforce is not None, "groupsRead": len(used),
+           "groupsUnread": len(unread), "groupReadsRefused": refused, "membersTotal": None, "membersCovered": None,
+           "excludedCount": None, "uncoveredCount": None, "excludedAccountsTotal": len(exempt), "coversAll": False}
+    if workforce is None:
+        return out
+    inside = workforce & covered
+    excluded_members = (workforce & exempt) - inside
+    outside = workforce - inside - excluded_members
+    out["membersTotal"] = len(workforce)
+    out["membersCovered"] = len(inside)
+    out["excludedCount"] = len(excluded_members)
+    out["uncoveredCount"] = len(outside)
+    out["coversAll"] = (bool(workforce) and not outside and bool(contributing)
+                        and len(exempt) <= MAX_EXCLUDED_ACCOUNTS)
+    return out
+
+
+def coverage_detail(coverage):
+    """Why the membership read did not show every enabled Member account covered."""
+    notes = []
+    if coverage["groupReadsRefused"]:
+        notes.append(f"Microsoft Graph refused {coverage['groupReadsRefused']} group member read(s) (403): grant the "
+                     "app GroupMember.Read.All (or Group.Read.All / Directory.Read.All) and admin consent")
+    elif coverage["groupsUnread"]:
+        notes.append(f"the member list of {coverage['groupsUnread']} included group(s) was not read whole")
+    if not coverage["memberListRead"]:
+        notes.append("the enabled member account list was not read whole (User.Read.All)")
+    elif not coverage["membersTotal"]:
+        notes.append("no enabled member accounts were read")
+    elif coverage["uncoveredCount"]:
+        notes.append(f"{coverage['uncoveredCount']} of {coverage['membersTotal']} enabled members are outside the "
+                     "included groups that could be read; group membership never fails this check: add them to a "
+                     "group the policy includes, or attest")
+    if coverage["excludedAccountsTotal"] > MAX_EXCLUDED_ACCOUNTS:
+        notes.append(f"the policies exclude {coverage['excludedAccountsTotal']} named accounts in total (more than "
+                     f"{MAX_EXCLUDED_ACCOUNTS} emergency-access accounts)")
+    if not coverage["policies"] and not notes:
+        notes.append("no included group yielded a member list")
+    return "; ".join(notes) or "coverage of all users cannot be confirmed"
 
 
 # #101: findings name the affected accounts (same shape as legacyauthblocked.py). The first reason names
@@ -332,6 +600,7 @@ def transform(input):
         policies_enforcing_mfa_all_users = []
         set_aside = []
         mfa_user_conditions = []
+        group_candidates = []
 
         for policy in policies:
             if not isinstance(policy, dict) or policy.get('state') != 'enabled':
@@ -353,6 +622,8 @@ def transform(input):
                 why = set_aside_reason(conditions, users, targets_all)
                 if why:
                     set_aside.append((short_name(policy.get('displayName')), why))
+                    if why == GROUP_REASON and group_candidate(policy, conditions, users):
+                        group_candidates.append((short_name(policy.get('displayName')), users))
                     continue
                 policies_enforcing_mfa_all_users.append(policy.get('displayName'))
                 mfa_user_conditions.append(users)
@@ -388,6 +659,34 @@ def transform(input):
                 validation, input_summary=input_summary, extra=details, findings=findings)
 
         scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
+        membership_note = ""
+        if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
+                and scope_unknown and any(k in data for k in MEMBERSHIP_KEYS)):
+            if group_candidates:
+                coverage = group_coverage(data, group_candidates)
+                details["groupCoverage"] = coverage
+                if coverage["coversAll"]:
+                    details["policiesEnforcingMFAForUsers"] = coverage["policies"]
+                    input_summary["mfaUserPolicies"] = len(coverage["policies"])
+                    input_summary["membersTotal"] = coverage["membersTotal"]
+                    result = {criteriaKey: True}
+                    result.update(details)
+                    return create_response(
+                        result=result,
+                        validation=validation,
+                        pass_reasons=[
+                            f"MFA methods enabled: {', '.join(enabled_methods)}",
+                            "MFA enforced for users via group-scoped policies "
+                            + ", ".join('"' + n + '"' for n in coverage["policies"][:SET_ASIDE_SHOWN])
+                            + f": all {coverage['membersTotal']} enabled member accounts are covered, "
+                            f"{coverage['membersCovered']} through the included groups or included users and "
+                            f"{coverage['excludedCount']} excluded by name (group membership read)"],
+                        input_summary=input_summary)
+                membership_note = "; group membership was read: " + coverage_detail(coverage)
+            else:
+                membership_note = ("; group membership was read, but no set-aside policy is one it can decide (each "
+                                   "is narrowed by apps, platform, client type, location or risk, includes a role, "
+                                   "or excludes a group, role or guests)")
         if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
                 and scope_unknown):
             names = ", ".join('"' + name + '"' for name, _ in scope_unknown[:SET_ASIDE_SHOWN])
@@ -395,8 +694,9 @@ def transform(input):
             return not_evaluated(
                 criteriaKey,
                 "MFA is required only by policies scoped to groups or with exclusions (" + names
-                + (f" and {more} more" if more > 0 else "") + "); group membership is not read, so coverage of "
-                "all users cannot be confirmed; " + set_aside_text(set_aside),
+                + (f" and {more} more" if more > 0 else "") + ")"
+                + (membership_note if membership_note else "; group membership is not read")
+                + ", so coverage of all users cannot be confirmed; " + set_aside_text(set_aside),
                 validation, input_summary=input_summary, extra=details)
 
         is_enforced = methods_available and mfa_enforced_for_users
