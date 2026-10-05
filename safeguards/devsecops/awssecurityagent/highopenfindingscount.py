@@ -196,7 +196,9 @@ def pentest_label(estate, pentest_id):
             title = p.get("title")
     detail = estate["details"].get(pentest_id) or {}
     title = title or detail.get("title") or str(pentest_id)
-    assets = detail.get("assets") if isinstance(detail.get("assets"), dict) else {}
+    # Integration-Service projects BatchGetPentests to top-level endpoints / integratedRepositories;
+    # the raw AWS shape nests them under assets. Read either.
+    assets = detail.get("assets") if isinstance(detail.get("assets"), dict) else detail
     targets = [e.get("uri") for e in (assets.get("endpoints") or []) if isinstance(e, dict) and e.get("uri")]
     repos = [r.get("providerResourceId") for r in (assets.get("integratedRepositories") or [])
              if isinstance(r, dict) and r.get("providerResourceId")]
