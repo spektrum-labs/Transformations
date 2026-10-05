@@ -5,8 +5,9 @@ Category: Identity / Authentication
 
 Evaluates "no weak factors": only strong authentication methods are enabled (FIDO2, certificate-based
 authentication, Microsoft Authenticator, software or hardware OATH tokens, and a Temporary Access Pass
-with a maximum lifetime). SMS, voice and email OTP (for any target, guests included) fail. An external
-method alone, or no member method at all, is not evaluated.
+with a maximum lifetime). SMS, voice and email OTP targeted at members fail. A method enabled with an
+empty includeTargets list targets nobody and is not counted at all. An external method alone, or no
+member method at all, is not evaluated.
 """
 
 import json
@@ -135,10 +136,20 @@ def transform(input):
         #
         # Rules (2026-10-03 fleet check, integration-fix-queue
         # changes/2026-10-03-false-fail-check, with J.J.'s decisions of 3 Oct 00:55 ET):
-        #  * Email OTP that is enabled FAILS "no weak factors" whoever it targets. An Email
-        #    configuration with an empty includeTargets list still lets B2B guests sign in
-        #    with an emailed one-time passcode (allowExternalIdToUseEmailOtp), and that is
-        #    an email-based factor allowed in the tenant. Guests included: still a fail.
+        #  * A method that is enabled but whose includeTargets list is EMPTY targets nobody,
+        #    so it is not counted -- neither weak nor strong. (Josh's decision, 5 Oct 2026,
+        #    superseding the 3 Oct rule that zero-target Email OTP fails.) Both shapes occur
+        #    in real tenants -- Email enabled with empty includeTargets, and Email targeted at
+        #    all_users or a group -- so the check still fails every tenant where a member can
+        #    actually use email OTP. Removing a zero-target method can leave nothing enabled;
+        #    that falls to the "no member method" rule below and is not evaluated -- which is
+        #    also correct on its own terms, since tenants in that position are typically at
+        #    policyMigrationState migrationInProgress, where legacy per-user MFA governs.
+        #    The B2B guest email-OTP path the 3 Oct rule worried about is kept as an
+        #    additional finding when allowExternalIdToUseEmailOtp is explicitly "enabled" (an
+        #    admin choice), and not raised when it is "default" (Microsoft's tenant default).
+        #    Only a PRESENT and EMPTY list counts as targeting nobody; a missing
+        #    includeTargets key is unknown, not empty, and the method is still classified.
         #  * An external authentication method (for example Cisco Duo) enforces its own
         #    factors, which Entra cannot see. It is never called insecure here; when it is
         #    the only thing standing between "no weak method" and a verdict, the check is
@@ -152,8 +163,14 @@ def transform(input):
         #    reason names policyMigrationState when the policy carries it.
         #  * X509Certificate (certificate-based authentication) and HardwareOath (OATH
         #    hardware tokens) are strong factors and are allowed.
-        enabled_methods = [obj for obj in auth_configs
-                           if isinstance(obj, dict) and str(obj.get('state', '')).lower() == "enabled"]
+        def targets_nobody(m):
+            targets = m.get('includeTargets')
+            return isinstance(targets, list) and not targets
+
+        switched_on = [obj for obj in auth_configs
+                       if isinstance(obj, dict) and str(obj.get('state', '')).lower() == "enabled"]
+        zero_target = [m for m in switched_on if targets_nobody(m)]
+        enabled_methods = [m for m in switched_on if not targets_nobody(m)]
 
         allowed_methods = ['fido2', 'x509certificate', 'microsoftauthenticator', 'softwareoath', 'hardwareoath']
 
@@ -162,9 +179,6 @@ def transform(input):
 
         def is_external(m):
             return "externalauthenticationmethodconfiguration" in str(m.get('@odata.type') or '').lower()
-
-        def guest_only_email(m):
-            return method_id(m) == 'email' and isinstance(m.get('includeTargets'), list) and not m.get('includeTargets')
 
         def bounded_tap(m):
             if method_id(m) != 'temporaryaccesspass':
@@ -185,7 +199,9 @@ def transform(input):
             else:
                 weak.append(m)
 
-        guest_email = [m for m in weak if guest_only_email(m)]
+        zero_target_email = [m for m in zero_target if method_id(m) == 'email']
+        guest_otp_chosen = [m for m in zero_target_email
+                            if str(m.get('allowExternalIdToUseEmailOtp') or '').lower() == 'enabled']
         has_fido2 = any(method_id(m) == 'fido2' for m in enabled_methods)
         has_ms_auth = any(method_id(m) == 'microsoftauthenticator' for m in enabled_methods)
         migration = str(data.get('policyMigrationState') or '')
@@ -195,23 +211,24 @@ def transform(input):
             "hasFido2": has_fido2,
             "hasMsAuth": has_ms_auth,
             "externalMethods": external,
-            "guestOnlyEmailOtp": bool(guest_email),
+            "zeroTargetMethodsIgnored": [str(m.get('id') or '')[:60] for m in zero_target],
+            "guestOnlyEmailOtp": bool(zero_target_email),
             "temporaryAccessPassBounded": bool(taps),
             "policyMigrationState": migration,
         }
         findings = []
         if taps:
             findings.append("Temporary Access Pass is enabled with a maximum lifetime (onboarding/recovery credential)")
+        if guest_otp_chosen:
+            findings.append("Email one-time passcode is enabled for external (B2B guest) users "
+                            "(allowExternalIdToUseEmailOtp is set to enabled). It targets no members, so it "
+                            "does not affect this check, but guests can sign in with an emailed code.")
 
         if weak:
             insecure_names = [str(m.get('id', 'unknown'))[:60] for m in weak]
             fail_reasons.append(f"Insecure authentication methods enabled: {', '.join(insecure_names)}")
-            if guest_email:
-                fail_reasons.append("Email one-time passcode is enabled for external (guest) users; an "
-                                    "email-based factor allowed for any user, guests included, is a weak factor")
-            recommendations.append("Disable SMS, voice and email OTP (including email OTP for guests); use "
-                                   "FIDO2/passkeys, certificate-based authentication, Microsoft Authenticator "
-                                   "or OATH tokens")
+            recommendations.append("Disable SMS, voice and email OTP for members; use FIDO2/passkeys, "
+                                   "certificate-based authentication, Microsoft Authenticator or OATH tokens")
             return create_response(
                 result={criteriaKey: False, "authTypes": weak},
                 validation=validation, pass_reasons=pass_reasons, fail_reasons=fail_reasons,
