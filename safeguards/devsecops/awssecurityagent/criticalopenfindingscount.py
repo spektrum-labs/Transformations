@@ -17,8 +17,11 @@ Fail closed:
 - any failed read is null, never 0;
 - 0 is reported only when the findings list was read completely (no nextToken) AND at least one
   penetration test run has COMPLETED -- zero findings from a test that never ran proves nothing;
-- a truncated findings list with matches reports the count read as a lower bound
-  (countIsLowerBound true), which can only make the result worse, never better.
+- a truncated findings list (nextToken left after maxPages) is null (Not evaluated) even when
+  matches were read; openCountAtLeast and countIsLowerBound carry the lower bound for the report.
+Scope: ListFindings per configured Agent Space. agentSpaceId is its only required input (API
+reference and SDK model); there is no account-wide call. If AWS refuses the space-wide call live,
+the Integration-Service workflow stops and every check is null.
 """
 
 import json
@@ -226,6 +229,23 @@ def completed_jobs(estate, job_types, now):
     return out
 
 
+def untyped_completed_jobs(estate, now):
+    """COMPLETED jobs that carry no jobType, newest first, as (days_ago, job). jobType (FULL,
+    REVALIDATION, CICD) is in the SDK model but not yet in the published API reference, and the
+    CI/CD integration is a public preview, so an account or Region may not return it. Such a run
+    cannot be told apart, so it can never prove or disprove a typed check on its own."""
+    out = []
+    for job in estate["jobs"] or []:
+        if job.get("status") != "COMPLETED" or job.get("jobType"):
+            continue
+        started = parse_time(job.get("createdAt"))
+        if started is None:
+            continue
+        out.append((days_ago(started, now), job))
+    out.sort(key=lambda pair: pair[0])
+    return out
+
+
 def build_response(result, pass_reasons=None, fail_reasons=None, errors=None, summary=None,
                    recommendations=None, transform_id="", findings=None):
     errors = errors or []
@@ -277,18 +297,22 @@ def transform(input):
                          (", open " + str(days_ago(opened, now)) + " day(s)" if opened is not None else ""))
         summary = {"activeFindingsRead": len(estate["findings"]), "counted": len(counted),
                    "truncated": estate["findingsTruncated"]}
+        if estate["findingsTruncated"]:
+            # Not every page was read: the count is unknown, so Not evaluated even when matches were
+            # seen. openCountAtLeast keeps the lower bound for the report.
+            result["countIsLowerBound"] = True
+            result["openCountAtLeast"] = len(counted)
+            return build_response(result, errors=[
+                "ListFindings returned more pages than were read (" + str(len(estate["findings"])) + " open findings "
+                "read); at least " + str(len(counted)) + " open " + RISK_LEVEL + " penetration test finding(s), "
+                "the full count is unknown"], findings=named, summary=summary, transform_id=TRANSFORM_ID)
         if counted:
             result[CRITERIA_KEY] = len(counted)
-            result["countIsLowerBound"] = estate["findingsTruncated"]
             more = len(counted) - len(named)
             return build_response(result, fail_reasons=[
-                str(len(counted)) + ("+" if estate["findingsTruncated"] else "") + " open " + RISK_LEVEL +
+                str(len(counted)) + " open " + RISK_LEVEL +
                 " penetration test finding(s): " + "; ".join(named) + (" and " + str(more) + " more" if more > 0 else "")],
                 findings=named, summary=summary, transform_id=TRANSFORM_ID)
-        if estate["findingsTruncated"]:
-            return build_response(result, errors=["ListFindings was truncated before any open " + RISK_LEVEL +
-                                                  " finding was read; the count is unknown"],
-                                  summary=summary, transform_id=TRANSFORM_ID)
         if estate["jobs"] is None:
             return build_response(result, errors=[estate["problems"].get("jobs") or estate["problems"].get("pentests")
                                                   or "pentest runs not read"], summary=summary, transform_id=TRANSFORM_ID)
