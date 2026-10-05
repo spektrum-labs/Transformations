@@ -23,6 +23,8 @@ A server whose agent status is "unknown" is unmeasured (Vision One cannot see it
 example a Worry-Free managed agent): with no measured failure and at least one unmeasured server
 the value is None (Not evaluated), never False. No servers in the inventory also fails: absence
 is not proof.
+The None verdict carries its reason in api_errors (dataCollection error), so Token-Service
+stores it as Unevaluated rather than as a failed comparison.
 
 What this proves: every server Vision One knows about has a connected Trend protection
 agent. What it does not prove: which individual protection features are enabled, or
@@ -186,6 +188,7 @@ def transform(input):
             pass_reasons.append("All %d servers have an active Trend protection agent" % len(servers))
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
-                               recommendations=recommendations, input_summary=summary)
+                               recommendations=recommendations, input_summary=summary,
+                               api_errors=(fail_reasons if value is None else None))
     except Exception as e:
         return failure(criteriaKey, False, e)
