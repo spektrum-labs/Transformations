@@ -95,6 +95,18 @@ jobs:
       - name: No criterion may be incapable of reporting a failure
         run: python tools/check_discriminates.py
 
+      # The fourth contract. A criterion a transform returns as None means "not measured",
+      # but Token-Service grades None as FAILED (isEvaluated true) unless the same output
+      # carries additionalInfo.dataCollection.status "error" -- which create_response sets
+      # only from a non-empty api_errors. Twice on 2026-10-05 a None verdict without one
+      # reached production as a red check nobody had measured. This judges the no-evidence
+      # battery plus a poisoned body that drives each transform down its except path.
+      - name: None-verdict checker self-test
+        run: python tools/check_none_not_evaluated.py --self-test
+
+      - name: A None criterion must reach the evaluator as not evaluated
+        run: python tools/check_none_not_evaluated.py
+
       # The third contract. Production does not import these files: it compiles each
       # one with RestrictedPython, which rejects names starting with "_", `x["k"] += 1`
       # and `nonlocal` -- all of which plain Python (and so every step above) accepts.
