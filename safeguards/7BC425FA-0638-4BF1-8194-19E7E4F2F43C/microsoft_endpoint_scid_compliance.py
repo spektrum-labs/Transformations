@@ -13,7 +13,10 @@ applicable device is not. The compliant share is also returned as a whole-number
 IsCompliant / IsApplicable arrive as SByte strings ("1", "0", "None") or booleans.
 
 Not evaluated (dataCollection error, values None): an error or unrecognised body, rows for an
-unexpected SCID, or no applicable device.
+unexpected SCID, or no applicable device. This query sees only the assessment table, never the machine
+list, so an empty assessment cannot show that Defender for Endpoint protects 0 devices (it may also mean
+the assessment has not run); the reason says exactly what the assessment returned and nothing more.
+Device coverage, including "0 onboarded devices", is reported by the deployment and coverage checks.
 """
 
 import json
@@ -105,9 +108,10 @@ def measure(data):
     result = empty_result()
     counts = {}
     for scid in SCIDS:
-        applicable = [row for row in rows if row.get("ConfigurationId") == scid and flag(row.get("IsApplicable"))]
+        assessed = [row for row in rows if row.get("ConfigurationId") == scid]
+        applicable = [row for row in assessed if flag(row.get("IsApplicable"))]
         compliant = [row for row in applicable if flag(row.get("IsCompliant"))]
-        counts[scid] = (len(compliant), len(applicable))
+        counts[scid] = (len(compliant), len(applicable), len(assessed))
         if applicable:
             result[SCIDS[scid][0]] = len(compliant) == len(applicable)
             result[SCIDS[scid][1]] = (len(compliant) * 100) // len(applicable)
@@ -132,8 +136,15 @@ def transform(input):
         lines = passed + failed
         errors = []
         if not lines:
-            errors.append("No device is applicable for tamper or real-time protection (no onboarded Windows device "
-                          "in the assessment); there is nothing to measure")
+            for scid in SCIDS:
+                if counts[scid][2]:
+                    errors.append("Defender for Endpoint's secure-configuration assessment lists " + str(counts[scid][2])
+                                  + " devices for " + SCIDS[scid][2] + " (" + scid + ") and none is applicable, "
+                                  "so Defender for Endpoint does not measure " + SCIDS[scid][2] + " here")
+            if not errors:
+                errors.append("Defender for Endpoint's secure-configuration assessment returned no device for tamper "
+                              "protection (scid-2010) or real-time protection (scid-2011), so Defender for Endpoint "
+                              "does not measure them here; this query cannot show whether any device is onboarded")
         summary = dict(result)
         summary["readings"] = lines
         return create_response(result, validation, errors=errors, passed=passed, failed=failed, summary=summary)
