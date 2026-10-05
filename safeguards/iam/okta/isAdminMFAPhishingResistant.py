@@ -375,6 +375,12 @@ COVERAGE_RESISTANT_KEYS = ["webauthn", "smart_card_idp", "okta_verify_fastpass"]
 # push, so it cannot be called either. security_key has its own schema and was not verified to be
 # FIDO rather than OTP. Neither is counted as covered or as uncovered.
 COVERAGE_UNKNOWN_KEYS = ["okta_verify", "security_key"]
+# Known PHISHABLE authenticators (password, email, SMS/voice, security question, OTP apps and tokens,
+# RADIUS/on-prem OTP). An admin is "uncovered" only when every ACTIVE enrollment is one of these.
+# Any other key (duo, external_idp, custom_app, or one Okta adds later) cannot be called either way,
+# so it makes the admin indeterminate: unclear data reads "not evaluated", never a fail.
+COVERAGE_PHISHABLE_KEYS = ["okta_password", "okta_email", "phone_number", "security_question", "google_otp",
+                           "yubikey_token", "rsa_token", "symantec_vip", "custom_otp", "onprem_mfa"]
 
 
 def is_item_error(entry):
@@ -397,7 +403,7 @@ def classify_admin(enrollments):
               if str(e.get("status") or "").upper() == "ACTIVE"]
     if any(k in COVERAGE_RESISTANT_KEYS for k in active):
         return "covered"
-    if any(k in COVERAGE_UNKNOWN_KEYS for k in active):
+    if any(k in COVERAGE_UNKNOWN_KEYS or k not in COVERAGE_PHISHABLE_KEYS for k in active):
         return "indeterminate"
     return "uncovered"
 
@@ -482,8 +488,9 @@ def coverage_response(data, validation):
 
     if not complete or indeterminate:
         if indeterminate:
-            why = (f"{indeterminate} administrator(s) have only Okta Verify or a security key enrolled, and Okta "
-                   f"does not say whether that enrollment is phishing-resistant (FastPass) or not (push/OTP)")
+            why = (f"{indeterminate} administrator(s) have only Okta Verify, a security key or another authenticator "
+                   f"Okta does not classify enrolled, so whether that enrollment is phishing-resistant (FastPass) or "
+                   f"not (push/OTP) is unknown")
         elif list_cut is None:
             why = "this Integration-Service build did not report whether the admin list was read in full"
         elif list_cut:

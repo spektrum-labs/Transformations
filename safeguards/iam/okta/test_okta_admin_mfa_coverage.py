@@ -101,7 +101,8 @@ class TheVerdict(unittest.TestCase):
         self.assertIs(verdict, False)
 
     def test_phishable_factors_alone_are_uncovered(self):
-        for key in ("phone_number", "okta_email", "security_question", "google_otp", "okta_password"):
+        for key in ("phone_number", "okta_email", "security_question", "google_otp", "okta_password",
+                    "yubikey_token", "rsa_token", "symantec_vip", "custom_otp", "onprem_mfa"):
             with self.subTest(key=key):
                 verdict, _, _ = run(body(["a"], [[enrol(key)]]))
                 self.assertIs(verdict, False)
@@ -117,6 +118,13 @@ class WhatCannotBeClaimed(unittest.TestCase):
     def test_security_key_is_indeterminate(self):
         verdict, _, _ = run(body(["a"], [[enrol("security_key")]]))
         self.assertIsNone(verdict)
+
+    def test_an_unclassified_authenticator_is_indeterminate_not_uncovered(self):
+        """Unclear data reads not evaluated, never a fail (J.J., 3 Oct 2026)."""
+        for key in ("duo", "external_idp", "custom_app", "some_future_key"):
+            with self.subTest(key=key):
+                verdict, _, _ = run(body(["a"], [[enrol("okta_password"), enrol(key)]]))
+                self.assertIsNone(verdict)
 
     def test_an_uncovered_admin_still_fails_alongside_an_indeterminate_one(self):
         """One uncovered admin proves coverage is below 100%."""
