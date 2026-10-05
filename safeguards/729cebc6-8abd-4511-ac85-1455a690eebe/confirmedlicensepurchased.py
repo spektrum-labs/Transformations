@@ -1,180 +1,264 @@
 """
 Transformation: confirmedLicensePurchased
-Vendor: Backup Provider
+Vendor: Microsoft (Azure Backup)
 Category: Licensing
 
-Evaluates if the license has been purchased for the given Backup Provider.
+Input: the backup policies Resource Graph lists for the connected subscription
+(Integration-Service workflow checkLicenseStatus -> getLicenseInfo, resultFormat table, one
+packed `result` column per policy).
+
+Azure Backup has no license to buy: it is billed pay-as-you-go per protected instance on the
+Azure subscription. The evidence that the service is provisioned and in use is a backup policy
+in a Recovery Services or Backup vault.
+
+    True   at least one backup policy read
+    null   Not evaluated: an error, no policy, an unreadable or unrecognised body
+           (dataCollection.status "error" carries the reason)
+    False  not reachable from Azure data: there is no license state to be off
+
+A truncated list that already holds a policy still answers True: more rows can only add policies.
+
+Why this was rewritten: the previous version looked for licensePurchased or totalRecords.
+Production Token-Service drills a legacy transform's input through response / result /
+apiResponse / Output / data, so a Resource Graph table arrives as {columns, rows} with
+neither field, and every production evaluation answered False while a replay of the stored,
+undrilled body answered True.
 """
 
+import ast
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+
+VAULT_TYPES = ("microsoft.recoveryservices/vaults", "microsoft.dataprotection/backupvaults")
+VAULT_ID_MARKERS = ("/providers/microsoft.recoveryservices/vaults/", "/providers/microsoft.dataprotection/backupvaults/")
+POLICY_MARKERS = ("/backuppolicies",)
+ENVELOPE_KEYS = ("response", "result", "apiResponse", "api_response", "Output", "data", "value")
 
 
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
+def parse(value):
+    """Decode a JSON (or Python-literal) string; anything else is returned unchanged.
+
+    Token-Service hands a transform typed JSON, but a stored response has every leaf as a
+    string, so a nested object can arrive as text. Empty text, "None" and "null" read as
+    nothing."""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", "replace")
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text in ("None", "null"):
+        return None
+    if text[0] not in "{[":
+        return value
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return value
+
+
+def text_of(value):
+    value = parse(value)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def flag_on(value):
+    return text_of(value).lower() in ("true", "1", "yes")
+
+
+def error_text(body):
+    """Why this body is an error rather than data, or None."""
+    if not isinstance(body, dict):
+        return None
+    err = parse(body.get("error"))
+    if isinstance(err, dict) and err:
+        code = text_of(err.get("code") or err.get("statusCode") or err.get("status"))
+        message = text_of(err.get("message") or err.get("Message"))
+        return ("Azure error " + code + ": " + message)[:240].strip()
+    if err not in (None, False, "", "false", "False", "0", 0, [], {}):
+        return ("error response: " + text_of(body.get("message") or err))[:240]
+    for key in ("errors", "errorMessage", "errorType", "fault", "Message"):
+        if parse(body.get(key)) not in (None, "", [], {}):
+            return ("error response: " + text_of(body.get(key)))[:240]
+    for key in ("statusCode", "status_code", "httpStatus"):
+        code = text_of(body.get(key))
+        if code.isdigit() and int(code) >= 400:
+            return "HTTP " + code + " from the vendor"
+    return None
+
+
+def table_rows(table):
+    """Rows of a Resource Graph `table` result as dicts, or None when malformed.
+
+    A single packed column (`project result=pack(...)`) yields the packed object itself."""
+    columns = parse(table.get("columns"))
+    rows = parse(table.get("rows"))
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return None
+    names = []
+    for column in columns:
+        column = parse(column)
+        name = column.get("name") if isinstance(column, dict) else column
+        if name is None:
+            return None
+        names.append(str(name))
+    out = []
+    for row in rows:
+        row = parse(row)
+        if not isinstance(row, list) or len(row) != len(names):
+            return None
+        record = {}
+        for name, cell in zip(names, row):
+            record[name] = parse(cell)
+        if len(names) == 1 and isinstance(record.get(names[0]), dict):
+            record = record.get(names[0])
+        out.append(record)
+    return out
+
+
+def read_rows(payload):
+    """(rows, truncated, problem) from a Resource Graph response, however it arrives.
+
+    Production Token-Service drills a legacy transform's input through response, result,
+    apiResponse, Output and data, so a Resource Graph body {totalRecords, data: [...]}
+    reaches the transform as the bare row list, and a `table` body as {columns, rows}. A
+    stored or replayed response arrives undrilled, possibly wrapped by Integration-Service,
+    possibly with every leaf a string. All of these read the same. problem is set (and rows
+    None) for an error, an unreadable body or an unrecognised shape."""
+    body = parse(payload)
+    truncated = False
+    depth = 0
+    while not isinstance(body, list):
+        depth = depth + 1
+        if depth > 8 or not isinstance(body, dict):
+            return None, truncated, "unreadable response (no Resource Graph rows found)"
+        problem = error_text(body)
+        if problem:
+            return None, truncated, problem
+        if flag_on(body.get("resultTruncated")) or text_of(body.get("$skipToken")) or text_of(body.get("skipToken")):
+            truncated = True
+        if "columns" in body and "rows" in body:
+            rows = table_rows(body)
+            if rows is None:
+                return None, truncated, "unreadable Resource Graph table (columns and rows do not match)"
+            body = rows
+            break
+        found = None
+        for key in ENVELOPE_KEYS:
+            if key in body:
+                found = parse(body.get(key))
                 break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+        if found is None:
+            return None, truncated, "unrecognised response shape (no Resource Graph rows found)"
+        body = found
+    rows = []
+    for item in body:
+        item = parse(item)
+        if not isinstance(item, dict):
+            return None, truncated, "unreadable row in the Resource Graph response"
+        problem = error_text(item)
+        if problem:
+            return None, truncated, problem
+        rows.append(item)
+    return rows, truncated, None
 
 
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
+def is_vault(row):
+    kind = text_of(row.get("type")).lower()
+    ident = text_of(row.get("id")).lower()
+    if kind in VAULT_TYPES:
+        return True
+    return any(marker in ident for marker in VAULT_ID_MARKERS)
+
+
+def vault_label(row):
+    name = text_of(row.get("name")) or "unnamed vault"
+    group = text_of(row.get("resourceGroup"))
+    return name + (" (resource group " + group + ")" if group else "")
+
+
+def create_response(criteria_key, value, pass_reasons=None, fail_reasons=None, recommendations=None,
+                    input_summary=None, not_evaluated=None, findings=None):
+    """The five-section response. not_evaluated (a reason) makes the verdict null with
+    dataCollection.status "error", which Token-Service records as Not evaluated."""
+    errors = [not_evaluated] if not_evaluated else []
     return {
-        "transformedResponse": result,
+        "transformedResponse": {criteria_key: None if not_evaluated else value},
         "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
-            },
-            "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
-            },
-            "transformation": {
-                "status": "error" if (transformation_errors or []) else "success",
-                "errors": transformation_errors or [],
-                "inputSummary": input_summary or {}
-            },
+            "dataCollection": {"status": "error" if errors else "success", "errors": errors},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": input_summary or {}},
             "evaluation": {
                 "passReasons": pass_reasons or [],
                 "failReasons": fail_reasons or [],
                 "recommendations": recommendations or [],
-                "additionalFindings": additional_findings or []
+                "additionalFindings": findings or [],
             },
             "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "evaluatedAt": datetime.now(timezone.utc).isoformat(),
                 "schemaVersion": "1.0",
-                "transformationId": "confirmedLicensePurchased",
-                "vendor": "Generic",
-                "category": "Licensing"
-            }
-        }
+                "transformationId": criteria_key,
+                "vendor": "Microsoft",
+                "category": "Backup",
+            },
+        },
     }
 
 
+CRITERIA_KEY = "confirmedLicensePurchased"
+
+
+def is_policy(row):
+    kind = text_of(row.get("type")).lower()
+    ident = text_of(row.get("id")).lower()
+    return kind.endswith("/backuppolicies") or "/backuppolicies/" in ident
+
+
+def protected_items(row):
+    props = parse(row.get("properties"))
+    if not isinstance(props, dict):
+        return 0
+    count = text_of(props.get("protectedItemsCount"))
+    return int(count) if count.isdigit() else 0
+
+
 def transform(input):
-    criteriaKey = "confirmedLicensePurchased"
-
     try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
+        rows, truncated, problem = read_rows(input)
+        if problem:
             return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # Default to True if data is present
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
-
-        # Check for explicit licensePurchased field
-        license_purchased = data.get('licensePurchased', default_value) if isinstance(data, dict) else default_value
-
-        # Check totalRecords as alternative indicator
-        if not license_purchased and isinstance(data, dict):
-            if 'totalRecords' in data and data['totalRecords'] > 0:
-                license_purchased = True
-
-        if license_purchased:
-            pass_reasons.append("License active and confirmed")
-        else:
-            fail_reasons.append("License purchase not confirmed")
-            recommendations.append("Confirm license has been purchased for the backup provider")
-
+                CRITERIA_KEY, None,
+                not_evaluated="Backup policies could not be read: " + problem,
+                recommendations=["Confirm the connection's app registration holds the Reader role on the "
+                                 "backup subscription, then re-run the evaluation."])
+        if not rows:
+            return create_response(
+                CRITERIA_KEY, None,
+                not_evaluated="No backup policy was returned for the connected subscription, so there is "
+                              "no evidence that Azure Backup is in use there.",
+                recommendations=["Confirm the connected subscription is the one that holds the backup vaults."])
+        policies = [row for row in rows if is_policy(row)]
+        if not policies:
+            return create_response(
+                CRITERIA_KEY, None,
+                not_evaluated="The response rows are not recognisable backup policies (no policy type or resource id).")
+        names = [text_of(policy.get("name")) or "unnamed policy" for policy in policies]
+        vaults = sorted(set(text_of(policy.get("vaultName")) for policy in policies if text_of(policy.get("vaultName"))))
+        items = sum([protected_items(policy) for policy in policies])
+        reason = (str(len(policies)) + " backup polic" + ("y" if len(policies) == 1 else "ies")
+                  + " configured (" + ", ".join(names[:10]) + (", ..." if len(names) > 10 else "") + ")"
+                  + (" in vault(s) " + ", ".join(vaults[:10]) if vaults else "")
+                  + ". Azure Backup is billed pay-as-you-go per protected instance with no separate "
+                    "license, so a configured policy confirms the service is provisioned.")
         return create_response(
-            result={criteriaKey: license_purchased},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased}
-        )
-
-    except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
-
-
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
-
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
-    """
-    if isinstance(data, list):
-        # A top-level JSON array is a population of records, as {"items": [...]} already is,
-        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
-        for item in data:
-            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
-                return False
-        data = {"items": [item for item in data if item]}
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
-        if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
+            CRITERIA_KEY, True,
+            pass_reasons=[reason],
+            input_summary={"policyCount": len(policies), "protectedItemsCount": items,
+                           "vaultCount": len(vaults), "truncated": truncated})
+    except Exception as exc:
+        return create_response(CRITERIA_KEY, None, not_evaluated="Transformation error: " + str(exc)[:200])
