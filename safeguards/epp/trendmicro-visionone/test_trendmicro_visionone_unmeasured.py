@@ -82,3 +82,31 @@ def test_signature_few_latest_many_unknown_is_not_evaluated():
 
 def test_signature_all_latest_passes():
     assert verdict("issignatureuptodate", "isSignatureUpToDate", [ep("a"), ep("b", comp="controlledLatestVersion")]) is True
+
+
+def info(name, items):
+    return mod(name).transform({"items": items, "count": len(items), "totalCount": len(items)})["additionalInfo"]
+
+
+def test_unmeasured_none_carries_api_errors_so_it_stores_unevaluated():
+    # A None verdict with no dataCollection error is stored as a Failed comparison, not Unevaluated.
+    cases = [
+        ("iseppenabledforcriticalsystems", [ep("s1", kind="server"), ep("s2", kind="server", status="unknown")]),
+        ("issignatureuptodate", [ep("a"), ep("b", comp="unknownVersions")]),
+    ]
+    for name, items in cases:
+        dc = info(name, items)["dataCollection"]
+        assert dc["status"] == "error" and dc["errors"], name
+        assert "cannot be read here" in dc["errors"][0], name
+
+
+def test_measured_verdicts_carry_no_api_errors():
+    cases = [
+        ("iseppenabledforcriticalsystems", [ep("s1", kind="server", status="off"), ep("s2", kind="server", status="unknown")]),
+        ("iseppenabledforcriticalsystems", [ep("s1", kind="server")]),
+        ("issignatureuptodate", [ep("a", comp="outdatedVersion"), ep("b", comp="unknownVersions")]),
+        ("issignatureuptodate", [ep("a")]),
+    ]
+    for name, items in cases:
+        dc = info(name, items)["dataCollection"]
+        assert dc["status"] == "success" and dc["errors"] == [], name

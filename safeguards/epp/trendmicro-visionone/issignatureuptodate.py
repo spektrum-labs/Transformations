@@ -22,6 +22,8 @@ protection agent reports eppAgent.componentVersion "latestVersion" or
 "outdatedVersion" fails it. "unknownVersions" or a missing value is unmeasured (Vision One does
 not know the agent's components, e.g. a Worry-Free managed or sensor-only agent): with no outdated
 agent and at least one unmeasured agent the value is None (Not evaluated), never False.
+The None verdict carries its reason in api_errors (dataCollection error), so Token-Service
+stores it as Unevaluated rather than as a failed comparison.
 
 What this proves: every Trend protection agent runs the latest pattern/engine components
 it is allowed to. What it does not prove: component freshness on endpoints with no
@@ -189,6 +191,7 @@ def transform(input):
             pass_reasons.append("All %d protection agents run the latest allowed components" % agents)
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
-                               recommendations=recommendations, input_summary=summary)
+                               recommendations=recommendations, input_summary=summary,
+                               api_errors=(fail_reasons if value is None else None))
     except Exception as e:
         return failure(criteriaKey, False, e)
