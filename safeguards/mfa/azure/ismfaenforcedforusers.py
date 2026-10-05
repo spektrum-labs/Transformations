@@ -15,12 +15,17 @@ Not evaluated (value None, dataCollection.status "error"):
   provider, which Entra cannot grade (J.J., 3 Oct 2026; same rule as authtypesallowed.py and
   entra_strongauth_methods.py). It is never a FAIL. Seen at one estate, where a tenant
   that requires Duo through Conditional Access read "No MFA authentication methods enabled";
+- no method that targets members is enabled: nothing at all, or only Email one-time passcode with an
+  empty includeTargets list, which reaches B2B guests only (J.J., 3 Oct and 5 Oct 2026). The methods
+  policy then does not govern member sign-in (per-user MFA or security defaults may), so it is not
+  evidence either way. Guest Email OTP still fails authTypesAllowed. Same rule as
+  874a78ff/ismfaenforcedforusers.py (TX #965);
 - the authentication methods policy or the Conditional Access policies were not read (error
   envelope, no authenticationMethodConfigurations array, no policy list), or input validation
   failed: a read that failed is not evidence either way.
 
-FAIL stays only when both were read and they show no MFA: no Microsoft MFA method and no
-external method enabled, or, with no external method enabled, no enabled Conditional Access
+FAIL stays only when both were read and they show no MFA: no Microsoft MFA method, no external
+method and some other member-targeted method enabled (for example SMS, voice or member Email OTP), or, with no external method enabled, no enabled Conditional Access
 policy requiring MFA for users. An external method (e.g. Duo) with no Conditional Access policy
 requiring MFA reads not evaluated, not FAIL.
 """
@@ -584,6 +589,8 @@ def transform(input):
         mfa_method_types = ['microsoftauthenticator', 'fido2', 'softwareoath', 'temporaryaccesspass']
         enabled_methods = []
         external_methods = []
+        other_member_methods = []
+        guest_only_email = False
         for method in method_configs:
             if not isinstance(method, dict):
                 continue
@@ -593,6 +600,12 @@ def transform(input):
                 external_methods.append(str(method.get('displayName') or method.get('id') or 'external method')[:60])
             elif str(method.get('id') or '').lower() in mfa_method_types:
                 enabled_methods.append(str(method.get('id')))
+            elif (str(method.get('id') or '').lower() == 'email' and isinstance(method.get('includeTargets'), list)
+                    and len(method.get('includeTargets')) == 0):
+                # Email OTP with no include targets reaches B2B guests only, not members.
+                guest_only_email = True
+            else:
+                other_member_methods.append(str(method.get('id') or 'unknown')[:40])
 
         methods_available = len(enabled_methods) > 0
 
@@ -657,6 +670,17 @@ def transform(input):
                 "Enabled external method(s): " + ", ".join(external_methods)
                 + "; no Microsoft MFA method is enabled in the authentication methods policy",
                 validation, input_summary=input_summary, extra=details, findings=findings)
+
+        # 3b. No method that targets members is enabled (nothing, or guest-only Email OTP): the methods
+        # policy does not govern member sign-in, so it is not evidence either way (J.J., 3 and 5 Oct 2026).
+        if not methods_available and not external_methods and not other_member_methods:
+            details["guestOnlyEmail"] = guest_only_email
+            return not_evaluated(
+                criteriaKey,
+                "No authentication method that targets members is enabled"
+                + (" (Email one-time passcode is enabled for B2B guests only)" if guest_only_email else "")
+                + ", so the authentication methods policy does not show whether MFA is enforced for users",
+                validation, input_summary=input_summary, extra=details)
 
         scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
         membership_note = ""
