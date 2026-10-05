@@ -6,10 +6,24 @@ Category: Identity / Secure Score
 Evaluates if MFA is enforced for users based on:
 - Microsoft Secure Score controlScores (MFARegistrationV2)
 - Authentication method configurations
+
+Authentication method configurations (GET /v1.0/policies/authenticationMethodsPolicy):
+- Only a strong method counts (STRONG_METHOD_IDS, the same list as mfa/azure/ismfaenforcedforusers.py plus
+  hardware OATH tokens). Email one-time passcodes (including the guest-only Email OTP setting), SMS and voice
+  are weak factors and never make the key True (J.J., 3 Oct 2026: "no weak factors"). Before 5 Oct 2026 any
+  enabled method passed, so a tenant whose only enabled method was Email OTP read True.
+- An external authentication method (for example Cisco Duo) with no strong Microsoft method reads not
+  evaluated (value None, dataCollection.status "error"): that provider enforces the factor and Entra cannot
+  grade it. Same rule as mfa/azure/ismfaenforcedforusers.py.
+- Neither Secure Score data nor an authenticationMethodConfigurations list reads not evaluated: a read that
+  returned nothing is not evidence either way.
 """
 
 import json
 from datetime import datetime
+
+STRONG_METHOD_IDS = ("microsoftauthenticator", "fido2", "softwareoath", "hardwareoath", "temporaryaccesspass")
+WEAK_METHOD_IDS = ("email", "sms", "voice")
 
 
 # ============================================================================
@@ -223,26 +237,55 @@ def transform(input):
         # ----------------------------------------------------------------
         # Fallback: Process authentication method configurations
         # ----------------------------------------------------------------
-        elif 'authenticationMethodConfigurations' in data:
+        elif isinstance(data.get('authenticationMethodConfigurations'), list):
             mfa_info = {"mfaTypes": []}
-            enabled_methods = [
-                obj for obj in data['authenticationMethodConfigurations']
-                if 'state' in obj and str(obj['state']).lower() == "enabled"
-            ]
-            mfa_info['mfaTypes'] = enabled_methods
+            strong_methods = []
+            weak_names = []
+            external_names = []
+            for obj in data['authenticationMethodConfigurations']:
+                if not isinstance(obj, dict) or str(obj.get('state') or '').lower() != "enabled":
+                    continue
+                method_id = str(obj.get('id') or '')
+                if "externalauthenticationmethodconfiguration" in str(obj.get('@odata.type') or '').lower():
+                    external_names.append(str(obj.get('displayName') or method_id or 'external method')[:60])
+                elif method_id.lower() in STRONG_METHOD_IDS:
+                    strong_methods.append(obj)
+                elif method_id.lower() in WEAK_METHOD_IDS:
+                    weak_names.append(method_id)
+            mfa_info['mfaTypes'] = strong_methods
 
-            is_enabled = len(enabled_methods) > 0
+            is_enabled = len(strong_methods) > 0
 
             if is_enabled:
-                method_names = [m.get('id', 'unknown') for m in enabled_methods[:5]]
-                pass_reasons.append(f"{len(enabled_methods)} MFA methods enabled: {', '.join(method_names)}")
+                method_names = [m.get('id', 'unknown') for m in strong_methods[:5]]
+                pass_reasons.append(f"{len(strong_methods)} strong MFA methods enabled: {', '.join(method_names)}")
+            elif external_names:
+                return create_response(
+                    result={criteriaKey: None, "externalMethodsEnabled": external_names},
+                    validation=validation,
+                    api_errors=["No Microsoft MFA method is enabled; MFA is provided by an external authentication "
+                                "method (" + ", ".join(external_names[:3]) + "), which Microsoft Entra cannot grade"],
+                    recommendations=["Answer this check from the external MFA provider's own integration"]
+                )
             else:
-                fail_reasons.append("No MFA authentication methods are enabled")
-                recommendations.append("Enable at least one MFA authentication method (e.g., Microsoft Authenticator)")
+                if weak_names:
+                    fail_reasons.append("Only weak methods are enabled (" + ", ".join(weak_names) + "): email one-time "
+                                        "passcodes, SMS and voice do not count as MFA enforcement")
+                else:
+                    fail_reasons.append("No MFA authentication methods are enabled")
+                recommendations.append("Enable a strong MFA method (Microsoft Authenticator, FIDO2 security keys or "
+                                       "OATH tokens) and require it for all users")
+            if weak_names:
+                mfa_info['weakMethodsEnabled'] = weak_names
 
         else:
-            fail_reasons.append("MFA configuration data not available - verify API permissions")
-            recommendations.append("Verify the Microsoft Graph API integration is returning data")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["MFA configuration data not available: no Secure Score data and no authentication "
+                            "methods policy was read"],
+                recommendations=["Verify the Microsoft Graph integration has Policy.Read.All and is returning data"]
+            )
 
         # ----------------------------------------------------------------
         # Build result
@@ -255,6 +298,8 @@ def transform(input):
         }
         if mfa_info is not None and 'mfaTypes' in mfa_info:
             result['mfaTypes'] = mfa_info['mfaTypes']
+        if mfa_info is not None and 'weakMethodsEnabled' in mfa_info:
+            result['weakMethodsEnabled'] = mfa_info['weakMethodsEnabled']
 
         input_summary = {
             "hasSecureScoreData": len(value) > 0,
