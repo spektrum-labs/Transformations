@@ -1,7 +1,7 @@
 """isStrongAuthRequired must not read an Okta org factor catalogue as a policy list.
 
-REAL mirrors the Spektrum Labs tenant read of 2026-10-05 06:32 UTC, archived as the
-`isAdminMFAPhishingResistant` api_response for safeguard 782e78aa (factorType/provider/status
+REAL mirrors an internal test tenant read of 2026-10-05 06:32 UTC, archived as the
+`isAdminMFAPhishingResistant` api_response (factorType/provider/status
 only, nothing else kept). GET /api/v1/org/factors returned 17 rows with exactly two ACTIVE:
 sms/OKTA and token:software:totp/OKTA.
 

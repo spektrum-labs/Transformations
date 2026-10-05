@@ -17,7 +17,7 @@ The old logic counted "any item with status ACTIVE" and reported
     "Strong authentication is required with 2 active policies"
 It was counting FACTORS and calling them POLICIES, so the pass was produced by SMS
 and TOTP being switched on -- the two weakest factors in the list. Across the Okta
-estate the key read 8 Passed / 0 Failed, which is the distribution of a check that
+estate the key only ever read Passed, which is the distribution of a check that
 cannot fail rather than a measurement of anyone's posture.
 
 Two further problems with that reading, independent of the shape confusion:
