@@ -23,10 +23,35 @@ import json
 from datetime import datetime
 
 # factorType values Okta emits that are acceptable as a second factor:
-# FIDO2/WebAuthn, legacy FIDO U2F, Okta FastPass, Okta Verify push, and an
-# authenticator app TOTP code. Every other active factorType fails, including
-# sms, call, email and question.
-ALLOWED_FACTOR_TYPES = ["webauthn", "u2f", "signed_nonce", "push", "token:software:totp"]
+# FIDO2/WebAuthn, legacy FIDO U2F, Okta FastPass, Okta Verify push, a hardware
+# OTP token, a smart card, and an authenticator app TOTP code. The intended
+# failures are the phishable shared-secret and knowledge factors: sms, call,
+# email and question.
+#
+# token:hardware and smart_card were missing, and their absence was an omission
+# rather than a decision -- the comment here has always enumerated the intended
+# failures as "sms, call, email and question", and neither is in that list.
+# Measured 2026-10-05: one customer with a YubiKey (token:hardware/YUBICO)
+# ACTIVE was failed with "Authentication types that are not allowed are active:
+# token:hardware, sms, question", counting a hardware token as a violation
+# alongside SMS. smart_card (PIV/CAC) is phishing-resistant and is already
+# treated as such by the sibling isPhishingResistantOnlyEnabled.py, whose
+# PHISH_RESISTANT_TYPES is ["webauthn", "u2f", "signed_nonce", "smart_card"];
+# failing an org for using it contradicts that file.
+#
+# Deliberately still NOT allowed, so that an unrecognised factor fails rather
+# than passing unexamined:
+#   token, token:hotp  - generic/custom OTP tokens (RSA SecurID, Symantec VIP,
+#                        bespoke HOTP). Plausibly legitimate, but the bare
+#                        "token" type does not say what the factor is, and no
+#                        customer measured has one ACTIVE -- every observed row
+#                        is NOT_SETUP. Add them on evidence, not on principle.
+#   web                - Duo-via-Okta. Delegates the factor decision to another
+#                        IdP this check cannot see.
+ALLOWED_FACTOR_TYPES = [
+    "webauthn", "u2f", "signed_nonce", "push", "token:software:totp",
+    "token:hardware", "smart_card",
+]
 
 # Display label only, preserved from the previous version so the rendered
 # authTypes list does not change shape for factors that already passed.
@@ -156,7 +181,7 @@ def transform(input):
             pass_reasons.append(f"Only allowed authentication types are active: {', '.join(authTypes)}")
         else:
             fail_reasons.append(f"Authentication types that are not allowed are active: {', '.join(otherAuthTypes)}")
-            recommendations.append("Restrict authentication to FIDO2/WebAuthn, U2F, Okta FastPass, Okta Verify push or an authenticator app code")
+            recommendations.append("Restrict authentication to FIDO2/WebAuthn, U2F, Okta FastPass, Okta Verify push, a hardware OTP token, a smart card or an authenticator app code")
 
         return create_response(
             result={criteriaKey: is_allowed, "authTypes": authTypes},
