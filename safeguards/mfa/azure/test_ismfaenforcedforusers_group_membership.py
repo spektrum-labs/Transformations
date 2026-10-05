@@ -1,7 +1,9 @@
 """mfa/azure/ismfaenforcedforusers.py: group-scoped MFA policies judged from the group-membership reads.
 
-Rule (5 Oct 2026): group math can turn "not evaluated" into True; it never turns any input into False, and with no
-membership keys in the input the output is identical to the shipped behaviour. Synthetic estate only (public repo).
+Rule (5 Oct 2026): group math can turn "not evaluated" into True. It turns it into False only when membership was read
+whole and some enabled members are reached by no enabled MFA policy (code owner ruling, 5 Oct; see
+test_ismfaenforcedforusers_members_outside.py). With no membership keys in the input the output is identical to the
+shipped behaviour. Synthetic estate only (public repo).
 """
 import builtins as real_builtins
 import copy
@@ -100,6 +102,7 @@ def test_two_named_exclusions_allowed_three_not():
     spread, out = run(body([policy("A", include_groups=(G1,), excludeUsers=U[4:6]),
                             policy("B", include_groups=(G2,), excludeUsers=U[2:4])], members=[U[:4], U[:2]]))
     assert spread is None and "more than 2" in reason(out)  # 4 in total across the counting policies
+    # U[4:6] are in no included group either; the two left outside are break-glass by name, so nothing fails
 
 
 def test_guests_and_disabled_accounts_do_not_count():
@@ -110,13 +113,12 @@ def test_guests_and_disabled_accounts_do_not_count():
     assert run(b)[0] is True
 
 
-# --- never False ----------------------------------------------------------------------------------------------------
+# --- members outside: False with the count (full rule in test_ismfaenforcedforusers_members_outside.py) ----------
 
-def test_members_outside_stay_not_evaluated_with_counts():
+def test_members_outside_fail_with_counts():
     value, out = run(body([policy("A")], members=[U[:2]], groups=[G1]))
-    assert value is None
-    assert "4 of 6 enabled members are outside" in reason(out)
-    assert "never fails this check" in reason(out)
+    assert value is False
+    assert "4 of 6 enabled member accounts are not covered" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
 
 
 @pytest.mark.parametrize("raw", [
@@ -179,8 +181,9 @@ def test_existing_pass_and_fail_are_untouched_by_membership():
     assert run(failing)[0] is False  # no MFA method: fails as before, membership is not consulted
 
 
-def test_membership_never_produces_false_on_a_battery():
-    # Every combination of policy shape x membership outcome: False only where the no-membership input is False.
+def test_membership_false_only_when_a_member_is_reached_by_no_mfa_policy():
+    # Every combination of policy shape x membership outcome: False only where the no-membership input is False or
+    # some enabled member is in no group or user list of any enabled MFA policy; True stays True.
     shapes = [policy("A"), policy("A", excludeUsers=U[:3]), policy("apps", apps=("x",)),
               policy("All", include_users=("All",), include_groups=(), excludeGroups=[G1])]
     outcomes = [[U], [U[:1]], [[]]]
@@ -188,8 +191,9 @@ def test_membership_never_produces_false_on_a_battery():
         base, _ = run(body([shape]))
         for members in outcomes:
             value, _ = run(body([shape], members=members, groups=[G1]))
+            reached = set(members[0]) if not shape["conditions"]["users"]["includeUsers"] else set(U)
             if value is False:
-                assert base is False
+                assert base is False or set(U) - reached
             if base is True:
                 assert value is True
 
