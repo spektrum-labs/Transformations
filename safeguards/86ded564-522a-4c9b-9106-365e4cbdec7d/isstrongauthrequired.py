@@ -37,6 +37,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # A None verdict must reach the evaluator as "not evaluated". Token-Service grades a
+    # transform's None as Failed unless dataCollection.status is "error", which needs a
+    # non-empty api_errors, so carry the reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and any(v is None for v in result.values()):
+        api_errors = list(fail_reasons or []) or ["The response could not answer this check, so it was not evaluated."]
     return {
         "transformedResponse": result,
         "additionalInfo": {
