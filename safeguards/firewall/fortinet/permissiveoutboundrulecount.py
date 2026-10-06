@@ -16,11 +16,15 @@ address "all", and at least one destination interface is internet-facing: an int
 wan member, an SD-WAN zone (virtual-wan-link or any zone in system/sdwan), or "any".
 Value: the number of permissive outbound policies. Pass rule lessThan 0 (inclusive), so only 0 passes. Allow-listed
 exceptions are counted (the integration has no exception list); the reason names each policy so it can be reviewed.
-Scope and limits, stated in every reason: the API token's VDOM only; named address objects or service groups that
-happen to cover everything are not expanded (only the built-in "all" address and "ALL" service are read).
+Scope and limits, stated in every reason: the API token's VDOM only; the consolidated policy table (IPv4 dstaddr and
+IPv6 dstaddr6 since FortiOS 6.4); IPv6 policies in the separate policy6 table of FortiOS 6.2 and older are not read;
+named address objects or service groups that happen to cover everything are not expanded (only the built-in "all"
+address and "ALL" service are read). A policy whose service or destination is negated (service-negate,
+dstaddr-negate, dstaddr6-negate) does not match that field.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body; the policy, interface or
-zone read missing or not successful; or an accept-ALL-to-all policy whose destination interface cannot be resolved
-to an interface or zone.
+zone read missing or not successful; or, when no permissive policy is confirmed, an accept-ALL-to-all policy whose
+destination interface cannot be resolved to an interface or zone. A confirmed permissive policy is a failure even
+when others are unresolved (they can only add to the count; the reason names them).
 """
 import json
 from datetime import datetime, timezone
@@ -35,6 +39,10 @@ WRAPPERS = ("apiResponse", "api_response", "response", "result", "Output", "rawR
 PARTS = ("firewallPolicies", "systemInterfaces", "systemZones", "sdwan")
 
 MAX_NAMED = 20
+
+LIMITS = ("Scope: this VDOM's consolidated policy table (IPv4 dstaddr and IPv6 dstaddr6); IPv6 policies kept in the "
+          "separate policy6 table of FortiOS 6.2 and older are not read, and named address objects or service groups "
+          "that cover everything are not expanded.")
 
 
 def to_obj(raw):
@@ -297,9 +305,16 @@ def transform(input):
                 continue
             if str(pol.get("internet-service") or "disable").strip().lower() == "enable":
                 continue
+            if str(pol.get("service-negate") or "disable").strip().lower() == "enable":
+                continue
             services = lower_set(names(pol.get("service")))
-            dst = lower_set(names(pol.get("dstaddr")))
-            if "all" not in services or "all" not in dst:
+            dst4 = lower_set(names(pol.get("dstaddr")))
+            dst6 = lower_set(names(pol.get("dstaddr6")))
+            if str(pol.get("dstaddr-negate") or "disable").strip().lower() == "enable":
+                dst4 = set()
+            if str(pol.get("dstaddr6-negate") or "disable").strip().lower() == "enable":
+                dst6 = set()
+            if "all" not in services or ("all" not in dst4 and "all" not in dst6):
                 continue
             label = "policy " + str(pol.get("policyid") or "?") + (" '" + str(pol.get("name"))[:60] + "'" if pol.get("name") else "")
             dst_intf = lower_set(names(pol.get("dstintf")))
@@ -316,33 +331,37 @@ def transform(input):
         summary = {"vdom": vdom, "policiesRead": len(policies), "internetFacingInterfaces": sorted(wan)[:MAX_NAMED],
                    "permissivePolicies": permissive[:MAX_NAMED], "unresolvedPolicies": unresolved[:MAX_NAMED],
                    "sdwanRead": sdwan_body is not None}
-        if unresolved:
-            return not_measured(validation, "FortiGate (VDOM " + vdom + "): " + str(len(unresolved)) + " accept-all "
-                                "polic(ies) send traffic to an interface or zone that is not in the interface, zone or "
-                                "SD-WAN read (" + name_list(unresolved) + "), so whether they reach the internet cannot "
-                                "be shown.", None, summary)
         if len(policies) == 0:
             return not_measured(validation, "FortiGate (VDOM " + vdom + ") returned no firewall policy. A FortiGate "
                                 "with no policy passes no traffic, but an empty list cannot be told apart from a read "
                                 "the token is not allowed to see in full.", None, summary)
         if permissive:
+            extra = ""
+            if unresolved:
+                extra = ("; " + str(len(unresolved)) + " more accept-all polic(ies) go to an interface or zone that was "
+                         "not read and may add to this count: " + name_list(unresolved))
             return create_response(
                 result={KEY: len(permissive)},
                 validation=validation,
                 fail_reasons=["FortiGate (VDOM " + vdom + "): " + str(len(permissive)) + " of " + str(len(policies)) +
                               " enabled polic(ies) accept every service (ALL) to any destination (all) on an internet-"
-                              "facing interface: " + name_list(permissive)],
+                              "facing interface: " + name_list(permissive) + extra + ". " + LIMITS],
                 recommendations=["Replace service ALL with the services needed (for example HTTP, HTTPS and DNS to named "
                                  "resolvers) on each policy named, and keep any broad exception documented and scoped "
                                  "to named sources."],
                 input_summary=summary,
             )
+        if unresolved:
+            return not_measured(validation, "FortiGate (VDOM " + vdom + "): " + str(len(unresolved)) + " accept-all "
+                                "polic(ies) send traffic to an interface or zone that is not in the interface, zone or "
+                                "SD-WAN read (" + name_list(unresolved) + "), so whether they reach the internet cannot "
+                                "be shown.", None, summary)
         return create_response(
             result={KEY: 0},
             validation=validation,
             pass_reasons=["FortiGate (VDOM " + vdom + "): none of " + str(len(policies)) + " firewall policies accepts "
                           "service ALL to the any address on an internet-facing interface (" +
-                          name_list(sorted(wan)) + "). Named address objects and service groups are not expanded."],
+                          name_list(sorted(wan)) + "). " + LIMITS],
             input_summary=summary,
         )
     except Exception as e:

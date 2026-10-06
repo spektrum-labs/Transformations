@@ -224,3 +224,23 @@ def test_key_is_new_and_no_existing_transform_emits_it():
                 if '"' + KEY + '"' in fh.read():
                     seen.append(path)
     assert seen == []
+
+
+def test_ipv6_any_destination_counts():
+    p = policy(11, ["internal"], ["wan1"], dstaddr=())
+    p["dstaddr6"] = ref("all")
+    assert value(workflow(fortios([p]))) == 1
+
+
+def test_negated_fields_do_not_match():
+    p = policy(12, ["internal"], ["wan1"])
+    p["dstaddr-negate"] = "enable"
+    q = policy(13, ["internal"], ["wan1"])
+    q["service-negate"] = "enable"
+    assert value(workflow(fortios([p, q]))) == 0
+
+
+def test_a_confirmed_failure_is_not_hidden_by_an_unresolved_policy():
+    out = load_plain()(workflow(fortios([policy(7, ["internal"], ["wan1"]), policy(8, ["internal"], ["port9"])])))
+    assert out["transformedResponse"][KEY] == 1
+    assert "port9" in out["additionalInfo"]["evaluation"]["failReasons"][0]
