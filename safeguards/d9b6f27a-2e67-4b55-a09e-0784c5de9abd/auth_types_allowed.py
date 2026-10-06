@@ -148,6 +148,13 @@ def transform(input):
         #    The B2B guest email-OTP path the 3 Oct rule worried about is kept as an
         #    additional finding when allowExternalIdToUseEmailOtp is explicitly "enabled" (an
         #    admin choice), and not raised when it is "default" (Microsoft's tenant default).
+        #    "default" is NOT "off": Microsoft turned guest email OTP on automatically for
+        #    tenants left at default from October 2021, so guests can usually still use it.
+        #    It is left out on purpose because it is not an admin choice; "disabled" means
+        #    nobody, guests included, can use the method.
+        #    Every zero-target method that would otherwise be classed as weak is still named
+        #    in additionalFindings, so a lost target list (a $select, a proxy, a Graph shape
+        #    change) that turns a weak method into a pass is visible in the evaluation.
         #    Only a PRESENT and EMPTY list counts as targeting nobody; a missing
         #    includeTargets key is unknown, not empty, and the method is still classified.
         #  * An external authentication method (for example Cisco Duo) enforces its own
@@ -199,6 +206,8 @@ def transform(input):
             else:
                 weak.append(m)
 
+        zero_target_weak = [m for m in zero_target
+                            if not is_external(m) and not bounded_tap(m) and method_id(m) not in allowed_methods]
         zero_target_email = [m for m in zero_target if method_id(m) == 'email']
         guest_otp_chosen = [m for m in zero_target_email
                             if str(m.get('allowExternalIdToUseEmailOtp') or '').lower() == 'enabled']
@@ -212,13 +221,17 @@ def transform(input):
             "hasMsAuth": has_ms_auth,
             "externalMethods": external,
             "zeroTargetMethodsIgnored": [str(m.get('id') or '')[:60] for m in zero_target],
-            "guestOnlyEmailOtp": bool(zero_target_email),
+            "guestOnlyEmailOtp": any(str(m.get('allowExternalIdToUseEmailOtp') or '').lower() != 'disabled'
+                                     for m in zero_target_email),
             "temporaryAccessPassBounded": bool(taps),
             "policyMigrationState": migration,
         }
         findings = []
         if taps:
             findings.append("Temporary Access Pass is enabled with a maximum lifetime (onboarding/recovery credential)")
+        for m in zero_target_weak:
+            findings.append(f"{str(m.get('id') or 'unknown')[:60]} is enabled but targets no users "
+                            "(includeTargets is empty); not counted")
         if guest_otp_chosen:
             findings.append("Email one-time passcode is enabled for external (B2B guest) users "
                             "(allowExternalIdToUseEmailOtp is set to enabled). It targets no members, so it "
@@ -252,6 +265,9 @@ def transform(input):
                            "set by this policy, so it is not evidence either way")
             else:
                 reason += ": the methods members can use are not set by this policy, so it is not evidence either way"
+            if zero_target:
+                reason += ("; enabled but targeting no one, so not counted: "
+                           + ", ".join(str(m.get('id') or '')[:60] for m in zero_target))
             return create_response(
                 result={criteriaKey: False},
                 validation=validation, input_summary=input_summary, additional_findings=findings,
