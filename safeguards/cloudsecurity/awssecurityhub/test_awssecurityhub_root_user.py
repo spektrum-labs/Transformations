@@ -80,6 +80,9 @@ CASES = [
     # Member account with no root credentials (J.J. 2026-10-06): not evaluated, never a fail.
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'credential_report_root_no_password_member_account.json', None),
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'account_summary_root_no_credentials.json', None),
+    # A recent root sign-in still fails without a password; a summary that omits AccountPasswordPresent keeps the fail.
+    ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'credential_report_root_no_password_recent_signin.json', False),
+    ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'account_summary_root_no_mfa_password_key_absent.json', False),
     ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'credential_report_root_no_password_member_account.json', True),
     ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'account_summary_root_no_credentials.json', True),
 ]
