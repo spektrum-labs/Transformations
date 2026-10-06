@@ -30,7 +30,8 @@ True is returned only with one of these, strongest first:
   * orgApps (optional) holds an ACTIVE productivity app (see MATCHING) that carries an assignment signal
     showing it is assigned to at least one user (assignedUserCount > 0, or a non-empty
     _embedded.users / assignedUsers list, e.g. merged from GET /api/v1/apps/{id}/users?limit=1);
-  * orgApps holds an ACTIVE productivity app that carries no assignment signal. This is the weakest
+  * orgApps holds an ACTIVE productivity app that carries no assignment signal (a signal field that is
+    present but malformed counts as "no user", not as "no signal"). This is the weakest
     evidence: it shows only that an active productivity app EXISTS in Okta, not that everyday users
     reach their mailbox through it, and the pass reason says exactly that.
 An org app whose assignment signal shows NO user is not evidence. Otherwise the result is None (not
@@ -336,16 +337,26 @@ def link_id_hints(rows, slots):
 
 
 def assignment_signal(app):
-    """True / False when an org app row says whether any user is assigned to it, None when it does not say."""
-    count = app.get("assignedUserCount")
-    if isinstance(count, int) and not isinstance(count, bool):
-        return count > 0
-    embedded = app.get("_embedded")
-    users = embedded.get("users") if isinstance(embedded, dict) else None
-    if not isinstance(users, list):
-        users = app.get("assignedUsers")
-    if isinstance(users, list):
-        return len(users) > 0
+    """True / False when an org app row says whether any user is assigned to it, None when it does not say.
+
+    A signal field that is PRESENT but malformed (a non-numeric or bool count, a non-list users value) is
+    read as False: the row claims to say something about assignment and cannot be trusted to say "assigned",
+    so the app is not evidence. A numeric string count ("0", "3") or a whole float is converted."""
+    if "assignedUserCount" in app:
+        count = app.get("assignedUserCount")
+        if isinstance(count, str) and count.strip().isdigit():
+            count = int(count.strip())
+        if isinstance(count, float) and count == int(count):
+            count = int(count)
+        if isinstance(count, int) and not isinstance(count, bool):
+            return count > 0
+        return False
+    for holder, key in [(app.get("_embedded"), "users"), (app, "assignedUsers")]:
+        if isinstance(holder, dict) and key in holder:
+            users = holder.get(key)
+            return isinstance(users, list) and len(users) > 0
+    if "_embedded" in app and not isinstance(app.get("_embedded"), dict):
+        return False
     return None
 
 
