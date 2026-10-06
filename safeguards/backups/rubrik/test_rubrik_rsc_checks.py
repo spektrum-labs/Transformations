@@ -114,6 +114,13 @@ USERS = {"data": {"usersInCurrentAndDescendantOrganization": {"count": 4, "pageI
     user("u1", ["APPROVE_TPR_REQUEST"]), user("u2", ["APPROVE_TPR_REQUEST", "VIEW_TPR_REQUEST"]), user("u3", ["VIEW_TPR_REQUEST"]),
     user("u4", ["APPROVE_TPR_REQUEST"], status="DEACTIVATED")]}}}
 
+ADMINS = {"data": {"usersInCurrentAndDescendantOrganization": {"count": 3, "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [
+    {"id": "a1", "username": "owner", "email": "owner@example.com", "domain": "LOCAL", "status": "ACTIVE", "isAccountOwner": True, "roles": []},
+    {"id": "a2", "username": "adm-jdoe@example.com", "email": "adm-jdoe@example.com", "domain": "SSO", "status": "ACTIVE",
+     "isAccountOwner": False, "roles": [{"id": "r1", "name": "Administrator", "isOrgAdmin": True}]},
+    {"id": "a3", "username": "jdoe@example.com", "email": "jdoe@example.com", "domain": "SSO", "status": "ACTIVE",
+     "isAccountOwner": False, "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}]}]}}}
+
 ROLES = {"data": {"getAllRolesInOrgConnection": {"count": 2, "pageInfo": DONE, "nodes": [
     {"id": "r1", "name": "Administrator", "isOrgAdmin": False, "isReadOnly": True,
      "effectiveRbacPermissions": [{"operations": ["MANAGE_USER", "MANAGE_ROLE", "RESTORE_TO_ORIGIN"]}]},
@@ -179,6 +186,9 @@ CASES = [
     ("quorumReviewerRoleAssignedCount", USERS, 2,
      flip(USERS, lambda d: d["usersInCurrentAndDescendantOrganization"]["nodes"][1]["roles"][0].update(
          effectiveRbacPermissions=[{"operations": ["VIEW_TPR_REQUEST"]}])), 1, "usersInCurrentAndDescendantOrganization"),
+    ("areBackupConsoleAdminsDedicated", ADMINS, True,
+     flip(ADMINS, lambda d: d["usersInCurrentAndDescendantOrganization"]["nodes"][2]["roles"][0].update(isOrgAdmin=True)), False,
+     "usersInCurrentAndDescendantOrganization"),
     ("isRestoreJobPermissionIsolationEnabled", ROLES, True,
      flip(ROLES, lambda d: d["getAllRolesInOrgConnection"]["nodes"][1]["effectiveRbacPermissions"][0]["operations"].append("MANAGE_ROLE")),
      False, "getAllRolesInOrgConnection"),
@@ -195,8 +205,12 @@ NUMERIC = {"backupSlaComplianceRatePercentage", "staleProtectionJobsCount", "unp
 IDS = [c[0] for c in CASES]
 
 
+#: Booleans whose unknown answer is None (Not evaluated, with a dataCollection error) rather than False.
+NONE_WHEN_UNKNOWN = {"areBackupConsoleAdminsDedicated"}
+
+
 def unknown(key):
-    return None if key in NUMERIC else False
+    return None if key in NUMERIC or key in NONE_WHEN_UNKNOWN else False
 
 
 def test_every_rubrik_file_is_covered():
