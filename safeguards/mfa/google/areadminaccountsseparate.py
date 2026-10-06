@@ -34,7 +34,8 @@ Google definition requests; adding it changes every customer's domain-wide deleg
 added here. The pass reason therefore says "no Gmail mailbox", which is what was read.
 
 FAIL CLOSED. Null, {}, an error envelope or missing scope, no users list, a list still carrying
-nextPageToken or flagged paginationTruncated, no active administrator (every tenant has a Super Admin),
+nextPageToken or flagged paginationTruncated (or paginationStats.<key>.paginationTruncated) on ANY
+wrapper level between the response and the users list, no active administrator (every tenant has a Super Admin),
 or an administrator without isMailboxSetup returns areAdminAccountsSeparate = None with a dataCollection
 error ("not evaluated"). One active administrator shown to have a mailbox is a measured fail, whatever
 else is missing. Google bodies can carry booleans as the strings "True"/"False"; both are read.
@@ -131,20 +132,41 @@ def error_reason(body):
     return "Google returned an error for the Directory users read (" + text.strip()[:80] + ")"
 
 
+def level_truncated(level):
+    """True when one wrapper level carries a truncation marker of its own."""
+    if not isinstance(level, dict):
+        return False
+    if is_true(level.get("paginationTruncated")) or bool(level.get("nextPageToken")):
+        return True
+    stats = level.get("paginationStats")
+    if isinstance(stats, dict):
+        if is_true(stats.get("paginationTruncated")):
+            return True
+        for marker in stats.values():
+            if isinstance(marker, dict) and is_true(marker.get("paginationTruncated")):
+                return True
+    return False
+
+
 def users_body(data):
-    """The users.list body (a dict with a `users` list), (None, reason) when it is not one."""
+    """(users.list body, None, truncated) or (None, reason, truncated).
+
+    Every wrapper level peeled on the way to the `users` list is checked for paginationTruncated,
+    paginationStats and nextPageToken, and the markers are OR'd: IS may set them on any wrapper."""
     body = data
+    truncated = False
     for depth in range(5):
         reason = error_reason(body)
         if reason:
-            return None, reason
+            return None, reason, truncated
         if isinstance(body, list):
             body = {"users": body}
         if not isinstance(body, dict):
-            return None, "No Directory users list in the response"
+            return None, "No Directory users list in the response", truncated
+        truncated = truncated or level_truncated(body)
         users = body.get("users")
         if isinstance(users, list):
-            return body, None
+            return body, None, truncated
         if isinstance(users, dict):
             body = users
             continue
@@ -154,9 +176,9 @@ def users_body(data):
                 found = body.get(key)
                 break
         if found is None:
-            return None, "No Directory users list in the response"
+            return None, "No Directory users list in the response", truncated
         body = found
-    return None, "No Directory users list in the response"
+    return None, "No Directory users list in the response", truncated
 
 
 def name_of(user):
@@ -193,18 +215,11 @@ def transform(input):
         if validation.get("status") == "failed":
             return not_evaluated(validation, "input validation failed: " + "; ".join(validation.get("errors", [])))
 
-        body, reason = users_body(data)
+        body, reason, truncated = users_body(data)
         if body is None:
             return not_evaluated(validation, reason)
 
         users = [u for u in body["users"] if isinstance(u, dict)]
-        truncated = bool(body.get("nextPageToken")) or is_true(body.get("paginationTruncated")) \
-            or (isinstance(data, dict) and is_true(data.get("paginationTruncated")))
-        stats = data.get("paginationStats") if isinstance(data, dict) else None
-        if isinstance(stats, dict):
-            for marker in stats.values():
-                if isinstance(marker, dict) and is_true(marker.get("paginationTruncated")):
-                    truncated = True
 
         admins = [u for u in users if is_true(u.get("isAdmin")) or is_true(u.get("isDelegatedAdmin"))]
         inactive = [u for u in admins if is_true(u.get("suspended")) or is_true(u.get("archived"))]
@@ -249,8 +264,9 @@ def transform(input):
                 input_summary=summary, additional_findings=findings)
 
         if truncated:
-            return not_evaluated(validation, "the Directory users list was truncated (nextPageToken present); not "
-                                             "every administrator was read", summary, findings, counts)
+            return not_evaluated(validation, "the Directory users list was truncated (nextPageToken or a "
+                                             "paginationTruncated marker present); not every administrator was read",
+                                 summary, findings, counts)
         if not active:
             return not_evaluated(validation, "no active administrator was returned; every Google tenant has a Super "
                                              "Admin, so the list cannot be complete", summary, findings, counts)
