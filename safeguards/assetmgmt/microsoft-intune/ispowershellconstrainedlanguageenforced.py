@@ -21,7 +21,8 @@ enforced collection is read fail-closed, rule by rule: an Allow path rule for BU
 Users / Authenticated Users / Interactive / Domain Users (or no principal) over everything, a wildcard-led path, a
 whole drive, a Users or ProgramData folder, or a temp/profile folder keeps PowerShell in FullLanguage mode (its
 %TEMP% probe runs as the signed-in user) and grades False; any other Allow path rule (an Entra or AD group SID, an
-unlisted path, a broad rule with exceptions) cannot be shown safe and reads Not evaluated.
+unlisted path, a path with "..", a broad rule with exceptions) cannot be shown safe and reads Not evaluated. An
+enforced collection with no rules at all allows every script, so it is not enforcing either (False).
 An assignment with a filter id is filtered unless its filter type is explicitly none.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
@@ -368,7 +369,7 @@ def rule_reach(rule):
         return "unknown"
     all_safe = True
     for path in paths:
-        if not any([path.startswith(root) and "*" not in path[:len(root)] for root in SAFE_ROOTS]):
+        if ".." in path or not any([path.startswith(root) for root in SAFE_ROOTS]):
             all_safe = False
     if all_safe:
         return "safe"
@@ -387,6 +388,9 @@ def allows_user_writable(low):
     """True when an Allow FilePathRule, without exceptions, is known-broad; None when any Allow path rule cannot be
     shown safe (an unknown principal or path, a broad rule with exceptions, or a collection over the read cap);
     False when every Allow path rule is known-safe."""
+    if "<filepathrule" not in low and "<filehashrule" not in low and "<filepublisherrule" not in low:
+        # A rule collection with no rules allows every file of that type (AppLocker), so the %TEMP% probe runs.
+        return True
     start = 0
     unknown = False
     for step in range(500):

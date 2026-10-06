@@ -290,3 +290,17 @@ def test_unknown_principals_and_paths_are_not_read():
     # a later broad rule still fails after an unreadable one
     rules = [("S-1-1-0", "*", "<Exceptions><FilePathException Path=\"x\" /></Exceptions>"), ("S-1-1-0", "C:\\Users\\*", "")]
     assert value(body([], [collection(rules)]))[0] is False
+
+
+def test_an_enforced_collection_with_no_rules_is_not_enforcing():
+    p = applocker("AL")
+    p["omaSettings"][0]["value"] = "<RuleCollection Type=\"Script\" EnforcementMode=\"Enabled\" />"
+    assert value(body([], [p]))[0] is False
+    q = applocker("AL")
+    q["omaSettings"][0]["value"] = ("<RuleCollection Type=\"Script\" EnforcementMode=\"Enabled\"><FileHashRule Id=\"1\" "
+                                    "Name=\"h\" UserOrGroupSid=\"S-1-1-0\" Action=\"Allow\" /></RuleCollection>")
+    assert value(body([], [q]))[0] is True
+
+
+def test_a_safe_root_with_dot_dot_is_not_read():
+    assert value(body([], [collection([("S-1-1-0", "%WINDIR%\\..\\Users\\*", "")])]))[0] is not True
