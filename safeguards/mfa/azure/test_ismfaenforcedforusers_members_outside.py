@@ -117,10 +117,16 @@ def test_security_defaults_read_off_still_fails():
 
 
 def test_per_user_mfa_covering_everyone_outside_passes():
-    states = {U[5]: "enforced", U[6]: "enabled", U[7]: "enforced"}
+    states = {U[5]: "enforced", U[6]: "enforced", U[7]: "enforced"}
     value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))
     assert value is True
     assert "per-user MFA covers the other 3" in " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+
+
+def test_per_user_enabled_is_not_enforced():
+    states = {U[5]: "enforced", U[6]: "enforced", U[7]: "enabled"}
+    value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))
+    assert value is False and "1 of 8 enabled member account is not covered" in fail_text(out)
 
 
 def test_per_user_mfa_covering_some_fails_on_the_rest():
@@ -158,13 +164,45 @@ def test_all_users_policy_excluding_a_read_group_leaves_that_group_outside():
     assert value is False and "2 of 8" in fail_text(out)  # U[2], U[3]: excluded from All, not in G1
 
 
-def test_role_including_policy_still_fails_and_says_role_holders_may_be_covered():
+def test_role_including_policy_never_fails():
     admins = policy("admins", include_groups=(), includeRoles=["62e90394-69f5-4237-9190-012177145e10"])
     value, out = run(body([policy("A"), admins], [G1], [U[:5]]))
-    assert value is False
-    assert "3 of 8 enabled member accounts are not covered" in fail_text(out)
-    assert "directory roles, whose holders are not read" in fail_text(out)
-    assert out["transformedResponse"]["roleScopedPolicyPresent"] is True
+    assert value is None
+    assert "directory role" in out["transformedResponse"]["membersOutsideUndecided"]
+
+
+# --- authentication strengths (grantControls.authenticationStrength, builtInControls empty) -----------------------
+
+STRENGTH_MFA = "00000000-0000-0000-0000-000000000002"
+STRENGTH_PHISHING_RESISTANT = "00000000-0000-0000-0000-000000000004"
+
+
+def strength(name, strength_id, **kw):
+    return policy(name, grant={"operator": "OR", "builtInControls": [],
+                               "authenticationStrength": {"id": strength_id, "requirementsSatisfied": "mfa"}}, **kw)
+
+
+@pytest.mark.parametrize("strength_id", [STRENGTH_MFA, STRENGTH_PHISHING_RESISTANT])
+def test_strength_policy_covers_its_included_users(strength_id):
+    # The 3 members outside G1 are in G2, which a strength-based policy includes: nobody is outside, no False.
+    value, out = run(body([policy("A"), strength("S", strength_id, include_groups=(G2,))], [G1, G2], [U[:5], U[5:]]))
+    assert value is not False
+    assert "membersOutsideCount" not in out["transformedResponse"]
+
+
+@pytest.mark.parametrize("strength_id", [STRENGTH_MFA, STRENGTH_PHISHING_RESISTANT])
+def test_strength_policy_on_all_users_reaches_everyone(strength_id):
+    all_users = strength("S all", strength_id, include_users=("All",), include_groups=(),
+                         excludeGuestsOrExternalUsers={"guestOrExternalUserTypes": "b2bCollaborationGuest"})
+    value, out = run(body([policy("A"), all_users], [G1], [U[:5]]))
+    assert value is None
+    assert "membersOutsideCount" not in out["transformedResponse"]
+
+
+def test_strength_policy_leaves_its_non_members_outside():
+    value, out = run(body([policy("A"), strength("S", STRENGTH_PHISHING_RESISTANT, include_groups=(G2,))],
+                          [G1, G2], [U[:4], U[4:6]]))
+    assert value is False and "2 of 8 enabled member accounts are not covered" in fail_text(out)
 
 
 def test_unread_group_in_another_policy_never_fails():
@@ -225,7 +263,9 @@ def test_restricted_python_agrees_on_the_new_verdicts():
     exec(code, glb)
     for b in (body([policy("A")], [G1], [[]]), body([policy("A")], [G1], [U[:5]]),
               body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user({U[5]: "enforced", U[6]: "enforced",
-                                                                            U[7]: "enabled"})),
+                                                                            U[7]: "enforced"})),
+              body([policy("A"), strength("S", STRENGTH_PHISHING_RESISTANT, include_groups=(G2,))], [G1, G2],
+                   [U[:4], U[4:6]]),
               body([policy("A")], [G1], [U[:5]], securityDefaults={"isEnabled": True})):
         s_out = glb["transform"](copy.deepcopy(b))
         p_out = M.transform(copy.deepcopy(b))
