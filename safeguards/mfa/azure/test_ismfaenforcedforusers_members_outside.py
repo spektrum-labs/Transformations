@@ -123,6 +123,21 @@ def test_per_user_mfa_covering_everyone_outside_passes():
     assert "per-user MFA covers the other 3" in " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
 
 
+def test_per_user_list_missing_an_outside_member_never_fails():
+    states = {U[5]: "enforced", U[6]: "disabled"}  # U[7] has no entry
+    value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))
+    assert value is None
+    assert out["transformedResponse"]["membersOutsideUndecided"] == "the per-user MFA list does not cover every member"
+
+
+@pytest.mark.parametrize("flag", [{"itemErrors": [{"index": 1}]}, {"iterateTruncated": True}])
+def test_per_user_fan_out_errors_never_fail(flag):
+    states = {U[5]: "enforced", U[6]: "disabled", U[7]: "disabled"}
+    b = body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states))
+    b.update(flag)
+    assert run(b)[0] is None
+
+
 def test_per_user_enabled_is_not_enforced():
     states = {U[5]: "enforced", U[6]: "enforced", U[7]: "enabled"}
     value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))
@@ -130,7 +145,7 @@ def test_per_user_enabled_is_not_enforced():
 
 
 def test_per_user_mfa_covering_some_fails_on_the_rest():
-    states = {U[5]: "enforced", U[6]: "disabled"}
+    states = {U[5]: "enforced", U[6]: "disabled", U[7]: "disabled"}
     value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))
     assert value is False and "2 of 8 enabled member accounts are not covered" in fail_text(out)
 

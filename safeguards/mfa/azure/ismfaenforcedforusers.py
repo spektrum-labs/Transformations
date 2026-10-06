@@ -92,7 +92,8 @@ from datetime import datetime
 #                       no False; the key stays not evaluated (security defaults are not graded here);
 #   "perUserMfaStates": a Graph list of {"id", "perUserMfaState"} (GET /beta/users/{id}/authentication/requirements,
 #                       one item per user). Only "enforced" covers that account ("enabled" means enrolled, and legacy
-#                       clients can still sign in with a password); a list not read whole means no False. When CA
+#                       clients can still sign in with a password). A list not read whole, a fan-out with item errors
+#                       or truncation, or a list with no entry for a member counted as outside means no False. When CA
 #                       group coverage plus enforced per-user MFA covers every enabled Member, the key passes.
 MFA_PER_USER_STATES = ("enforced",)
 EXCLUDE_RISK_CONDITIONED = True
@@ -473,22 +474,26 @@ def defaults_block(data):
 
 
 def per_user_mfa(data):
-    """(lower-case ids with per-user MFA enforced or enabled, '' or a reason the list cannot be used). An absent key
-    gives (set(), '')."""
+    """(lower-case ids with per-user MFA enforced, lower-case ids the list has any entry for, '' or a reason the list
+    cannot be used). An absent key gives (set(), None, '')."""
     if "perUserMfaStates" not in data:
-        return set(), ""
+        return set(), None, ""
+    if data.get("itemErrors") or data.get("iterateTruncated") is True:
+        return set(), set(), "the per-user MFA read reported item errors or was truncated"
     pages = list_pages(data.get("perUserMfaStates"))
     if pages is None:
-        return set(), "the per-user MFA list was not read whole"
+        return set(), set(), "the per-user MFA list was not read whole"
     ids = set()
+    seen = set()
     for page in pages:
         for item in page["value"]:
             uid = str(as_dict(item).get("id") or "").strip().lower()
             if not uid:
-                return set(), "the per-user MFA list was not read whole"
+                return set(), set(), "the per-user MFA list was not read whole"
+            seen.add(uid)
             if str(as_dict(item).get("perUserMfaState") or "").strip().lower() in MFA_PER_USER_STATES:
                 ids.add(uid)
-    return ids, ""
+    return ids, seen, ""
 
 
 def requires_mfa_reach(policy):
@@ -671,7 +676,9 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
     if found is None:
         details["membersOutsideUndecided"] = why
         return None
-    per_user, per_user_why = per_user_mfa(data)
+    per_user, per_user_seen, per_user_why = per_user_mfa(data)
+    if not per_user_why and per_user_seen is not None and found["outside"] - per_user_seen:
+        per_user_why = "the per-user MFA list does not cover every member"
     outside = found["outside"] - per_user
     total = found["membersTotal"]
     workforce = read_workforce(data.get("workforceUsers")) or set()
