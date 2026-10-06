@@ -139,6 +139,24 @@ def test_per_user_fan_out_errors_never_fail(flag):
     assert run(b)[0] is None
 
 
+@pytest.mark.parametrize("item", [{}, {"perUserMfaState": None}, {"perUserMfaState": "unknown"}])
+def test_per_user_entry_without_a_known_state_never_fails(item):
+    p = per_user({U[5]: "enforced", U[6]: "disabled"})
+    p["value"].append(dict({"id": U[7]}, **item))
+    assert run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=p))[0] is None
+
+
+@pytest.mark.parametrize("extra", [{"@odata.nextLink": "https://graph.microsoft.com/v1.0/next"},
+                                   {"paginationTruncated": True}, {"@odata.count": 9},
+                                   {"vendorErrorAsResponse": {"status": 429}}])
+def test_policy_list_not_read_whole_never_fails(extra):
+    b = body([policy("A")], [G1], [U[:5]])
+    b["conditionalAccessPolicies"].update(extra)
+    value, out = run(b)
+    assert value is None
+    assert out["transformedResponse"]["membersOutsideUndecided"] == "the Conditional Access policy list was not read whole"
+
+
 def test_per_user_enabled_neither_covers_nor_fails():
     states = {U[5]: "enforced", U[6]: "enforced", U[7]: "enabled"}
     value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))
