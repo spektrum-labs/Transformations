@@ -336,7 +336,9 @@ def judge(validation, devices):
             result={KEY: False},
             validation=validation,
             fail_reasons=[str(len(failing)) + " of " + str(len(applicable)) + " applicable device(s) assessed by "
-                          "Defender Vulnerability Management do not have " + WHAT + ": " + name_list(failing)],
+                          "Defender Vulnerability Management do not have " + WHAT + ": " + name_list(failing) +
+                          ("; " + str(len(unassessed)) + " more device(s) were not assessed for every part: " +
+                           name_list(unassessed) if unassessed else "")],
             recommendations=[FIX],
             input_summary=summary,
         )

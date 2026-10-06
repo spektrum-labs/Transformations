@@ -282,3 +282,10 @@ def test_a_confirmed_failure_still_fails_when_another_device_is_partly_assessed(
 def test_the_client_id_never_counts_as_the_server_side():
     rows = [row("ws-01", "scid-95", name="Enable 'Microsoft network server: Digitally sign communications (always)'")]
     assert value("issmbsigningrequired", result(rows))[0] is None
+
+
+def test_a_count_with_partly_assessed_devices_says_it_is_a_lower_bound():
+    rows = [row("ws-01", "scid-53", 1, 0), row("ws-01", "scid-54"), row("ws-02", "scid-53")]
+    got, out = value("smbv1enableddevicecount", result(rows))
+    assert got == 1
+    assert "count may be higher: ws-02.example.test" in out["additionalInfo"]["evaluation"]["failReasons"][0]

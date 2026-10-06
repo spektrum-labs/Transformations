@@ -335,7 +335,9 @@ def judge(validation, devices):
             result={KEY: len(enabled)},
             validation=validation,
             fail_reasons=[str(len(enabled)) + " of " + str(len(applicable)) + " applicable device(s) assessed by "
-                          "Defender Vulnerability Management still have SMBv1 enabled: " + name_list(enabled)],
+                          "Defender Vulnerability Management still have SMBv1 enabled: " + name_list(enabled) +
+                          ("; " + str(len(unassessed)) + " more device(s) were not assessed for every part, so the "
+                           "count may be higher: " + name_list(unassessed) if unassessed else "")],
             recommendations=["Disable the SMBv1 client driver and SMBv1 server on the devices named (Intune or Group "
                              "Policy: MS Security Guide 'Configure SMB v1 client driver' and 'Configure SMB v1 server' "
                              "= Disabled)."],
