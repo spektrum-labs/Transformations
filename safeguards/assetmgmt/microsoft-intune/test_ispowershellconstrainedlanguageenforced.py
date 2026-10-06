@@ -339,3 +339,32 @@ def test_applocker_profiles_merge_on_devices():
     # App Control enforcement is not undone by an AppLocker profile
     broad["assignments"] = [group("g-sales")]
     assert value(body([app_control("ACfB")], [broad]))[0] is True
+
+
+def supplemental(name, file_rules, assignments=None):
+    p = xml_policy(name, [], assignments=assignments, file_rules=file_rules)
+    s = p["settings"][0]["settingInstance"]["simpleSettingValue"]
+    s["value"] = s["value"].replace("<SiPolicy ", "<SiPolicy PolicyType=\"Supplemental Policy\" ")
+    return p
+
+
+def test_a_broad_supplemental_undoes_its_base():
+    base = xml_policy("Base", ["Enabled:UMCI"])
+    broad = supplemental("Sup", "<Allow ID=\"ID_ALLOW_ALL\" FileName=\"*\" />", assignments=[group("g-1")])
+    got, out = value(body([base, broad]))
+    assert got is False
+    assert "merged with a broad supplemental" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    narrow = supplemental("Sup", "<Allow ID=\"ID_ALLOW_APP\" FilePath=\"%PROGRAMFILES%\\\\App\\\\*\" />")
+    assert value(body([base, narrow]))[0] is True
+    # a supplemental never enforces on its own, even if it lists UMCI
+    lone = supplemental("Sup", "<Allow ID=\"ID_ALLOW_APP\" FilePath=\"%PROGRAMFILES%\\\\App\\\\*\" />")
+    lone["settings"][0]["settingInstance"]["simpleSettingValue"]["value"] = lone["settings"][0]["settingInstance"]["simpleSettingValue"]["value"].replace("<Rules>", "<Rules><Rule><Option>Enabled:UMCI</Option></Rule>")
+    assert value(body([lone]))[0] is False
+
+
+def test_empty_applocker_profile_does_not_undo_and_audit_profile_makes_it_unreadable():
+    empty = applocker("Empty AL", assignments=[group("g-2")])
+    empty["omaSettings"][0]["value"] = "<RuleCollection Type=\"Script\" EnforcementMode=\"Enabled\" />"
+    assert value(body([], [applocker("Baseline AL"), empty]))[0] is True
+    audit = applocker("Pilot AL", "AuditOnly", assignments=[group("g-3")])
+    assert value(body([], [applocker("Baseline AL"), audit]))[0] is None
