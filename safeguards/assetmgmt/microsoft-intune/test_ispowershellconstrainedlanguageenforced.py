@@ -254,3 +254,28 @@ def test_filter_id_without_a_type_is_filtered():
     got, out = value(body([app_control("x", assignments=[t])]))
     assert got is False
     assert "uses an assignment filter" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def collection(rules):
+    xml = "<RuleCollection Type=\"Script\" EnforcementMode=\"Enabled\">" + "".join(
+        "<FilePathRule Id=\"" + str(i) + "\" Name=\"r\" UserOrGroupSid=\"" + sid + "\" Action=\"Allow\"><Conditions>"
+        "<FilePathCondition Path=\"" + path + "\" /></Conditions>" + extra + "</FilePathRule>"
+        for i, (sid, path, extra) in enumerate(rules)) + "</RuleCollection>"
+    p = applocker("AL")
+    p["omaSettings"][0]["value"] = xml
+    return p
+
+
+def test_applocker_default_rules_are_enforcing():
+    rules = [("S-1-1-0", "%WINDIR%\\*", ""), ("S-1-1-0", "%PROGRAMFILES%\\*", ""), ("S-1-5-32-544", "*", "")]
+    assert value(body([], [collection(rules)]))[0] is True
+
+
+@pytest.mark.parametrize("sid", ["S-1-1-0", "S-1-5-32-545", "S-1-5-11", "S-1-5-21-1111111111-2222222222-3333333333-513"])
+def test_a_broad_principal_allowing_everything_is_not_enforcing(sid):
+    assert value(body([], [collection([(sid, "*", "")])]))[0] is False
+
+
+def test_a_broad_rule_with_exceptions_is_not_read():
+    rules = [("S-1-1-0", "*", "<Exceptions><FilePathException Path=\"%TEMP%\\*\" /></Exceptions>")]
+    assert value(body([], [collection(rules)]))[0] is None

@@ -16,8 +16,10 @@ device_vendor_msft_policy_config_applicationcontrol) are read for their mode:
     nor "Disabled:Script Enforcement" (which leaves PowerShell in FullLanguage mode).
 AppLocker comes from custom profiles (windows10CustomConfiguration) whose OMA-URI is .../AppLocker/
 ApplicationLaunchRestrictions/.../Script/Policy: EnforcementMode="Enabled" is Enforce, "AuditOnly" is Audit. An
-enforced collection with an Allow path rule for everything, the system drive or a user-writable folder (%TEMP%,
-%USERPROFILE%, %APPDATA%) is not enforcing: PowerShell tests a script in %TEMP%, so it stays in FullLanguage mode.
+enforced collection with an Allow path rule, for Everyone / Users / Authenticated Users / Interactive / Domain Users,
+over everything, the system drive or a user-writable folder (%TEMP%, %USERPROFILE%, %APPDATA%) is not enforcing:
+PowerShell tests a script in %TEMP% as the signed-in user, so it stays in FullLanguage mode. An admin-only "All
+scripts" rule (AppLocker's default) is still enforcing; a broad rule with exceptions is not read (Not evaluated).
 An assignment with a filter id is filtered unless its filter type is explicitly none.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
@@ -331,9 +333,33 @@ USER_WRITABLE = ('path="*"', 'path="%osdrive%\\*"', 'path="%systemdrive%\\*"', '
                  'path="%osdrive%\\users', 'path="c:\\users')
 
 
+#: Principals that cover standard users. PowerShell's %TEMP% probe runs as the signed-in user, so an Allow rule for
+#: Administrators only does not lift constrained language mode for standard users (AppLocker's default script rule
+#: "All scripts" for BUILTIN\Administrators is normal and still enforcing).
+BROAD_SIDS = ('userorgroupsid="s-1-1-0"', 'userorgroupsid="s-1-5-32-545"', 'userorgroupsid="s-1-5-11"',
+              'userorgroupsid="s-1-5-4"')
+
+
+def broad_principal(rule):
+    """True when the rule applies to Everyone, Users, Authenticated Users, Interactive or Domain Users (-513), or
+    names no principal at all."""
+    if "userorgroupsid=" not in rule:
+        return True
+    for sid in BROAD_SIDS:
+        if sid in rule:
+            return True
+    i = rule.find("userorgroupsid=\"")
+    if i >= 0:
+        j = rule.find("\"", i + len("userorgroupsid=\""))
+        if j > 0 and rule[i:j].endswith("-513"):
+            return True
+    return False
+
+
 def allows_user_writable(low):
-    """True when a lower-cased, space-free AppLocker script collection holds an Allow FilePathRule whose path covers
-    everything, the system drive, or a user-writable folder."""
+    """True when a lower-cased, space-free AppLocker script collection holds an Allow FilePathRule for a principal
+    that covers standard users and whose path covers everything, the system drive or a user-writable folder; None
+    when such a rule carries exceptions (not read) or the collection is too large to read; else False."""
     start = 0
     for step in range(500):
         i = low.find("<filepathrule", start)
@@ -343,12 +369,14 @@ def allows_user_writable(low):
         if j < 0:
             j = len(low)
         rule = low[i:j]
-        if 'action="allow"' in rule:
+        if 'action="allow"' in rule and broad_principal(rule):
             for marker in USER_WRITABLE:
                 if marker in rule:
+                    if "<filepathexception" in rule or "<filehashexception" in rule or "<filepublisherexception" in rule:
+                        return None
                     return True
         start = j + 1
-    return True
+    return None
 
 
 def applocker_mode(profile):
@@ -376,7 +404,13 @@ def applocker_mode(profile):
             if 'enforcementmode="auditonly"' in low:
                 modes.append("audit")
             elif 'enforcementmode="enabled"' in low:
-                modes.append("allows user-writable paths" if allows_user_writable(low) else "enforce")
+                broad = allows_user_writable(low)
+                if broad is None:
+                    modes.append(None)
+                elif broad:
+                    modes.append("allows user-writable paths")
+                else:
+                    modes.append("enforce")
             else:
                 modes.append(None)
     if not found:
