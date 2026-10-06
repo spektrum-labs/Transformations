@@ -127,6 +127,25 @@ class Vulnerabilities(unittest.TestCase):
         del nosev["vulnerabilitySeverityLevel"]
         self.assert_unevaluated(body([nosev]))
 
+    def test_exception_path_is_unevaluated_not_failed(self):
+        # A body whose every read raises drives transform() into its except path. Token-Service grades a
+        # None as Failed unless dataCollection.status is "error", so that path must carry api_errors.
+        class Poisoned(dict):
+            def __init__(self):
+                super().__init__(poisoned=True)
+
+            def boom(self, *args, **kwargs):
+                raise RuntimeError("poisoned read")
+
+            get = __getitem__ = __contains__ = keys = items = values = __iter__ = boom
+
+            def __len__(self):
+                return 1
+
+        out = self.assert_unevaluated(Poisoned())
+        self.assertIn("Transformation error", out["additionalInfo"]["dataCollection"]["errors"][0])
+        self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()
