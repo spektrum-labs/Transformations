@@ -339,8 +339,183 @@ def unevaluated_response(validation, message, summary=None):
     )
 
 
+# --- COVERAGE OF ADMINISTRATORS (getAdminAuthenticatorPosture) ----------------------------------
+#
+# Product decision, Josh, 5 Oct 2026: this criterion is an ENFORCEMENT claim about administrator
+# accounts, reported as a coverage percentage, and it FAILS below 100%. That keeps the requirement's
+# existing `isEquals true` working with no requirement change; customer-set thresholds arrive in the
+# next platform version. An enforcement surface that cannot be read answers "not evaluated".
+#
+# Body: the Integration-Service workflow getAdminAuthenticatorPosture merges
+#   adminAssignees    GET /api/v1/iam/assignees/users -- {"value": [{"id": ...}, ...], "_links": ...},
+#                     paged by the body's _links.next.href; with reportPagination it also sets
+#                     paginationStats.adminAssignees.paginationTruncated (always present when this IS
+#                     build can tell) and top-level paginationTruncated when the list was cut off.
+#   adminEnrollments  GET /api/v1/users/{id}/authenticator-enrollments per admin, INDEX-ALIGNED with
+#                     adminAssignees.value. With continueOnItemError a failed read is the record
+#                     {"error": true, "statusCode": ..., "item": "<userId>", "errorType": ...}; with
+#                     maxItems the list stops at the cap and iterateTruncated is set.
+#
+# Why /authenticator-enrollments and not /users/{id}/factors: Okta documents the latter as listing
+# only factors in the HIGHEST PRIORITY enrollment policy, evaluated against the CALLING admin's
+# client and network zone rather than the user's. A percentage built on it would vary by caller.
+#
+# Each admin is one of:
+#   covered        an ACTIVE enrollment that is phishing-resistant
+#   indeterminate  no such enrollment, but an ACTIVE one that may or may not be (see below)
+#   uncovered      neither
+# One uncovered admin PROVES coverage is below 100%, so the verdict is False even when other reads
+# were partial. 100% can only be claimed from a complete read with no indeterminate admin.
+COVERAGE_KEY = "adminPhishResistantCoveragePercentage"
+# webauthn (FIDO2 / passkeys) and smart_card_idp (PIV / CAC) are phishing-resistant.
+# okta_verify_fastpass is the per-method FastPass authenticator (Flexible Okta Verify EA): signed
+# nonce, treated as phishing-resistant here exactly as PHISH_RESISTANT_TYPES treats signed_nonce.
+COVERAGE_RESISTANT_KEYS = ["webauthn", "smart_card_idp", "okta_verify_fastpass"]
+# okta_verify is the legacy aggregate: Okta does not say whether that enrollment is FastPass or
+# push, so it cannot be called either. security_key has its own schema and was not verified to be
+# FIDO rather than OTP. Neither is counted as covered or as uncovered.
+COVERAGE_UNKNOWN_KEYS = ["okta_verify", "security_key"]
+# Known PHISHABLE authenticators (password, email, SMS/voice, security question, OTP apps and tokens,
+# RADIUS/on-prem OTP). An admin is "uncovered" only when every ACTIVE enrollment is one of these.
+# Any other key (duo, external_idp, custom_app, or one Okta adds later) cannot be called either way,
+# so it makes the admin indeterminate: unclear data reads "not evaluated", never a fail.
+COVERAGE_PHISHABLE_KEYS = ["okta_password", "okta_email", "phone_number", "security_question", "google_otp",
+                           "yubikey_token", "rsa_token", "symantec_vip", "custom_otp", "onprem_mfa"]
+
+
+def is_item_error(entry):
+    return isinstance(entry, dict) and entry.get("error") is True
+
+
+def enrollment_list(entry):
+    """One admin's enrollments, or None when the slot is not an enrollment list."""
+    if isinstance(entry, list):
+        return [e for e in entry if isinstance(e, dict)]
+    if isinstance(entry, dict):
+        for wrap in ("value", "data", "apiResponse"):
+            if isinstance(entry.get(wrap), list):
+                return [e for e in entry.get(wrap) if isinstance(e, dict)]
+    return None
+
+
+def classify_admin(enrollments):
+    active = [str(e.get("key") or "").lower() for e in enrollments
+              if str(e.get("status") or "").upper() == "ACTIVE"]
+    if any(k in COVERAGE_RESISTANT_KEYS for k in active):
+        return "covered"
+    if any(k in COVERAGE_UNKNOWN_KEYS or k not in COVERAGE_PHISHABLE_KEYS for k in active):
+        return "indeterminate"
+    return "uncovered"
+
+
+def flag(data, top_key, stats_key, output_key):
+    """True / False from a workflow marker, or None when this IS build did not report it."""
+    if data.get(top_key) is True:
+        return True
+    stats = data.get(stats_key)
+    block = stats.get(output_key) if isinstance(stats, dict) else None
+    if isinstance(block, dict) and isinstance(block.get(top_key), bool):
+        return block.get(top_key)
+    return None
+
+
+def coverage_response(data, validation):
+    block = data.get("adminAssignees")
+    rows = block.get("value") if isinstance(block, dict) else (block if isinstance(block, list) else None)
+    if isinstance(block, dict) and read_error(block):
+        rows = None
+    if not isinstance(rows, list):
+        return unevaluated_response(
+            validation, "The admin role assignments (GET /api/v1/iam/assignees/users) were not read, so "
+                        "phishing-resistant MFA coverage of administrators was not evaluated. The integration "
+                        "needs the okta.roles.read scope.")
+    if not rows:
+        return unevaluated_response(
+            validation, "Okta returned no users holding an admin role, so there is no administrator "
+                        "population to measure.")
+
+    enrollments = data.get("adminEnrollments")
+    if not isinstance(enrollments, list):
+        return unevaluated_response(
+            validation, "The administrators' authenticator enrollments were not read, so phishing-resistant "
+                        "MFA coverage of administrators was not evaluated.")
+
+    covered, indeterminate, uncovered, unreadable = 0, 0, 0, 0
+    uncovered_ids = []
+    for index, row in enumerate(rows):
+        admin_id = str(row.get("id") or "")[:64] if isinstance(row, dict) else ""
+        entry = enrollments[index] if index < len(enrollments) else None
+        listed = None if (entry is None or is_item_error(entry)) else enrollment_list(entry)
+        if listed is None:
+            unreadable = unreadable + 1
+            continue
+        state = classify_admin(listed)
+        if state == "covered":
+            covered = covered + 1
+        elif state == "indeterminate":
+            indeterminate = indeterminate + 1
+        else:
+            uncovered = uncovered + 1
+            if len(uncovered_ids) < MAX_AFFECTED:
+                uncovered_ids.append(admin_id)
+
+    assessed = covered + indeterminate + uncovered
+    list_cut = flag(data, "paginationTruncated", "paginationStats", "adminAssignees")
+    reads_cut = flag(data, "iterateTruncated", "iterateStats", "adminEnrollments")
+    complete = list_cut is False and reads_cut is not True and unreadable == 0
+    pct = round(100.0 * covered / assessed, 1) if assessed else None
+
+    summary = {"adminsListed": len(rows), "adminsAssessed": assessed, "adminsCovered": covered,
+               "adminsIndeterminate": indeterminate, "adminsUncovered": uncovered,
+               "adminsUnreadable": unreadable, "adminListComplete": list_cut is False,
+               "enrollmentReadsCapped": reads_cut is True, COVERAGE_KEY: pct,
+               "uncoveredAdminIds": uncovered_ids}
+    result = {KEY: None, COVERAGE_KEY: pct, "adminsAssessed": assessed, "adminsCovered": covered}
+
+    if uncovered:
+        result[KEY] = False
+        partial_note = "" if complete else (" Not every administrator could be read, so coverage of the "
+                                            "full population may be lower still.")
+        return create_response(
+            result=result, validation=validation,
+            fail_reasons=[f"{uncovered} of {assessed} administrators assessed have no ACTIVE "
+                          f"phishing-resistant authenticator (FIDO2/WebAuthn, smart card or Okta FastPass) "
+                          f"enrolled; coverage is {pct}%." + partial_note],
+            recommendations=["Enroll every administrator in FIDO2/WebAuthn or Okta FastPass, then require a "
+                             "phishing-resistant authenticator in the Okta Admin Console authentication policy."],
+            input_summary=summary,
+            metadata={"transformationId": KEY, "vendor": "Okta", "category": "iam"})
+
+    if not complete or indeterminate:
+        if indeterminate:
+            why = (f"{indeterminate} administrator(s) have only Okta Verify, a security key or another authenticator "
+                   f"Okta does not classify enrolled, so whether that enrollment is phishing-resistant (FastPass) or "
+                   f"not (push/OTP) is unknown")
+        elif list_cut is None:
+            why = "this Integration-Service build did not report whether the admin list was read in full"
+        elif list_cut:
+            why = "the admin role assignment list was cut off before its last page"
+        else:
+            why = f"{unreadable} administrator(s)' enrollments could not be read"
+        response = unevaluated_response(
+            validation, f"Every administrator assessed ({covered} of {assessed}) has a phishing-resistant "
+                        f"authenticator, but 100% coverage cannot be confirmed: {why}.", summary)
+        response["transformedResponse"][COVERAGE_KEY] = pct
+        return response
+
+    result[KEY] = True
+    return create_response(
+        result=result, validation=validation,
+        pass_reasons=[f"All {assessed} administrators have an ACTIVE phishing-resistant authenticator "
+                      f"(FIDO2/WebAuthn, smart card or Okta FastPass) enrolled; coverage is 100%."],
+        input_summary=summary,
+        metadata={"transformationId": KEY, "vendor": "Okta", "category": "iam"})
+
+
 def transform(input):
     data, validation = extract_input(input)
+    if isinstance(data, dict) and "adminEnrollments" in data:
+        return coverage_response(data, validation)
     factors = factor_list(data)
     if factors is None:
         return unevaluated_response(validation, "No Okta org factor list in the response (GET /api/v1/org/factors); "
