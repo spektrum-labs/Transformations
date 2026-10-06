@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta
 
 
@@ -86,13 +87,22 @@ ACTIVE_WINDOW_DAYS = 15
 
 
 def parse_time(value):
-    """CrowdStrike ISO timestamps (seconds, or nanoseconds, then Z) as naive UTC; None if unreadable."""
-    if not isinstance(value, str) or len(value.strip()) < 19:
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Falcon sends Z; an offset is converted rather than dropped. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
         return None
     try:
-        return datetime.fromisoformat(value.strip()[:19])
+        when = datetime.fromisoformat(match.group(1))
     except ValueError:
         return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
 
 
 def reference_clock(devices):
@@ -104,7 +114,8 @@ def reference_clock(devices):
     wall = datetime.utcnow()
     if not known:
         return wall
-    newest = max(known)
+    # Capped at the wall clock: one future-dated record must not make every real host stale.
+    newest = min(max(known), wall)
     if newest < wall - timedelta(days=ACTIVE_WINDOW_DAYS):
         return wall
     return newest
@@ -116,12 +127,14 @@ def is_reporting(device, clock):
     return seen is not None and seen >= clock - timedelta(days=ACTIVE_WINDOW_DAYS)
 
 
-# A host whose prevention policy was assigned within PENDING_WINDOW_HOURS, and which has not checked
-# in since (beyond PICKUP_GRACE_MINUTES after the assignment), has not yet had the chance to apply it.
-# Such a host is pending: counted separately and left out of this percentage, never counted as
-# configured. The window is fixed, so pending cannot last. A reassignment cannot restart the clock on
-# a host that was already failing: a reporting host checks in soon after any reassignment, and once
-# it has checked in past the grace with the policy still not applied it is failing again.
+# A host whose prevention policy was assigned within PENDING_WINDOW_HOURS, which was reporting in the
+# PENDING_WINDOW_HOURS before the assignment, and which has not checked in since (beyond
+# PICKUP_GRACE_MINUTES after the assignment), has not yet had the chance to apply it. Such a host is
+# pending: counted separately and left out of this percentage, never counted as configured. The
+# window is fixed, so pending cannot last. A reassignment cannot restart the clock on a host that was
+# already failing: a reporting host checks in soon after any reassignment, and once it has checked in
+# past the grace with the policy still not applied it is failing again; a host that was already
+# silent before the assignment is never pending, so repeated reassignment cannot keep it out.
 PENDING_WINDOW_HOURS = 24
 PICKUP_GRACE_MINUTES = 60
 
@@ -131,7 +144,9 @@ def is_pending(prevention, device, clock):
     if assigned is None or clock - assigned > timedelta(hours=PENDING_WINDOW_HOURS):
         return False
     seen = parse_time(device.get("last_seen"))
-    return seen is not None and seen <= assigned + timedelta(minutes=PICKUP_GRACE_MINUTES)
+    if seen is None or assigned - seen > timedelta(hours=PENDING_WINDOW_HOURS):
+        return False
+    return seen <= assigned + timedelta(minutes=PICKUP_GRACE_MINUTES)
 
 
 def transform(input):

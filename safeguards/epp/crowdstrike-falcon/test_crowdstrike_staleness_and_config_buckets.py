@@ -115,11 +115,41 @@ def test_coverage_dark_fleet_uses_the_wall_clock_so_every_host_is_stale():
 
 
 def test_coverage_breaks_inactive_hosts_down_by_first_failed_test():
-    _, info = cov([host(0), host(1, seen=ago(days=30), status="contained"), host(2, status="contained"),
+    _, info = cov([host(0), host(1, seen=ago(days=30), status="contained"), host(2, status="bogus"),
                    host(3, rfm="yes")])
     summary = info["transformation"]["inputSummary"]
     assert (summary["notReportingDevices"], summary["statusNotNormalDevices"],
             summary["reducedFunctionalityDevices"], summary["activeDevices"]) == (1, 1, 1, 1)
+
+
+def test_coverage_contained_hosts_are_covered_and_called_out_separately():
+    hosts = [host(0), host(1, status="contained"), host(2, status="containment_pending"),
+             host(3, status="lift_containment_pending")]
+    result, info = cov(hosts)
+    assert result["requiredCoveragePercentage"] == 100.0
+    assert result["containedDevices"] == 3
+    assert any("3 of the covered devices are network-contained" in r for r in info["evaluation"]["passReasons"])
+
+
+def test_coverage_contained_but_stale_or_rfm_is_still_not_covered():
+    result, _ = cov([host(0), host(1, status="contained", seen=ago(days=20)), host(2, status="contained", rfm="yes")])
+    assert (result["activeDevices"], result["containedDevices"]) == (1, 0)
+
+
+def test_coverage_one_future_dated_record_cannot_make_every_host_stale():
+    hosts = [host(i) for i in range(9)] + [host(9, seen=iso(NOW + timedelta(days=20)))]
+    result, _ = cov(hosts)
+    assert result["requiredCoveragePercentage"] == 100.0
+    cfg_result, info = cfg(hosts)
+    assert cfg_result["isEPPConfigured"] == 100
+
+
+def test_timestamps_with_an_offset_are_converted_not_dropped():
+    assert COV.parse_time("2026-10-01T12:00:00+02:00") == datetime(2026, 10, 1, 10, 0, 0)
+    assert COV.parse_time("2026-10-01T12:00:00-05:30") == datetime(2026, 10, 1, 17, 30, 0)
+    assert COV.parse_time("2026-10-01T12:00:00.123456789Z") == datetime(2026, 10, 1, 12, 0, 0)
+    for bad in ("2026-10-01T12:00:00 UTC", "2026-10-01", "2026-10-01T12:00:00+0200", "x" * 25):
+        assert COV.parse_time(bad) is None, bad
 
 
 def test_coverage_real_last_seen_spread_shifted_to_the_present():
@@ -226,6 +256,14 @@ def test_reassigning_an_online_failing_host_does_not_restart_its_clock():
 def test_config_online_host_within_pickup_grace_is_pending():
     hosts = [host(0), host(1, applied=False, assigned=ago(minutes=10), seen=ago(minutes=1))]
     assert cfg(hosts)[1]["transformation"]["inputSummary"]["pendingPreventionPolicy"] == 1
+
+
+def test_config_host_silent_before_the_assignment_is_never_pending():
+    """Last seen 5 days ago, reassigned an hour ago: repeated reassignment cannot keep it out."""
+    hosts = [host(0), host(1, applied=False, assigned=ago(hours=1), seen=ago(days=5))]
+    result, info = cfg(hosts)
+    assert result["isEPPConfigured"] == 50
+    assert info["transformation"]["inputSummary"]["pendingPreventionPolicy"] == 0
 
 
 def test_config_no_assigned_date_is_never_pending():

@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, timedelta
 
 
@@ -88,13 +89,22 @@ ACTIVE_WINDOW_DAYS = 15
 
 
 def parse_time(value):
-    """CrowdStrike ISO timestamps (seconds, or nanoseconds, then Z) as naive UTC; None if unreadable."""
-    if not isinstance(value, str) or len(value.strip()) < 19:
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Falcon sends Z; an offset is converted rather than dropped. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
         return None
     try:
-        return datetime.fromisoformat(value.strip()[:19])
+        when = datetime.fromisoformat(match.group(1))
     except ValueError:
         return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
 
 
 def reference_clock(devices):
@@ -106,7 +116,8 @@ def reference_clock(devices):
     wall = datetime.utcnow()
     if not known:
         return wall
-    newest = max(known)
+    # Capped at the wall clock: one future-dated record must not make every real host stale.
+    newest = min(max(known), wall)
     if newest < wall - timedelta(days=ACTIVE_WINDOW_DAYS):
         return wall
     return newest
@@ -118,13 +129,18 @@ def is_reporting(device, clock):
     return seen is not None and seen >= clock - timedelta(days=ACTIVE_WINDOW_DAYS)
 
 
+# Falcon's status field is network containment state. A contained host still runs a working sensor,
+# so it is covered; it is counted separately so the output shows it. Any other status is not covered.
+CONTAINMENT_STATUSES = ("contained", "containment_pending", "lift_containment_pending")
+
+
 def transform(input):
     """
     requiredCoveragePercentage (CrowdStrike, GET /devices/combined/devices/v1).
 
     Percentage of returned devices whose sensor is active: last_seen within ACTIVE_WINDOW_DAYS of the
-    newest check-in in the response (see reference_clock), status "normal", not in reduced
-    functionality mode, and an agent_version. Each inactive host is counted under the first of those
+    newest check-in in the response (see reference_clock), status "normal" or a network containment
+    state (counted separately as contained), not in reduced functionality mode, and an agent_version. Each inactive host is counted under the first of those
     tests it fails, in that order, so the output explains the gap. Not measured (dataCollection error, shown
     Unevaluated) on an API error, or when the device list is truncated: meta.pagination.total larger
     than the devices returned (an unpaged call returns the first 100), or a merged paginated
@@ -164,6 +180,7 @@ def transform(input):
     active = 0
     not_reporting = 0
     not_normal = 0
+    contained = 0
     rfm_hosts = 0
     no_agent = 0
     for device in resources:
@@ -171,7 +188,7 @@ def transform(input):
             continue
         if not is_reporting(device, clock):
             not_reporting = not_reporting + 1
-        elif device.get("status") != "normal":
+        elif device.get("status") != "normal" and device.get("status") not in CONTAINMENT_STATUSES:
             not_normal = not_normal + 1
         elif is_rfm(device.get("reduced_functionality_mode")):
             rfm_hosts = rfm_hosts + 1
@@ -179,6 +196,8 @@ def transform(input):
             no_agent = no_agent + 1
         else:
             active = active + 1
+            if device.get("status") in CONTAINMENT_STATUSES:
+                contained = contained + 1
     window = f"within {ACTIVE_WINDOW_DAYS} days of the newest check-in ({clock.isoformat()}Z)"
 
     if total > 0:
@@ -200,14 +219,20 @@ def transform(input):
     elif total > 0:
         pass_reasons.append(
             f"{active} of {total} known Falcon-managed devices have a last_seen {window}, "
-            f"status='normal', reduced_functionality_mode not on, and a populated agent_version, "
-            f"yielding a sensor coverage of {percentage}%."
+            f"status 'normal' or network-contained, reduced_functionality_mode not on, and a populated "
+            f"agent_version, yielding a sensor coverage of {percentage}%."
         )
+        if contained:
+            pass_reasons.append(
+                f"{contained} of the covered devices are network-contained: the sensor is working and the "
+                "host is isolated, so it counts as covered. Review and lift containment in Falcon when the "
+                "incident is resolved."
+            )
         if percentage < 100:
             fail_reasons.append(
                 f"{total - active} of {total} devices ({round(100 - percentage, 2)}%) do not have an "
                 f"actively-reporting Falcon sensor: {not_reporting} not seen {window} (or no readable "
-                f"last_seen), {not_normal} with status other than 'normal', {rfm_hosts} in reduced "
+                f"last_seen), {not_normal} with a status that is neither 'normal' nor a containment state, {rfm_hosts} in reduced "
                 f"functionality mode, {no_agent} with no agent_version."
             )
             if not_reporting:
@@ -217,8 +242,8 @@ def transform(input):
                 )
             if not_normal:
                 recommendations.append(
-                    f"{not_normal} hosts report a status other than 'normal' (for example network "
-                    "containment): review them in Falcon host management."
+                    f"{not_normal} hosts report a status that is neither 'normal' nor a containment state: "
+                    "review them in Falcon host management."
                 )
             if rfm_hosts or no_agent:
                 recommendations.append(
@@ -240,6 +265,7 @@ def transform(input):
         "activeDevices": active,
         "totalDevices": total,
         "notReportingDevices": not_reporting,
+        "containedDevices": contained,
         "activeWindowDays": ACTIVE_WINDOW_DAYS,
     }
 
@@ -254,6 +280,7 @@ def transform(input):
             "activeDevices": active,
             "notReportingDevices": not_reporting,
             "statusNotNormalDevices": not_normal,
+            "containedDevices": contained,
             "reducedFunctionalityDevices": rfm_hosts,
             "noAgentVersionDevices": no_agent,
             "activeWindowDays": ACTIVE_WINDOW_DAYS,
