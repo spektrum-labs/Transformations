@@ -213,12 +213,22 @@ def test_except_path_is_not_evaluated():
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
+#: Every transform that emits permissiveOutboundRuleCount, one per firewall vendor. A new vendor adds its file here;
+#: anything else emitting the key is a collision.
+IMPLEMENTATIONS = (
+    "safeguards/firewall/fortinet/permissiveoutboundrulecount.py",
+    "safeguards/firewalls/cisco-meraki-mx/permissiveOutboundRuleCount.py",
+)
+
+
 def test_key_is_new_and_no_existing_transform_emits_it():
     seen = []
     for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, "safeguards")):
         for fn in filenames:
             path = os.path.join(dirpath, fn)
-            if not fn.endswith(".py") or fn.startswith("test_") or os.path.basename(path) == os.path.basename(FILE):
+            if not fn.endswith(".py") or fn.startswith("test_"):
+                continue
+            if os.path.relpath(path, ROOT).replace(os.sep, "/") in IMPLEMENTATIONS:
                 continue
             with open(path, encoding="utf-8", errors="replace") as fh:
                 if '"' + KEY + '"' in fh.read():
