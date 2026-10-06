@@ -157,6 +157,14 @@ def test_policy_list_not_read_whole_never_fails(extra):
     assert out["transformedResponse"]["membersOutsideUndecided"] == "the Conditional Access policy list was not read whole"
 
 
+def test_bare_array_policy_list_never_fails():
+    b = body([policy("A")], [G1], [U[:5]])
+    b["conditionalAccessPolicies"] = b["conditionalAccessPolicies"]["value"]
+    value, out = run(b)
+    assert value is None
+    assert out["transformedResponse"]["membersOutsideUndecided"] == "the Conditional Access policy list was not read whole"
+
+
 def test_per_user_enabled_neither_covers_nor_fails():
     states = {U[5]: "enforced", U[6]: "enforced", U[7]: "enabled"}
     value, out = run(body([policy("A")], [G1], [U[:5]], perUserMfaStates=per_user(states)))

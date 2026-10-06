@@ -676,7 +676,7 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
     if coverage["groupReadsRefused"] or coverage["groupsUnread"] or not coverage["memberListRead"]:
         return None
     ca = data.get("conditionalAccessPolicies")
-    if isinstance(ca, dict) and list_pages(ca) is None:
+    if not isinstance(ca, dict) or list_pages(ca) is None:  # a bare array cannot show it was read whole
         details["membersOutsideUndecided"] = "the Conditional Access policy list was not read whole"
         return None
     found, why = members_outside(data, policies)
