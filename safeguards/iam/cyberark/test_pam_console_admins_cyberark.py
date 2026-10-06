@@ -72,3 +72,31 @@ def test_no_evidence_is_not_evaluated(loader, module, key, body):
 def test_json_string_input_matches_dict(loader, module, key, fixture_name, expected):
     body = (HERE / "fixtures" / fixture_name).read_text()
     assert verdict(loader(module)(body), key)[0] is expected
+
+
+# --- an administrator whose source is missing is not evaluated -------------------------------
+
+
+def admin_without_source(value):
+    body = fixture("console_admins_dedicated.json")
+    for u in body["Users"]:
+        if u.get("userType") == "Built-InAdmins" or "vaultAuthorization" in u:
+            if value is None:
+                u.pop("source", None)
+            else:
+                u["source"] = value
+            return body
+    raise AssertionError("fixture has no administrator")
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=["plain", "sandbox"])
+@pytest.mark.parametrize("value", [None, "", "   "], ids=["missing", "empty", "blank"])
+@pytest.mark.parametrize("username", ["jdoe", "admin"])
+def test_admin_without_source_is_not_evaluated(loader, value, username):
+    body = admin_without_source(value)
+    for u in body["Users"]:
+        if "source" not in u or not str(u.get("source")).strip():
+            u["username"] = username
+    out = loader("arepamconsoleadminsdedicated")(body)
+    assert out["transformedResponse"]["arePAMConsoleAdminsDedicated"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"

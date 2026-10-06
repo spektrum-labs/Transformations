@@ -30,14 +30,27 @@ True when every administrator is (a) or (b). False when any administrator is a d
 Platform or Entra identity under an ordinary personal name: the person's everyday SSO
 identity holding Secret Server admin.
 
-LIMIT. Admin is read from role names, not role permissions; a custom role that grants
-Administer permissions under a name without "admin" is not counted. Stated so a reviewer can
-see it, not hidden.
+USER-TO-ROLES MATCH. Each userRoles entry is matched to a user by list position
+(userRoles[i] belongs to records[i]), because the roles-assigned body carries no user id. When
+an entry does carry one -- the entry shape {"userId", "roles": <roles body>}, or a userId on
+the body or on its role records -- it must equal that user's id, or the user is not evaluated.
+Until the Integration-Service workflow emits the keyed shape, a fan-out that returned legs out
+of order would attribute roles to the wrong user and could not be detected here.
+
+LIMITS. Stated so a reviewer can see them, not hidden.
+  * Admin is read from role names, not role permissions; a custom role that grants Administer
+    permissions under a name without "admin" is not counted.
+  * Positional user-to-roles matching, as above, when no user id is present.
+  * Roles granted through groups are counted only if roles-assigned returns them. Its
+    UserRoleSummary carries isDirectAssignment and groups, which indicates group-inherited
+    roles are included, but this has not been confirmed against a live tenant.
 
 FAIL CLOSED (None, dataCollection "error", never a pass): an empty or error body; no records
 list; hasNext true or total above the rows returned (partial); a userRoles list missing or of
 a different length from records, or any per-user roles body that is an error or has no
-records list (roles unread for that user); no administrator found; an administrator with no
+records list (roles unread for that user); a per-user roles body with hasNext true or total
+above the role records returned (roles partly read for that user); a roles entry whose user id
+does not match the user at that position; no administrator found; an administrator with no
 domainId.
 """
 
@@ -149,6 +162,37 @@ def admin_marker(name):
     return tokens[0] in ADMIN_MARKERS or tokens[-1] in ADMIN_MARKERS
 
 
+def roles_entry(entry, user):
+    """(roles body, problem) for one userRoles entry. Accepts the plain roles-assigned body or
+    the keyed shape {"userId", "roles": body}; checks any user id the entry carries."""
+    body = entry
+    ids = []
+    if isinstance(entry, dict) and isinstance(entry.get("roles"), (dict, list)) and not isinstance(
+            entry.get("records"), list):
+        for key in ("userId", "user_id", "id"):
+            if entry.get(key) is not None:
+                ids.append(entry.get(key))
+        body = entry["roles"]
+        if isinstance(body, list):
+            body = {"records": body}
+    if isinstance(body, dict) and not isinstance(body.get("records"), list):
+        body = unwrap(body)
+    if isinstance(body, dict):
+        for key in ("userId", "user_id"):
+            if body.get(key) is not None:
+                ids.append(body.get(key))
+        if isinstance(body.get("records"), list):
+            for r in body["records"]:
+                if isinstance(r, dict) and r.get("userId") is not None:
+                    ids.append(r.get("userId"))
+    user_id = user.get("id")
+    for found in ids:
+        if user_id is None or str(found) != str(user_id):
+            return body, ("its roles entry is for user id " + str(found)[:40] + ", not "
+                          + str(user_id)[:40] + ": roles and users are out of step")
+    return body, None
+
+
 def judge(admins, summary):
     """admins: list of dicts {name, local, source}. Returns the response."""
     dedicated = []
@@ -211,13 +255,18 @@ def transform(input):
             if u.get("enabled") is False or u.get("isApplicationAccount") is True:
                 continue
             name = str(u.get("userName") or u.get("displayName") or u.get("id"))
-            body = roles_by_user[index]
-            if isinstance(body, dict) and not isinstance(body.get("records"), list):
-                body = unwrap(body)
+            body, mismatch = roles_entry(roles_by_user[index], u)
+            if mismatch:
+                return not_evaluated("roles for user " + name + " were not matched: " + mismatch)
             body_error = error_reason(body)
             if body_error or not isinstance(body, dict) or not isinstance(body.get("records"), list):
                 return not_evaluated("roles for user " + name + " were not read"
                                      + (": " + body_error if body_error else ""))
+            role_total = body.get("total")
+            if body.get("hasNext") is True or (isinstance(role_total, int)
+                                               and role_total > len(body["records"])):
+                return not_evaluated("roles for user " + name + " were only partly read ("
+                                     + str(len(body["records"])) + " of " + str(role_total) + ")")
             role_names = [str(r.get("roleName") or r.get("name") or "") for r in body["records"]
                           if isinstance(r, dict)]
             admin_roles = [r for r in role_names if "admin" in r.lower()]

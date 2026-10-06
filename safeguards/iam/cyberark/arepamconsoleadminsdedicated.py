@@ -35,7 +35,8 @@ Vault admin.
 FAIL CLOSED (None, dataCollection "error", never a pass): an empty or error body; no Users
 list; Total above the rows returned (partial); no user carrying vaultAuthorization or
 groupsMembership (the read was not made with ExtendedDetails=true, so admin rights are
-unknown); no administrator found.
+unknown); no administrator found; an administrator with a missing or empty source (how it
+signs in is unknown, so it is neither passed nor failed).
 """
 
 import json
@@ -235,13 +236,16 @@ def transform(input):
                 continue
             name = str(u.get("username") or u.get("id"))
             source = str(u.get("source") or "").strip()
+            if not source:
+                return not_evaluated("administrator " + name + " has no source, so whether it is a "
+                                     "Vault user or a directory mapping is unknown")
             methods = auth_methods(u)
             federated = [m for m in methods if m in FEDERATED_METHODS]
             local = source.lower() == "cyberark" and not federated
             if local:
                 label = "Vault user"
             elif source.lower() != "cyberark":
-                label = (source or "unknown") + " directory mapping"
+                label = source + " directory mapping"
             else:
                 label = "Vault user allowed to sign in by " + "/".join(federated)
             admins.append({"name": name, "local": local, "source": label})
