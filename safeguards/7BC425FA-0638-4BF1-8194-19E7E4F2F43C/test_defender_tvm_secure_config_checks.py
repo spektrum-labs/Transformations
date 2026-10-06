@@ -289,3 +289,19 @@ def test_a_count_with_partly_assessed_devices_says_it_is_a_lower_bound():
     got, out = value("smbv1enableddevicecount", result(rows))
     assert got == 1
     assert "count may be higher: ws-02.example.test" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_a_part_no_device_finds_applicable_was_not_measured():
+    rows = [row(d, "scid-95") for d in ("ws-01", "ws-02")] + [row(d, "scid-9999", 0, 0) for d in ("ws-01", "ws-02")]
+    got, out = value("issmbsigningrequired", result(rows))
+    assert got is None
+    assert "SMB server signing" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    rows = [row(d, "scid-53") for d in ("ws-01", "ws-02")] + [row(d, "scid-54", 0, 0) for d in ("ws-01", "ws-02")]
+    assert value("smbv1enableddevicecount", result(rows))[0] is None
+
+
+@pytest.mark.parametrize("bad_id", ["", "None", "scid-", "x-12", "scid-12a"])
+def test_a_name_only_part_needs_a_well_formed_id(bad_id):
+    rows = [row("ws-01", "scid-95"),
+            row("ws-01", bad_id, name="Enable 'Microsoft network server: Digitally sign communications (always)'")]
+    assert value("issmbsigningrequired", result(rows))[0] is None
