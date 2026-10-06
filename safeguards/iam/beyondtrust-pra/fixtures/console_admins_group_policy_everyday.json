@@ -73,6 +73,11 @@
           "id": 11,
           "security_provider_id": 2,
           "user_id": 2
+        },
+        {
+          "id": 14,
+          "security_provider_id": 2,
+          "user_id": 3
         }
       ]
     },

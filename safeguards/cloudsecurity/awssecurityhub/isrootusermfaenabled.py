@@ -5,12 +5,16 @@ Vendor: AWS (Security Hub connection, IAM read)  |  Category: Cloud Security
 CLAIM. The AWS account's root user has MFA enabled AND has not been used to sign in to the
 console within the last 90 days (it is not an everyday identity).
 
-RULE. Read from the IAM credential report (GetCredentialReport), `<root_account>` row:
+RULE. Read from the IAM credential report (GetCredentialReport), `<root_account>` row. The
+report must be fresh first: its GeneratedTime must parse and be no more than 24 hours before
+the evaluation clock (datetime.utcnow(), the clock the sibling transforms use) and no more than
+1 hour ahead of it. GetCredentialReport returns whatever report was last generated, so an old
+report could hide a recent root sign-in.
   * mfa_active must be "true"; "false" fails.
   * password_last_used is the root user's last console sign-in. "N/A" (never signed in) and
     "no_information" (no sign-in since IAM began tracking, Oct 2014) count as not used. An ISO
     8601 timestamp fails when it is within 90 days of the report's GeneratedTime (the clock the
-    report was taken at; the evaluation clock only when GeneratedTime is absent). The window is
+    report was taken at, at most 24 hours behind the evaluation clock). The window is
     inclusive: a sign-in exactly 90 days before is still a use.
   * Root access-key use is NOT judged here: any active root key already fails
     isRootUserAccessKeyRestricted. The last-used dates are reported as findings.
@@ -21,8 +25,9 @@ definite False, but it carries no sign-in history, so AccountMFAEnabled 1 alone 
 evaluated (None) rather than a pass.
 
 FAIL CLOSED. An empty body, an AWS or Integration-Service error, a report with no root row or
-an incomplete one, mfa_active or password_last_used in any unrecognised form, and a summary
-without the key all return None with additionalInfo.dataCollection.status "error" (not
+an incomplete one, a GeneratedTime that is missing, unparsable, more than 24 hours old or more
+than 1 hour in the future, mfa_active or password_last_used in any unrecognised form, and a
+summary without the key all return None with additionalInfo.dataCollection.status "error" (not
 evaluated). None of them is a pass.
 
 Integration-Service parses the IAM Query API's XML, so the report arrives as
@@ -38,6 +43,11 @@ TRANSFORM_ID = "isrootusermfaenabled"
 WINDOW_DAYS = 90
 NOT_USED = ("n/a", "no_information")
 B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+#: A credential report older than this (by GeneratedTime) is not evaluated. AWS regenerates a
+#: report older than 4 hours when GenerateCredentialReport is called, so a fresh read is <= 4 h.
+REPORT_MAX_AGE_HOURS = 24
+#: Tolerated clock skew for a GeneratedTime that is ahead of the evaluation clock.
+REPORT_FUTURE_SKEW_HOURS = 1
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -234,21 +244,43 @@ def parse_time(value):
     return None
 
 
+def evaluation_now():
+    """The evaluation clock (naive UTC), the same datetime.utcnow() the sibling transforms use."""
+    return datetime.utcnow()
+
+
+def report_age_problem(generated_raw, now):
+    """A not-evaluated reason when the report's GeneratedTime is missing, unparsable or not
+    fresh against `now`, else None."""
+    if generated_raw is None or (isinstance(generated_raw, str) and not generated_raw.strip()):
+        return "credential report has no GeneratedTime, so its age is unknown"
+    generated = parse_time(generated_raw)
+    if generated is None:
+        return "credential report GeneratedTime is not a timestamp: " + str(generated_raw)[:40]
+    if generated > now + timedelta(hours=REPORT_FUTURE_SKEW_HOURS):
+        return ("credential report GeneratedTime " + str(generated_raw)[:40]
+                + " is ahead of the evaluation clock")
+    if now - generated > timedelta(hours=REPORT_MAX_AGE_HOURS):
+        hours = int((now - generated).total_seconds() // 3600)
+        return ("credential report is " + str(hours) + " hour(s) old (GeneratedTime "
+                + str(generated_raw)[:40] + "), older than the " + str(REPORT_MAX_AGE_HOURS)
+                + "-hour limit: regenerate it before reading")
+    return None
+
+
 def evaluate_report(holder):
+    generated_raw = holder.get("GeneratedTime")
+    stale = report_age_problem(generated_raw, evaluation_now())
+    if stale:
+        return None, stale, {"source": "credentialReport", "generatedTime": generated_raw}, []
+    reference = parse_time(generated_raw)
+    clock = "report GeneratedTime"
     text = report_text(holder)
     header, row = root_row_from_csv(text)
     if row is None:
         return None, "credential report has no <root_account> row", {}, []
     mfa = str(row.get("mfa_active", "")).strip().lower()
     last_used_raw = str(row.get("password_last_used", "")).strip()
-    generated_raw = holder.get("GeneratedTime")
-    reference = parse_time(generated_raw) if generated_raw else None
-    clock = "report GeneratedTime"
-    if reference is None:
-        if generated_raw:
-            return None, "GeneratedTime is not a timestamp: " + str(generated_raw)[:40], {}, []
-        reference = datetime.utcnow()
-        clock = "evaluation time"
     summary = {"source": "credentialReport", "mfaActive": mfa, "passwordLastUsed": last_used_raw,
                "generatedTime": generated_raw, "windowDays": WINDOW_DAYS}
     findings = []
