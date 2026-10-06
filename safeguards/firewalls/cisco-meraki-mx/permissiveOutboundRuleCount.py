@@ -20,7 +20,8 @@ so only 0 passes. Allow-listed exceptions (a named server allowed to any port) a
 integration has no exception list; the reason names every rule counted so each can be reviewed.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body, no network list, a rules
 response missing or in error for any network, a network list of 1,000 or more (the first page may not be the
-last), or networks and responses that do not pair up one to one.
+last), networks and responses that do not pair up one to one, or a rules list that neither stops at a deny-all rule
+nor ends with Meraki's Default rule (an incomplete list).
 """
 import json
 from datetime import datetime, timezone
@@ -195,6 +196,14 @@ def is_deny_all(rule):
             and is_any(rule.get("srcCidr")) and is_any(rule.get("destCidr")))
 
 
+def is_default_rule(rule):
+    """Meraki's implicit last rule as the GET returns it: allow, protocol any, from Any to Any."""
+    return (str(rule.get("policy") or "").strip().lower() == "allow"
+            and str(rule.get("protocol") or "").strip().lower() == "any"
+            and is_any(rule.get("srcCidr")) and is_any(rule.get("destCidr"))
+            and (str(rule.get("comment") or "").strip().lower() == "default rule" or is_any(rule.get("destPort"))))
+
+
 def rule_label(network, rule, position):
     comment = str(rule.get("comment") or "").strip()[:60]
     label = network + " rule " + str(position)
@@ -271,13 +280,21 @@ def transform(input):
                 continue
             count = 0
             position = 0
+            stopped = False
+            found = []
             for rule in rules:
                 position = position + 1
                 if is_permissive(rule):
                     count = count + 1
-                    permissive.append(rule_label(name, rule, position))
+                    found.append(rule_label(name, rule, position))
                 if is_deny_all(rule):
+                    stopped = True
                     break
+            if not stopped and not is_default_rule(rules[-1]):
+                unreadable.append(name + ": the rules list neither stops at a deny-all rule nor ends with Meraki's "
+                                  "Default rule, so it is incomplete")
+                continue
+            permissive = permissive + found
             per_network[name] = count
         summary = {"networksRead": len(per_network), "permissiveRules": len(permissive),
                    "permissiveRuleNames": permissive[:MAX_NAMED], "networksNotRead": unreadable[:MAX_NAMED]}

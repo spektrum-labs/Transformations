@@ -193,3 +193,10 @@ def test_key_is_new_and_no_existing_transform_emits_it():
                 if '"' + KEY + '"' in fh.read():
                     seen.append(path)
     assert seen == []
+
+
+def test_a_list_without_the_default_rule_or_a_deny_all_is_incomplete():
+    assert value(workflow([{"rules": [rule("allow", "tcp", "443")]}])) is None
+    assert value(workflow([locked("a"), {"rules": [rule("allow", "tcp", "443"), rule("deny", "tcp", "22")]}])) is None
+    # stopping at a deny-all is complete even when the Default rule is not shown
+    assert value(workflow([{"rules": [rule("allow", "tcp", "443"), DENY_ALL]}])) == 0
