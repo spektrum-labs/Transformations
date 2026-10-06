@@ -40,15 +40,18 @@ not judged. Administrator emails are never copied into the output: accounts are 
 
 A PASS NEEDS EVIDENCE THAT COULD HAVE FAILED. If the org's everyday identities are not JumpCloud
 directory users (JumpCloud used only for devices or admin access, users mastered elsewhere), no admin
-email can match and every admin would read "dedicated" while nothing was learned. So when the directory
-has no ACTIVE user, or no active user's email or alternateEmail is on any active administrator's email
-domain, the result is None (not evaluated). Administrators on a domain no directory user shares are
-named in a finding: their separation could not be compared.
+email can match and every admin would read "dedicated" while nothing was learned. So a pass must cover
+EVERY active administrator: when the directory has no ACTIVE user, or ANY active administrator's email
+domain is one no active directory user's primary email is on, the result is None (not evaluated), the
+same as an administrator with no email, and the reason names those administrators by record id. Domains
+come from the primary `email` only: alternateEmail is often a personal address (gmail.com, outlook.com)
+and would let a personal-address admin look "on a directory domain". alternateEmail is still matched as
+an address (an admin whose email is a user's alternateEmail is that user's everyday identity).
 
 FAIL CLOSED. Null, {}, an error envelope (401/403/5xx, {"error": ...}), either list missing, a list
 without totalCount or shorter than its totalCount (a partial read), a paginationTruncated flag, no
-active administrator, an administrator with no email, no active directory user, or no active directory
-user on any administrator's email domain returns areAdminAccountsSeparate = None with a dataCollection
+active administrator, an administrator with no email, no active directory user, or any active
+administrator on an email domain no active directory user's primary email is on returns areAdminAccountsSeparate = None with a dataCollection
 error ("not evaluated"). The workflow's paginationTruncated markers (top level or
 paginationStats.<key>) are read too. One active administrator shown to share an active everyday
 identity is a measured fail, whatever else is missing.
@@ -235,17 +238,6 @@ def name_list(items):
     return shown
 
 
-def pass_reason(active, off_domain):
-    """The pass reason, naming only the administrators that were actually compared with directory users."""
-    if not off_domain:
-        return ("All " + str(active) + " active JumpCloud administrator(s) use an admin-only identity that no "
-                "active everyday directory user carries")
-    return (str(active - off_domain) + " of " + str(active) + " active JumpCloud administrator(s) were compared with "
-            "directory users on their email domain and use an admin-only identity that no active everyday directory "
-            "user carries; " + str(off_domain) + " use an email domain no active directory user is on, so their "
-            "separation could not be compared (see findings)")
-
-
 def not_evaluated(validation, reason, summary=None, findings=None):
     return create_response(
         result={KEY: None, "adminCount": None, "adminsSharingEverydayIdentity": None},
@@ -297,17 +289,21 @@ def transform(input):
         suspended_emails = {}
         active_domains = {}
         active_users = 0
+        user_records = 0
         for user in users or ((user_block or {}).get("results") if isinstance(user_block, dict) else None) or []:
             if not isinstance(user, dict):
                 continue
+            user_records = user_records + 1
             active = user_active(user)
             if active:
                 active_users = active_users + 1
+                # Domains from the primary email only; alternateEmail is often a personal address.
+                primary_domain = domain_of(email_of(user))
+                if primary_domain:
+                    active_domains[primary_domain] = True
             for email in emails_of(user):
                 if active:
                     active_emails[email] = True
-                    if domain_of(email):
-                        active_domains[domain_of(email)] = True
                 else:
                     suspended_emails[email] = True
 
@@ -324,12 +320,13 @@ def transform(input):
         dedicated = 0
         for admin in active_admins:
             email = email_of(admin)
-            if email and domain_of(email) not in active_domains:
-                off_domain.append(label(admin))
             if not email:
                 no_email.append(label(admin))
             elif email in active_emails:
                 sharing.append(label(admin))
+            elif domain_of(email) not in active_domains:
+                # Not compared: no everyday directory user is on this domain. Never counted as dedicated.
+                off_domain.append(label(admin))
             elif email in suspended_emails:
                 suspended_match.append(label(admin))
                 dedicated = dedicated + 1
@@ -338,7 +335,7 @@ def transform(input):
 
         summary = {"administratorCount": len(admin_rows), "activeAdministratorCount": len(active_admins),
                    "suspendedAdministratorCount": len(admin_rows) - len(active_admins),
-                   "directoryUserCount": len(active_emails) + len(suspended_emails),
+                   "directoryUserCount": user_records,
                    "activeDirectoryUserCount": active_users,
                    "administratorsOffDirectoryDomains": len(off_domain),
                    "dedicatedAdministratorCount": dedicated,
@@ -348,9 +345,6 @@ def transform(input):
         findings = []
         if len(admin_rows) > len(active_admins):
             findings.append(str(len(admin_rows) - len(active_admins)) + " administrator(s) are suspended (not judged)")
-        if off_domain and len(off_domain) < len(active_admins):
-            findings.append(str(len(off_domain)) + " administrator(s) use an email domain no active directory user "
-                            "is on, so their separation could not be compared: " + name_list(off_domain))
         if suspended_match:
             findings.append(str(len(suspended_match)) + " administrator(s) share an email with a SUSPENDED directory "
                             "user, so that everyday identity cannot sign in: " + name_list(suspended_match))
@@ -359,7 +353,7 @@ def transform(input):
             reason = (str(len(sharing)) + " of " + str(len(active_admins)) + " active JumpCloud administrator(s) "
                       "sign in to the Admin Portal with the email of an active everyday directory user, so the admin "
                       "account is the person's everyday identity (administrator record ids): " + name_list(sharing))
-            if admin_problem or user_problem or no_email:
+            if admin_problem or user_problem or no_email or off_domain:
                 reason = reason + "; the read was also incomplete, so more may be affected"
             return create_response(
                 result={KEY: False, "adminCount": len(active_admins), "adminsSharingEverydayIdentity": len(sharing)},
@@ -382,15 +376,18 @@ def transform(input):
             return not_evaluated(validation, "the JumpCloud directory has no active user, so no administrator can be "
                                  "compared with an everyday identity; separation cannot be shown from JumpCloud",
                                  summary, findings)
-        if len(off_domain) == len(active_admins):
-            return not_evaluated(validation, "no active directory user is on any administrator's email domain, so the "
-                                 "everyday identities are not JumpCloud directory users and separation cannot be "
-                                 "shown from JumpCloud", summary, findings)
+        if off_domain:
+            return not_evaluated(validation, str(len(off_domain)) + " of " + str(len(active_admins)) + " active "
+                                 "administrator(s) use an email domain no active directory user's primary email is on, "
+                                 "so they cannot be compared with an everyday identity and separation cannot be shown "
+                                 "for them (administrator record ids): " + name_list(off_domain), summary, findings)
 
         return create_response(
             result={KEY: True, "adminCount": len(active_admins), "adminsSharingEverydayIdentity": 0},
             validation=validation,
-            pass_reasons=[pass_reason(len(active_admins), len(off_domain))],
+            pass_reasons=["All " + str(len(active_admins)) + " active JumpCloud administrator(s) were compared with "
+                          "directory users on their email domain and use an admin-only identity that no active "
+                          "everyday directory user carries"],
             input_summary=summary, additional_findings=findings)
     except Exception as e:
         message = "Transformation error: " + str(e)[:200]

@@ -181,15 +181,42 @@ def test_no_directory_user_on_the_admins_domains_is_not_evaluated(loader):
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
-def test_admin_off_the_directory_domains_is_a_finding(loader):
+def test_any_admin_off_the_directory_domains_is_not_evaluated(loader):
     body = fixture("pass")
     body["administrators"]["results"][1]["email"] = "ops@msp.example.org"
     out = loader()(body)
+    assert not_evaluated(out)
+    reason = out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert reason.startswith("1 of 2 active") and "6501a0000000000000000002" in reason
+    assert "msp.example.org" not in json.dumps(out)
+    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+    assert summary["dedicatedAdministratorCount"] == 1 and summary["administratorsOffDirectoryDomains"] == 1
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_alternate_email_domain_does_not_count_as_a_directory_domain(loader):
+    body = fixture("pass")
+    body["administrators"]["results"][1]["email"] = "someone.personal@gmail.example"
+    body["systemUsers"]["results"][0]["alternateEmail"] = "jo.home@gmail.example"
+    assert not_evaluated(loader()(body))
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_off_domain_admin_matching_an_alternate_email_still_fails(loader):
+    body = fixture("pass")
+    body["administrators"]["results"][1]["email"] = "jo.home@gmail.example"
+    body["systemUsers"]["results"][0]["alternateEmail"] = "jo.home@gmail.example"
+    assert loader()(body)["transformedResponse"][KEY] is False
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_directory_user_count_is_per_record(loader):
+    body = fixture("pass")
+    for user in body["systemUsers"]["results"]:
+        user["alternateEmail"] = user["username"] + ".alt@example.com"
+    out = loader()(body)
     assert out["transformedResponse"][KEY] is True
-    findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
-    assert "6501a0000000000000000002" in findings and "msp.example.org" not in json.dumps(out)
-    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
-    assert reason.startswith("1 of 2 active") and "could not be compared" in reason
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["directoryUserCount"] == 3
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
