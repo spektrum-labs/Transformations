@@ -1,0 +1,66 @@
+{
+  "Users": [
+    {
+      "id": 2,
+      "username": "Administrator",
+      "source": "CyberArk",
+      "userType": "Built-InAdmins",
+      "componentUser": false,
+      "enableUser": true,
+      "suspended": false,
+      "groupsMembership": [
+        {
+          "groupID": 1,
+          "groupName": "Vault Admins",
+          "groupType": "Vault"
+        }
+      ],
+      "vaultAuthorization": [
+        "AddUpdateUsers",
+        "AddSafes",
+        "ManageDirectoryMapping",
+        "AuditUsers",
+        "BackupAllSafes",
+        "RestoreAllSafes",
+        "ResetUsersPasswords",
+        "ActivateUsers"
+      ],
+      "allowedAuthenticationMethods": [
+        "AuthTypePass"
+      ],
+      "location": "\\",
+      "personalDetails": {
+        "firstName": "Example",
+        "lastName": "User"
+      }
+    },
+    {
+      "id": 41,
+      "username": "asmith@example.com",
+      "source": "LDAP",
+      "userType": "EPVUser",
+      "componentUser": false,
+      "enableUser": true,
+      "suspended": false,
+      "groupsMembership": [
+        {
+          "groupID": 1,
+          "groupName": "Vault Admins",
+          "groupType": "Vault"
+        }
+      ],
+      "vaultAuthorization": [
+        "AuditUsers"
+      ],
+      "allowedAuthenticationMethods": [
+        "AuthTypeSAML"
+      ],
+      "location": "\\",
+      "personalDetails": {
+        "firstName": "Example",
+        "lastName": "User"
+      }
+    }
+  ],
+  "Total": 2
+}
