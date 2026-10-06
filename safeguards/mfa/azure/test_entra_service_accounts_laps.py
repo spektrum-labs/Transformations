@@ -380,3 +380,8 @@ def test_laps_percentage_never_rounds_up_across_a_threshold():
     devices = [device(i) for i in range(1, 2001)]
     creds = [cred(i) for i in range(1, 1900)]          # 1899 of 2000 = 94.95%
     assert value(LAPS, laps_body(devices, creds))[0] == 94.95
+    # 2 of 3 = 66.666...: round() would give 66.67, truncation gives 66.66
+    assert value(LAPS, laps_body([device(1), device(2), device(3)], [cred(1), cred(2)]))[0] == 66.66
+    # 1999 of 2001 = 99.9000...; 3998 of 4001 = 99.925...: round() 99.93, truncation 99.92
+    devices = [device(i) for i in range(1, 4002)]
+    assert value(LAPS, laps_body(devices, [cred(i) for i in range(1, 3999)]))[0] == 99.92
