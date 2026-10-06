@@ -217,6 +217,10 @@ def test_sample_links_of_admins_or_failed_reads_are_not_evidence(loader):
     ("template_wsfed", "Microsoft 365"),
     ("template_saml_2_0", "Exchange Online"),
     ("bookmark", "Outlook Web Access"),
+    ("bookmark", "Outlook"),
+    ("template_wsfed", "Exchange"),
+    ("bookmark", "OWA"),
+    ("template_saml_2_0", "Microsoft Exchange Server"),
     ("template_saml_2_0", "G Suite"),
     ("template_saml_2_0", "Google Workspace (SAML)"),
     ("custom_gmail_app", "Mail"),
@@ -234,6 +238,9 @@ def test_custom_suite_apps_match_on_label_or_name(loader, app_name, label):
     ("template_saml_2_0", "Exchangerate Portal"),
     ("bookmark", "Outlookers Wiki"),
     ("gcp", "Google Cloud Console"),
+    ("template_saml_2_0", "Partner Exchange"),
+    ("template_saml_2_0", "Data Exchange"),
+    ("bookmark", "Sales Outlook Dashboard"),
 ])
 def test_non_suite_apps_are_not_matched(loader, app_name, label):
     body = fixture("pass")
@@ -278,3 +285,11 @@ def test_matching_echoed_user_is_paired(loader):
     body = fixture("pass")
     body["adminAppLinks"][0] = {"userId": "00u1adm0000000000001", "value": body["adminAppLinks"][0]}
     assert verdict(loader()(body)) is True
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+@pytest.mark.parametrize("label", ["Partner Exchange", "Data Exchange", "Market Outlook"])
+def test_ambiguous_org_apps_are_not_pass_evidence(loader, label):
+    body = fixture("pass")
+    body["orgApps"] = [{"name": "template_saml_2_0", "label": label, "status": "ACTIVE"}]
+    assert not_evaluated(loader()(body))
