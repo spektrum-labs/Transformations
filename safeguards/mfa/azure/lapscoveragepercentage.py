@@ -166,6 +166,21 @@ def name_list(items):
     return shown
 
 
+def workflow_truncated(body, key):
+    """True when the workflow reported that the part under key was cut off at its page limit (reportPagination)."""
+    if not isinstance(body, dict):
+        return False
+    stats = to_obj(body.get("paginationStats"))
+    if isinstance(stats, dict):
+        entry = to_obj(stats.get(key))
+        if isinstance(entry, dict):
+            flag = entry.get("paginationTruncated")
+            if flag is True or str(flag).strip().lower() == "true":
+                return True
+    flag = body.get("paginationTruncated")
+    return flag is True or str(flag).strip().lower() == "true"
+
+
 def graph_collection(part, what):
     """(items, None) for a complete Graph collection read, else (None, reason)."""
     cur = to_obj(part)
@@ -255,6 +270,9 @@ def transform(input):
         if not isinstance(body, dict) or not has_part(body):
             return not_measured(validation, "Microsoft Entra ID: the response is not the getLapsCoverageEvidence "
                                 "workflow result.")
+        if workflow_truncated(body, "deviceLocalCredentials") or workflow_truncated(body, "windowsDevices"):
+            return not_measured(validation, "Microsoft Entra ID: a list was cut off at its page limit "
+                                "(paginationTruncated), so coverage cannot be computed.")
         creds, why = graph_collection(body.get("deviceLocalCredentials"), "Windows LAPS credentials")
         if why:
             return not_measured(validation, "Microsoft Entra ID " + why + ". Needs access, not a finding.",

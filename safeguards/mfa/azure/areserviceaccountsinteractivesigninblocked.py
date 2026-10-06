@@ -162,6 +162,21 @@ def name_list(items):
     return shown
 
 
+def workflow_truncated(body, key):
+    """True when the workflow reported that the part under key was cut off at its page limit (reportPagination)."""
+    if not isinstance(body, dict):
+        return False
+    stats = to_obj(body.get("paginationStats"))
+    if isinstance(stats, dict):
+        entry = to_obj(stats.get(key))
+        if isinstance(entry, dict):
+            flag = entry.get("paginationTruncated")
+            if flag is True or str(flag).strip().lower() == "true":
+                return True
+    flag = body.get("paginationTruncated")
+    return flag is True or str(flag).strip().lower() == "true"
+
+
 def graph_collection(part, what):
     """(items, None) for a complete Graph collection read, else (None, reason)."""
     cur = to_obj(part)
@@ -227,10 +242,14 @@ READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "plat
 
 
 def has_value(value):
+    """True when some leaf inside value is set: an object or list whose fields are all empty is not a value
+    (Graph returns unset conditions as null or as objects of empty lists)."""
     if value is None:
         return False
-    if isinstance(value, (list, dict)):
-        return len(value) > 0
+    if isinstance(value, dict):
+        return any([has_value(v) for k, v in value.items() if not str(k).startswith("@")])
+    if isinstance(value, list):
+        return any([has_value(v) for v in value])
     return str(value).strip().lower() not in ("", "none", "null")
 
 
@@ -338,6 +357,9 @@ def transform(input):
         if not isinstance(body, dict) or not has_part(body):
             return not_measured(validation, "Microsoft Entra ID: the response is not the "
                                 "getServiceAccountSignInEvidence workflow result.")
+        if workflow_truncated(body, "conditionalAccessPolicies") or workflow_truncated(body, "groups"):
+            return not_measured(validation, "Microsoft Entra ID: a list was cut off at its page limit "
+                                "(paginationTruncated), so the read is incomplete.")
         policies, why = graph_collection(body.get("conditionalAccessPolicies"), "Conditional Access policies")
         if why:
             return not_measured(validation, "Microsoft Entra ID " + why + ".", "The read needs Policy.Read.All, which "

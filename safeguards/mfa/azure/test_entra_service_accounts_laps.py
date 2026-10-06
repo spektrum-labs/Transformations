@@ -338,3 +338,27 @@ def test_laps_rotation_overdue_does_not_count():
     got, out = value(LAPS, laps_body([device(1), device(2), device(3)], [cred(1), overdue, old_no_refresh]))
     assert got == round(100.0 / 3, 2)
     assert "WS-002 (rotation overdue)" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_empty_condition_objects_do_not_narrow():
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2])
+    pol["conditions"]["devices"] = {"includeDevices": [], "excludeDevices": [], "deviceFilter": None}
+    pol["conditions"]["clientApplications"] = {"includeServicePrincipals": [], "excludeServicePrincipals": [],
+                                              "servicePrincipalFilter": None}
+    pol["conditions"]["applications"]["applicationFilter"] = None
+    pol["conditions"]["users"]["excludeGuestsOrExternalUsers"] = None
+    assert value(SVC, svc_body([pol]))[0] is True
+    assert value(SVC, stringify(svc_body([pol])))[0] is True
+    pol["conditions"]["devices"]["deviceFilter"] = {"mode": "exclude", "rule": "device.isCompliant -eq True"}
+    assert value(SVC, svc_body([pol]))[0] is False
+
+
+@pytest.mark.parametrize("name,keys", [(SVC, ("conditionalAccessPolicies", "groups")),
+                                       (LAPS, ("deviceLocalCredentials", "windowsDevices"))])
+def test_workflow_reported_truncation_is_not_evaluated(name, keys):
+    body = SVC_PASS if name == SVC else LAPS_PASS
+    for k in keys:
+        marked = dict(body, paginationTruncated=True, paginationStats={k: {"paginationTruncated": True}})
+        assert value(name, marked)[0] is None
+        assert value(name, stringify(marked))[0] is None
+    assert value(name, dict(body, paginationStats={keys[0]: {"paginationTruncated": False}}))[0] is not None
