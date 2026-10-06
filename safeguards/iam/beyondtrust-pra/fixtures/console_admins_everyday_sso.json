@@ -1,0 +1,55 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "public_display_name": "admin",
+      "email_address": "admin@example.com",
+      "enabled": true,
+      "perm_admin": true,
+      "security_provider_id": 1,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    },
+    {
+      "id": 2,
+      "username": "jdoe@example.com",
+      "public_display_name": "jdoe@example.com",
+      "email_address": "jdoe@example.com",
+      "enabled": true,
+      "perm_admin": true,
+      "security_provider_id": 2,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    },
+    {
+      "id": 3,
+      "username": "asmith@example.com",
+      "public_display_name": "asmith@example.com",
+      "email_address": "asmith@example.com",
+      "enabled": true,
+      "perm_admin": false,
+      "security_provider_id": 2,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    }
+  ],
+  "securityProviders": [
+    {
+      "id": 1,
+      "name": "Local",
+      "type": "local",
+      "enabled": true,
+      "user_authentication": true,
+      "group_lookup": false
+    },
+    {
+      "id": 2,
+      "name": "Corporate SAML",
+      "type": "saml",
+      "enabled": true,
+      "user_authentication": true,
+      "group_lookup": true
+    }
+  ]
+}

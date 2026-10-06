@@ -1,0 +1,27 @@
+{
+  "count": 250,
+  "page": 0,
+  "size": 100,
+  "data": [
+    {
+      "userId": "u001",
+      "name": "breakglass-admin",
+      "username": "breakglass-admin",
+      "email": "breakglass-admin@example.com",
+      "status": "active",
+      "type": "User",
+      "rootUser": false,
+      "adminRoles": [
+        {
+          "name": "TenantAdmin",
+          "description": "TenantAdmin"
+        }
+      ],
+      "identityProvider": {
+        "id": "idp-default",
+        "name": "Britive",
+        "type": "DEFAULT"
+      }
+    }
+  ]
+}
