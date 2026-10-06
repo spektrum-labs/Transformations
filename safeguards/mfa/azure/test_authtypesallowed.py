@@ -96,7 +96,8 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
         self.assertTrue(any("B2B guest" in f for f in info["evaluation"]["additionalFindings"]))
 
     def test_guest_email_otp_on_microsofts_default_raises_nothing(self):
-        # "default" is Microsoft's tenant default, not an admin choice.
+        # "default" is Microsoft's tenant default, not an admin choice. It is NOT "off": Microsoft
+        # turned guest email OTP on for default tenants from October 2021. It is left out on purpose.
         default = [self.cfg(id="MicrosoftAuthenticator"),
                    self.cfg(id="Email", allowExternalIdToUseEmailOtp="default", includeTargets=[])]
         findings = self.info(self.body(default))["evaluation"]["additionalFindings"]
@@ -113,6 +114,39 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
         # ...and a strong method nobody can use is not evidence of strong auth either.
         strong_nobody = [self.cfg(id="Fido2", includeTargets=[])]
         self.assertEqual(self.verdict(self.body(strong_nobody)), (False, "error"))
+
+    def test_a_zero_target_weak_method_is_named_in_additional_findings(self):
+        # A lost target list must not turn a weak method into a silent pass.
+        for weak in ("Sms", "Voice", "Email"):
+            with self.subTest(weak=weak):
+                configs = [self.cfg(id="MicrosoftAuthenticator"), self.cfg(id=weak, includeTargets=[])]
+                self.assertEqual(self.verdict(self.body(configs)), (True, "success"))
+                findings = self.info(self.body(configs))["evaluation"]["additionalFindings"]
+                self.assertIn(f"{weak} is enabled but targets no users (includeTargets is empty); not counted",
+                              findings)
+
+    def test_a_zero_target_strong_method_raises_no_weak_finding(self):
+        configs = [self.cfg(id="MicrosoftAuthenticator"), self.cfg(id="Fido2", includeTargets=[])]
+        findings = self.info(self.body(configs))["evaluation"]["additionalFindings"]
+        self.assertFalse(any("targets no users" in f for f in findings))
+
+    def test_guest_only_email_otp_summary_reflects_guest_reachability(self):
+        for setting, expected in (("enabled", True), ("default", True), ("disabled", False), (None, True)):
+            with self.subTest(setting=setting):
+                email = self.cfg(id="Email", includeTargets=[])
+                if setting is not None:
+                    email["allowExternalIdToUseEmailOtp"] = setting
+                summary = self.info(self.body([self.cfg(id="Fido2"), email]))["transformation"]["inputSummary"]
+                self.assertIs(summary["guestOnlyEmailOtp"], expected)
+        summary = self.info(self.body([self.cfg(id="Fido2")]))["transformation"]["inputSummary"]
+        self.assertIs(summary["guestOnlyEmailOtp"], False)
+
+    def test_only_zero_target_methods_names_them_in_the_not_evaluated_reason(self):
+        errors = " ".join(self.info(self.body([self.cfg(id="Fido2", includeTargets=[])]))["dataCollection"]["errors"])
+        self.assertIn("No member authentication method is enabled", errors)
+        self.assertIn("enabled but targeting no one, so not counted: Fido2", errors)
+        plain = " ".join(self.info(self.body([{"id": "Sms", "state": "disabled"}]))["dataCollection"]["errors"])
+        self.assertNotIn("targeting no one", plain)
 
     def test_recommendation_no_longer_tells_members_to_fix_a_guest_default(self):
         configs = [self.cfg(id="Fido2"), self.cfg(id="Sms", includeTargets=[{"targetType": "group", "id": "g"}])]

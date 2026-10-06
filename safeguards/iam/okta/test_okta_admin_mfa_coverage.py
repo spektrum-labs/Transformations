@@ -69,6 +69,10 @@ def run(data):
     return r["transformedResponse"].get(KEY), r["transformedResponse"].get(PCT), r
 
 
+def summary(r):
+    return r["additionalInfo"]["transformation"]["inputSummary"]
+
+
 def reasons(r):
     ev = r["additionalInfo"]["evaluation"]
     return " ".join(ev["passReasons"] + ev["failReasons"])
@@ -97,8 +101,10 @@ class TheVerdict(unittest.TestCase):
         self.assertIs(verdict, True)
 
     def test_an_inactive_resistant_enrollment_does_not_count(self):
-        verdict, _, _ = run(body(["a"], [[enrol("webauthn", status="INACTIVE")]]))
+        verdict, _, _ = run(body(["a"], [[enrol("webauthn", status="INACTIVE"), enrol("okta_password")]]))
         self.assertIs(verdict, False)
+        # With nothing ACTIVE at all the admin is noActive (see EnrollmentShapes): never True, never False.
+        self.assertIsNone(run(body(["a"], [[enrol("webauthn", status="INACTIVE")]]))[0])
 
     def test_phishable_factors_alone_are_uncovered(self):
         for key in ("phone_number", "okta_email", "security_question", "google_otp", "okta_password",
@@ -134,12 +140,17 @@ class WhatCannotBeClaimed(unittest.TestCase):
     def test_a_truncated_admin_list_cannot_claim_100(self):
         verdict, pct, r = run(body(["a"], [[enrol("webauthn")]], list_complete=False))
         self.assertIsNone(verdict)
-        self.assertEqual(pct, 100.0)
+        # A threshold token must not read a partial 100% as coverage; the figure stays in inputSummary.
+        self.assertIsNone(pct)
+        self.assertEqual(summary(r)[PCT], 100.0)
+        self.assertIs(summary(r)["adminCoverageComplete"], False)
         self.assertIn("cut off", reasons(r))
 
     def test_a_truncated_list_still_fails_on_a_known_uncovered_admin(self):
-        verdict, _, r = run(body(["a", "b"], [[enrol("webauthn")], [enrol("okta_email")]], list_complete=False))
+        verdict, pct, r = run(body(["a", "b"], [[enrol("webauthn")], [enrol("okta_email")]], list_complete=False))
         self.assertIs(verdict, False)
+        self.assertIsNone(pct)
+        self.assertEqual(summary(r)[PCT], 50.0)
         self.assertIn("may be lower still", reasons(r))
 
     def test_capped_enrollment_reads_cannot_claim_100(self):
@@ -162,6 +173,138 @@ class WhatCannotBeClaimed(unittest.TestCase):
         verdict, _, r = run(data)
         self.assertIsNone(verdict)
         self.assertIn("did not report", reasons(r))
+
+
+class EnrollmentShapes(unittest.TestCase):
+    def test_an_enrollment_with_no_status_is_unreadable_not_uncovered(self):
+        verdict, pct, r = run(body(["a"], [[{"key": "webauthn"}]]))
+        self.assertIsNone(verdict)
+        self.assertIsNone(pct)
+        self.assertEqual(summary(r)["adminsUnreadable"], 1)
+
+    def test_an_undocumented_status_is_unreadable(self):
+        for status in ("SOMETHING_NEW", "", None):
+            with self.subTest(status=status):
+                entry = enrol("okta_email")
+                entry["status"] = status
+                self.assertIsNone(run(body(["a"], [[entry]]))[0])
+
+    def test_status_casing_is_tolerated(self):
+        self.assertIs(run(body(["a"], [[enrol("webauthn", status="active")]]))[0], True)
+
+    def test_an_admin_with_no_active_enrollment_is_not_uncovered(self):
+        # Suspended or deprovisioned users keep admin roles and often hold no ACTIVE enrollment.
+        for listed in ([], [enrol("okta_email", status="INACTIVE")]):
+            with self.subTest(listed=listed):
+                verdict, pct, r = run(body(["a", "b"], [[enrol("webauthn")], listed]))
+                self.assertIsNone(verdict)
+                self.assertIsNone(pct)
+                self.assertEqual(summary(r)["adminsWithNoActiveEnrollment"], 1)
+                self.assertEqual(summary(r)["uncoveredAdminIds"], [])
+                self.assertIn("no ACTIVE authenticator enrollment", reasons(r))
+
+    def test_an_admin_with_no_active_enrollment_does_not_hide_an_uncovered_one(self):
+        verdict, _, r = run(body(["a", "b"], [[], [enrol("okta_email")]]))
+        self.assertIs(verdict, False)
+        self.assertEqual(summary(r)["uncoveredAdminIds"], ["b"])
+
+    def test_an_error_envelope_slot_is_unreadable_not_uncovered(self):
+        for slot in ({"vendorErrorAsResponse": {"status": 403}, "value": []}, {"errorCode": "E0000006", "data": []}):
+            with self.subTest(slot=slot):
+                verdict, _, r = run(body(["a", "b"], [[enrol("webauthn")], slot]))
+                self.assertIsNone(verdict)
+                self.assertEqual(summary(r)["adminsUnreadable"], 1)
+
+    def test_a_row_with_no_id_is_unreadable_and_never_named(self):
+        data = body(["a"], [[enrol("okta_email")]])
+        data["adminAssignees"] = {"value": [{}], "_links": {}}
+        verdict, _, r = run(data)
+        self.assertIsNone(verdict)
+        self.assertNotIn("", summary(r)["uncoveredAdminIds"])
+
+    def test_percentage_is_floored_so_only_a_true_100_reads_100(self):
+        ids = ["u" + str(i) for i in range(2000)]
+        slots = [[enrol("webauthn")] for _ in range(1999)] + [[enrol("okta_email")]]
+        verdict, pct, r = run(body(ids, slots))
+        self.assertIs(verdict, False)
+        self.assertEqual(pct, 99.9)
+        self.assertNotIn("100.0%", reasons(r))
+
+
+class IndexAlignment(unittest.TestCase):
+    def assert_no_verdict(self, data):
+        verdict, pct, r = run(data)
+        self.assertIsNone(verdict)
+        self.assertIsNone(pct)
+        self.assertIn("out of line", reasons(r))
+        self.assertNotIn("uncoveredAdminIds", summary(r))
+
+    def test_more_slots_than_admins(self):
+        self.assert_no_verdict(body(["a"], [[enrol("okta_email")], [enrol("webauthn")]]))
+
+    def test_fewer_slots_than_admins_without_a_read_cap(self):
+        self.assert_no_verdict(body(["a", "b"], [[enrol("okta_email")]]))
+
+    def test_items_total_disagrees_with_the_admin_list(self):
+        data = body(["a", "b"], [[enrol("okta_email")], [enrol("webauthn")]])
+        data["iterateStats"]["adminEnrollments"]["itemsTotal"] = 3
+        self.assert_no_verdict(data)
+
+    def test_an_item_error_naming_another_user(self):
+        self.assert_no_verdict(body(["a", "b"], [item_error("b"), [enrol("okta_email")]]))
+
+    def test_an_enrollment_linking_to_another_user(self):
+        stray = enrol("okta_email")
+        stray["_links"] = {"self": {"href": "https://x.okta.com/api/v1/users/b/authenticator-enrollments/e1"}}
+        self.assert_no_verdict(body(["a", "b"], [[stray], [enrol("webauthn")]]))
+
+    def test_an_enrollment_linking_to_its_own_admin_is_fine(self):
+        own = enrol("okta_email")
+        own["_links"] = {"self": {"href": "https://x.okta.com/api/v1/users/a/authenticator-enrollments/e1"}}
+        self.assertIs(run(body(["a"], [[own]]))[0], False)
+
+
+class SameKeysOnEveryPath(unittest.TestCase):
+    def test_coverage_keys_are_present_on_every_coverage_return(self):
+        cases = [
+            body(["a"], [[enrol("webauthn")]]),                                # True
+            body(["a"], [[enrol("okta_email")]]),                               # False
+            body(["a"], [[enrol("okta_verify")]]),                              # not evaluated, indeterminate
+            body(["a", "b"], [[enrol("okta_email")]]),                          # not evaluated, misaligned
+            {"adminEnrollments": []},                                           # not evaluated, no admin list
+            {"adminAssignees": admins("a"), "adminEnrollments": None},          # not evaluated, no enrollments
+            body([], []),                                                       # not evaluated, no admins
+        ]
+        for data in cases:
+            with self.subTest(data=data):
+                out = run(data)[2]["transformedResponse"]
+                for k in (PCT, "adminsAssessed", "adminsCovered"):
+                    self.assertIn(k, out)
+                if out[KEY] is None:
+                    self.assertIsNone(out[PCT])
+
+    def test_not_evaluated_carries_the_counts(self):
+        out = run(body(["a", "b"], [[enrol("webauthn")], [enrol("okta_verify")]]))[2]["transformedResponse"]
+        self.assertEqual((out["adminsAssessed"], out["adminsCovered"]), (2, 1))
+
+
+class Messages(unittest.TestCase):
+    def test_indeterminate_message_does_not_claim_every_admin_is_covered(self):
+        _, _, r = run(body(["a"], [[enrol("okta_verify")]]))
+        self.assertNotIn("Every administrator assessed", reasons(r))
+        self.assertIn("0 of 1 administrators assessed have a phishing-resistant authenticator and none is known "
+                      "to lack one", reasons(r))
+
+    def test_capped_reads_with_no_unreadable_slot_say_capped(self):
+        data = body(["a"], [[enrol("webauthn")]], iterateTruncated=True)
+        text = reasons(run(data)[2])
+        self.assertIn("capped", text)
+        self.assertNotIn("0 administrator(s)", text)
+
+    def test_every_admin_unreadable_does_not_say_every_admin_is_covered(self):
+        text = reasons(run(body(["a"], [item_error("a")]))[2])
+        self.assertNotIn("Every administrator assessed", text)
+        self.assertIn("No administrator's enrollments could be assessed", text)
 
 
 class UnreadableBodies(unittest.TestCase):
