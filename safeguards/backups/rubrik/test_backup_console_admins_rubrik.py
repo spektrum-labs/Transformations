@@ -194,7 +194,7 @@ MARKER_ROWS = [
     ("jdoeadmin@example.com", False), ("doe.a@example.com", False), ("admiral.jones@example.com", False),
     # the organisation's own domain is never a marker; a domain label matches only as a whole word
     ("jdoe@privatebank.com", False), ("jdoe@adminsoft.com", False), ("jdoe@cityadm.gov", False),
-    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
+    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("jdoe@admin.gv.at", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
 ]
 
 
@@ -253,7 +253,9 @@ def test_count_still_optional_on_a_single_page():
 @pytest.mark.parametrize("role_name,counts", [
     ("Non-Admin Viewer", False), ("No Admin Access", False), ("Admin Read Only", False), ("Read-Only Admin", False),
     ("ReadOnlyAdmin", False), ("Administration Viewer", False), ("Viewer", False),
+    ("NonAdmin", False), ("View-Only Admin", False),
     ("Backup Admins", True), ("TenantAdmin", True), ("Super Admin", True), ("Administrator", True),
+    ("Admin (no delete)", True), ("Backup Admin - not prod", True), ("Admin No-MFA", True),
 ])
 def test_custom_role_name_whole_words(role_name, counts):
     custom = {"id": "r-c", "name": role_name, "isOrgAdmin": False}

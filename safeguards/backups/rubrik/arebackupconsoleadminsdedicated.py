@@ -79,7 +79,9 @@ DOMAIN_ADMIN_WORDS = ("adm", "admin", "admins", "priv", "privileged", "t0", "tie
 
 #: Second-level labels under a two-letter country code (example.co.uk, example.com.au). The registrable domain
 #: is the organisation's own name and is never read as a marker: jdoe@admin.ch is an everyday address.
-SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "mil", "ltd", "plc")
+SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "gub", "mil", "ltd",
+                       "plc", "gouv", "gv", "gc", "govt", "sch", "nhs", "res", "nic", "int", "gen", "firm", "biz",
+                       "info", "nom", "med", "police", "mod", "judiciary", "parliament", "lg", "ed")
 
 MAX_LISTED = 25
 
@@ -441,33 +443,41 @@ def users_connection(body):
 
 #: Whole words of a role name that name an administrator role (Super Admin, COHESITY_ADMIN, Backup Admins).
 ROLE_ADMIN_WORDS = ("admin", "admins", "administrator", "administrators", "superadmin", "sysadmin")
-#: Qualifiers that make a role name a non-admin role (Non-Admin Viewer, No Admin Access, Admin Read Only).
-ROLE_NOT_ADMIN_WORDS = ("non", "no", "not", "nonadmin", "noadmin", "readonly", "viewonly")
+#: A qualifier written directly before the admin word makes it a non-admin role (Non-Admin Viewer, No Admin
+#: Access, NonAdmin). Elsewhere in the name it does not (Admin (no delete) is still an admin role).
+ROLE_NEGATIONS = ("non", "no", "not")
+#: Words that make the whole role read-only (Admin Read Only, ReadOnlyAdmin, View-Only Admin).
+ROLE_READ_ONLY = ("readonly", "viewonly")
 #: Endings of a joined role-name word that name an administrator role (TenantAdmin, HeliosAdmins).
 ROLE_ADMIN_ENDINGS = ("administrators", "administrator", "admins", "admin")
 
 
 def role_names_admin(name):
-    """True when a role name names an administrator role in whole words, and no qualifier makes it a
-    non-admin or read-only role."""
+    """True when a role name names an administrator role in whole words (or a joined ending such as
+    TenantAdmin), the admin word is not directly negated (non admin, no admin, nonadmin), and the role is not
+    read-only or view-only."""
     words = [w for w in re.split(r"[^a-z0-9]+", str(name or "").lower()) if w]
+    for i in range(len(words)):
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if words[i] in ROLE_READ_ONLY or (words[i] in ("read", "view") and nxt == "only"):
+            return False
     found = False
     for i in range(len(words)):
         w = words[i]
-        nxt = words[i + 1] if i + 1 < len(words) else ""
-        if w in ROLE_NOT_ADMIN_WORDS:
-            return False
-        if w in ("read", "view") and nxt == "only":
-            return False
+        prev = words[i - 1] if i > 0 else ""
+        stem = None
         if w in ROLE_ADMIN_WORDS:
-            found = True
+            stem = ""
+        else:
+            for e in ROLE_ADMIN_ENDINGS:
+                if w.endswith(e) and len(w) > len(e):
+                    stem = w[:-len(e)]
+                    break
+        if stem is None:
             continue
-        for e in ROLE_ADMIN_ENDINGS:
-            if w.endswith(e) and len(w) > len(e):
-                if w[:-len(e)] in ROLE_NOT_ADMIN_WORDS or w[:-len(e)] in ("read", "view"):
-                    return False
-                found = True
-                break
+        if prev in ROLE_NEGATIONS or stem in ROLE_NEGATIONS or stem in ROLE_READ_ONLY or stem in ("read", "view"):
+            continue
+        found = True
     return found
 
 

@@ -174,7 +174,7 @@ MARKER_ROWS = [
     ("jdoeadmin@example.com", False), ("doe.a@example.com", False), ("admiral.jones@example.com", False),
     # the organisation's own domain is never a marker; a domain label matches only as a whole word
     ("jdoe@privatebank.com", False), ("jdoe@adminsoft.com", False), ("jdoe@cityadm.gov", False),
-    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
+    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("jdoe@admin.gv.at", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
 ]
 
 
@@ -209,11 +209,19 @@ def test_privateco_domain_users_group_fails():
 @pytest.mark.parametrize("extra,expected", [
     ({}, None),
     ({"userType": "LOCAL"}, True), ({"providerType": {"id": 1, "name": "Local"}}, True),
-    ({"userType": "CommCell User"}, True), ({"domain": ""}, True), ({"domain": None}, True),
-    ({"domain": {"id": 0, "name": ""}}, True),
+    ({"userType": "CommCell User"}, True), ({"domain": {"id": 0, "name": ""}}, True), ({"provider": {"id": 0}}, True),
+    # null, "" and {} are what serializers emit for any unset field: not proof of a local account
+    ({"domain": ""}, None), ({"domain": None}, None), ({"domain": {}}, None), ({"provider": None}, None),
     ({"userType": "AD"}, None), ({"providerType": "SAML"}, None), ({"domain": "CORP"}, None),
     ({"domain": {"id": 3, "name": "corp.example"}}, None), ({"userType": 2}, None),
 ])
 def test_bare_name_is_local_only_when_the_record_proves_it(extra, expected):
     u = cv_user(9, "jroe", **extra)
     assert value(merged([ADMIN, u], [], [ADMIN, u])) is expected
+
+
+def test_bare_name_with_upn_is_sso_not_local():
+    u = cv_user(9, "jdoe", "jdoe@corp.example", domain={"id": 0, "name": ""})
+    assert value(merged([ADMIN, u], [], [ADMIN, u])) is None
+    marked = cv_user(10, "adm-jdoe", "adm-jdoe@corp.example", domain={"id": 0, "name": ""})
+    assert value(merged([ADMIN, marked], [], [ADMIN, marked])) is True

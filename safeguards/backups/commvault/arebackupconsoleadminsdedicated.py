@@ -14,9 +14,10 @@ Rule: CommCell administrators are the members of the "master" user group: its us
 external (directory) groups. A user named DOMAIN\\user is a directory identity and one named user@domain an
 SSO identity; both are dedicated only when the name (or the UPN) marks them as admin accounts. A user with a
 bare name is a CommCell-local account (dedicated) only when its record proves it: userType, providerType or
-authenticationMethod says local (LOCAL, CommCell), or a domain or provider field is present and empty. A
-non-empty domain or provider, or a non-local type, makes it a directory identity. With no such field the
-sign-in source is unknown: an AD user added by sAMAccountName under a default domain, or a SAML user with a
+authenticationMethod says local (LOCAL, CommCell), or a domain or provider object is present with id 0 and no
+name. A bare name with a userPrincipalName (jdoe + jdoe@corp.example) is an SSO identity. A non-empty domain or
+provider, or a non-local type, makes it a directory identity. A null or "" domain is not proof (serializers
+emit null for any unset field). With no such signal the sign-in source is unknown: an AD user added by sAMAccountName under a default domain, or a SAML user with a
 normalised name, looks the same, so the user is classified by its name marker only and an unmarked one reads
 Not evaluated, never True. An external group is dedicated only when its name marks it as an admin
 group. The transform checks that group 1 is named "master"; if not, it does not guess.
@@ -77,7 +78,9 @@ DOMAIN_ADMIN_WORDS = ("adm", "admin", "admins", "priv", "privileged", "t0", "tie
 
 #: Second-level labels under a two-letter country code (example.co.uk, example.com.au). The registrable domain
 #: is the organisation's own name and is never read as a marker: jdoe@admin.ch is an everyday address.
-SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "mil", "ltd", "plc")
+SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "gub", "mil", "ltd",
+                       "plc", "gouv", "gv", "gc", "govt", "sch", "nhs", "res", "nic", "int", "gen", "firm", "biz",
+                       "info", "nom", "med", "police", "mod", "judiciary", "parliament", "lg", "ed")
 
 MAX_LISTED = 25
 
@@ -422,36 +425,46 @@ def field_text(value):
 
 
 def is_empty_source(value):
-    """True for a present but empty domain or provider: null, "", {} or an object with no name and id 0."""
-    if value is None or value == "" or value == {} or value == []:
-        return True
+    """True only for a domain or provider object with id 0 and no name (Commvault's "no domain")."""
+    if isinstance(value, dict) and "id" in value:
+        return field_text(value) == "" and value.get("id") in (0, "0")
+    return False
+
+
+def is_set_source(value):
+    """True for a domain or provider that names a source: a non-empty string or an object with a name or id."""
+    if isinstance(value, str):
+        return value.strip() != ""
     if isinstance(value, dict):
-        return field_text(value) == "" and value.get("id") in (None, 0, "", "0")
+        return field_text(value) != "" or value.get("id") not in (None, 0, "", "0")
     return False
 
 
 def identity_of(user):
     """local, directory, sso or unknown for a CommCell user.
 
-    DOMAIN\\user is directory and user@domain is sso. A bare name is local only when the record proves it
-    (a local userType / providerType / authenticationMethod, or a present but empty domain or provider);
-    otherwise it is unknown, never assumed local."""
+    DOMAIN\\user is directory, and user@domain or a bare name with a userPrincipalName is sso. A bare name is
+    local only when the record proves it (a local userType / providerType / authenticationMethod, or a domain
+    or provider object with id 0); otherwise it is unknown, never assumed local."""
     name = str(user.get("name") or "")
     if "\\" in name:
         return "directory"
     if "@" in name:
         return "sso"
+    upn = user.get("userPrincipalName")
+    if isinstance(upn, str) and "@" in upn:
+        return "sso"
     for k in TYPE_FIELDS:
         kind = field_text(user.get(k))
         if kind != "":
             return "local" if kind in LOCAL_TYPES else "directory"
-    present = [k for k in SOURCE_FIELDS if k in user]
-    for k in present:
-        if not is_empty_source(user.get(k)):
+    proven_local = False
+    for k in SOURCE_FIELDS:
+        if is_set_source(user.get(k)):
             return "directory"
-    if len(present) > 0:
-        return "local"
-    return "unknown"
+        if is_empty_source(user.get(k)):
+            proven_local = True
+    return "local" if proven_local else "unknown"
 
 
 def transform(input):
