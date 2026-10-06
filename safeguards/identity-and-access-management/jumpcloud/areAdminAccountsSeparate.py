@@ -40,7 +40,8 @@ not judged. Administrator emails are never copied into the output: accounts are 
 FAIL CLOSED. Null, {}, an error envelope (401/403/5xx, {"error": ...}), either list missing, a list
 without totalCount or shorter than its totalCount (a partial read), a paginationTruncated flag, no
 active administrator, or an administrator with no email returns areAdminAccountsSeparate = None with a
-dataCollection error ("not evaluated"). One active administrator shown to share an active everyday
+dataCollection error ("not evaluated"). The workflow's paginationTruncated markers (top level or
+paginationStats.<key>) are read too. One active administrator shown to share an active everyday
 identity is a measured fail, whatever else is missing.
 """
 
@@ -230,6 +231,17 @@ def transform(input):
 
         admins, admin_problem = full_list(admin_block, "administrators")
         users, user_problem = full_list(user_block, "directory users")
+        # The workflow's own markers (reportPagination): a list cut off before its last page.
+        stats = data.get("paginationStats") if isinstance(data.get("paginationStats"), dict) else {}
+        for key, what in [(admin_key, "administrators"), (user_key, "directory users")]:
+            marker = stats.get(key) if isinstance(stats.get(key), dict) else {}
+            if truthy(marker.get("paginationTruncated")):
+                if what == "administrators" and not admin_problem:
+                    admin_problem = "the administrators list was cut off before its last page"
+                if what == "directory users" and not user_problem:
+                    user_problem = "the directory users list was cut off before its last page"
+        if truthy(data.get("paginationTruncated")) and not (admin_problem or user_problem):
+            user_problem = "a list was cut off before its last page"
 
         # Who is an everyday identity, by email. Built from whatever was read, even a partial list:
         # a match found in a partial list is still a proven match.
