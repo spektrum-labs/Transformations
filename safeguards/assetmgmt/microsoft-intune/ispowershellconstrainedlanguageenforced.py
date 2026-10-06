@@ -28,7 +28,10 @@ unlisted path, a path with "..", a broad rule with exceptions) cannot be shown s
 enforced collection with no rules at all allows every script, so it is not enforcing either (False).
 An assignment with a filter id is filtered unless its filter type is explicitly none.
 AppLocker rules from every profile that reaches a device are merged there, so an enforcing AppLocker profile does
-not count while any assigned AppLocker profile allows broadly (or cannot be read).
+not count while any assigned AppLocker profile allows broadly (False), or cannot be read or audits the collection
+(Not evaluated). A supplemental App Control policy (PolicyType="Supplemental Policy") adds allow rules to its base
+and never enforces on its own: a broad one undoes App Control enforcement (False), an unreadable one makes it
+Not evaluated.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
 False: App Control or AppLocker policies were read and none of them is an estate-wide enforcing policy (audit only,
@@ -290,6 +293,11 @@ def setting_pairs(node, out, depth):
     return out
 
 
+SUPPLEMENTAL = "supplemental"
+SUPPLEMENTAL_BROAD = "supplemental allows all files"
+SUPPLEMENTAL_UNREAD = "supplemental unreadable"
+
+
 def strip_comments(low):
     """The XML text with <!-- ... --> comments removed (bounded)."""
     out = low
@@ -339,6 +347,12 @@ def xml_mode(text):
     low = strip_comments(text.lower()).replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "")
     if "<sipolicy" not in low:
         return None
+    if 'policytype="supplementalpolicy"' in low:
+        # A supplemental policy adds allow rules to its base policy; it never enforces on its own.
+        broad = wdac_allows_everything(low)
+        if broad is None:
+            return SUPPLEMENTAL_UNREAD
+        return SUPPLEMENTAL_BROAD if broad else SUPPLEMENTAL
     if has_option(low, "enabled:auditmode"):
         return "audit"
     if has_option(low, "disabled:scriptenforcement"):
@@ -374,11 +388,15 @@ def app_control_mode(policy):
             m = xml_mode(v)
             if m:
                 modes.append(m)
-    for weak in ("audit", "script enforcement disabled", "kernel-only", "allows all files"):
+    for weak in ("audit", "script enforcement disabled", "kernel-only", "allows all files", SUPPLEMENTAL_BROAD):
         if weak in modes:
             return True, weak
+    if SUPPLEMENTAL_UNREAD in modes:
+        return True, None
     if "enforce" in modes:
         return True, "enforce"
+    if SUPPLEMENTAL in modes:
+        return True, SUPPLEMENTAL
     return True, None
 
 
@@ -565,11 +583,25 @@ def transform(input):
         # AppLocker rules from every profile that reaches a device are merged there, so one profile's broad allow (or
         # an unreadable collection) undoes another profile's enforcement on the devices it reaches. App Control
         # policies intersect instead (a file must pass every policy), so they are judged one by one.
+        # An AppLocker profile that audits the same collection may set the merged enforcement mode on the devices it
+        # reaches (not confirmed for the CSP), so it makes another profile's enforcement unreadable, never a pass.
+        # An empty collection adds no rules and undoes nothing. A supplemental App Control policy adds its allow
+        # rules to its base policy, so a broad supplemental undoes App Control enforcement the same way.
         applocker_reaching = [p for p in policies if p["kind"] == "AppLocker script rules" and p["reach"] != NOT_ASSIGNED]
-        applocker_undone = [p for p in applocker_reaching if p["mode"] != "enforce" and p["mode"] != "audit"]
+        applocker_broad = [p for p in applocker_reaching if p["mode"] == "allows user-writable paths"]
+        applocker_unsure = [p for p in applocker_reaching if p["mode"] is None or p["mode"] == "audit"]
+        supplemental_reaching = [p for p in policies if p["kind"] == "App Control" and p["reach"] != NOT_ASSIGNED]
+        supplemental_broad = [p for p in supplemental_reaching if p["mode"] == SUPPLEMENTAL_BROAD]
         for p in policies:
-            if p["kind"] == "AppLocker script rules" and p["mode"] == "enforce" and applocker_undone:
-                p["mode"] = None if any([q["mode"] is None for q in applocker_undone]) else "merged with a broad rule"
+            if p["mode"] != "enforce":
+                continue
+            if p["kind"] == "AppLocker script rules":
+                if applocker_broad:
+                    p["mode"] = "merged with a broad rule"
+                elif applocker_unsure:
+                    p["mode"] = None
+            elif supplemental_broad:
+                p["mode"] = "merged with a broad supplemental"
         enforcing = [p for p in policies if p["mode"] == "enforce" and p["wide"] is True]
         summary = {"policiesRead": len(policies), "policies": [label(p) for p in policies][:MAX_NAMED],
                    "readGaps": gaps[:MAX_NAMED]}
