@@ -8,21 +8,29 @@ RULE. True only when a body that reads the root user's keys shows none active:
 
   1. IAM credential report (GetCredentialReport; preferred). The `<root_account>` row must
      carry access_key_1_active and access_key_2_active, each "true" or "false". True when both
-     are "false"; False when either is "true".
+     are "false"; False when either is "true". The report must be fresh: its GeneratedTime
+     must parse and be no more than 24 hours before the evaluation clock (datetime.utcnow(),
+     the clock the sibling transforms use). GetCredentialReport returns whatever report was
+     last generated, so an old one could hide a root key created since.
      https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_getting-report.html
   2. IAM account summary (GetAccountSummary). SummaryMap.AccountAccessKeysPresent 0 -> True,
      1 -> False. https://docs.aws.amazon.com/IAM/latest/APIReference/API_GetAccountSummary.html
   3. Security Hub findings (method getSecurityHubComplianceAWS, AWS Foundational Security Best
-     Practices). Control IAM.4 "IAM root user access key should not exist": every active IAM.4
-     finding PASSED -> True; any FAILED -> False. This needs no permission beyond the Security
-     Hub read the connection already holds.
+     Practices). Control IAM.4 "IAM root user access key should not exist". Only findings with
+     RecordState ACTIVE and a Workflow.Status other than SUPPRESSED are judged (an archived
+     finding is stale; a suppressed one is a finding someone chose to hide). Any judged FAILED
+     -> False; every judged finding PASSED -> True. A body carrying a non-empty NextToken has
+     more findings on a later page, so it is not evaluated unless a FAILED finding was already
+     seen. This needs no permission beyond the Security Hub read the connection already holds.
      https://docs.aws.amazon.com/securityhub/latest/userguide/iam-controls.html#iam-4
 
 When more than one source is present the first in that order decides.
 
 FAIL CLOSED. An empty body, an AWS or Integration-Service error, a report with no root row, a
-root row missing either key column or holding any other value, a summary without the key, and
-a findings list with no PASSED/FAILED IAM.4 finding all return None with
+root row missing either key column or holding any other value, a report whose GeneratedTime is
+missing, unparsable, more than 24 hours old or more than 1 hour in the future, a summary
+without the key, a findings list with no active, unsuppressed PASSED/FAILED IAM.4 finding, and
+a paged findings list (NextToken) with no FAILED finding seen all return None with
 additionalInfo.dataCollection.status "error" (not evaluated). None of them is a pass.
 
 Integration-Service parses the IAM Query API's XML, so the report arrives as
@@ -32,13 +40,18 @@ a flat object) are read too. base64 is decoded by hand: the sandbox cannot impor
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 CRITERIA_KEY = "isRootUserAccessKeyRestricted"
 TRANSFORM_ID = "isrootuseraccesskeyrestricted"
 SH_CONTROL = "IAM.4"
 B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 WRAPPERS = ["api_response", "response", "result", "apiResponse", "Output", "data"]
+#: A credential report older than this (by GeneratedTime) is not evaluated. AWS regenerates a
+#: report older than 4 hours when GenerateCredentialReport is called, so a fresh read is <= 4 h.
+REPORT_MAX_AGE_HOURS = 24
+#: Tolerated clock skew for a GeneratedTime that is ahead of the evaluation clock.
+REPORT_FUTURE_SKEW_HOURS = 1
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -206,15 +219,77 @@ def summary_value(holder, name):
 
 
 def findings_list(data):
+    """(findings list, next_token) or (None, None)."""
     holder = find_key(data, "Findings", 6)
     if holder is not None and isinstance(holder.get("Findings"), list):
-        return holder["Findings"]
+        token = holder.get("NextToken")
+        if not token and isinstance(data, dict):
+            token = data.get("NextToken")
+        return holder["Findings"], token
     if isinstance(data, list) and data and isinstance(data[0], dict) and "Compliance" in data[0]:
-        return data
+        return data, None
+    return None, None
+
+
+def evaluation_now():
+    """The evaluation clock (naive UTC), the same datetime.utcnow() the sibling transforms use."""
+    return datetime.utcnow()
+
+
+def parse_time(value):
+    """ISO 8601 (credential report / GeneratedTime) to a naive UTC datetime, or None."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if len(text) < 19 or text[4] != "-" or text[7] != "-" or text[10] not in ("T", " "):
+        return None
+    try:
+        year, month, day = int(text[0:4]), int(text[5:7]), int(text[8:10])
+        hour, minute, second = int(text[11:13]), int(text[14:16]), int(text[17:19])
+        moment = datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+    rest = text[19:]
+    if "." in rest[:1]:
+        cut = 1
+        while cut < len(rest) and rest[cut].isdigit():
+            cut = cut + 1
+        rest = rest[cut:]
+    if rest in ("", "Z", "z", "+00:00", "-00:00", "+0000"):
+        return moment
+    if len(rest) == 6 and rest[0] in ("+", "-") and rest[3] == ":":
+        try:
+            offset = timedelta(hours=int(rest[1:3]), minutes=int(rest[4:6]))
+        except ValueError:
+            return None
+        return moment - offset if rest[0] == "+" else moment + offset
+    return None
+
+
+def report_age_problem(generated_raw, now):
+    """A not-evaluated reason when the report's GeneratedTime is missing, unparsable or not
+    fresh against `now`, else None."""
+    if generated_raw is None or (isinstance(generated_raw, str) and not generated_raw.strip()):
+        return "credential report has no GeneratedTime, so its age is unknown"
+    generated = parse_time(generated_raw)
+    if generated is None:
+        return "credential report GeneratedTime is not a timestamp: " + str(generated_raw)[:40]
+    if generated > now + timedelta(hours=REPORT_FUTURE_SKEW_HOURS):
+        return ("credential report GeneratedTime " + str(generated_raw)[:40]
+                + " is ahead of the evaluation clock")
+    if now - generated > timedelta(hours=REPORT_MAX_AGE_HOURS):
+        hours = int((now - generated).total_seconds() // 3600)
+        return ("credential report is " + str(hours) + " hour(s) old (GeneratedTime "
+                + str(generated_raw)[:40] + "), older than the " + str(REPORT_MAX_AGE_HOURS)
+                + "-hour limit: regenerate it before reading")
     return None
 
 
 def evaluate_report(holder):
+    generated_raw = holder.get("GeneratedTime")
+    stale = report_age_problem(generated_raw, evaluation_now())
+    if stale:
+        return None, stale, {"source": "credentialReport", "generatedTime": generated_raw}
     text = report_text(holder)
     header, row = root_row_from_csv(text)
     if row is None:
@@ -222,7 +297,7 @@ def evaluate_report(holder):
     k1 = str(row.get("access_key_1_active", "")).strip().lower()
     k2 = str(row.get("access_key_2_active", "")).strip().lower()
     summary = {"source": "credentialReport", "accessKey1Active": k1, "accessKey2Active": k2,
-               "generatedTime": holder.get("GeneratedTime")}
+               "generatedTime": generated_raw}
     if k1 not in ("true", "false") or k2 not in ("true", "false"):
         return None, "root row access-key columns are not true/false", summary
     return (k1 == "false" and k2 == "false"), None, summary
@@ -238,22 +313,40 @@ def evaluate_summary(holder):
     return None, "account summary has no AccountAccessKeysPresent value", summary
 
 
-def evaluate_findings(findings):
+def evaluate_findings(findings, next_token=None):
     statuses = []
+    skipped = 0
     for f in findings:
         if not isinstance(f, dict):
             continue
         comp = f.get("Compliance") if isinstance(f.get("Compliance"), dict) else {}
         if comp.get("SecurityControlId") != SH_CONTROL:
             continue
+        if str(f.get("RecordState") or "ACTIVE").strip().upper() != "ACTIVE":
+            skipped = skipped + 1
+            continue
+        workflow = f.get("Workflow") if isinstance(f.get("Workflow"), dict) else {}
+        if str(workflow.get("Status") or "").strip().upper() == "SUPPRESSED":
+            skipped = skipped + 1
+            continue
         status = str(comp.get("Status") or "").upper()
         if status in ("PASSED", "FAILED"):
             statuses.append(status)
+    paged = isinstance(next_token, str) and next_token.strip() != ""
     summary = {"source": "securityHub", "control": SH_CONTROL, "findings": len(statuses),
-               "failed": len([s for s in statuses if s == "FAILED"])}
+               "failed": len([s for s in statuses if s == "FAILED"]),
+               "archivedOrSuppressedSkipped": skipped, "morePages": paged}
+    if "FAILED" in statuses:
+        return False, None, summary
+    if paged:
+        return None, ("the Security Hub findings list has more pages (NextToken) and no FAILED "
+                      + SH_CONTROL + " finding was seen on this one"), summary
     if not statuses:
+        if skipped:
+            return None, ("only archived or suppressed Security Hub findings exist for control "
+                          + SH_CONTROL + "; none is current"), summary
         return None, "no PASSED or FAILED Security Hub finding for control " + SH_CONTROL, summary
-    return ("FAILED" not in statuses), None, summary
+    return True, None, summary
 
 
 def transform(input):
@@ -270,13 +363,13 @@ def transform(input):
         verdict, why, summary = None, None, {}
         report = find_key(data, "Content", 6)
         account = find_key(data, "SummaryMap", 6)
-        findings = findings_list(data)
+        findings, next_token = findings_list(data)
         if report is not None:
             verdict, why, summary = evaluate_report(report)
         elif account is not None:
             verdict, why, summary = evaluate_summary(account)
         elif findings is not None:
-            verdict, why, summary = evaluate_findings(findings)
+            verdict, why, summary = evaluate_findings(findings, next_token)
         else:
             inner_error = None
             if isinstance(data, dict):

@@ -62,43 +62,5 @@
       "user_authentication": true,
       "group_lookup": true
     }
-  ],
-  "groupPolicies": [
-    {
-      "id": 1,
-      "name": "PRA Administrators",
-      "perm_admin": true,
-      "members": [
-        {
-          "id": 11,
-          "security_provider_id": 2,
-          "user_id": 2
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "name": "Everyone (SAML)",
-      "perm_admin": false,
-      "members": [
-        {
-          "id": 12,
-          "security_provider_id": 2,
-          "group_id": "Everyone"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "name": "Support Reps",
-      "perm_admin": null,
-      "members": [
-        {
-          "id": 13,
-          "security_provider_id": 2,
-          "user_id": 3
-        }
-      ]
-    }
   ]
 }

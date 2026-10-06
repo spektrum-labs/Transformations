@@ -6,16 +6,20 @@ Category: Identity and Access Management
 CLAIM. The privileged access management console is administered only by dedicated admin
 accounts, not by people's everyday SSO identities.
 
-SOURCE. Workflow getConsoleAdmins, two legs under their own output keys:
+SOURCE. Workflow getConsoleAdmins, legs under their own output keys:
   users              <- getUsers             GET {serverUrl}/api/config/v1/user
   securityProviders  <- getSecurityProviders GET {serverUrl}/api/config/v1/security-provider
+  groupPolicies      <- getGroupPolicies     GET {serverUrl}/api/config/v1/group-policy, each
+                        policy with its members (GET .../group-policy/{id}/member) attached as
+                        "members". Optional leg; see GROUP POLICIES below.
   User: id, username, enabled, perm_admin (the "Administrator" permission, read-only),
         security_provider_id (the provider through which the user authenticates).
   SecurityProvider: id, name, type in local | ldap | radius | kerberos | saml | scim.
   https://docs.beyondtrust.com/pra/reference/apiconfiguserindex
   https://docs.beyondtrust.com/pra/reference/apiconfigsecurity-providerindex
 
-RULE. Console administrators are the enabled users with perm_admin true. Each must be a
+RULE. Console administrators are the enabled users with perm_admin true, plus the enabled
+users named as members of a group policy with perm_admin true. Each must be a
 dedicated admin account, which is either
   (a) LOCAL: its security provider has type "local" (credentials held by the appliance, not
       the directory or IdP), or
@@ -26,11 +30,36 @@ True when every administrator is (a) or (b). False when any administrator signs 
 directory or SSO provider under an ordinary personal username: that is the person's everyday
 identity holding console admin.
 
+GROUP POLICIES. In PRA the Administrator permission can also be granted by a group policy
+mapped to an LDAP or SAML group, the usual setup for SSO users, and it is not confirmed that
+the user-level perm_admin reflects such a grant (no live appliance was available to check).
+So the check fails closed:
+  * groupPolicies present: every policy must carry perm_admin (true, false or null). For each
+    policy with perm_admin true, its members list must be present, and every member must name a
+    user (user_id) found in the users leg; that user counts as an administrator. A member that
+    is a directory group or a whole provider (no user_id) is not evaluated, because the people
+    it covers were not read.
+  * groupPolicies absent: a False from user-level admins stands (more admins cannot fix it). A
+    True is NOT returned; the result is not evaluated ("group-policy admin grants were not
+    read"), unless every administrator found is a local appliance account AND every security
+    provider listed has type "local" (no SAML, LDAP or other directory provider exists that a
+    group policy could map to).
+
+LIMITS. Stated so a reviewer can see them, not hidden.
+  * Whether perm_admin on /api/config/v1/user includes group-policy grants is unconfirmed;
+    the GROUP POLICIES rule above is the fail-closed answer to that.
+  * The groupPolicies leg and its member shape ({user_id} or a group/provider member) are the
+    contract this transform asks of the Integration-Service workflow; until that leg ships,
+    a deployment with any directory provider returns not evaluated rather than True.
+
 FAIL CLOSED (None, dataCollection "error", never a pass): either leg missing or an error body;
 no enabled administrator in the user list (an appliance always has one, so the read is
 partial); an administrator with no security_provider_id or one that names a provider the
 providers leg does not list; a users leg of exactly 100 records with no sign it was paged
-(the API's page size, so the list may be truncated).
+(the API's page size, so the list may be truncated); a groupPolicies leg that is an error or
+not a list, a policy without perm_admin, an admin-granting policy without a members list, a
+member with no user_id, or a member user_id not in the users leg; and group policies not read
+while a directory provider exists (see GROUP POLICIES).
 """
 
 import json
@@ -181,10 +210,57 @@ def as_list(leg):
     if isinstance(leg, list):
         return leg
     if isinstance(leg, dict):
-        for key in ("data", "items", "results", "records", "users", "securityProviders"):
+        for key in ("data", "items", "results", "records", "users", "securityProviders",
+                    "groupPolicies", "members"):
             if isinstance(leg.get(key), list):
                 return leg[key]
     return None
+
+
+def group_policy_admins(leg, user_by_id):
+    """(users granted Administrator by a group policy, problem). problem is a not-evaluated
+    reason, else None."""
+    leg_error = error_reason(leg)
+    if leg_error:
+        return [], "groupPolicies: " + leg_error
+    policies = as_list(leg)
+    if policies is None:
+        return [], "groupPolicies is not a list of group policies"
+    granted = []
+    for p in policies:
+        if not isinstance(p, dict):
+            continue
+        label = str(p.get("name") or p.get("id"))
+        if "perm_admin" not in p:
+            return [], ("group policy " + label + " carries no perm_admin, so whether it grants "
+                        "Administrator is unknown")
+        if p.get("perm_admin") is not True:
+            continue
+        members = p.get("members")
+        if isinstance(members, dict):
+            members_error = error_reason(members)
+            if members_error:
+                return [], "members of group policy " + label + ": " + members_error
+            members = as_list(members)
+        if not isinstance(members, list):
+            return [], ("group policy " + label + " grants Administrator but its members were not "
+                        "read")
+        for m in members:
+            if not isinstance(m, dict):
+                return [], "group policy " + label + " has a member that is not an object"
+            uid = m.get("user_id")
+            if uid is None:
+                uid = m.get("userId")
+            if uid is None:
+                return [], ("group policy " + label + " grants Administrator to a directory group or "
+                            "provider member, and the people it covers were not read")
+            user = user_by_id.get(str(uid))
+            if user is None:
+                return [], ("group policy " + label + " grants Administrator to user id "
+                            + str(uid)[:40] + ", which the users leg does not list")
+            if user not in granted:
+                granted.append(user)
+    return granted, None
 
 
 def transform(input):
@@ -212,10 +288,26 @@ def transform(input):
         for p in providers:
             if isinstance(p, dict) and p.get("id") is not None:
                 provider_by_id[str(p.get("id"))] = p
-        admins = []
+        user_by_id = {}
         for u in users:
-            if not isinstance(u, dict) or u.get("perm_admin") is not True:
-                continue
+            if isinstance(u, dict) and u.get("id") is not None:
+                user_by_id[str(u.get("id"))] = u
+        admin_users = []
+        for u in users:
+            if isinstance(u, dict) and u.get("perm_admin") is True:
+                admin_users.append(u)
+        policies_read = "groupPolicies" in data
+        policy_count = 0
+        if policies_read:
+            policies, problem = group_policy_admins(data.get("groupPolicies"), user_by_id)
+            if problem:
+                return not_evaluated(problem)
+            policy_count = len(policies)
+            for u in policies:
+                if u not in admin_users:
+                    admin_users.append(u)
+        admins = []
+        for u in admin_users:
             if u.get("enabled") is False:
                 continue
             name = str(u.get("username") or u.get("public_display_name") or u.get("id"))
@@ -231,10 +323,22 @@ def transform(input):
                 return not_evaluated("security provider " + str(pid) + " has no type")
             admins.append({"name": name, "local": ptype == "local",
                            "source": ptype + " provider " + str(provider.get("name") or pid)})
-        summary = {"users": len(users), "securityProviders": len(providers)}
+        summary = {"users": len(users), "securityProviders": len(providers),
+                   "groupPoliciesRead": policies_read,
+                   "adminGrantingGroupPolicyMembers": policy_count}
         if not admins:
             return not_evaluated("no enabled user with the Administrator permission (perm_admin) was "
                                  "returned, so the administrator population was not read", summary)
+        if not policies_read:
+            everyday = [a for a in admins if not a["local"] and not admin_marker(a["name"])]
+            directory = [p for p in providers if isinstance(p, dict)
+                         and str(p.get("type") or "").strip().lower() != "local"]
+            if not everyday and (directory or len([a for a in admins if not a["local"]]) > 0):
+                return not_evaluated(
+                    "group-policy admin grants were not read: a group policy mapped to a "
+                    + "/".join(sorted(set([str(p.get("type") or "?").strip().lower() for p in directory])) or "directory")
+                    + " group can grant Administrator without showing in user-level perm_admin, so "
+                    "the administrator population may be incomplete", summary)
         return judge(admins, summary)
     except Exception as error:
         return create_response(result={CRITERIA_KEY: None}, transformation_errors=[str(error)],
