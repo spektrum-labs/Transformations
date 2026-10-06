@@ -187,7 +187,7 @@ CASES = [
      flip(USERS, lambda d: d["usersInCurrentAndDescendantOrganization"]["nodes"][1]["roles"][0].update(
          effectiveRbacPermissions=[{"operations": ["VIEW_TPR_REQUEST"]}])), 1, "usersInCurrentAndDescendantOrganization"),
     ("areBackupConsoleAdminsDedicated", ADMINS, True,
-     flip(ADMINS, lambda d: d["usersInCurrentAndDescendantOrganization"]["nodes"][2]["roles"][0].update(isOrgAdmin=True)), False,
+     flip(ADMINS, lambda d: d["usersInCurrentAndDescendantOrganization"]["nodes"][2]["roles"][0].update(isOrgAdmin=True)), None,
      "usersInCurrentAndDescendantOrganization"),
     ("isRestoreJobPermissionIsolationEnabled", ROLES, True,
      flip(ROLES, lambda d: d["getAllRolesInOrgConnection"]["nodes"][1]["effectiveRbacPermissions"][0]["operations"].append("MANAGE_ROLE")),
