@@ -68,3 +68,13 @@ def test_legacy_files_refuse_the_retired_ids_and_read_the_right_ones():
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert tamper(hunting([row("scid-2003", 1)]))["transformedResponse"]["isTamperProtectionEnabled"] is True
     assert rtp(hunting([row("scid-2012", 1)]))["transformedResponse"]["isRealTimeProtectionEnabled"] is True
+
+
+def test_legacy_guard_covers_bare_lists_and_any_other_id():
+    tamper = load_legacy("istamperprotectionenabled")
+    rtp = load_legacy("isrealtimeprotectionenabled")
+    assert tamper([row("scid-2010", 1)])["transformedResponse"]["isTamperProtectionEnabled"] is None
+    assert rtp([row("scid-2011", 1)])["transformedResponse"]["isRealTimeProtectionEnabled"] is None
+    assert tamper(hunting([row("scid-2012", 1)]))["transformedResponse"]["isTamperProtectionEnabled"] is None
+    assert rtp(hunting([row("scid-2003", 1)]))["transformedResponse"]["isRealTimeProtectionEnabled"] is None
+    assert tamper([row("scid-2003", 1)])["transformedResponse"]["isTamperProtectionEnabled"] is True
