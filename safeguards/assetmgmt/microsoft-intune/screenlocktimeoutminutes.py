@@ -16,8 +16,9 @@ Settings read (minutes):
                                                             ("Interactive logon: machine inactivity limit")
 A profile is ESTATE-WIDE when it is assigned to All devices or All users, has no exclusion-group assignment and no
 assignment filter. A null or 0 value is "not configured" and is ignored; any other value that does not read as minutes is
-Not evaluated (a fraction rounds up). A device restriction limit counts only when the same profile requires a
-password (passwordRequired), because DeviceLock applies it only then. Once at least one estate-wide profile sets a
+Not evaluated (a fraction rounds up). A device restriction limit counts only when a password is required
+(passwordRequired), because DeviceLock applies it only then: either the same profile requires one, or a profile
+assigned to all devices or all users does (Intune merges DeviceLock settings per setting across profiles). Once at least one estate-wide profile sets a
 limit, the value is the longest limit set by ANY profile, estate-wide or narrower (a device in a narrower profile's
 group receives both, and Intune flags the conflict), so a group profile at 60 minutes fails. A profile that reaches no
 device (no assignment, or exclusion groups only) is named in the summary and never sets the value.
@@ -290,6 +291,13 @@ def transform(input):
         limits = []
         narrowed = []
         no_password = []
+        gated = []
+        password_estate_wide = False
+        for p in profiles:
+            if (str(p.get("@odata.type") or "").strip().lower() in PASSWORD_GATED
+                    and str(p.get("passwordRequired")).strip().lower() == "true"
+                    and estate_wide(p.get("assignments"))[0] is True):
+                password_estate_wide = True
         for p in profiles:
             ptype = str(p.get("@odata.type") or "").strip().lower()
             fields = LIMIT_FIELDS.get(ptype)
@@ -307,7 +315,9 @@ def transform(input):
             if not values:
                 continue
             if ptype in PASSWORD_GATED and str(p.get("passwordRequired")).strip().lower() != "true":
-                no_password.append(name)
+                # Intune merges DeviceLock settings per setting: a required password from another profile may
+                # still make this limit apply. Held until every profile is read (see below).
+                gated.append((p, name, max(values)))
                 continue
             wide, why = estate_wide(p.get("assignments"))
             if wide is None:
@@ -317,6 +327,18 @@ def transform(input):
                 limits.append((max(values), name))
             else:
                 narrowed.append((max(values), name, why))
+        for p, name, v in gated:
+            if not password_estate_wide:
+                no_password.append(name)
+                continue
+            wide, why = estate_wide(p.get("assignments"))
+            if wide is None:
+                return not_measured(validation, "Intune profile '" + name + "' sets an inactivity limit but its "
+                                    "assignments could not be read (" + why + "), so its reach is unknown.")
+            if wide:
+                limits.append((v, name))
+            else:
+                narrowed.append((v, name, why))
         summary = {"profilesRead": len(profiles), "estateWideLimits": [n + ": " + str(v) + " min" for v, n in limits][:MAX_NAMED],
                    "narrowerProfiles": [n + " (" + str(v) + " min, " + w + ")" for v, n, w in narrowed][:MAX_NAMED],
                    "limitWithoutPasswordRequired": no_password[:MAX_NAMED]}
