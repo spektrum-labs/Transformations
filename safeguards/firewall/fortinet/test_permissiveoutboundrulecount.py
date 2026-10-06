@@ -244,3 +244,16 @@ def test_a_confirmed_failure_is_not_hidden_by_an_unresolved_policy():
     out = load_plain()(workflow(fortios([policy(7, ["internal"], ["wan1"]), policy(8, ["internal"], ["port9"])])))
     assert out["transformedResponse"][KEY] == 1
     assert "port9" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_a_paged_or_partial_read_is_not_evaluated():
+    body = fortios([policy(1, ["internal"], ["wan1"], service=("HTTPS",))])
+    body["next_idx"] = 50
+    assert value(workflow(body)) is None
+    body = fortios([policy(1, ["internal"], ["wan1"], service=("HTTPS",))])
+    body["matched_count"] = 9
+    assert value(workflow(body)) is None
+
+
+def test_an_inbound_policy_to_an_unknown_interface_does_not_grey_the_read():
+    assert value(workflow(fortios([policy(1, ["wan1"], ["port9"]), policy(2, ["internal"], ["wan1"], service=("HTTPS",))]))) == 0
