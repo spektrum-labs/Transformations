@@ -49,7 +49,7 @@ def group(gid, exclude=False):
 
 def general(name, mins, targets):
     return {"@odata.type": "#microsoft.graph.windows10GeneralConfiguration", "id": "cfg-" + name, "displayName": name,
-            "passwordMinutesOfInactivityBeforeScreenTimeout": mins,
+            "passwordRequired": True, "passwordMinutesOfInactivityBeforeScreenTimeout": mins,
             "assignments": [{"id": "a-%d" % i, "target": t} for i, t in enumerate(targets)]}
 
 
@@ -74,7 +74,7 @@ OTHER = {"@odata.type": "#microsoft.graph.iosGeneralDeviceConfiguration", "id": 
          "passcodeMinutesOfInactivityBeforeScreenTimeout": 60, "assignments": [{"id": "a", "target": ALL_DEVICES}]}
 
 PASSING = graph([general("Windows baseline", 10, [ALL_DEVICES]), protection("EP lock", 15, [ALL_USERS]), OTHER,
-                 general("Kiosks", 60, [group("g-kiosk")])])
+                 general("Finance", 5, [group("g-finance")])])
 FAILING = graph([general("Windows baseline", 10, [ALL_DEVICES]),
                  protection("Legacy EP", 30, [ALL_DEVICES], "localSecurityOptionsMachineInactivityLimitInMinutes")])
 
@@ -115,10 +115,15 @@ def test_narrowed_profiles_are_not_estate_wide():
                     deviceAndAppManagementAssignmentFilterType="include")
     assert value(graph([general("x", 5, [filtered])]))[0] is None
     assert value(graph([general("x", 5, [group("g1")])]))[0] is None
-    # a narrowed long limit does not hide behind an estate-wide short one, and vice versa
-    got, out = value(graph([general("short", 5, [ALL_DEVICES]), general("long", 60, [group("g1")])]))
-    assert got == 5
-    assert "long (60 min, assigned to groups only)" in out["additionalInfo"]["transformation"]["inputSummary"]["narrowerProfiles"]
+    # a narrower profile with a longer limit is the limit its devices may get: it sets the value
+    got, out = value(graph([general("short", 5, [ALL_DEVICES]), general("Kiosks", 60, [group("g1")])]))
+    assert got == 60
+    assert "Kiosks [assigned to groups only] (60 min)" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    # a shorter narrower limit does not lower the estate-wide one
+    assert value(graph([general("base", 12, [ALL_DEVICES]), general("Finance", 5, [group("g1")])]))[0] == 12
+    # an unassigned profile is named as such
+    out = value(graph([general("base", 12, [ALL_DEVICES]), general("draft", 90, [])]))[1]
+    assert "draft (90 min, not assigned)" in out["additionalInfo"]["transformation"]["inputSummary"]["narrowerProfiles"]
 
 
 def test_not_configured_values_are_ignored():
@@ -193,3 +198,23 @@ def test_key_is_new_and_no_existing_transform_emits_it():
                 if '"' + KEY + '"' in fh.read():
                     seen.append(path)
     assert seen == []
+
+
+def test_device_restriction_limit_needs_a_required_password():
+    p = general("no password", 10, [ALL_DEVICES])
+    p["passwordRequired"] = False
+    got, out = value(graph([p]))
+    assert got is None
+    assert "no password" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert value(stringify(graph([p])))[0] is None
+    # the endpoint protection setting is not password-gated
+    assert value(graph([p, protection("EP", 10, [ALL_DEVICES])]))[0] == 10
+
+
+@pytest.mark.parametrize("raw", ["abc", "nan", "-5", "1e400", True])
+def test_unreadable_minutes_are_not_evaluated(raw):
+    assert value(graph([general("odd", raw, [ALL_DEVICES]), general("ok", 10, [ALL_DEVICES])]))[0] is None
+
+
+def test_fractional_minutes_round_up():
+    assert value(graph([general("frac", "15.2", [ALL_DEVICES])]))[0] == 16

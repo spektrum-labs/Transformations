@@ -15,8 +15,11 @@ Settings read (minutes):
                                                             localSecurityOptionsMachineInactivityLimitInMinutes
                                                             ("Interactive logon: machine inactivity limit")
 A profile is ESTATE-WIDE when it is assigned to All devices or All users, has no exclusion-group assignment and no
-assignment filter. A null or 0 value is "not configured" and is ignored. When several estate-wide profiles set a
-limit, the longest one is reported (Intune flags the conflict; a device may receive either).
+assignment filter. A null or 0 value is "not configured" and is ignored; any other value that does not read as minutes is
+Not evaluated (a fraction rounds up). A device restriction limit counts only when the same profile requires a
+password (passwordRequired), because DeviceLock applies it only then. Once at least one estate-wide profile sets a
+limit, the value is the longest limit set by ANY profile, estate-wide or narrower (a device in a narrower profile's
+group receives both, and Intune flags the conflict), so a group profile at 60 minutes fails.
 Scope, stated in every reason: Intune device configuration profiles. Settings catalog policies, security baselines
 and Group Policy are not read; a limit set only there reads Not evaluated, never failed.
 Not evaluated (None with a dataCollection error): an empty, error, truncated or unrecognised body; a profile with no
@@ -38,6 +41,10 @@ LIMIT_FIELDS = {
     "#microsoft.graph.windows10endpointprotectionconfiguration": ("localSecurityOptionsMachineInactivityLimit",
                                                                   "localSecurityOptionsMachineInactivityLimitInMinutes"),
 }
+
+#: Profile types whose inactivity limit (DeviceLock MaxInactivityTimeDeviceLock) only takes effect when the profile
+#: also requires a device password (DeviceLock DevicePasswordEnabled = passwordRequired).
+PASSWORD_GATED = ("#microsoft.graph.windows10generalconfiguration",)
 
 ESTATE_TARGETS = ("#microsoft.graph.alldevicesassignmenttarget", "#microsoft.graph.alllicensedusersassignmenttarget")
 EXCLUSION_TARGET = "#microsoft.graph.exclusiongroupassignmenttarget"
@@ -195,17 +202,31 @@ def graph_collection(part, what):
     return cur.get("value"), None
 
 
+NOT_SET = ("", "none", "null", "0")
+
+
 def minutes(value):
-    """A positive whole number of minutes, or None for null, 0, or anything unreadable."""
-    if value is None or isinstance(value, bool):
-        return None
+    """(minutes, None): a positive whole number of minutes (a fraction rounds up), or None when not configured
+    (null, empty, 0). (None, reason) when the value is set but cannot be read as minutes."""
+    if value is None:
+        return None, None
+    if isinstance(value, bool):
+        return None, "a true/false value where minutes were expected"
+    text = str(value).strip().lower()
+    if text in NOT_SET:
+        return None, None
     try:
-        n = int(float(str(value).strip()))
+        n = float(text)
     except Exception:
-        return None
-    if n <= 0:
-        return None
-    return n
+        return None, "an unreadable value '" + text[:20] + "'"
+    if n != n or n > 1000000 or n < 0:
+        return None, "an out-of-range value '" + text[:20] + "'"
+    if n == 0:
+        return None, None
+    whole = int(n)
+    if whole < n:
+        whole = whole + 1
+    return whole, None
 
 
 def estate_wide(assignments):
@@ -230,7 +251,7 @@ def estate_wide(assignments):
         if t in ESTATE_TARGETS:
             found = True
     if not found:
-        return False, "assigned to groups only"
+        return False, ("not assigned" if len(assignments) == 0 else "assigned to groups only")
     return True, None
 
 
@@ -254,15 +275,26 @@ def transform(input):
                                 "check already uses.")
         limits = []
         narrowed = []
+        no_password = []
         for p in profiles:
-            fields = LIMIT_FIELDS.get(str(p.get("@odata.type") or "").strip().lower())
+            ptype = str(p.get("@odata.type") or "").strip().lower()
+            fields = LIMIT_FIELDS.get(ptype)
             if not fields:
                 continue
-            values = [minutes(p.get(f)) for f in fields]
-            values = [v for v in values if v is not None]
+            name = str(p.get("displayName") or p.get("id") or "profile")[:60]
+            values = []
+            for f in fields:
+                v, bad = minutes(p.get(f))
+                if bad:
+                    return not_measured(validation, "Intune profile '" + name + "' sets " + f + " to " + bad +
+                                        ", so its inactivity limit cannot be read.")
+                if v is not None:
+                    values.append(v)
             if not values:
                 continue
-            name = str(p.get("displayName") or p.get("id") or "profile")[:60]
+            if ptype in PASSWORD_GATED and str(p.get("passwordRequired")).strip().lower() != "true":
+                no_password.append(name)
+                continue
             wide, why = estate_wide(p.get("assignments"))
             if wide is None:
                 return not_measured(validation, "Intune profile '" + name + "' sets an inactivity limit but its "
@@ -270,22 +302,28 @@ def transform(input):
             if wide:
                 limits.append((max(values), name))
             else:
-                narrowed.append(name + " (" + str(max(values)) + " min, " + why + ")")
+                narrowed.append((max(values), name, why))
         summary = {"profilesRead": len(profiles), "estateWideLimits": [n + ": " + str(v) + " min" for v, n in limits][:MAX_NAMED],
-                   "narrowerProfiles": narrowed[:MAX_NAMED]}
+                   "narrowerProfiles": [n + " (" + str(v) + " min, " + w + ")" for v, n, w in narrowed][:MAX_NAMED],
+                   "limitWithoutPasswordRequired": no_password[:MAX_NAMED]}
         if not limits:
             return not_measured(validation, "No Intune device configuration profile assigned to all devices or all "
                                 "users sets a Windows inactivity limit (" + str(len(profiles)) + " profiles read" +
-                                ("; narrower profiles: " + name_list(narrowed) if narrowed else "") + "). The limit "
+                                ("; narrower profiles: " + name_list(summary["narrowerProfiles"]) if narrowed else "") +
+                                ("; limit set without a required password (not enforced): " + name_list(no_password)
+                                 if no_password else "") + "). The limit "
                                 "may be set by a settings catalog policy, a security baseline or Group Policy, which "
                                 "this read does not see.",
                                 "Assign a device restriction (Password > Maximum minutes of inactivity until screen "
                                 "locks) or endpoint protection (Interactive logon: machine inactivity limit) profile "
                                 "of 15 minutes or less to All devices, or provide the evidence as a document.", summary)
-        worst = max([v for v, n in limits])
-        names = [n + " (" + str(v) + " min)" for v, n in limits]
-        line = ("The longest inactivity limit set by an Intune profile assigned to all devices or all users is " +
-                str(worst) + " minutes: " + name_list(names))
+        # Once an estate-wide limit exists, every profile that sets one counts: a device in a narrower profile's
+        # group receives both, so the longest limit set anywhere is the one some devices may get.
+        every = [(v, n) for v, n in limits] + [(v, n + " [" + w + "]") for v, n, w in narrowed]
+        worst = max([v for v, n in every])
+        names = [n + " (" + str(v) + " min)" for v, n in sorted(every, reverse=True)]
+        line = ("The longest inactivity limit set by an Intune profile is " + str(worst) + " minutes (estate-wide "
+                "baseline from a profile assigned to all devices or all users): " + name_list(names))
         if worst > 15:
             return create_response(
                 result={KEY: worst},
