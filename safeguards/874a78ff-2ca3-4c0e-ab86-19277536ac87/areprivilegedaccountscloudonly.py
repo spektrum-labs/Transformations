@@ -27,7 +27,11 @@ provider, but it does not by itself show that either is the case. Telling federa
 tenant's domain list (GET /domains, Domain.Read.All), a permission the integrations do not hold, so it
 is not read here (see PERMISSIONS).
 
-Role holders that are service principals are not user accounts and are not judged. Disabled role holders
+Role holders that are service principals are not user accounts and are not judged. The kind comes only
+from the expanded principal's @odata.type. A privileged principal that is not in the user read and
+carries no @odata.type is most likely a service principal, but it cannot be told apart from a user
+missing from the read, so it stays unresolved (not evaluated, fail-closed) and the reason says so
+explicitly, naming the fix (read the principal type, or supply service-principal ids). Disabled role holders
 cannot sign in; they are counted and not judged. A role-assignable GROUP holding a privileged role is
 not expanded by this read, so its members are unresolved and the result is not evaluated. Only ACTIVE
 role assignments are read (roleAssignments); PIM-eligible assignments are not in this read.
@@ -425,6 +429,7 @@ def transform(input):
         disabled = 0
         service_principals = 0
         unresolved = []
+        untyped = []
         unknown_state = []
         synced = []
         formerly = []
@@ -439,7 +444,13 @@ def transform(input):
                 continue
             user = users_by_id.get(pid)
             if user is None:
-                unresolved.append(short(pid, 60) + " (not in the user read)")
+                if kind == "user":
+                    unresolved.append(short(pid, 60) + " (a user not in the user read)")
+                else:
+                    untyped.append(short(pid, 60))
+                    unresolved.append(short(pid, 60) + " (not in the user read and the role assignment carries no "
+                                      "principal @odata.type: most likely a service principal or other non-user "
+                                      "object, but it cannot be told apart from a user missing from the read)")
                 continue
             privileged_users = privileged_users + 1
             if not is_enabled(user):
@@ -472,6 +483,7 @@ def transform(input):
             "servicePrincipalAdmins": service_principals,
             "userCount": len(users_by_id),
             "syncStateUnknown": len(unknown_state),
+            "untypedPrincipalsNotInUserRead": len(untyped),
             "truncated": truncated,
         }
         findings = []
@@ -522,11 +534,21 @@ def transform(input):
             incomplete.append("no enabled user holds a privileged directory role; every tenant has a Global "
                               "Administrator, so the read is incomplete")
 
+        extra_recommendations = []
+        if untyped:
+            incomplete.append(f"{len(untyped)} privileged role holder(s) are not in the user read and carry no "
+                              f"@odata.type on the expanded principal, so this check stays not evaluated on every "
+                              f"run until their type is read; they are most likely service principals (automation "
+                              f"apps holding a role such as Application Administrator)")
+            extra_recommendations.append(
+                "Have the role-assignment read return the principal type (expand principal so @odata.type is "
+                "present) or add the tenant's service-principal ids to the workflow, so non-user role holders are "
+                "recognised instead of left unresolved")
         if incomplete:
             return not_evaluated(
                 validation, incomplete,
                 recommendations + ["Read all role assignments and all users with onPremisesSyncEnabled in "
-                                   "$select ($top=999, follow nextLink)"],
+                                   "$select ($top=999, follow nextLink)"] + extra_recommendations,
                 summary, findings, result)
 
         result[CRITERIA_KEY] = True

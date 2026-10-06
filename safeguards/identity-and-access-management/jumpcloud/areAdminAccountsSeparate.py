@@ -11,8 +11,8 @@ EVIDENCE. Two reads the definition already has, merged by one Integration-Servic
                   JumpCloud Admin Portal administrators: {"results": [{_id, email, roleName, roleNames,
                   suspended, ...}], "totalCount": N}. Paged with limit/skip.
   systemUsers     GET https://console.jumpcloud.com/api/systemusers  (method listSystemUsers)
-                  JumpCloud directory (everyday) users: {"results": [{_id, email, username, state,
-                  suspended, activated, ...}], "totalCount": N}. Paged with limit/skip.
+                  JumpCloud directory (everyday) users: {"results": [{_id, email, alternateEmail,
+                  username, state, suspended, activated, ...}], "totalCount": N}. Paged with limit/skip.
 Both authenticate with the definition's x-api-key, which acts with the rights of the administrator who
 owns it; JumpCloud has no OAuth scope, so nothing new is asked of the customer.
 
@@ -24,8 +24,9 @@ everyday identity with admin rights attached: its password resets, MFA prompts a
 the everyday mailbox, and a phish of that mailbox reaches the Admin Portal. A dedicated admin account
 uses an admin-only address that no everyday directory user carries (for example admin-jdoe@).
 
-RULE. Each ACTIVE administrator (suspended false) is compared, by email (trimmed, case-insensitive),
-with the directory users:
+RULE. Each ACTIVE administrator (suspended false) is compared, by email, with each directory user's
+email AND alternateEmail. Addresses are trimmed, lower-cased and plus-folded (local+tag@domain is read
+as local@domain, so jdoe+admin@ is the same mailbox as jdoe@):
   * matches an ACTIVE directory user (not suspended, state not SUSPENDED; STAGED users count, because
     they become active when scheduled)  -> not separate: a measured fail.
   * matches only a SUSPENDED directory user  -> separate (the everyday identity cannot sign in);
@@ -37,10 +38,18 @@ custom), as every Admin Portal account can see or change the directory. Suspende
 sign in; they are counted and not judged. Provider (MSP) administrators are not in /api/users and are
 not judged. Administrator emails are never copied into the output: accounts are named by record id.
 
+A PASS NEEDS EVIDENCE THAT COULD HAVE FAILED. If the org's everyday identities are not JumpCloud
+directory users (JumpCloud used only for devices or admin access, users mastered elsewhere), no admin
+email can match and every admin would read "dedicated" while nothing was learned. So when the directory
+has no ACTIVE user, or no active user's email or alternateEmail is on any active administrator's email
+domain, the result is None (not evaluated). Administrators on a domain no directory user shares are
+named in a finding: their separation could not be compared.
+
 FAIL CLOSED. Null, {}, an error envelope (401/403/5xx, {"error": ...}), either list missing, a list
 without totalCount or shorter than its totalCount (a partial read), a paginationTruncated flag, no
-active administrator, or an administrator with no email returns areAdminAccountsSeparate = None with a
-dataCollection error ("not evaluated"). The workflow's paginationTruncated markers (top level or
+active administrator, an administrator with no email, no active directory user, or no active directory
+user on any administrator's email domain returns areAdminAccountsSeparate = None with a dataCollection
+error ("not evaluated"). The workflow's paginationTruncated markers (top level or
 paginationStats.<key>) are read too. One active administrator shown to share an active everyday
 identity is a measured fail, whatever else is missing.
 """
@@ -173,11 +182,39 @@ def full_list(block, label):
     return records, None
 
 
-def email_of(record):
-    value = record.get("email")
+def fold(value):
+    """An address trimmed, lower-cased and plus-folded (local+tag@domain -> local@domain), or ""."""
     if not isinstance(value, str):
         return ""
-    return value.strip().lower()
+    text = value.strip().lower()
+    if text.count("@") != 1:
+        return text
+    local, domain = text.split("@")
+    if "+" in local:
+        local = local.split("+")[0]
+    if not local or not domain:
+        return text
+    return local + "@" + domain
+
+
+def email_of(record):
+    return fold(record.get("email"))
+
+
+def emails_of(user):
+    """A directory user's addresses: email and alternateEmail, folded."""
+    found = []
+    for key in ["email", "alternateEmail"]:
+        value = fold(user.get(key))
+        if value and value not in found:
+            found.append(value)
+    return found
+
+
+def domain_of(email):
+    if email.count("@") != 1:
+        return ""
+    return email.split("@")[1]
 
 
 def user_active(user):
@@ -247,16 +284,21 @@ def transform(input):
         # a match found in a partial list is still a proven match.
         active_emails = {}
         suspended_emails = {}
+        active_domains = {}
+        active_users = 0
         for user in users or ((user_block or {}).get("results") if isinstance(user_block, dict) else None) or []:
             if not isinstance(user, dict):
                 continue
-            email = email_of(user)
-            if not email:
-                continue
-            if user_active(user):
-                active_emails[email] = True
-            else:
-                suspended_emails[email] = True
+            active = user_active(user)
+            if active:
+                active_users = active_users + 1
+            for email in emails_of(user):
+                if active:
+                    active_emails[email] = True
+                    if domain_of(email):
+                        active_domains[domain_of(email)] = True
+                else:
+                    suspended_emails[email] = True
 
         admin_rows = admins
         if admin_rows is None and isinstance(admin_block, dict) and isinstance(admin_block.get("results"), list):
@@ -267,9 +309,12 @@ def transform(input):
         sharing = []
         suspended_match = []
         no_email = []
+        off_domain = []
         dedicated = 0
         for admin in active_admins:
             email = email_of(admin)
+            if email and domain_of(email) not in active_domains:
+                off_domain.append(label(admin))
             if not email:
                 no_email.append(label(admin))
             elif email in active_emails:
@@ -283,6 +328,8 @@ def transform(input):
         summary = {"administratorCount": len(admin_rows), "activeAdministratorCount": len(active_admins),
                    "suspendedAdministratorCount": len(admin_rows) - len(active_admins),
                    "directoryUserCount": len(active_emails) + len(suspended_emails),
+                   "activeDirectoryUserCount": active_users,
+                   "administratorsOffDirectoryDomains": len(off_domain),
                    "dedicatedAdministratorCount": dedicated,
                    "administratorsSharingEverydayIdentity": len(sharing),
                    "administratorsWithoutEmail": len(no_email),
@@ -290,6 +337,9 @@ def transform(input):
         findings = []
         if len(admin_rows) > len(active_admins):
             findings.append(str(len(admin_rows) - len(active_admins)) + " administrator(s) are suspended (not judged)")
+        if off_domain and len(off_domain) < len(active_admins):
+            findings.append(str(len(off_domain)) + " administrator(s) use an email domain no active directory user "
+                            "is on, so their separation could not be compared: " + name_list(off_domain))
         if suspended_match:
             findings.append(str(len(suspended_match)) + " administrator(s) share an email with a SUSPENDED directory "
                             "user, so that everyday identity cannot sign in: " + name_list(suspended_match))
@@ -317,6 +367,14 @@ def transform(input):
         if no_email:
             return not_evaluated(validation, str(len(no_email)) + " administrator(s) carry no email, so they cannot "
                                  "be compared with the directory users: " + name_list(no_email), summary, findings)
+        if active_users == 0:
+            return not_evaluated(validation, "the JumpCloud directory has no active user, so no administrator can be "
+                                 "compared with an everyday identity; separation cannot be shown from JumpCloud",
+                                 summary, findings)
+        if len(off_domain) == len(active_admins):
+            return not_evaluated(validation, "no active directory user is on any administrator's email domain, so the "
+                                 "everyday identities are not JumpCloud directory users and separation cannot be "
+                                 "shown from JumpCloud", summary, findings)
 
         return create_response(
             result={KEY: True, "adminCount": len(active_admins), "adminsSharingEverydayIdentity": 0},

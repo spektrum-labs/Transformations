@@ -71,5 +71,21 @@
       "itemsFailed": 0,
       "iterateTruncated": false
     }
-  }
+  },
+  "orgApps": [
+    {
+      "id": "0oa1o365000000000001",
+      "name": "office365",
+      "label": "Microsoft Office 365",
+      "status": "ACTIVE",
+      "signOnMode": "WS_FEDERATION"
+    },
+    {
+      "id": "0oa12ecnxtBQMKOXJSMF",
+      "name": "salesforce",
+      "label": "Salesforce.com",
+      "status": "ACTIVE",
+      "signOnMode": "SAML_2_0"
+    }
+  ]
 }

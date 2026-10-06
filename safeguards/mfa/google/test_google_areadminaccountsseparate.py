@@ -119,3 +119,32 @@ def test_wrapped_and_workflow_merged_bodies(loader):
 def test_workflow_pagination_marker_is_not_evaluated(loader):
     body = {"users": fixture("pass"), "paginationStats": {"users": {"paginationTruncated": True}}}
     assert not_evaluated(loader()(body))
+
+
+# --- Review fix (#1006 / #1007): truncation markers on any wrapper level are read --------------------
+
+@pytest.mark.parametrize("loader", RUNNERS)
+@pytest.mark.parametrize("wrap", [
+    lambda inner: {"response": {"paginationTruncated": True, "data": inner}},
+    lambda inner: {"apiResponse": {"paginationStats": {"users": {"paginationTruncated": True}}, "result": inner}},
+    lambda inner: {"result": {"response": inner, "paginationStats": {"paginationTruncated": "True"}}},
+    lambda inner: {"response": {"users": dict(inner, paginationTruncated=True)}},
+    lambda inner: {"data": {"nextPageToken": "abc", "response": inner}},
+])
+def test_intermediate_wrapper_truncation_is_not_evaluated(loader, wrap):
+    out = loader()(wrap(fixture("pass")))
+    assert not_evaluated(out)
+    assert "truncated" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_intermediate_wrapper_truncation_with_a_mailbox_admin_still_fails(loader):
+    out = loader()({"response": {"paginationTruncated": True, "data": fixture("fail")}})
+    assert out["transformedResponse"][KEY] is False
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_clean_wrappers_still_pass(loader):
+    body = {"response": {"paginationTruncated": False, "paginationStats": {"users": {"paginationTruncated": False}},
+                         "data": fixture("pass")}}
+    assert loader()(body)["transformedResponse"][KEY] is True
