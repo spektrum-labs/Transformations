@@ -11,13 +11,21 @@ API Source: listConsoleAdmins (POST https://<account>.my.rubrik.com/api/graphql,
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
     (type User: domain UserDomainEnum! = LOCAL | SSO | LDAP | CLIENT | PAT | SUPPORT; status UserStatus! =
     ACTIVE | DEACTIVATED | UNKNOWN; roles [Role!]! with isOrgAdmin).
-Rule: an administrator is an active user who is the account owner or holds a role with isOrgAdmin or a role
-named as an admin role. LOCAL users are console accounts (dedicated); CLIENT, PAT and SUPPORT users are
-non-person accounts (dedicated); SSO and LDAP users are dedicated only when the email or username is named as
-an admin account (adm-jsmith@, jsmith.admin@, a-jsmith@ ...).
-True: every administrator is dedicated. False: any administrator holds the role through a
-general-purpose group. Unevaluated: a directory or SSO identity whose name carries no admin marker.
-None (not evaluated): empty, error or partial input, a GraphQL error, or no administrator in the read.
+Rule: an administrator is an active user who is the account owner, holds a role with isOrgAdmin, or holds a
+role whose name names an admin role in whole words (Administrator, Backup Admins; not Non-Admin Viewer, No
+Admin Access or Admin Read Only). LOCAL users are console accounts (dedicated); CLIENT, PAT and SUPPORT users
+are non-person accounts (dedicated); SSO and LDAP users are dedicated only when the email or username is named
+as an admin account (adm-jsmith@, jsmith.admin@, a-jsmith@, adminjsmith@ ...).
+True: every administrator is dedicated.
+None (not evaluated): a directory or SSO identity whose name carries no admin marker; empty, error or partial
+input; a GraphQL error; or no administrator in the read.
+Rubrik never returns False, by design. The shared rule gives False only when an administrator holds the role
+through a general-purpose group, and the RSC user list carries users only, never groups. An SSO or LDAP
+administrator whose name carries no admin marker reads Not evaluated, not False: J.J.'s ruling of 6 Oct 2026
+(an everyday identity and a dedicated one with an unmarked name look the same here, so the read cannot prove
+a failure). So this transform answers True or None only.
+Limits: completeness needs pageInfo; when hasNextPage is true (Integration-Service merged the pages and
+nulled endCursor) the read is complete only with an integer count and at least that many nodes.
 """
 import json
 import re
@@ -31,20 +39,47 @@ NONE_MEANS_NOT_EVALUATED = (KEY,)
 WRAPPERS = ("apiResponse", "api_response", "response", "result", "Output", "_response_data")
 
 #: Words that name an account as an administrative identity (adm-jsmith, jsmith.admin, t0-jsmith,
-#: BUILTIN\Administrators, Backup-Admins). Matched as whole words of the account name; "admin" is also
-#: matched as a prefix or suffix of a word (adminjsmith, veeamadmin).
+#: BUILTIN\Administrators, Backup-Admins). Matched only as whole words of the account name (split on every
+#: character that is not a letter or digit), never as a prefix or suffix of a longer word, so badmin, padmin
+#: and administration are not markers. "pam" and "root" are not here: both are personal names (pam.smith@,
+#: joe.root@), so they count only as a joined affix (SHORT_AFFIXES).
 ADMIN_WORDS = ("adm", "admin", "admins", "administrator", "administrators", "priv", "privileged",
-               "pam", "breakglass", "emergency", "sysadmin", "sysadmins", "superuser", "root",
+               "breakglass", "emergency", "sysadmin", "sysadmins", "superuser", "superadmin",
                "tier0", "tier1", "t0", "t1")
+
+#: Product- or function-prefixed admin words, listed one by one (VBR01\veeamadmin, rubrikadmin@). A word that
+#: only ends in "admin" is not a marker unless it is listed here.
+PREFIXED_ADMIN_WORDS = ("veeamadmin", "veeamadmins", "vbradmin", "vspcadmin", "vspcadmins", "rubrikadmin",
+                        "rubrikadmins", "rscadmin", "cohesityadmin", "cohesityadmins", "heliosadmin",
+                        "commvaultadmin", "commvaultadmins", "cvadmin", "cvadmins", "backupadmin", "backupadmins",
+                        "bkpadmin", "localadmin", "domainadmin", "domainadmins")
+
+#: "admin" written straight onto a name (adminjsmith, admin01) is a common admin-account convention, and no
+#: common given name or surname starts with "admin". Such a word counts when any digits or at least three more
+#: characters follow "admin". The English words that start with "admin" (administer, administration,
+#: administrative, adminicle) all start with "administ" or "adminic", and those do not count.
+ADMIN_PREFIX = "admin"
+NOT_ADMIN_PREFIXED = ("administ", "adminic")
 
 #: Words that name a user as a non-person service or console account (svc-backup, veeam.service).
 #: Accepted for users only: a group named after the product ("Veeam Users") is not an admin group.
 SERVICE_WORDS = ("svc", "service", "services", "serviceaccount", "backup", "backups", "bkp",
                  "veeam", "rubrik", "cohesity", "commvault", "helios", "vspc", "vbr", "rsc")
 
-#: Short tier prefixes or suffixes (a-jsmith, jsmith_a, pa-jsmith). Only with a hyphen or an underscore,
-#: never a dot, so a surname plus initial (smith.a) is not read as an admin account.
-SHORT_AFFIXES = ("a", "pa", "da", "ea", "sa", "x")
+#: Short or ambiguous tier prefixes or suffixes (a-jsmith, jsmith_a, pa-jsmith, pam-jsmith, root_backup). Only
+#: when joined to the rest of the account with a hyphen or an underscore, never a dot and never alone, so a
+#: surname plus initial (smith.a) and a person named Pam or Root (pam.smith@, pam@, joe.root@) are not read
+#: as admin accounts.
+SHORT_AFFIXES = ("a", "pa", "da", "ea", "sa", "x", "pam", "root")
+
+#: Whole words of a domain label that name an admin directory or tier (jsmith@admin.corp.example, ADM\jsmith,
+#: CORP-ADM\jsmith, jsmith@t0.corp.example). Matched only as whole words, never as a prefix or suffix, so
+#: PRIVATECO\, jdoe@cityadm.gov and jdoe@adminsoft.com are not markers.
+DOMAIN_ADMIN_WORDS = ("adm", "admin", "admins", "priv", "privileged", "t0", "tier0")
+
+#: Second-level labels under a two-letter country code (example.co.uk, example.com.au). The registrable domain
+#: is the organisation's own name and is never read as a marker: jdoe@admin.ch is an everyday address.
+SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "mil", "ltd", "plc")
 
 MAX_LISTED = 25
 
@@ -179,9 +214,28 @@ def split_identity(name):
 
 
 def word_is_admin(word):
-    if word in ADMIN_WORDS:
+    """True for a whole admin word, a listed product-prefixed admin word, or "admin" written onto a name."""
+    if word in ADMIN_WORDS or word in PREFIXED_ADMIN_WORDS:
         return True
-    return word.startswith("admin") or word.endswith("admin") or word.endswith("admins")
+    if not word.startswith(ADMIN_PREFIX):
+        return False
+    for p in NOT_ADMIN_PREFIXED:
+        if word.startswith(p):
+            return False
+    rest = word[len(ADMIN_PREFIX):]
+    return rest.isdigit() or len(rest) >= 3
+
+
+def domain_labels(domain):
+    """The domain labels that may name an admin directory: a NetBIOS name (CORP-ADM) as it is, or the
+    subdomain labels of a DNS name (admin in admin.corp.example). Never the registrable domain itself."""
+    labels = [x for x in domain.split(".") if x]
+    if len(labels) <= 1:
+        return labels
+    keep = 2
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in SECOND_LEVEL_LABELS:
+        keep = 3
+    return labels[:-keep]
 
 
 def has_admin_marker(name, allow_service):
@@ -200,11 +254,9 @@ def has_admin_marker(name, allow_service):
             return True
         if account.endswith("-" + a) or account.endswith("_" + a):
             return True
-    label = domain.split(".")[0] if domain else ""
-    if label:
-        label_words = [w for w in re.split(r"[^a-z0-9]+", label) if w]
-        for w in label_words:
-            if word_is_admin(w) or w.endswith("adm") or w.startswith("priv") or w in ("t0", "tier0"):
+    for label in domain_labels(domain):
+        for w in re.split(r"[^a-z0-9]+", label):
+            if w in DOMAIN_ADMIN_WORDS:
                 return True
     return False
 
@@ -375,12 +427,48 @@ def users_connection(body):
     if info.get("hasNextPage") not in (True, False):
         return None, "pageInfo.hasNextPage is missing, so a complete read cannot be shown"
     count = conn.get("count")
-    if isinstance(count, int) and not isinstance(count, bool) and len(nodes) < count:
+    has_count = isinstance(count, int) and not isinstance(count, bool)
+    if info.get("hasNextPage") is True and not has_count:
+        return None, ("pageInfo.hasNextPage is true and no count was returned, so the merged pages cannot be shown "
+                      "to be complete")
+    if has_count and len(nodes) < count:
         return None, "read " + str(len(nodes)) + " of " + str(count) + " users; the rest were not read"
     for n in nodes:
         if not isinstance(n, dict):
             return None, "a user entry is not an object"
     return nodes, None
+
+
+#: Whole words of a role name that name an administrator role (Super Admin, COHESITY_ADMIN, Backup Admins).
+ROLE_ADMIN_WORDS = ("admin", "admins", "administrator", "administrators", "superadmin", "sysadmin")
+#: Qualifiers that make a role name a non-admin role (Non-Admin Viewer, No Admin Access, Admin Read Only).
+ROLE_NOT_ADMIN_WORDS = ("non", "no", "not", "nonadmin", "noadmin", "readonly", "viewonly")
+#: Endings of a joined role-name word that name an administrator role (TenantAdmin, HeliosAdmins).
+ROLE_ADMIN_ENDINGS = ("administrators", "administrator", "admins", "admin")
+
+
+def role_names_admin(name):
+    """True when a role name names an administrator role in whole words, and no qualifier makes it a
+    non-admin or read-only role."""
+    words = [w for w in re.split(r"[^a-z0-9]+", str(name or "").lower()) if w]
+    found = False
+    for i in range(len(words)):
+        w = words[i]
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if w in ROLE_NOT_ADMIN_WORDS:
+            return False
+        if w in ("read", "view") and nxt == "only":
+            return False
+        if w in ROLE_ADMIN_WORDS:
+            found = True
+            continue
+        for e in ROLE_ADMIN_ENDINGS:
+            if w.endswith(e) and len(w) > len(e):
+                if w[:-len(e)] in ROLE_NOT_ADMIN_WORDS or w[:-len(e)] in ("read", "view"):
+                    return False
+                found = True
+                break
+    return found
 
 
 def is_admin(node):
@@ -395,7 +483,7 @@ def is_admin(node):
             continue
         if r.get("isOrgAdmin") is True:
             return True
-        if "admin" in str(r.get("name") or "").lower():
+        if role_names_admin(r.get("name")):
             return True
     return False
 
