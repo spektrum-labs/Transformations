@@ -5,8 +5,10 @@ Claim (EP-005): SMB packet signing is required by both the SMB client and the SM
 True: every applicable device is compliant for both "Microsoft network client: Digitally sign
 communications (always)" (scid-95) and "Microsoft network server: Digitally sign communications
 (always)". False: at least one applicable device is not compliant for either. The server-side
-configuration is selected by its knowledge-base name; if Defender does not assess it, the check
-is Not evaluated rather than passed on the client side alone.
+configuration is matched by its knowledge-base name only (its id is not pinned; scid-95 never
+counts as the server side). Every applicable device needs both readings: a device read for one
+side only makes the check Not evaluated unless another device already fails, so it never passes
+on the client side alone.
 
 Source: a new One-Click method (an advanced-hunting query, POST /api/advancedqueries/run, the same API and
 application permission as the existing getTamperProtectionStatus method) over
@@ -17,7 +19,8 @@ carries its ConfigurationName:
 IsApplicable / IsCompliant arrive as SByte (1/0), booleans, or their strings.
 
 A row counts only when its ConfigurationId is one this file names AND its knowledge-base name says what that
-id means; any other row makes the read Not evaluated rather than being guessed at.
+id means; any other row makes the read Not evaluated rather than being guessed at. An applicable device that has
+no reading for one part of the claim is not shown to comply: with no failure elsewhere the read is Not evaluated.
 Scope: devices onboarded to Defender for Endpoint and assessed by Defender Vulnerability Management. Devices
 that are not onboarded are not seen; device coverage is reported by the coverage checks.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body, a result at the
@@ -193,8 +196,11 @@ def config_part(config_id, config_name):
     name = str(config_name or "").strip().lower()
     if name == "":
         return None
+    claimed = []
     for part in PARTS:
-        if config_id in part["ids"] or len(part["ids"]) == 0:
+        claimed = claimed + list(part["ids"])
+    for part in PARTS:
+        if config_id in part["ids"] or (len(part["ids"]) == 0 and config_id not in claimed):
             ok = True
             for word in part["words"]:
                 if word not in name:
@@ -307,6 +313,7 @@ def transform(input):
 def judge(validation, devices):
     applicable = []
     failing = []
+    unassessed = []
     for dkey in devices:
         d = devices[dkey]
         any_app = False
@@ -319,10 +326,13 @@ def judge(validation, devices):
                     bad.append(part)
         if any_app:
             applicable.append(d["name"])
+            gaps = [p["part"] for p in PARTS if p["part"] not in d["parts"]]
+            if gaps and not bad:
+                unassessed.append(d["name"] + " (no reading for " + ", ".join(gaps) + ")")
         if bad:
             failing.append(d["name"] + " (" + ", ".join(bad) + ")" if len(PARTS) > 1 else d["name"])
     summary = {"applicableDevices": len(applicable), "nonCompliantDevices": len(failing),
-               "nonCompliantDeviceNames": failing[:MAX_NAMED]}
+               "nonCompliantDeviceNames": failing[:MAX_NAMED], "partlyAssessedDevices": unassessed[:MAX_NAMED]}
     if len(applicable) == 0:
         return not_measured(validation, "Defender Vulnerability Management assessed " + str(len(devices)) +
                             " device(s) for " + CLAIM + " and none is applicable, so it does not measure it here.",
@@ -336,6 +346,10 @@ def judge(validation, devices):
             recommendations=[FIX],
             input_summary=summary,
         )
+    if unassessed:
+        return not_measured(validation, str(len(unassessed)) + " applicable device(s) were not assessed for every "
+                            "part of " + CLAIM + ": " + name_list(unassessed) + ". No device failed, but the devices "
+                            "named cannot be shown to comply.", None, summary)
     return create_response(
         result={KEY: True},
         validation=validation,

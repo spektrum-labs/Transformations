@@ -260,3 +260,25 @@ def test_keys_are_new_and_no_existing_transform_emits_them():
                 if '"' + k + '"' in text or "'" + k + "'" in text:
                     seen.append((path, k))
     assert seen == []
+
+
+def test_smb_signing_device_with_client_reading_only_is_not_evaluated():
+    """Device A has both sides compliant; device B has only a compliant client reading: B is not shown to comply."""
+    rows = [row("ws-01", "scid-95"), row("ws-01", "scid-9999"), row("ws-02", "scid-95")]
+    got, out = value("issmbsigningrequired", result(rows))
+    assert got is None
+    assert "ws-02.example.test" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_a_confirmed_failure_still_fails_when_another_device_is_partly_assessed():
+    rows = [row("ws-01", "scid-95", 1, 0), row("ws-01", "scid-9999"), row("ws-02", "scid-95")]
+    assert value("issmbsigningrequired", result(rows))[0] is False
+    rows = [row("ws-01", "scid-53", 1, 0), row("ws-01", "scid-54"), row("ws-02", "scid-53")]
+    assert value("smbv1enableddevicecount", result(rows))[0] == 1
+    rows = [row("ws-01", "scid-53"), row("ws-01", "scid-54"), row("ws-02", "scid-53")]
+    assert value("smbv1enableddevicecount", result(rows))[0] is None
+
+
+def test_the_client_id_never_counts_as_the_server_side():
+    rows = [row("ws-01", "scid-95", name="Enable 'Microsoft network server: Digitally sign communications (always)'")]
+    assert value("issmbsigningrequired", result(rows))[0] is None
