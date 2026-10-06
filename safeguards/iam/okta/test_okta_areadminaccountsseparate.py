@@ -304,7 +304,12 @@ def test_slots_without_link_ids_are_not_counted_as_mismatched(loader):
 # --- orgApps evidence strength (re-review of #1013) ---------------------------------------------
 
 @pytest.mark.parametrize("loader", RUNNERS)
-@pytest.mark.parametrize("signal", [{"assignedUserCount": 0}, {"_embedded": {"users": []}}, {"assignedUsers": []}])
+@pytest.mark.parametrize("signal", [{"assignedUserCount": 0}, {"_embedded": {"users": []}}, {"assignedUsers": []},
+                                    {"assignedUserCount": "0"}, {"assignedUserCount": 0.0},
+                                    {"assignedUserCount": "many"}, {"assignedUserCount": True},
+                                    {"assignedUserCount": None}, {"_embedded": {"users": "x"}},
+                                    {"_embedded": {"users": None}}, {"assignedUsers": {"id": "00u1"}},
+                                    {"_embedded": "users"}])
 def test_org_app_shown_unassigned_is_not_evidence(loader, signal):
     body = fixture("pass")
     body["orgApps"] = [dict({"name": "office365", "label": "Microsoft Office 365", "status": "ACTIVE"}, **signal)]
@@ -312,7 +317,8 @@ def test_org_app_shown_unassigned_is_not_evidence(loader, signal):
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
-@pytest.mark.parametrize("signal", [{"assignedUserCount": 12}, {"_embedded": {"users": [{"id": "00u1usr0000000000009"}]}}])
+@pytest.mark.parametrize("signal", [{"assignedUserCount": 12}, {"assignedUserCount": "3"}, {"assignedUserCount": 2.0},
+                                    {"_embedded": {"users": [{"id": "00u1usr0000000000009"}]}}])
 def test_org_app_shown_assigned_is_evidence(loader, signal):
     body = fixture("pass")
     body["orgApps"] = [dict({"name": "office365", "label": "Microsoft Office 365", "status": "ACTIVE"}, **signal)]
@@ -324,7 +330,9 @@ def test_org_app_shown_assigned_is_evidence(loader, signal):
 
 @pytest.mark.parametrize("loader", RUNNERS)
 def test_org_app_without_signal_passes_with_softened_reason(loader):
-    out = loader()(fixture("pass"))
+    body = fixture("pass")
+    body["orgApps"][0]["_embedded"] = {"logo": []}  # an _embedded block without users is still "no signal"
+    out = loader()(body)
     assert verdict(out) is True
     assert out["additionalInfo"]["transformation"]["inputSummary"]["suiteEvidence"] == "activeOrgApp"
     reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
