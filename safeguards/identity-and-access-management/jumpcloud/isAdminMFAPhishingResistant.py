@@ -1,6 +1,20 @@
 import json
 from datetime import datetime
 
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isAdminMFAPhishingResistant',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -28,6 +42,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -65,7 +85,41 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-PHISHING_RESISTANT_FACTORS = ["WEBAUTHN", "FIDO2", "FIDO", "PIV", "SMARTCARD"]
+# effect.obligations.mfaFactors is an array of OBJECTS -- [{"type": "WEBAUTHN"}] -- not of strings.
+# JumpCloud's own OpenAPI v2 (docs.jumpcloud.com/api/2.0/index.yaml, schema AuthnPolicyObligations)
+# gives the type enum as exactly: DURT, WEBAUTHN, PUSH, DUO, TOTP, SMS_OTP.
+#
+# This list used to be ["WEBAUTHN", "FIDO2", "FIDO", "PIV", "SMARTCARD"] and was tested with
+# `f in PHISHING_RESISTANT_FACTORS for f in factors`, comparing a dict against strings. That is
+# always False, so the check reported a finding against EVERY JumpCloud tenant, including one
+# correctly configured with a WebAuthn-only admin-portal policy. Four of those five values do not
+# exist in JumpCloud's API either: a strict search of the 3 MB v2 spec for FIDO, FIDO2, PIV,
+# SMARTCARD and SMART_CARD returns nothing. WEBAUTHN (FIDO2 keys, platform authenticators,
+# passkeys) is the only phishing-resistant value JumpCloud emits.
+#
+# DURT is deliberately counted NEITHER way: it appears only in sample payloads with no description
+# anywhere in the spec, so it is not claimed as resistant and not held against a tenant. The
+# sibling authTypesAllowed.py takes the same position.
+PHISHING_RESISTANT_FACTORS = ("WEBAUTHN",)
+
+
+def factor_types(factors):
+    """The factor type strings in an mfaFactors array.
+
+    Tolerates both shapes: the documented array of objects, and a bare array of strings in case a
+    tenant or a future version emits one. Anything else contributes nothing.
+    """
+    out = []
+    for f in factors or []:
+        if isinstance(f, dict):
+            value = f.get("type")
+        elif isinstance(f, str):
+            value = f
+        else:
+            value = None
+        if value:
+            out.append(str(value).strip().upper())
+    return out
 
 
 def transform_evidence(input):
@@ -99,23 +153,54 @@ def transform_evidence(input):
 
     phishing_resistant_policy_names = []
     mfa_required_admin_policy_names = []
+    unspecified_factor_policy_names = []
     for p in admin_policies:
         if p.get("disabled"):
             continue
         effect = p.get("effect") or {}
         obligations = effect.get("obligations") or {}
         mfa_obj = obligations.get("mfa") or {}
-        factors = obligations.get("mfaFactors") or []
+        types = factor_types(obligations.get("mfaFactors"))
         name = p.get("name") or p.get("id") or "unknown"
         if mfa_obj.get("required"):
             mfa_required_admin_policy_names.append(name)
-        has_phishing_resistant = any(
-            f in PHISHING_RESISTANT_FACTORS for f in factors
-        )
+            # mfaFactors is optional. The console also offers "All Enabled", and the org-wide
+            # enabled factor list is not exposed by the API, so a policy that requires MFA without
+            # naming its factors cannot be graded either way. That is unknown, not a failure.
+            if not types:
+                unspecified_factor_policy_names.append(name)
+        has_phishing_resistant = any(t in PHISHING_RESISTANT_FACTORS for t in types)
         if mfa_obj.get("required") and has_phishing_resistant:
             phishing_resistant_policy_names.append(name)
 
     is_phishing_resistant = len(phishing_resistant_policy_names) > 0
+
+    # Nothing provable either way: MFA is required on an admin policy but the factors are not named,
+    # and no other admin policy names a phishing-resistant one.
+    if not is_phishing_resistant and unspecified_factor_policy_names:
+        return create_response(
+            result={"isAdminMFAPhishingResistant": None,
+                    "adminScopedPolicies": len(admin_policies),
+                    "phishingResistantAdminPolicies": 0},
+            validation=validation,
+            fail_reasons=[
+                "Admin-scoped policy/policies " + str(unspecified_factor_policy_names)
+                + " require MFA but do not name the permitted factors in "
+                "effect.obligations.mfaFactors, and JumpCloud does not expose the org-wide enabled "
+                "factor list, so whether admin MFA is phishing-resistant was not evaluated."
+            ],
+            recommendations=[
+                "Set the Admin Portal conditional access policy to require a specific factor "
+                "(WebAuthn) rather than All Enabled, so the control can be evidenced."
+            ],
+            input_summary={
+                "totalPolicies": len(policies),
+                "adminScopedPolicies": len(admin_policies),
+                "mfaRequiredAdminPolicies": len(mfa_required_admin_policy_names),
+                "phishingResistantAdminPolicies": 0,
+                "adminPoliciesWithUnspecifiedFactors": len(unspecified_factor_policy_names),
+            },
+        )
 
     total_policies = len(policies)
     total_admin_policies = len(admin_policies)
@@ -131,7 +216,7 @@ def transform_evidence(input):
         pass_reasons = [
             f"Admin-scoped authentication policy/policies {phishing_resistant_policy_names} require MFA "
             f"(effect.obligations.mfa.required=true) with a phishing-resistant factor in "
-            f"effect.obligations.mfaFactors (WebAuthn/FIDO2/PIV) among {total_admin_policies} admin-scoped "
+            f"effect.obligations.mfaFactors (WEBAUTHN) among {total_admin_policies} admin-scoped "
             f"policy/policies found in {total_policies} total authn policies."
         ]
         fail_reasons = []
@@ -145,17 +230,17 @@ def transform_evidence(input):
             ]
             recommendations = [
                 "Create a JumpCloud Conditional Access Policy scoped to the Admin Portal that requires "
-                "MFA with a phishing-resistant factor (WebAuthn/FIDO2) via mfaFactors."
+                "MFA with the WebAuthn factor via effect.obligations.mfaFactors."
             ]
         else:
             fail_reasons = [
                 f"Found {total_admin_policies} admin-scoped policy/policies ({[p.get('name') for p in admin_policies]}) "
-                f"but none require MFA with a phishing-resistant factor (WEBAUTHN/FIDO2/PIV) in "
+                f"but none require MFA with the phishing-resistant factor WEBAUTHN in "
                 f"effect.obligations.mfaFactors; mfa.required admin policies: {mfa_required_admin_policy_names}."
             ]
             recommendations = [
                 "Update the Admin Portal conditional access policy's effect.obligations.mfaFactors to include "
-                "WEBAUTHN (or another phishing-resistant factor) and ensure mfa.required is true."
+                "WEBAUTHN and ensure mfa.required is true."
             ]
 
     result = {
