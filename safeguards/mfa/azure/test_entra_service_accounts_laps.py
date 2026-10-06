@@ -194,7 +194,7 @@ def test_laps_pass_and_fail(form, loader):
     assert got == 100.0
     assert out["additionalInfo"]["transformation"]["inputSummary"]["activeJoinedWindowsDevices"] == 21
     got, out = value(LAPS, bad, loader)
-    assert got == round(18 * 100.0 / 21, 2)
+    assert got == (18 * 10000 // 21) / 100.0
     reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
     assert "18 of 21" in reason and "WS-019" in reason and "WS-024" in reason
 
@@ -336,7 +336,7 @@ def test_laps_rotation_overdue_does_not_count():
     old_no_refresh["lastBackupDateTime"] = ago(400)
     old_no_refresh["refreshDateTime"] = None
     got, out = value(LAPS, laps_body([device(1), device(2), device(3)], [cred(1), overdue, old_no_refresh]))
-    assert got == round(100.0 / 3, 2)
+    assert got == 33.33
     assert "WS-002 (rotation overdue)" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
@@ -370,3 +370,13 @@ def test_modern_client_types_only_leave_legacy_sign_in_open():
     pol = ca("Block svc", groups=[G_SVC, G_SVC2],
              client_types=("browser", "mobileAppsAndDesktopClients", "exchangeActiveSync", "other"))
     assert value(SVC, svc_body([pol]))[0] is True
+
+
+def test_laps_percentage_never_rounds_up_across_a_threshold():
+    devices = [device(i) for i in range(1, 201)]
+    creds = [cred(i) for i in range(1, 190)]          # 189 of 200 = 94.5%
+    got = value(LAPS, laps_body(devices, creds))[0]
+    assert got == 94.5
+    devices = [device(i) for i in range(1, 2001)]
+    creds = [cred(i) for i in range(1, 1900)]          # 1899 of 2000 = 94.95%
+    assert value(LAPS, laps_body(devices, creds))[0] == 94.95

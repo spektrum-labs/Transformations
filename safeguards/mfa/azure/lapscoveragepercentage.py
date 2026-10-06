@@ -324,7 +324,8 @@ def transform(input):
             return not_measured(validation, "Entra ID lists no enabled Entra-joined or hybrid-joined Windows device that "
                                 "signed in within " + str(ACTIVE_DAYS) + " days (" + str(len(devices)) + " Windows "
                                 "device(s) read), so LAPS coverage has no population here.", None, summary)
-        pct = round(covered * 100.0 / len(active), 2)
+        # Truncated, never rounded up: Token-Service compares whole numbers, so 94.996 must not become 95.
+        pct = (covered * 10000 // len(active)) / 100.0
         summary["lapsCoveragePercentage"] = pct
         line = (str(covered) + " of " + str(len(active)) + " active Entra-joined or hybrid-joined Windows device(s) "
                 "have a Windows LAPS password backed up to Entra ID (" + str(pct) + "%)")
