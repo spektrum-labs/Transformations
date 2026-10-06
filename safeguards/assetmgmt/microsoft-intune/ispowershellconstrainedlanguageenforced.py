@@ -12,9 +12,13 @@ the permission the existing device-configuration check uses), each link-paginate
 App Control for Business policies (templateFamily endpointSecurityApplicationControl, or settings whose id starts
 device_vendor_msft_policy_config_applicationcontrol) are read for their mode:
     built-in controls: a choice value ending _enable_app_control_0 is Enforce, _enable_app_control_1 is Audit;
-    uploaded policy XML (<SiPolicy>): Enforce when it enables UMCI ("Enabled:UMCI") and not "Enabled:Audit Mode".
+    uploaded policy XML (<SiPolicy>): Enforce when it enables UMCI ("Enabled:UMCI") and neither "Enabled:Audit Mode"
+    nor "Disabled:Script Enforcement" (which leaves PowerShell in FullLanguage mode).
 AppLocker comes from custom profiles (windows10CustomConfiguration) whose OMA-URI is .../AppLocker/
-ApplicationLaunchRestrictions/.../Script/Policy: EnforcementMode="Enabled" is Enforce, "AuditOnly" is Audit.
+ApplicationLaunchRestrictions/.../Script/Policy: EnforcementMode="Enabled" is Enforce, "AuditOnly" is Audit. An
+enforced collection with an Allow path rule for everything, the system drive or a user-writable folder (%TEMP%,
+%USERPROFILE%, %APPDATA%) is not enforcing: PowerShell tests a script in %TEMP%, so it stays in FullLanguage mode.
+An assignment with a filter id is filtered unless its filter type is explicitly none.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
 False: App Control or AppLocker policies were read and none of them is an estate-wide enforcing policy (audit only,
@@ -194,8 +198,8 @@ def estate_wide(assignments):
             continue
         includes = True
         fid = target.get("deviceAndAppManagementAssignmentFilterId")
-        ftype = str(target.get("deviceAndAppManagementAssignmentFilterType") or "none").strip().lower()
-        if fid not in (None, "", "None", "00000000-0000-0000-0000-000000000000") and ftype not in ("none", ""):
+        ftype = str(target.get("deviceAndAppManagementAssignmentFilterType") or "").strip().lower()
+        if fid not in (None, "", "None", "00000000-0000-0000-0000-000000000000") and ftype != "none":
             filtered = True
         if t in ESTATE_TARGETS:
             estate = True
@@ -283,6 +287,8 @@ def xml_mode(text):
         return None
     if "enabled:audit mode" in low:
         return "audit"
+    if "disabled:script enforcement" in low:
+        return "script enforcement disabled"
     if "enabled:umci" in low:
         return "enforce"
     return "kernel-only"
@@ -309,13 +315,40 @@ def app_control_mode(policy):
             m = xml_mode(v)
             if m:
                 modes.append(m)
-    if "audit" in modes:
-        return True, "audit"
+    for weak in ("audit", "script enforcement disabled", "kernel-only"):
+        if weak in modes:
+            return True, weak
     if "enforce" in modes:
         return True, "enforce"
-    if "kernel-only" in modes:
-        return True, "kernel-only"
     return True, None
+
+
+#: PowerShell picks its language mode under AppLocker by testing whether a script in a user-writable folder (%TEMP%)
+#: would be allowed. An Allow path rule for everything, the whole system drive, or a user-writable folder keeps it in
+#: FullLanguage mode, so such a collection is not an enforcing one.
+USER_WRITABLE = ('path="*"', 'path="%osdrive%\\*"', 'path="%systemdrive%\\*"', 'path="c:\\*"',
+                 'path="%temp%', 'path="%tmp%', 'path="%userprofile%', 'path="%appdata%', 'path="%localappdata%',
+                 'path="%osdrive%\\users', 'path="c:\\users')
+
+
+def allows_user_writable(low):
+    """True when a lower-cased, space-free AppLocker script collection holds an Allow FilePathRule whose path covers
+    everything, the system drive, or a user-writable folder."""
+    start = 0
+    for step in range(500):
+        i = low.find("<filepathrule", start)
+        if i < 0:
+            return False
+        j = low.find("</filepathrule>", i)
+        if j < 0:
+            j = len(low)
+        rule = low[i:j]
+        if 'action="allow"' in rule:
+            for marker in USER_WRITABLE:
+                if marker in rule:
+                    return True
+        start = j + 1
+    return True
 
 
 def applocker_mode(profile):
@@ -343,13 +376,14 @@ def applocker_mode(profile):
             if 'enforcementmode="auditonly"' in low:
                 modes.append("audit")
             elif 'enforcementmode="enabled"' in low:
-                modes.append("enforce")
+                modes.append("allows user-writable paths" if allows_user_writable(low) else "enforce")
             else:
                 modes.append(None)
     if not found:
         return False, None
-    if "audit" in modes:
-        return True, "audit"
+    for weak in ("audit", "allows user-writable paths"):
+        if weak in modes:
+            return True, weak
     if None in modes:
         return True, None
     return True, "enforce"

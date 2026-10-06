@@ -71,8 +71,10 @@ def xml_policy(name, options, assignments=None):
             "settings": settings, "assignments": [ALL_DEVICES] if assignments is None else assignments}
 
 
-def applocker(name, mode="Enabled", assignments=None, encrypted=False):
-    value = "<RuleCollection Type=\"Script\" EnforcementMode=\"" + mode + "\"><FilePathRule /></RuleCollection>"
+def applocker(name, mode="Enabled", assignments=None, encrypted=False, allow_path="%WINDIR%\\*"):
+    value = ("<RuleCollection Type=\"Script\" EnforcementMode=\"" + mode + "\"><FilePathRule Id=\"1\" Name=\"r\" "
+             "UserOrGroupSid=\"S-1-1-0\" Action=\"Allow\"><Conditions><FilePathCondition Path=\"" + allow_path +
+             "\" /></Conditions></FilePathRule></RuleCollection>")
     return {"@odata.type": "#microsoft.graph.windows10CustomConfiguration", "id": "c-" + name, "displayName": name,
             "omaSettings": [{"@odata.type": "#microsoft.graph.omaSettingString",
                              "omaUri": "./Vendor/MSFT/AppLocker/ApplicationLaunchRestrictions/Grp1/Script/Policy",
@@ -227,3 +229,28 @@ def test_key_is_new_and_no_existing_transform_emits_it():
                 if '"' + KEY + '"' in fh.read():
                     seen.append(path)
     assert seen == []
+
+
+def test_script_enforcement_disabled_is_not_constrained_language():
+    got, out = value(body([xml_policy("x", ["Enabled:UMCI", "Disabled:Script Enforcement"])]))
+    assert got is False
+    assert "script enforcement disabled" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+@pytest.mark.parametrize("path", ["*", "%OSDRIVE%\\*", "%TEMP%\\*", "%USERPROFILE%\\Downloads\\*", "C:\\Users\\*"])
+def test_applocker_allowing_user_writable_paths_is_not_enforcing(path):
+    got, out = value(body([], [applocker("AL", allow_path=path)]))
+    assert got is False
+    assert "allows user-writable paths" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_applocker_allowing_program_files_still_enforces():
+    assert value(body([], [applocker("AL", allow_path="%PROGRAMFILES%\\*")]))[0] is True
+
+
+def test_filter_id_without_a_type_is_filtered():
+    t = {"target": {"@odata.type": "#microsoft.graph.allDevicesAssignmentTarget",
+                    "deviceAndAppManagementAssignmentFilterId": "11111111-1111-1111-1111-111111111111"}}
+    got, out = value(body([app_control("x", assignments=[t])]))
+    assert got is False
+    assert "uses an assignment filter" in out["additionalInfo"]["evaluation"]["failReasons"][0]
