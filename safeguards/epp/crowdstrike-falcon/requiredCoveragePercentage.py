@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def extract_input(input_data):
@@ -80,12 +80,52 @@ def is_rfm(value):
     return value is True or str(value).strip().lower() in ("yes", "true")
 
 
+# A host counts as reporting only when its last_seen is within this many days of the response's
+# clock. The same window, clock and rule are written identically in isEPPConfiguredFromHosts.py, so
+# a host this check counts as not reporting is the host that check leaves out, and the reverse.
+# It matches the 15-day endpoint rule the Sophos and NinjaOne checks already apply.
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_time(value):
+    """CrowdStrike ISO timestamps (seconds, or nanoseconds, then Z) as naive UTC; None if unreadable."""
+    if not isinstance(value, str) or len(value.strip()) < 19:
+        return None
+    try:
+        return datetime.fromisoformat(value.strip()[:19])
+    except ValueError:
+        return None
+
+
+def reference_clock(devices):
+    """The newest last_seen in the response, so a scan of cached data judges hosts against the data's
+    own time. When that newest check-in is itself older than the window the whole fleet is dark, and
+    the wall clock is used so every host is stale rather than every host fresh."""
+    known = [parse_time(d.get("last_seen")) for d in devices if isinstance(d, dict)]
+    known = [t for t in known if t is not None]
+    wall = datetime.utcnow()
+    if not known:
+        return wall
+    newest = max(known)
+    if newest < wall - timedelta(days=ACTIVE_WINDOW_DAYS):
+        return wall
+    return newest
+
+
+def is_reporting(device, clock):
+    """A missing or unreadable last_seen is not reporting, never reporting."""
+    seen = parse_time(device.get("last_seen"))
+    return seen is not None and seen >= clock - timedelta(days=ACTIVE_WINDOW_DAYS)
+
+
 def transform(input):
     """
     requiredCoveragePercentage (CrowdStrike, GET /devices/combined/devices/v1).
 
-    Percentage of returned devices whose sensor is active: status "normal", not in reduced
-    functionality mode, an agent_version and a last_seen. Not measured (dataCollection error, shown
+    Percentage of returned devices whose sensor is active: last_seen within ACTIVE_WINDOW_DAYS of the
+    newest check-in in the response (see reference_clock), status "normal", not in reduced
+    functionality mode, and an agent_version. Each inactive host is counted under the first of those
+    tests it fails, in that order, so the output explains the gap. Not measured (dataCollection error, shown
     Unevaluated) on an API error, or when the device list is truncated: meta.pagination.total larger
     than the devices returned (an unpaged call returns the first 100), or a merged paginated
     response marked truncated. A percentage of a sample is not the estate's coverage.
@@ -120,22 +160,26 @@ def transform(input):
         )
 
     total = len(resources)
+    clock = reference_clock(resources)
     active = 0
+    not_reporting = 0
+    not_normal = 0
+    rfm_hosts = 0
+    no_agent = 0
     for device in resources:
         if not isinstance(device, dict):
             continue
-        status = device.get("status")
-        rfm = device.get("reduced_functionality_mode")
-        last_seen = device.get("last_seen")
-        agent_version = device.get("agent_version")
-        is_active = (
-            status == "normal"
-            and not is_rfm(rfm)
-            and bool(agent_version)
-            and bool(last_seen)
-        )
-        if is_active:
+        if not is_reporting(device, clock):
+            not_reporting = not_reporting + 1
+        elif device.get("status") != "normal":
+            not_normal = not_normal + 1
+        elif is_rfm(device.get("reduced_functionality_mode")):
+            rfm_hosts = rfm_hosts + 1
+        elif not device.get("agent_version"):
+            no_agent = no_agent + 1
+        else:
             active = active + 1
+    window = f"within {ACTIVE_WINDOW_DAYS} days of the newest check-in ({clock.isoformat()}Z)"
 
     if total > 0:
         percentage = round((active / total) * 100, 2)
@@ -155,19 +199,32 @@ def transform(input):
         )
     elif total > 0:
         pass_reasons.append(
-            f"{active} of {total} known Falcon-managed devices report status='normal', "
-            f"reduced_functionality_mode!=true, a populated agent_version, and a recent last_seen "
-            f"timestamp, yielding a sensor coverage of {percentage}%."
+            f"{active} of {total} known Falcon-managed devices have a last_seen {window}, "
+            f"status='normal', reduced_functionality_mode not on, and a populated agent_version, "
+            f"yielding a sensor coverage of {percentage}%."
         )
         if percentage < 100:
             fail_reasons.append(
-                f"{total - active} of {total} devices ({round(100 - percentage, 2)}%) do not have "
-                f"an actively-reporting Falcon sensor (missing/rfm/stale)."
+                f"{total - active} of {total} devices ({round(100 - percentage, 2)}%) do not have an "
+                f"actively-reporting Falcon sensor: {not_reporting} not seen {window} (or no readable "
+                f"last_seen), {not_normal} with status other than 'normal', {rfm_hosts} in reduced "
+                f"functionality mode, {no_agent} with no agent_version."
             )
-            recommendations.append(
-                "Investigate devices with status != 'normal' or reduced_functionality_mode=true "
-                "and reinstall or repair the Falcon sensor to restore full coverage."
-            )
+            if not_reporting:
+                recommendations.append(
+                    f"{not_reporting} hosts have not checked in for more than {ACTIVE_WINDOW_DAYS} days: "
+                    "bring them back online, or remove decommissioned hosts from Falcon host management."
+                )
+            if not_normal:
+                recommendations.append(
+                    f"{not_normal} hosts report a status other than 'normal' (for example network "
+                    "containment): review them in Falcon host management."
+                )
+            if rfm_hosts or no_agent:
+                recommendations.append(
+                    "Reinstall or repair the Falcon sensor on hosts in reduced functionality mode or with "
+                    "no agent version."
+                )
     else:
         fail_reasons.append(
             "No device records were returned by getDeviceDetails; coverage percentage could not be computed "
@@ -182,6 +239,8 @@ def transform(input):
         "requiredCoveragePercentage": percentage,
         "activeDevices": active,
         "totalDevices": total,
+        "notReportingDevices": not_reporting,
+        "activeWindowDays": ACTIVE_WINDOW_DAYS,
     }
 
     return create_response(
@@ -190,7 +249,16 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary={"totalDevices": total, "activeDevices": active},
+        input_summary={
+            "totalDevices": total,
+            "activeDevices": active,
+            "notReportingDevices": not_reporting,
+            "statusNotNormalDevices": not_normal,
+            "reducedFunctionalityDevices": rfm_hosts,
+            "noAgentVersionDevices": no_agent,
+            "activeWindowDays": ACTIVE_WINDOW_DAYS,
+            "referenceClock": clock.isoformat() + "Z",
+        },
         metadata={
             "transformationId": "requiredCoveragePercentage",
             "vendor": "CrowdStrike Falcon",

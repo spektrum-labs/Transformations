@@ -2,8 +2,9 @@
 
 protected = endpoints with the vendor's protection installed (computers and servers); configured = those
 enforcing and healthy by the vendor's own signal. floor(100 * configured / protected). Staleness is not held
-against an endpoint, except on Sophos and NinjaOne, which judge only endpoints seen within 15 days of the newest
-check-in (endpoint rules 2026-09-29, see test_endpoint_rules.py). No protected endpoint, or a truncated list, is not evaluated: dataCollection error and no
+against an endpoint, except on Sophos, NinjaOne and CrowdStrike Falcon, which judge only endpoints seen within 15
+days of the newest check-in (endpoint rules 2026-09-29, see test_endpoint_rules.py and
+crowdstrike-falcon/test_crowdstrike_staleness_and_config_buckets.py). No protected endpoint, or a truncated list, is not evaluated: dataCollection error and no
 value -- except Microsoft Defender for Endpoint, where a fully read inventory with no onboarded machine is 0
 with the reason "connected and has 0 onboarded devices" (a finding for that tool). Synthetic bodies in each vendor's documented shape; no customer data."""
 import copy
@@ -70,7 +71,7 @@ def threatdown_policy(self_protection=True):
 
 def falcon_host(i, applied=True, rfm="no", product="Workstation"):
     return {"device_id": f"d{i}", "platform_name": "Windows", "product_type_desc": product, "status": "normal",
-            "reduced_functionality_mode": rfm, "last_seen": "2025-01-01T00:00:00Z",
+            "reduced_functionality_mode": rfm, "last_seen": RECENT,
             "device_policies": {"prevention": {"policy_type": "prevention", "policy_id": "p1", "applied": applied}}}
 
 

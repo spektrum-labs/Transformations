@@ -11,6 +11,7 @@ import copy
 import importlib.util
 import json
 import pathlib
+from datetime import datetime, timedelta
 
 HERE = pathlib.Path(__file__).resolve().parent
 
@@ -26,6 +27,7 @@ CRIT = load("isEPPEnabledForCriticalSystems")
 COV = load("requiredCoveragePercentage")
 POLICIES = json.loads((HERE / "fixtures" / "falcon_complete_prevention_policies_real_2026-09-25.json").read_text())
 DEVICES = json.loads((HERE / "fixtures" / "xdr_devices_unpaged_real_2026-09-25.json").read_text())
+RECENT = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 ERROR = {"error": True, "message": "Integration execution error: HTTP 403: Forbidden"}
 
 
@@ -92,6 +94,8 @@ def test_coverage_real_unpaged_sample_is_not_measured():
 def test_coverage_complete_list_counts_rfm_yes_as_inactive():
     body = copy.deepcopy(DEVICES)
     body["meta"]["pagination"]["total"] = str(len(body["resources"]))
+    for d in body["resources"]:  # staleness is tested in test_crowdstrike_staleness_and_config_buckets.py
+        d["last_seen"] = RECENT
     assert cov(body) == (99.0, "success")  # 99 normal/"no", 1 normal/"yes"
     flipped = copy.deepcopy(body)
     for d in flipped["resources"]:
