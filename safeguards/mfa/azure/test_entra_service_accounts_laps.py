@@ -362,3 +362,11 @@ def test_workflow_reported_truncation_is_not_evaluated(name, keys):
         assert value(name, marked)[0] is None
         assert value(name, stringify(marked))[0] is None
     assert value(name, dict(body, paginationStats={keys[0]: {"paginationTruncated": False}}))[0] is not None
+
+
+def test_modern_client_types_only_leave_legacy_sign_in_open():
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2], client_types=("browser", "mobileAppsAndDesktopClients"))
+    assert value(SVC, svc_body([pol]))[0] is False
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2],
+             client_types=("browser", "mobileAppsAndDesktopClients", "exchangeActiveSync", "other"))
+    assert value(SVC, svc_body([pol]))[0] is True

@@ -16,7 +16,8 @@ A group is BLOCKED when at least one enabled policy (state enabled, not report-o
     - targets all cloud apps (includeApplications All, no excluded apps, no application filter),
     - includes the group (includeGroups) or All users, and excludes nothing on the user side (no excluded users,
       roles, guests or other groups: group membership is not expanded, so any carve-out may be a service account),
-    - applies to every client app type (none listed, or "all", or both browser and mobileAppsAndDesktopClients),
+    - applies to every client app type (none listed, "all", or all four: browser, mobileAppsAndDesktopClients,
+      exchangeActiveSync and other legacy clients),
     - and has no other condition with a value (locations or platforms other than All, device filters, risk levels,
       authentication flows, or any condition this file does not know): a block "except from trusted locations" still
       lets the accounts sign in interactively from there, so it does not count.
@@ -295,11 +296,19 @@ def user_exclusions(users, group_id):
     return out
 
 
+#: Every client app type Conditional Access knows: modern (browser, desktop and mobile apps) and legacy
+#: (Exchange ActiveSync and other basic-auth clients such as IMAP, POP, SMTP AUTH and ROPC).
+CLIENT_APP_TYPES = ("browser", "mobileappsanddesktopclients", "exchangeactivesync", "other")
+
+
 def all_client_apps(cond):
     types = lowered(cond.get("clientAppTypes"))
     if len(types) == 0 or "all" in types:
         return True
-    return "browser" in types and "mobileappsanddesktopclients" in types
+    for t in CLIENT_APP_TYPES:
+        if t not in types:
+            return False
+    return True
 
 
 def policy_reach(policy, group_id):
