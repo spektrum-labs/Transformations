@@ -91,11 +91,11 @@ from datetime import datetime
 #   "securityDefaults": GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy. Enabled (or not read whole):
 #                       no False; the key stays not evaluated (security defaults are not graded here);
 #   "perUserMfaStates": a Graph list of {"id", "perUserMfaState"} (GET /beta/users/{id}/authentication/requirements,
-#                       one item per user, each carrying the user's "id"). Only "enforced" covers that account. A member
-#                       outside whose state is "enabled" (MFA on modern sign-ins, a password on legacy clients) or who
-#                       has no entry, a list not read whole, or a fan-out with item errors or truncation means no
-#                       False. When CA
-#                       group coverage plus enforced per-user MFA covers every enabled Member, the key passes.
+#                       one item per user, each carrying the user's "id"). Only "enforced" covers an account and only
+#                       "disabled" leaves it outside. A member outside with any other state ("enabled" is MFA on
+#                       modern sign-ins only), or with no entry, a list not read whole, or a fan-out with item errors
+#                       or truncation means no False. When CA group coverage plus enforced per-user MFA covers every
+#                       enabled Member, the key passes.
 MFA_PER_USER_STATES = ("enforced",)
 EXCLUDE_RISK_CONDITIONED = True
 ALL_USERS_TARGET_MODE = "unevaluated"
@@ -494,8 +494,8 @@ def per_user_mfa(data):
             state = str(as_dict(item).get("perUserMfaState") or "").strip().lower()
             if state in MFA_PER_USER_STATES:
                 ids.add(uid)
-            elif state != "enabled":
-                seen.add(uid)  # "enabled" stays out of seen: such a member blocks the False (see members_outside_verdict)
+            elif state == "disabled":
+                seen.add(uid)  # any other state ("enabled", missing, unknown) stays out of seen and blocks the False
     return ids, seen | ids, ""
 
 
@@ -674,6 +674,10 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
                             input_summary, details):
     """The members-outside rule (header). A response, or None to keep the not-evaluated path."""
     if coverage["groupReadsRefused"] or coverage["groupsUnread"] or not coverage["memberListRead"]:
+        return None
+    ca = data.get("conditionalAccessPolicies")
+    if isinstance(ca, dict) and list_pages(ca) is None:
+        details["membersOutsideUndecided"] = "the Conditional Access policy list was not read whole"
         return None
     found, why = members_outside(data, policies)
     if found is None:
