@@ -1,0 +1,11 @@
+{
+  "Findings": [
+    {
+      "Compliance": {
+        "Status": "FAILED",
+        "SecurityControlId": "IAM.5"
+      },
+      "RecordState": "ACTIVE"
+    }
+  ]
+}

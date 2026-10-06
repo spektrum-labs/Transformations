@@ -1,0 +1,65 @@
+{
+  "records": [
+    {
+      "id": 2,
+      "userName": "ssadmin",
+      "displayName": "ssadmin",
+      "domainId": -1,
+      "domainName": null,
+      "enabled": true,
+      "isApplicationAccount": false,
+      "isLockedOut": false,
+      "externalUserSource": "None",
+      "twoFactorMethod": "None"
+    },
+    {
+      "id": 11,
+      "userName": "jdoe@example.com",
+      "displayName": "jdoe@example.com",
+      "domainId": -1,
+      "domainName": null,
+      "enabled": true,
+      "isApplicationAccount": false,
+      "isLockedOut": false,
+      "externalUserSource": "ThycoticOne",
+      "twoFactorMethod": "None"
+    }
+  ],
+  "total": 2,
+  "hasNext": false,
+  "success": true,
+  "userRoles": [
+    {
+      "records": [
+        {
+          "roleId": 1,
+          "roleName": "Administrator",
+          "isDirectAssignment": true,
+          "groups": []
+        }
+      ],
+      "total": 1,
+      "hasNext": false,
+      "success": true
+    },
+    {
+      "records": [
+        {
+          "roleId": 1,
+          "roleName": "User",
+          "isDirectAssignment": true,
+          "groups": []
+        },
+        {
+          "roleId": 2,
+          "roleName": "Secret Server Admin",
+          "isDirectAssignment": true,
+          "groups": []
+        }
+      ],
+      "total": 2,
+      "hasNext": false,
+      "success": true
+    }
+  ]
+}
