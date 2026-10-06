@@ -178,7 +178,7 @@ MARKER_ROWS = [
     ("jdoeadmin@example.com", False), ("doe.a@example.com", False), ("admiral.jones@example.com", False),
     # the organisation's own domain is never a marker; a domain label matches only as a whole word
     ("jdoe@privatebank.com", False), ("jdoe@adminsoft.com", False), ("jdoe@cityadm.gov", False),
-    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
+    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("jdoe@admin.gv.at", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
 ]
 
 

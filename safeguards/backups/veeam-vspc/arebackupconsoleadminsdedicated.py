@@ -77,7 +77,9 @@ DOMAIN_ADMIN_WORDS = ("adm", "admin", "admins", "priv", "privileged", "t0", "tie
 
 #: Second-level labels under a two-letter country code (example.co.uk, example.com.au). The registrable domain
 #: is the organisation's own name and is never read as a marker: jdoe@admin.ch is an everyday address.
-SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "mil", "ltd", "plc")
+SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "gub", "mil", "ltd",
+                       "plc", "gouv", "gv", "gc", "govt", "sch", "nhs", "res", "nic", "int", "gen", "firm", "biz",
+                       "info", "nom", "med", "police", "mod", "judiciary", "parliament", "lg", "ed")
 
 MAX_LISTED = 25
 
