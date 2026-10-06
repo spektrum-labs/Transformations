@@ -61,11 +61,16 @@ MATCHING. An app link (appName, label) or an org app (name, label) is a producti
   * its OIN name is exactly "office365" (Microsoft Office 365) or "google" (Google Workspace; Okta's own
     example labels it "Google Apps Mail"), case-insensitive; or
   * its name or label contains, as whole words (case-insensitive; any non-alphanumeric character,
-    including "_", separates words), one of: office 365, microsoft 365, outlook, exchange, google
-    workspace, g suite, gmail, or the run-together forms office365, microsoft365, gsuite,
-    googleworkspace. This catches custom SAML / WS-Fed / bookmark apps such as "Microsoft 365 (SAML)" or
-    appName "contoso_microsoft365_1". A bare "google" in a label is NOT matched (Google Analytics, Google
-    Cloud are not mailboxes).
+    including "_", separates words), one of: office 365, microsoft 365, google workspace, g suite, gmail,
+    the run-together forms office365, microsoft365, gsuite, googleworkspace, or the qualified Exchange /
+    Outlook phrases exchange online, microsoft exchange, exchange server, microsoft outlook, outlook web,
+    outlook com, owa; or
+  * its whole name or label is just "Exchange" or "Outlook". A bare "exchange" or "outlook" inside a
+    longer label is NOT matched: "Partner Exchange" or "Data Exchange" is not a mailbox, and matching it
+    would make it false pass evidence in orgApps and a false fail on an admin.
+This catches custom SAML / WS-Fed / bookmark apps such as "Microsoft 365 (SAML)", "Exchange Online" or
+appName "contoso_microsoft365_1". A bare "google" in a label is NOT matched (Google Analytics, Google
+Cloud are not mailboxes).
 
 PAIRING. adminAppLinks is paired with adminAssignees.value by position. When a slot echoes the user it
 was read for (an IS item-error record's "item", or a "userId" on the slot), a mismatch with the admin in
@@ -103,8 +108,12 @@ NONE_MEANS_NOT_EVALUATED = ('areAdminAccountsSeparate',)
 KEY = "areAdminAccountsSeparate"
 META = {"transformationId": KEY, "vendor": "Okta", "category": "iam"}
 PRODUCTIVITY_OIN_NAMES = ["office365", "google"]
-PRODUCTIVITY_TERMS = ["office 365", "microsoft 365", "outlook", "exchange", "google workspace", "g suite", "gmail",
-                      "office365", "microsoft365", "gsuite", "googleworkspace"]
+PRODUCTIVITY_TERMS = ["office 365", "microsoft 365", "google workspace", "g suite", "gmail",
+                      "office365", "microsoft365", "gsuite", "googleworkspace",
+                      "exchange online", "microsoft exchange", "exchange server", "microsoft outlook", "outlook web",
+                      "outlook com", "owa"]
+# Ambiguous alone ("Partner Exchange", "Data Exchange"): a match only when they are the whole name or label.
+WHOLE_LABEL_TERMS = ["exchange", "outlook"]
 WRAPPER_KEYS = ["api_response", "response", "result", "apiResponse", "Output"]
 MAX_NAMED = 20
 MAX_AFFECTED = 50
@@ -234,7 +243,10 @@ def productivity_match(app_name, label):
     if name in PRODUCTIVITY_OIN_NAMES:
         return name
     for text in [app_name, label]:
-        padded = " " + " ".join(words(text)) + " "
+        joined = " ".join(words(text))
+        if joined in WHOLE_LABEL_TERMS:
+            return joined
+        padded = " " + joined + " "
         for term in PRODUCTIVITY_TERMS:
             if " " + term + " " in padded:
                 return term

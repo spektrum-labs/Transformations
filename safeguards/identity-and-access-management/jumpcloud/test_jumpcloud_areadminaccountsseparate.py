@@ -188,6 +188,8 @@ def test_admin_off_the_directory_domains_is_a_finding(loader):
     assert out["transformedResponse"][KEY] is True
     findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
     assert "6501a0000000000000000002" in findings and "msp.example.org" not in json.dumps(out)
+    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
+    assert reason.startswith("1 of 2 active") and "could not be compared" in reason
 
 
 @pytest.mark.parametrize("loader", RUNNERS)

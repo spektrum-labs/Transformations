@@ -235,6 +235,17 @@ def name_list(items):
     return shown
 
 
+def pass_reason(active, off_domain):
+    """The pass reason, naming only the administrators that were actually compared with directory users."""
+    if not off_domain:
+        return ("All " + str(active) + " active JumpCloud administrator(s) use an admin-only identity that no "
+                "active everyday directory user carries")
+    return (str(active - off_domain) + " of " + str(active) + " active JumpCloud administrator(s) were compared with "
+            "directory users on their email domain and use an admin-only identity that no active everyday directory "
+            "user carries; " + str(off_domain) + " use an email domain no active directory user is on, so their "
+            "separation could not be compared (see findings)")
+
+
 def not_evaluated(validation, reason, summary=None, findings=None):
     return create_response(
         result={KEY: None, "adminCount": None, "adminsSharingEverydayIdentity": None},
@@ -379,8 +390,7 @@ def transform(input):
         return create_response(
             result={KEY: True, "adminCount": len(active_admins), "adminsSharingEverydayIdentity": 0},
             validation=validation,
-            pass_reasons=["All " + str(len(active_admins)) + " active JumpCloud administrator(s) use an admin-only "
-                          "identity that no active everyday directory user carries"],
+            pass_reasons=[pass_reason(len(active_admins), len(off_domain))],
             input_summary=summary, additional_findings=findings)
     except Exception as e:
         message = "Transformation error: " + str(e)[:200]
