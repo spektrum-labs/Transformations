@@ -17,9 +17,11 @@ RULE. True only when a body that reads the root user's keys shows none active:
      1 -> False. https://docs.aws.amazon.com/IAM/latest/APIReference/API_GetAccountSummary.html
   3. Security Hub findings (method getSecurityHubComplianceAWS, AWS Foundational Security Best
      Practices). Control IAM.4 "IAM root user access key should not exist". Only findings with
-     RecordState ACTIVE and a Workflow.Status other than SUPPRESSED are judged (an archived
-     finding is stale; a suppressed one is a finding someone chose to hide). Any judged FAILED
-     -> False; every judged finding PASSED -> True. A body carrying a non-empty NextToken has
+     RecordState ACTIVE are judged (an archived finding is stale). A SUPPRESSED finding whose
+     Compliance.Status is FAILED still counts as FAILED: Security Hub keeps re-evaluating
+     suppressed findings, so it still means a root key exists, and suppressing it must not make
+     the check pass. A SUPPRESSED PASSED finding is not counted. Any judged FAILED -> False;
+     every judged finding PASSED -> True. A body carrying a non-empty NextToken has
      more findings on a later page, so it is not evaluated unless a FAILED finding was already
      seen. This needs no permission beyond the Security Hub read the connection already holds.
      https://docs.aws.amazon.com/securityhub/latest/userguide/iam-controls.html#iam-4
@@ -29,7 +31,7 @@ When more than one source is present the first in that order decides.
 FAIL CLOSED. An empty body, an AWS or Integration-Service error, a report with no root row, a
 root row missing either key column or holding any other value, a report whose GeneratedTime is
 missing, unparsable, more than 24 hours old or more than 1 hour in the future, a summary
-without the key, a findings list with no active, unsuppressed PASSED/FAILED IAM.4 finding, and
+without the key, a findings list with no active FAILED or active, unsuppressed PASSED IAM.4 finding, and
 a paged findings list (NextToken) with no FAILED finding seen all return None with
 additionalInfo.dataCollection.status "error" (not evaluated). None of them is a pass.
 
@@ -316,6 +318,7 @@ def evaluate_summary(holder):
 def evaluate_findings(findings, next_token=None):
     statuses = []
     skipped = 0
+    suppressed_failed = 0
     for f in findings:
         if not isinstance(f, dict):
             continue
@@ -325,16 +328,21 @@ def evaluate_findings(findings, next_token=None):
         if str(f.get("RecordState") or "ACTIVE").strip().upper() != "ACTIVE":
             skipped = skipped + 1
             continue
+        status = str(comp.get("Status") or "").upper()
         workflow = f.get("Workflow") if isinstance(f.get("Workflow"), dict) else {}
         if str(workflow.get("Status") or "").strip().upper() == "SUPPRESSED":
-            skipped = skipped + 1
+            if status == "FAILED":
+                suppressed_failed = suppressed_failed + 1
+                statuses.append(status)
+            else:
+                skipped = skipped + 1
             continue
-        status = str(comp.get("Status") or "").upper()
         if status in ("PASSED", "FAILED"):
             statuses.append(status)
     paged = isinstance(next_token, str) and next_token.strip() != ""
     summary = {"source": "securityHub", "control": SH_CONTROL, "findings": len(statuses),
                "failed": len([s for s in statuses if s == "FAILED"]),
+               "suppressedFailed": suppressed_failed,
                "archivedOrSuppressedSkipped": skipped, "morePages": paged}
     if "FAILED" in statuses:
         return False, None, summary

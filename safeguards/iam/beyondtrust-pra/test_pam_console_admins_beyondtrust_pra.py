@@ -150,3 +150,75 @@ def test_unread_group_policies_reason_names_the_gap(loader):
     out = loader(MODULE)(fixture("console_admins_dedicated_group_policies_unread.json"))
     assert out["transformedResponse"][KEY] is None
     assert "group-policy admin grants were not read" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+# --- group policies and members are paged like users: a full page or a marker is partial ------
+
+def hundred_policies(body):
+    filler = [{"id": 100 + i, "name": "Policy " + str(i), "perm_admin": False, "members": []}
+              for i in range(100 - len(body["groupPolicies"]))]
+    body["groupPolicies"] = body["groupPolicies"] + filler
+    return body
+
+
+def ninety_nine_policies(body):
+    filler = [{"id": 100 + i, "name": "Policy " + str(i), "perm_admin": False, "members": []}
+              for i in range(99 - len(body["groupPolicies"]))]
+    body["groupPolicies"] = body["groupPolicies"] + filler
+    return body
+
+
+def hundred_members_on_admin_policy(body):
+    """100 members on the admin-granting policy, all of them the one dedicated admin, so only the
+    page-size guard can make the result anything but True."""
+    body["groupPolicies"][0]["members"] = [{"id": 1000 + i, "security_provider_id": 2, "user_id": 2}
+                                          for i in range(100)]
+    return body
+
+
+def hundred_members_on_non_admin_policy(body):
+    body["groupPolicies"][1]["members"] = [{"id": 1000 + i, "security_provider_id": 2, "group_id": "g" + str(i)}
+                                          for i in range(100)]
+    return body
+
+
+def policies_with_marker(key, value):
+    def mutate(body):
+        body["groupPolicies"] = {"data": body["groupPolicies"], key: value}
+        return body
+    return mutate
+
+
+def members_with_marker(key, value):
+    def mutate(body):
+        body["groupPolicies"][0]["members"] = {"data": body["groupPolicies"][0]["members"], key: value}
+        return body
+    return mutate
+
+
+def workflow_pagination_stats(body):
+    body["paginationStats"] = {"groupPolicies": {"paginationTruncated": True}}
+    return body
+
+
+PAGING_CASES = [
+    ("100 group policies", hundred_policies, None),
+    ("99 group policies", ninety_nine_policies, True),
+    ("100 members on an admin policy", hundred_members_on_admin_policy, None),
+    ("100 members on a non-admin policy", hundred_members_on_non_admin_policy, True),
+    ("policies with next link", policies_with_marker("next", "/api/config/v1/group-policy?current_page=2"), None),
+    ("policies with hasNext", policies_with_marker("hasNext", True), None),
+    ("policies with NextToken", policies_with_marker("NextToken", "abc"), None),
+    ("policies with empty next", policies_with_marker("next", ""), True),
+    ("members with next link", members_with_marker("next", "/api/config/v1/group-policy/1/member?current_page=2"), None),
+    ("members with paginationTruncated", members_with_marker("paginationTruncated", True), None),
+    ("workflow paginationStats.groupPolicies truncated", workflow_pagination_stats, None),
+]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=["plain", "sandbox"])
+@pytest.mark.parametrize("label,mutate,expected", PAGING_CASES, ids=[c[0] for c in PAGING_CASES])
+def test_group_policy_and_member_paging(loader, label, mutate, expected):
+    value, status = verdict(loader(MODULE)(mutate(dedicated())), KEY)
+    assert value is expected
+    assert status == ("error" if expected is None else "success")

@@ -68,6 +68,7 @@ CASES = [
     ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'securityhub_no_iam4.json', None),
     ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'securityhub_iam4_archived_passed_only.json', None),
     ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'securityhub_iam4_archived_failed_active_passed.json', True),
+    ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'securityhub_iam4_suppressed_failed_active_passed.json', False),
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'credential_report_root_locked_down.json', True),
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'credential_report_root_never_signed_in.json', True),
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'credential_report_root_no_mfa.json', False),
@@ -110,8 +111,11 @@ def iam4(status, record_state="ACTIVE", workflow="NEW"):
 
 
 IAM4_CASES = [
-    ("suppressed FAILED alone", {"Findings": [iam4("FAILED", workflow="SUPPRESSED")]}, None),
-    ("suppressed FAILED beside active PASSED", {"Findings": [iam4("FAILED", workflow="SUPPRESSED"), iam4("PASSED")]}, True),
+    ("suppressed FAILED alone", {"Findings": [iam4("FAILED", workflow="SUPPRESSED")]}, False),
+    ("suppressed FAILED beside active PASSED", {"Findings": [iam4("FAILED", workflow="SUPPRESSED"), iam4("PASSED")]}, False),
+    ("suppressed PASSED alone", {"Findings": [iam4("PASSED", workflow="SUPPRESSED")]}, None),
+    ("suppressed PASSED beside active PASSED", {"Findings": [iam4("PASSED", workflow="SUPPRESSED"), iam4("PASSED")]}, True),
+    ("archived suppressed FAILED beside active PASSED", {"Findings": [iam4("FAILED", "ARCHIVED", "SUPPRESSED"), iam4("PASSED")]}, True),
     ("archived and suppressed only", {"Findings": [iam4("PASSED", "ARCHIVED"), iam4("PASSED", workflow="SUPPRESSED")]}, None),
     ("active FAILED beside archived PASSED", {"Findings": [iam4("PASSED", "ARCHIVED"), iam4("FAILED")]}, False),
     ("PASSED with more pages", {"Findings": [iam4("PASSED")], "NextToken": "abc"}, None),
