@@ -180,3 +180,35 @@ def test_workflow_pagination_marker_is_not_evaluated(path, loader):
     body = fixture(path, "pass")
     body["paginationStats"] = {"users": {"paginationTruncated": True}}
     assert not_evaluated(run(path, loader, body))
+
+
+# --- Review fix (#1006 / #1007): an untyped principal missing from the user read is named as such ---
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+@pytest.mark.parametrize("principal", [None, {"id": "7c7c7c7c-0000-4000-8000-00000000007c"}])
+def test_untyped_principal_not_in_user_read_says_why(path, loader, principal):
+    body = fixture(path, "pass")
+    row = {"id": "sp", "principalId": "7c7c7c7c-0000-4000-8000-00000000007c", "roleDefinitionId": GA,
+           "directoryScopeId": "/"}
+    if principal is not None:
+        row["principal"] = principal
+    body["roleAssignments"]["value"].append(row)
+    out = run(path, loader, body)
+    assert not_evaluated(out)
+    errors = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "no @odata.type" in errors and "service principal" in errors
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["untypedPrincipalsNotInUserRead"] == 1
+    assert any("principal type" in r for r in out["additionalInfo"]["evaluation"]["recommendations"])
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_typed_user_not_in_user_read_is_not_called_a_service_principal(path, loader):
+    body = fixture(path, "pass")
+    body["roleAssignments"]["value"].append({
+        "id": "u", "principalId": "7c7c7c7c-0000-4000-8000-00000000007d", "roleDefinitionId": GA,
+        "directoryScopeId": "/", "principal": {"@odata.type": "#microsoft.graph.user",
+                                                "id": "7c7c7c7c-0000-4000-8000-00000000007d"}})
+    out = run(path, loader, body)
+    assert not_evaluated(out)
+    errors = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "a user not in the user read" in errors and "service principal" not in errors
