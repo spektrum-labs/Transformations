@@ -1,6 +1,13 @@
 """isTamperProtectionEnabled and isRealTimeProtectionEnabled for Microsoft Defender for Endpoint (One-Click),
 from the advanced-hunting query over DeviceTvmSecureConfigurationAssessment that the One-Click methods
-getTamperProtectionStatus (scid-2010) and getRealTimeProtectionStatus (scid-2011) run.
+getTamperProtectionStatus (scid-2003) and getRealTimeProtectionStatus (scid-2012) run.
+
+Configuration ids (Microsoft's own Defender agent-health hunting query, Azure/Azure-Sentinel "Endpoint Agent Health
+Status Report": scid-2003 TamperProtectionWin, scid-2010 AntivirusEnabled, scid-2011 AntivirusSignatureVersionWin,
+scid-2012 RealtimeProtectionWin). Until 6 Oct 2026 this file and the methods read scid-2010 as tamper protection and
+scid-2011 as real-time protection; those ids measure "Defender Antivirus on" and "definitions up to date". A result
+that still carries scid-2010 or scid-2011 rows (a method not yet re-pointed) is read as Not evaluated, never as
+tamper or real-time protection.
 
 Why a separate file: istamperprotectionenabled.py / isrealtimeprotectionenabled.py return true when ONE
 device is compliant ("protected > 0"), so 1943 of 2075 devices passed "real-time protection is active
@@ -24,8 +31,14 @@ from datetime import datetime
 
 
 SCIDS = {
-    "scid-2010": ("isTamperProtectionEnabled", "tamperProtectionCompliancePercentage", "tamper protection"),
-    "scid-2011": ("isRealTimeProtectionEnabled", "realTimeProtectionCompliancePercentage", "real-time protection"),
+    "scid-2003": ("isTamperProtectionEnabled", "tamperProtectionCompliancePercentage", "tamper protection"),
+    "scid-2012": ("isRealTimeProtectionEnabled", "realTimeProtectionCompliancePercentage", "real-time protection"),
+}
+
+#: Ids the methods used to query by mistake, and what they really measure.
+RETIRED_SCIDS = {
+    "scid-2010": "Defender Antivirus turned on, not tamper protection",
+    "scid-2011": "Defender Antivirus definitions up to date, not real-time protection",
 }
 
 
@@ -102,6 +115,11 @@ def measure(data):
     if any(not isinstance(row, dict) for row in rows):
         raise ValueError("The advanced-hunting response contains an invalid row")
     seen = set(str(row.get("ConfigurationId") or "") for row in rows)
+    retired = sorted(seen & set(RETIRED_SCIDS))
+    if retired:
+        raise ValueError("The query read " + "; ".join(scid + " (" + RETIRED_SCIDS[scid] + ")" for scid in retired)
+                         + ". The method must query scid-2003 (tamper protection) and scid-2012 (real-time "
+                         "protection), so these rows are not evidence for either")
     unknown = seen - set(SCIDS)
     if unknown:
         raise ValueError("Unexpected configuration ids in the results: " + ", ".join(sorted(unknown)))
@@ -143,7 +161,7 @@ def transform(input):
                                   "so Defender for Endpoint does not measure " + SCIDS[scid][2] + " here")
             if not errors:
                 errors.append("Defender for Endpoint's secure-configuration assessment returned no device for tamper "
-                              "protection (scid-2010) or real-time protection (scid-2011), so Defender for Endpoint "
+                              "protection (scid-2003) or real-time protection (scid-2012), so Defender for Endpoint "
                               "does not measure them here; this query cannot show whether any device is onboarded")
         summary = dict(result)
         summary["readings"] = lines

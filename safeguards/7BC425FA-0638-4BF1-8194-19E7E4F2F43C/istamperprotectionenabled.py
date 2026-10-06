@@ -10,7 +10,8 @@ Query: DeviceTvmSecureConfigurationAssessment
 Permission: AdvancedQuery.Read.All
 
 Response contains Results[] with IsCompliant (bool) per device.
-scid-2010 = "Turn on tamper protection" configuration check.
+scid-2010 is "Turn on Microsoft Defender Antivirus", NOT tamper protection (that is scid-2003); this file
+counts whatever rows its method returns, so the method query decides what is measured.
 """
 import json
 from datetime import datetime

@@ -9,7 +9,8 @@ Query: DeviceTvmSecureConfigurationAssessment
        | project DeviceId, DeviceName, ConfigurationId, IsCompliant, IsApplicable
 Permission: AdvancedQuery.Read.All
 
-scid-2011 = "Turn on real-time protection" configuration check.
+scid-2011 is "Update Microsoft Defender Antivirus definitions", NOT real-time protection (that is scid-2012);
+this file counts whatever rows its method returns, so the method query decides what is measured.
 """
 import json
 from datetime import datetime
