@@ -237,7 +237,8 @@ def test_script_enforcement_disabled_is_not_constrained_language():
     assert "script enforcement disabled" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
-@pytest.mark.parametrize("path", ["*", "%OSDRIVE%\\*", "%TEMP%\\*", "%USERPROFILE%\\Downloads\\*", "C:\\Users\\*"])
+@pytest.mark.parametrize("path", ["*", "*.ps1", "*\\Temp\\*", "%OSDRIVE%\\*", "%TEMP%\\*", "%USERPROFILE%\\Downloads\\*",
+                                  "C:\\Users\\*", "D:\\Users\\*", "%OSDRIVE%\\ProgramData\\*"])
 def test_applocker_allowing_user_writable_paths_is_not_enforcing(path):
     got, out = value(body([], [applocker("AL", allow_path=path)]))
     assert got is False
@@ -279,3 +280,13 @@ def test_a_broad_principal_allowing_everything_is_not_enforcing(sid):
 def test_a_broad_rule_with_exceptions_is_not_read():
     rules = [("S-1-1-0", "*", "<Exceptions><FilePathException Path=\"%TEMP%\\*\" /></Exceptions>")]
     assert value(body([], [collection(rules)]))[0] is None
+
+
+def test_unknown_principals_and_paths_are_not_read():
+    # an Entra group SID allowing everything cannot be shown narrow
+    assert value(body([], [collection([("S-1-12-1-1111111111-2222222222-3333333333-4444444444", "*", "")])]))[0] is None
+    # an unlisted path for Everyone cannot be shown safe
+    assert value(body([], [collection([("S-1-1-0", "%OSDRIVE%\\Tools\\*", "")])]))[0] is None
+    # a later broad rule still fails after an unreadable one
+    rules = [("S-1-1-0", "*", "<Exceptions><FilePathException Path=\"x\" /></Exceptions>"), ("S-1-1-0", "C:\\Users\\*", "")]
+    assert value(body([], [collection(rules)]))[0] is False

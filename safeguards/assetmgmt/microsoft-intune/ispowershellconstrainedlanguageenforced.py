@@ -16,10 +16,12 @@ device_vendor_msft_policy_config_applicationcontrol) are read for their mode:
     nor "Disabled:Script Enforcement" (which leaves PowerShell in FullLanguage mode).
 AppLocker comes from custom profiles (windows10CustomConfiguration) whose OMA-URI is .../AppLocker/
 ApplicationLaunchRestrictions/.../Script/Policy: EnforcementMode="Enabled" is Enforce, "AuditOnly" is Audit. An
-enforced collection with an Allow path rule, for Everyone / Users / Authenticated Users / Interactive / Domain Users,
-over everything, the system drive or a user-writable folder (%TEMP%, %USERPROFILE%, %APPDATA%) is not enforcing:
-PowerShell tests a script in %TEMP% as the signed-in user, so it stays in FullLanguage mode. An admin-only "All
-scripts" rule (AppLocker's default) is still enforcing; a broad rule with exceptions is not read (Not evaluated).
+enforced collection is read fail-closed, rule by rule: an Allow path rule for BUILTIN\\Administrators, or under
+%WINDIR%, %PROGRAMFILES% or %SYSTEM32%, is safe (AppLocker's default rules); an Allow path rule for Everyone /
+Users / Authenticated Users / Interactive / Domain Users (or no principal) over everything, a wildcard-led path, a
+whole drive, a Users or ProgramData folder, or a temp/profile folder keeps PowerShell in FullLanguage mode (its
+%TEMP% probe runs as the signed-in user) and grades False; any other Allow path rule (an Entra or AD group SID, an
+unlisted path, a broad rule with exceptions) cannot be shown safe and reads Not evaluated.
 An assignment with a filter id is filtered unless its filter type is explicitly none.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
@@ -325,57 +327,85 @@ def app_control_mode(policy):
     return True, None
 
 
-#: PowerShell picks its language mode under AppLocker by testing whether a script in a user-writable folder (%TEMP%)
-#: would be allowed. An Allow path rule for everything, the whole system drive, or a user-writable folder keeps it in
-#: FullLanguage mode, so such a collection is not an enforcing one.
-USER_WRITABLE = ('path="*"', 'path="%osdrive%\\*"', 'path="%systemdrive%\\*"', 'path="c:\\*"',
-                 'path="%temp%', 'path="%tmp%', 'path="%userprofile%', 'path="%appdata%', 'path="%localappdata%',
-                 'path="%osdrive%\\users', 'path="c:\\users')
-
-
-#: Principals that cover standard users. PowerShell's %TEMP% probe runs as the signed-in user, so an Allow rule for
-#: Administrators only does not lift constrained language mode for standard users (AppLocker's default script rule
-#: "All scripts" for BUILTIN\Administrators is normal and still enforcing).
+#: PowerShell picks its language mode under AppLocker by testing, as the signed-in user, whether an unsigned script
+#: in %TEMP% would be allowed. Path rules are read fail-closed: a rule is known-safe only when it is for
+#: BUILTIN\Administrators, or its path sits under a root standard users cannot write to; a rule for a principal that
+#: covers standard users over everything, a whole drive or a user folder is known-broad; anything else is unread.
+ADMIN_SIDS = ('userorgroupsid="s-1-5-32-544"',)
 BROAD_SIDS = ('userorgroupsid="s-1-1-0"', 'userorgroupsid="s-1-5-32-545"', 'userorgroupsid="s-1-5-11"',
               'userorgroupsid="s-1-5-4"')
+SAFE_ROOTS = ('%windir%\\', '%programfiles%\\', '%system32%\\')
+BROAD_PATHS = ('*', '%osdrive%\\*', '%systemdrive%\\*', 'c:\\*', 'd:\\*', '%temp%', '%tmp%', '%userprofile%',
+               '%appdata%', '%localappdata%', '%osdrive%\\users', 'c:\\users', '%osdrive%\\programdata', 'c:\\programdata')
 
 
-def broad_principal(rule):
-    """True when the rule applies to Everyone, Users, Authenticated Users, Interactive or Domain Users (-513), or
-    names no principal at all."""
-    if "userorgroupsid=" not in rule:
-        return True
-    for sid in BROAD_SIDS:
+def rule_paths(rule):
+    """The lower-cased FilePathCondition paths in one rule."""
+    out = []
+    start = 0
+    for step in range(50):
+        i = rule.find('<filepathcondition', start)
+        if i < 0:
+            break
+        k = rule.find('path="', i)
+        if k < 0:
+            break
+        e = rule.find('"', k + 6)
+        if e < 0:
+            break
+        out.append(rule[k + 6:e])
+        start = e + 1
+    return out
+
+
+def rule_reach(rule):
+    """'safe', 'broad' or 'unknown' for one lower-cased Allow FilePathRule."""
+    for sid in ADMIN_SIDS:
         if sid in rule:
-            return True
-    i = rule.find("userorgroupsid=\"")
-    if i >= 0:
-        j = rule.find("\"", i + len("userorgroupsid=\""))
-        if j > 0 and rule[i:j].endswith("-513"):
-            return True
-    return False
+            return "safe"
+    paths = rule_paths(rule)
+    if len(paths) == 0:
+        return "unknown"
+    all_safe = True
+    for path in paths:
+        if not any([path.startswith(root) and "*" not in path[:len(root)] for root in SAFE_ROOTS]):
+            all_safe = False
+    if all_safe:
+        return "safe"
+    broad_sid = "userorgroupsid=" not in rule or any([sid in rule for sid in BROAD_SIDS])
+    if not broad_sid:
+        q = rule.find('userorgroupsid="')
+        e = rule.find('"', q + 16) if q >= 0 else -1
+        broad_sid = e > 0 and rule[q:e].endswith("-513")
+    broad_path = any([any([path.startswith(b) or ("\\users\\" in path) for b in BROAD_PATHS]) for path in paths])
+    if broad_sid and broad_path:
+        return "broad"
+    return "unknown"
 
 
 def allows_user_writable(low):
-    """True when a lower-cased, space-free AppLocker script collection holds an Allow FilePathRule for a principal
-    that covers standard users and whose path covers everything, the system drive or a user-writable folder; None
-    when such a rule carries exceptions (not read) or the collection is too large to read; else False."""
+    """True when an Allow FilePathRule, without exceptions, is known-broad; None when any Allow path rule cannot be
+    shown safe (an unknown principal or path, a broad rule with exceptions, or a collection over the read cap);
+    False when every Allow path rule is known-safe."""
     start = 0
+    unknown = False
     for step in range(500):
         i = low.find("<filepathrule", start)
         if i < 0:
-            return False
+            return None if unknown else False
         j = low.find("</filepathrule>", i)
         if j < 0:
             j = len(low)
         rule = low[i:j]
-        if 'action="allow"' in rule and broad_principal(rule):
-            for marker in USER_WRITABLE:
-                if marker in rule:
-                    if "<filepathexception" in rule or "<filehashexception" in rule or "<filepublisherexception" in rule:
-                        return None
-                    return True
         start = j + 1
+        if 'action="allow"' not in rule:
+            continue
+        reach = rule_reach(rule)
+        if reach == "safe":
+            continue
+        if reach == "broad" and "exception" not in rule:
+            return True
+        unknown = True
     return None
 
 
