@@ -58,7 +58,10 @@ partial); an administrator with no security_provider_id or one that names a prov
 providers leg does not list; a users leg of exactly 100 records with no sign it was paged
 (the API's page size, so the list may be truncated); a groupPolicies leg that is an error or
 not a list, a policy without perm_admin, an admin-granting policy without a members list, a
-member with no user_id, or a member user_id not in the users leg; and group policies not read
+member with no user_id, or a member user_id not in the users leg; a groupPolicies list or an
+admin-granting policy's members list of exactly 100 rows (the API page size) or carrying a
+next/paging marker (next, NextToken, hasNext, paginationTruncated, or the workflow's
+paginationStats.groupPolicies), since it may be truncated; and group policies not read
 while a directory provider exists (see GROUP POLICIES).
 """
 
@@ -217,15 +220,40 @@ def as_list(leg):
     return None
 
 
-def group_policy_admins(leg, user_by_id):
+PAGING_KEYS = ("next", "nextPage", "next_page", "nextLink", "nextUrl", "NextToken", "nextToken",
+               "next_cursor")
+PAGING_FLAGS = ("hasNext", "has_next", "hasMore", "has_more", "paginationTruncated")
+
+
+def paging_problem(leg, rows, what):
+    """A not-evaluated reason when a list from the paged Configuration API may be cut off:
+    exactly PAGE_SIZE rows, or a next/paging marker on the leg that carried them."""
+    if isinstance(rows, list) and len(rows) == PAGE_SIZE:
+        return ("exactly " + str(PAGE_SIZE) + " " + what + " returned, the API page size: the "
+                "list may be truncated")
+    if isinstance(leg, dict):
+        for key in PAGING_FLAGS:
+            if leg.get(key) is True or str(leg.get(key)).strip().lower() == "true":
+                return what + " carry a paging marker (" + key + "): the list is partial"
+        for key in PAGING_KEYS:
+            value = leg.get(key)
+            if value is not None and value is not False and str(value).strip() not in ("", "0"):
+                return what + " carry a paging marker (" + key + "): the list is partial"
+    return None
+
+
+def group_policy_admins(leg, user_by_id, stats=None):
     """(users granted Administrator by a group policy, problem). problem is a not-evaluated
-    reason, else None."""
+    reason, else None. stats is the workflow's paginationStats.groupPolicies, if any."""
     leg_error = error_reason(leg)
     if leg_error:
         return [], "groupPolicies: " + leg_error
     policies = as_list(leg)
     if policies is None:
         return [], "groupPolicies is not a list of group policies"
+    paged = paging_problem(leg, policies, "group policies") or paging_problem(stats, None, "group policies")
+    if paged:
+        return [], paged
     granted = []
     for p in policies:
         if not isinstance(p, dict):
@@ -237,6 +265,7 @@ def group_policy_admins(leg, user_by_id):
         if p.get("perm_admin") is not True:
             continue
         members = p.get("members")
+        members_leg = members
         if isinstance(members, dict):
             members_error = error_reason(members)
             if members_error:
@@ -245,6 +274,9 @@ def group_policy_admins(leg, user_by_id):
         if not isinstance(members, list):
             return [], ("group policy " + label + " grants Administrator but its members were not "
                         "read")
+        paged = paging_problem(members_leg, members, "members of group policy " + label)
+        if paged:
+            return [], paged
         for m in members:
             if not isinstance(m, dict):
                 return [], "group policy " + label + " has a member that is not an object"
@@ -299,7 +331,9 @@ def transform(input):
         policies_read = "groupPolicies" in data
         policy_count = 0
         if policies_read:
-            policies, problem = group_policy_admins(data.get("groupPolicies"), user_by_id)
+            stats = data.get("paginationStats") if isinstance(data.get("paginationStats"), dict) else {}
+            policies, problem = group_policy_admins(data.get("groupPolicies"), user_by_id,
+                                                    stats.get("groupPolicies"))
             if problem:
                 return not_evaluated(problem)
             policy_count = len(policies)
