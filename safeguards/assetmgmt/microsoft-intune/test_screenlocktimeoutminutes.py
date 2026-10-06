@@ -221,3 +221,14 @@ def test_unreadable_minutes_are_not_evaluated(raw):
 
 def test_fractional_minutes_round_up():
     assert value(graph([general("frac", "15.2", [ALL_DEVICES])]))[0] == 16
+
+
+def test_a_password_required_estate_wide_makes_another_profiles_limit_apply():
+    kiosk = general("Kiosks", 60, [group("g-kiosk")])
+    kiosk["passwordRequired"] = False
+    got, out = value(graph([general("base", 10, [ALL_DEVICES]), kiosk]))
+    assert got == 60
+    # with no profile requiring a password estate-wide, the gated limit still does not count
+    base = general("base", 10, [ALL_DEVICES])
+    base["passwordRequired"] = False
+    assert value(graph([base, kiosk, protection("EP", 12, [ALL_DEVICES])]))[0] == 12
