@@ -118,7 +118,7 @@ def principal(name, ptype="InternalUser", role="Veeam Backup Administrator", ser
 
 ADMINS = coll([principal("BUILTIN\\Administrators", "InternalGroup"), principal("CORP\\adm-jdoe"),
                principal("CORP\\jdoe", role="Veeam Restore Operator")])
-ADMINS_BAD = coll([principal("BUILTIN\\Administrators", "InternalGroup"), principal("CORP\\jdoe")])
+ADMINS_BAD = coll([principal("BUILTIN\\Administrators", "InternalGroup"), principal("CORP\\Domain Users", "InternalGroup")])
 
 CASES = {
     "areBackupConsoleAdminsDedicated": (ADMINS, True, ADMINS_BAD, False),

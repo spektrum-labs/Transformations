@@ -109,16 +109,16 @@ def test_dedicated_admins_pass(loader):
 
 
 @pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
-def test_everyday_sso_admin_fails(loader):
+def test_unmarked_sso_admin_not_evaluated(loader):
     out = run(FAILING, loader)
-    assert out["transformedResponse"][KEY] is False
+    assert out["transformedResponse"][KEY] is None
     assert "jane.doe@example.com" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
 def test_wrapped_same_answers():
     assert value(ts_wrap(PASSING)) is True
-    assert value(ts_wrap(FAILING)) is False
-    assert value(json.dumps(FAILING)) is False
+    assert value(ts_wrap(FAILING)) is None
+    assert value(json.dumps(FAILING)) is None
 
 
 def test_partial_pages_not_evaluated():
@@ -150,14 +150,21 @@ def test_unknown_domain_unmarked_not_evaluated():
 
 def test_role_named_admin_counts():
     custom = {"id": "r-c", "name": "Backup Admins", "isOrgAdmin": False}
-    assert value(body([user("jdoe@example.com", roles=[custom])])) is False
+    assert value(body([user("jdoe@example.com", roles=[custom])])) is None
 
 
 @pytest.mark.parametrize("name,expected", [
     ("adm-jdoe@example.com", True), ("jdoe-adm@example.com", True), ("a-jdoe@example.com", True),
     ("jdoe_a@example.com", True), ("adminjdoe@example.com", True), ("t0.jdoe@example.com", True),
-    ("jdoe@admin.example.com", True), ("doe.a@example.com", False), ("jane.doe@example.com", False),
-    ("admiral.jones@example.com", False), ("sam@example.com", False),
+    ("jdoe@admin.example.com", True), ("doe.a@example.com", None), ("jane.doe@example.com", None),
+    ("admiral.jones@example.com", None), ("sam@example.com", None),
 ])
 def test_identity_marker(name, expected):
     assert value(body([user(name)])) is expected
+
+
+def test_unmarked_identity_reads_not_evaluated():
+    out = run(FAILING)
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "no admin marker" in out["additionalInfo"]["evaluation"]["failReasons"][0]
