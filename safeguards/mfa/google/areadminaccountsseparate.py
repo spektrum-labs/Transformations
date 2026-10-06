@@ -200,6 +200,11 @@ def transform(input):
         users = [u for u in body["users"] if isinstance(u, dict)]
         truncated = bool(body.get("nextPageToken")) or is_true(body.get("paginationTruncated")) \
             or (isinstance(data, dict) and is_true(data.get("paginationTruncated")))
+        stats = data.get("paginationStats") if isinstance(data, dict) else None
+        if isinstance(stats, dict):
+            for marker in stats.values():
+                if isinstance(marker, dict) and is_true(marker.get("paginationTruncated")):
+                    truncated = True
 
         admins = [u for u in users if is_true(u.get("isAdmin")) or is_true(u.get("isDelegatedAdmin"))]
         inactive = [u for u in admins if is_true(u.get("suspended")) or is_true(u.get("archived"))]

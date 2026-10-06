@@ -138,3 +138,13 @@ def test_all_admins_suspended_is_not_evaluated(loader):
     for admin in body["administrators"]["results"]:
         admin["suspended"] = True
     assert not_evaluated(loader()(body))
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_workflow_pagination_marker_is_not_evaluated(loader):
+    body = fixture("pass")
+    body["paginationStats"] = {"systemUsers": {"paginationTruncated": True}}
+    assert not_evaluated(loader()(body))
+    body = fixture("pass")
+    body["paginationTruncated"] = True
+    assert not_evaluated(loader()(body))

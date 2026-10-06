@@ -331,8 +331,15 @@ def collect(data):
             truncated.append(label)
         parts[label] = rows
 
-    if data.get("paginationTruncated") is True and "pagination" not in truncated:
+    if str(data.get("paginationTruncated")).lower() == "true" and "pagination" not in truncated:
         truncated.append("pagination")
+    stats = data.get("paginationStats")
+    if isinstance(stats, dict):
+        for label in sorted(stats):
+            marker = stats.get(label)
+            if isinstance(marker, dict) and str(marker.get("paginationTruncated")).lower() == "true" \
+                    and label not in truncated:
+                truncated.append(label)
 
     return (parts.get("roleAssignments"), parts.get("directoryRoles"), parts.get("users"),
             api_errors, recommendations, truncated)

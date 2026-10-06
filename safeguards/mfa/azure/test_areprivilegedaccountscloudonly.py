@@ -173,3 +173,10 @@ def test_one_failed_read_is_not_evaluated(path, loader):
     out = run(path, loader, body)
     assert not_evaluated(out)
     assert "403" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+@pytest.mark.parametrize("path,loader", RUNNERS)
+def test_workflow_pagination_marker_is_not_evaluated(path, loader):
+    body = fixture(path, "pass")
+    body["paginationStats"] = {"users": {"paginationTruncated": True}}
+    assert not_evaluated(run(path, loader, body))

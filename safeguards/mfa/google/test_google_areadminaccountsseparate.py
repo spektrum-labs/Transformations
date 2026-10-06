@@ -113,3 +113,9 @@ def test_wrapped_and_workflow_merged_bodies(loader):
     assert loader()({"apiResponse": fixture("pass")})["transformedResponse"][KEY] is True
     assert loader()({"users": fixture("fail")})["transformedResponse"][KEY] is False
     assert loader()({"rawResponse": fixture("fail")["users"]})["transformedResponse"][KEY] is False
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_workflow_pagination_marker_is_not_evaluated(loader):
+    body = {"users": fixture("pass"), "paginationStats": {"users": {"paginationTruncated": True}}}
+    assert not_evaluated(loader()(body))
