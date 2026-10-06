@@ -122,8 +122,11 @@ def test_narrowed_profiles_are_not_estate_wide():
     # a shorter narrower limit does not lower the estate-wide one
     assert value(graph([general("base", 12, [ALL_DEVICES]), general("Finance", 5, [group("g1")])]))[0] == 12
     # an unassigned profile is named as such
-    out = value(graph([general("base", 12, [ALL_DEVICES]), general("draft", 90, [])]))[1]
+    got, out = value(graph([general("base", 12, [ALL_DEVICES]), general("draft", 90, [])]))
+    assert got == 12
     assert "draft (90 min, not assigned)" in out["additionalInfo"]["transformation"]["inputSummary"]["narrowerProfiles"]
+    # exclusion groups only: reaches no device either
+    assert value(graph([general("base", 12, [ALL_DEVICES]), general("x", 90, [group("g9", exclude=True)])]))[0] == 12
 
 
 def test_not_configured_values_are_ignored():

@@ -19,7 +19,8 @@ assignment filter. A null or 0 value is "not configured" and is ignored; any oth
 Not evaluated (a fraction rounds up). A device restriction limit counts only when the same profile requires a
 password (passwordRequired), because DeviceLock applies it only then. Once at least one estate-wide profile sets a
 limit, the value is the longest limit set by ANY profile, estate-wide or narrower (a device in a narrower profile's
-group receives both, and Intune flags the conflict), so a group profile at 60 minutes fails.
+group receives both, and Intune flags the conflict), so a group profile at 60 minutes fails. A profile that reaches no
+device (no assignment, or exclusion groups only) is named in the summary and never sets the value.
 Scope, stated in every reason: Intune device configuration profiles. Settings catalog policies, security baselines
 and Group Policy are not read; a limit set only there reads Not evaluated, never failed.
 Not evaluated (None with a dataCollection error): an empty, error, truncated or unrecognised body; a profile with no
@@ -48,6 +49,7 @@ PASSWORD_GATED = ("#microsoft.graph.windows10generalconfiguration",)
 
 ESTATE_TARGETS = ("#microsoft.graph.alldevicesassignmenttarget", "#microsoft.graph.alllicensedusersassignmenttarget")
 EXCLUSION_TARGET = "#microsoft.graph.exclusiongroupassignmenttarget"
+NOT_ASSIGNED = "not assigned"
 
 MAX_NAMED = 20
 
@@ -230,11 +232,15 @@ def minutes(value):
 
 
 def estate_wide(assignments):
-    """(True, None) for an All devices / All users assignment with no exclusion or filter, (False, why) otherwise,
-    (None, why) when the assignments cannot be read."""
+    """(True, None) for an All devices / All users assignment with no exclusion or filter; (False, why) for a
+    narrower one; (False, "not assigned") when no assignment includes any device or user (an empty list, or
+    exclusion groups only), so the profile reaches no device; (None, why) when the assignments cannot be read."""
     if not isinstance(assignments, list):
         return None, "no readable assignments"
-    found = False
+    estate = False
+    includes = False
+    excluded = False
+    filtered = False
     for a in assignments:
         if not isinstance(a, dict):
             return None, "an assignment is not an object"
@@ -243,15 +249,23 @@ def estate_wide(assignments):
             return None, "an assignment has no target"
         t = str(target.get("@odata.type") or "").strip().lower()
         if t == EXCLUSION_TARGET:
-            return False, "excludes a group"
+            excluded = True
+            continue
+        includes = True
         fid = target.get("deviceAndAppManagementAssignmentFilterId")
         ftype = str(target.get("deviceAndAppManagementAssignmentFilterType") or "none").strip().lower()
         if fid not in (None, "", "None", "00000000-0000-0000-0000-000000000000") and ftype not in ("none", ""):
-            return False, "uses an assignment filter"
+            filtered = True
         if t in ESTATE_TARGETS:
-            found = True
-    if not found:
-        return False, ("not assigned" if len(assignments) == 0 else "assigned to groups only")
+            estate = True
+    if not includes:
+        return False, NOT_ASSIGNED
+    if excluded:
+        return False, "excludes a group"
+    if filtered:
+        return False, "uses an assignment filter"
+    if not estate:
+        return False, "assigned to groups only"
     return True, None
 
 
@@ -319,7 +333,7 @@ def transform(input):
                                 "of 15 minutes or less to All devices, or provide the evidence as a document.", summary)
         # Once an estate-wide limit exists, every profile that sets one counts: a device in a narrower profile's
         # group receives both, so the longest limit set anywhere is the one some devices may get.
-        every = [(v, n) for v, n in limits] + [(v, n + " [" + w + "]") for v, n, w in narrowed]
+        every = [(v, n) for v, n in limits] + [(v, n + " [" + w + "]") for v, n, w in narrowed if w != NOT_ASSIGNED]
         worst = max([v for v, n in every])
         names = [n + " (" + str(v) + " min)" for v, n in sorted(every, reverse=True)]
         line = ("The longest inactivity limit set by an Intune profile is " + str(worst) + " minutes (estate-wide "
