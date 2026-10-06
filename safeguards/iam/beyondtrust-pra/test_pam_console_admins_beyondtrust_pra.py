@@ -220,6 +220,28 @@ def hundred_users(body):
     return body
 
 
+def local_only():
+    return fixture("console_admins_local_only.json")
+
+
+def providers_with_marker(key, value):
+    def mutate(body):
+        body["securityProviders"] = {"data": body["securityProviders"], key: value}
+        return body
+    return mutate
+
+
+def providers_stats(body):
+    body["paginationStats"] = {"securityProviders": {"paginationTruncated": True}}
+    return body
+
+
+def hundred_local_providers(body):
+    body["securityProviders"] = body["securityProviders"] + [
+        {"id": 100 + i, "name": "Local " + str(i), "type": "local"} for i in range(99)]
+    return body
+
+
 PAGING_CASES = [
     ("100 group policies", hundred_policies, None),
     ("99 group policies", ninety_nine_policies, True),
@@ -237,6 +259,12 @@ PAGING_CASES = [
     ("users with empty next", lambda b: users_with_marker("next", None)(b), True),
     ("workflow paginationStats.users truncated", workflow_users_stats, None),
     ("100 users", hundred_users, None),
+    ("users with numeric hasMore", lambda b: users_with_marker("hasMore", 1)(b), None),
+    ("users with hasMore 0", lambda b: users_with_marker("hasMore", 0)(b), True),
+    ("local-only, providers with next link", lambda b: providers_with_marker("next", "/api/config/v1/security-provider?current_page=2")(local_only()), None),
+    ("local-only, paginationStats.securityProviders truncated", lambda b: providers_stats(local_only()), None),
+    ("local-only, 100 local providers", lambda b: hundred_local_providers(local_only()), None),
+    ("local-only, complete providers", lambda b: local_only(), True),
 ]
 
 
