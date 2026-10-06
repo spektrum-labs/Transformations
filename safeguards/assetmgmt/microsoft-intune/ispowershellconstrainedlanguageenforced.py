@@ -31,7 +31,9 @@ AppLocker rules from every profile that reaches a device are merged there, so an
 not count while any assigned AppLocker profile allows broadly (False), or cannot be read or audits the collection
 (Not evaluated). A supplemental App Control policy (PolicyType="Supplemental Policy") adds allow rules to its base
 and never enforces on its own: a broad one undoes App Control enforcement (False), an unreadable one makes it
-Not evaluated.
+Not evaluated. An App Control policy delivered as a binary .cip through a custom OMA-URI profile
+(./Vendor/MSFT/ApplicationControl/Policies/...) cannot be read; when one reaches devices, App Control enforcement is
+Not evaluated. Attribute quotes may be single or double.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
 False: App Control or AppLocker policies were read and none of them is an estate-wide enforcing policy (audit only,
@@ -344,7 +346,8 @@ def wdac_allows_everything(low):
 
 def xml_mode(text):
     """The mode of an App Control policy XML string, or None when it is not one."""
-    low = strip_comments(text.lower()).replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "")
+    low = strip_comments(text.lower()).replace("'", '"')
+    low = low.replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "")
     if "<sipolicy" not in low:
         return None
     if 'policytype="supplementalpolicy"' in low:
@@ -392,7 +395,7 @@ def app_control_mode(policy):
         if weak in modes:
             return True, weak
     if SUPPLEMENTAL_UNREAD in modes:
-        return True, None
+        return True, SUPPLEMENTAL_UNREAD
     if "enforce" in modes:
         return True, "enforce"
     if SUPPLEMENTAL in modes:
@@ -483,6 +486,19 @@ def allows_user_writable(low):
             return True
         unknown = True
     return None
+
+
+def oma_app_control(profile):
+    """True for a custom profile that delivers an App Control policy through ./Vendor/MSFT/ApplicationControl."""
+    if str(profile.get("@odata.type") or "").strip().lower() != CUSTOM_PROFILE:
+        return False
+    settings = profile.get("omaSettings")
+    if not isinstance(settings, list):
+        return False
+    for s in settings:
+        if isinstance(s, dict) and "/applicationcontrol/policies/" in str(s.get("omaUri") or "").strip().lower():
+            return True
+    return False
 
 
 def applocker_mode(profile):
@@ -576,6 +592,10 @@ def transform(input):
                 else:
                     is_it, mode = applocker_mode(it)
                     kind = "AppLocker script rules"
+                    if not is_it and oma_app_control(it):
+                        # An App Control policy delivered as a binary .cip through a custom OMA-URI profile: it may
+                        # be a base or a supplemental, and its rules cannot be read here.
+                        is_it, mode, kind = True, None, "App Control (custom OMA-URI)"
                 if not is_it:
                     continue
                 wide, reach = estate_wide(it.get("assignments"))
@@ -590,8 +610,10 @@ def transform(input):
         applocker_reaching = [p for p in policies if p["kind"] == "AppLocker script rules" and p["reach"] != NOT_ASSIGNED]
         applocker_broad = [p for p in applocker_reaching if p["mode"] == "allows user-writable paths"]
         applocker_unsure = [p for p in applocker_reaching if p["mode"] is None or p["mode"] == "audit"]
-        supplemental_reaching = [p for p in policies if p["kind"] == "App Control" and p["reach"] != NOT_ASSIGNED]
+        supplemental_reaching = [p for p in policies if p["kind"].startswith("App Control") and p["reach"] != NOT_ASSIGNED]
         supplemental_broad = [p for p in supplemental_reaching if p["mode"] == SUPPLEMENTAL_BROAD]
+        supplemental_unsure = [p for p in supplemental_reaching
+                               if p["mode"] == SUPPLEMENTAL_UNREAD or p["kind"] == "App Control (custom OMA-URI)"]
         for p in policies:
             if p["mode"] != "enforce":
                 continue
@@ -602,6 +624,8 @@ def transform(input):
                     p["mode"] = None
             elif supplemental_broad:
                 p["mode"] = "merged with a broad supplemental"
+            elif supplemental_unsure:
+                p["mode"] = None
         enforcing = [p for p in policies if p["mode"] == "enforce" and p["wide"] is True]
         summary = {"policiesRead": len(policies), "policies": [label(p) for p in policies][:MAX_NAMED],
                    "readGaps": gaps[:MAX_NAMED]}
@@ -618,7 +642,7 @@ def transform(input):
             return not_measured(validation, "Microsoft Intune: " + "; ".join(gaps[:3]) + ". No estate-wide enforcing "
                                 "App Control or AppLocker policy was found in what was read, but the read is incomplete.",
                                 "The reads need DeviceManagementConfiguration.Read.All.", summary)
-        unreadable = [p for p in policies if p["mode"] is None or p["wide"] is None]
+        unreadable = [p for p in policies if p["mode"] is None or p["mode"] == SUPPLEMENTAL_UNREAD or p["wide"] is None]
         if unreadable:
             return not_measured(validation, str(len(unreadable)) + " App Control or AppLocker polic(ies) could not be "
                                 "read for mode or assignments (" + name_list([label(p) for p in unreadable]) + "), so "

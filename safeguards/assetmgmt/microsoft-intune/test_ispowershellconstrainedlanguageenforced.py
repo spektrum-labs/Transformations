@@ -368,3 +368,25 @@ def test_empty_applocker_profile_does_not_undo_and_audit_profile_makes_it_unread
     assert value(body([], [applocker("Baseline AL"), empty]))[0] is True
     audit = applocker("Pilot AL", "AuditOnly", assignments=[group("g-3")])
     assert value(body([], [applocker("Baseline AL"), audit]))[0] is None
+
+
+def test_unreadable_or_binary_supplementals_make_the_base_not_evaluated():
+    base = xml_policy("Base", ["Enabled:UMCI"])
+    many = "".join("<Allow ID=\"ID_H_" + str(i) + "\" FriendlyName=\"h\" Hash=\"AA\" />" for i in range(5001))
+    big = supplemental("Big Sup", many + "<Allow ID=\"ID_X\" FileName=\"*\" />", assignments=[group("g-1")])
+    assert value(body([base, big]))[0] is None
+    cip = {"@odata.type": "#microsoft.graph.windows10CustomConfiguration", "id": "c-cip", "displayName": "Legacy WDAC",
+           "omaSettings": [{"@odata.type": "#microsoft.graph.omaSettingBase64",
+                            "omaUri": "./Vendor/MSFT/ApplicationControl/Policies/{guid}/Policy", "value": "AAAA"}],
+           "assignments": [group("g-2")]}
+    got, out = value(body([base], [cip]))
+    assert got is None
+    assert "custom OMA-URI" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_single_quoted_supplemental_is_recognised():
+    base = xml_policy("Base", ["Enabled:UMCI"])
+    sup = supplemental("Sup", "<Allow ID='ID_ALL' FileName='*' />", assignments=[group("g-1")])
+    v = sup["settings"][0]["settingInstance"]["simpleSettingValue"]
+    v["value"] = v["value"].replace("PolicyType=\"Supplemental Policy\"", "PolicyType='Supplemental Policy'")
+    assert value(body([base, sup]))[0] is False
