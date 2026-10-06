@@ -20,7 +20,8 @@ IsApplicable / IsCompliant arrive as SByte (1/0), booleans, or their strings.
 
 A row counts only when its ConfigurationId is one this file names AND its knowledge-base name says what that
 id means; any other row makes the read Not evaluated rather than being guessed at. An applicable device that has
-no reading for one part of the claim is not shown to comply: with no failure elsewhere the read is Not evaluated.
+no reading for one part of the claim is not shown to comply, and a part no device reads as applicable was not
+measured: with no failure elsewhere, either makes the read Not evaluated.
 Scope: devices onboarded to Defender for Endpoint and assessed by Defender Vulnerability Management. Devices
 that are not onboarded are not seen; device coverage is reported by the coverage checks.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body, a result at the
@@ -200,7 +201,8 @@ def config_part(config_id, config_name):
     for part in PARTS:
         claimed = claimed + list(part["ids"])
     for part in PARTS:
-        if config_id in part["ids"] or (len(part["ids"]) == 0 and config_id not in claimed):
+        if config_id in part["ids"] or (len(part["ids"]) == 0 and config_id.startswith("scid-")
+                                         and config_id[5:].isdigit() and config_id not in claimed):
             ok = True
             for word in part["words"]:
                 if word not in name:
@@ -266,6 +268,20 @@ def measure(rows):
             worst = compliant if current[1] is None else (current[1] and compliant)
             devices[dkey]["parts"][part] = [True, worst]
     return devices, parts_seen, unknown_ids, unnamed
+
+
+def never_applicable(devices):
+    """The parts of the claim that no device reads as applicable: nothing about them was measured."""
+    out = []
+    for p in PARTS:
+        seen = False
+        for dkey in devices:
+            reading = devices[dkey]["parts"].get(p["part"])
+            if reading is not None and reading[0]:
+                seen = True
+        if not seen:
+            out.append(p["part"])
+    return out
 
 
 def transform(input):
@@ -348,6 +364,10 @@ def judge(validation, devices):
             recommendations=[FIX],
             input_summary=summary,
         )
+    unmeasured = never_applicable(devices)
+    if unmeasured:
+        return not_measured(validation, "No device is applicable for " + ", ".join(unmeasured) + ", so that part of " +
+                            CLAIM + " was not measured anywhere.", None, summary)
     if unassessed:
         return not_measured(validation, str(len(unassessed)) + " applicable device(s) were not assessed for every "
                             "part of " + CLAIM + ": " + name_list(unassessed) + ". No device failed, but the devices "
