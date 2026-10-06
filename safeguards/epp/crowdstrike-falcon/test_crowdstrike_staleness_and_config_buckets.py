@@ -185,12 +185,14 @@ def test_config_all_hosts_stale_is_not_evaluated():
 
 
 def test_both_checks_share_one_window_and_one_rule():
-    assert CFG.ACTIVE_WINDOW_DAYS == COV.ACTIVE_WINDOW_DAYS
-    for name in ("parse_time", "reference_clock", "is_reporting"):
-        cov_src = (HERE / "requiredCoveragePercentage.py").read_text()
-        cfg_src = (HERE / "isEPPConfiguredFromHosts.py").read_text()
-        start = "def " + name + "("
-        assert cov_src[cov_src.index(start):].split("\n\n\n")[0] == cfg_src[cfg_src.index(start):].split("\n\n\n")[0], name
+    """And so do isEDRDeployed and isPatchManagementEnabledFromHosts: every CrowdStrike host check agrees
+    on which hosts are reporting."""
+    files = ("requiredCoveragePercentage.py", "isEPPConfiguredFromHosts.py", "isEDRDeployed.py",
+             "isPatchManagementEnabledFromHosts.py")
+    sources = [(HERE / f).read_text() for f in files]
+    for name in ("ACTIVE_WINDOW_DAYS = ", "def parse_time(", "def reference_clock(", "def is_reporting("):
+        bodies = {src[src.index(name):].split("\n\n\n")[0] for src in sources}
+        assert len(bodies) == 1, name
 
 
 # --- isEPPConfigured: three buckets, three fixes ---
