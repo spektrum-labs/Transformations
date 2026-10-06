@@ -78,3 +78,10 @@ def test_legacy_guard_covers_bare_lists_and_any_other_id():
     assert tamper(hunting([row("scid-2012", 1)]))["transformedResponse"]["isTamperProtectionEnabled"] is None
     assert rtp(hunting([row("scid-2003", 1)]))["transformedResponse"]["isRealTimeProtectionEnabled"] is None
     assert tamper([row("scid-2003", 1)])["transformedResponse"]["isTamperProtectionEnabled"] is True
+
+
+def test_legacy_guard_refuses_hunting_rows_without_an_id():
+    tamper = load_legacy("istamperprotectionenabled")
+    r = row("scid-2003", 1)
+    del r["ConfigurationId"]
+    assert tamper(hunting([r]))["transformedResponse"]["isTamperProtectionEnabled"] is None
