@@ -252,9 +252,13 @@ def test_a_paged_or_partial_read_is_not_evaluated():
     body["next_idx"] = 0
     assert value(workflow(body)) is None
     body = fortios([policy(i, ["internal"], ["wan1"], service=("HTTPS",)) for i in range(1, 4)])
-    body["matched_count"] = 5
-    body["next_idx"] = 2
+    body["matched_count"] = "5"
     assert value(workflow(body)) is None
+    # next_idx is never read as a cursor
+    body = fortios([policy(i, ["internal"], ["wan1"], service=("HTTPS",)) for i in range(1, 4)])
+    body["matched_count"] = 3
+    body["next_idx"] = 0
+    assert value(workflow(body)) == 0
     body = fortios([policy(1, ["internal"], ["wan1"], service=("HTTPS",))])
     body["matched_count"] = 9
     assert value(workflow(body)) is None

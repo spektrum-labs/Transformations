@@ -22,8 +22,8 @@ named address objects or service groups that happen to cover everything are not 
 address and "ALL" service are read). A policy whose service or destination is negated (service-negate,
 dstaddr-negate, dstaddr6-negate) does not match that field.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body; the policy, interface or
-zone read missing, not successful or partial (matched_count above the results returned, or next_idx short of the
-last matched entry; next_idx alone is not a cursor on FortiOS 7.x); or, when no permissive policy is confirmed, an accept-ALL-to-all policy whose
+zone read missing, not successful or partial (matched_count above the results returned; next_idx is not read as a
+cursor, because FortiOS 7.x sends it on complete reads too); or, when no permissive policy is confirmed, an accept-ALL-to-all policy whose
 destination interface cannot be resolved to an interface or zone. A confirmed permissive policy is a failure even
 when others are unresolved (they can only add to the count; the reason names them).
 """
@@ -198,16 +198,12 @@ def fortios_body(part):
     if status == "" and http_status is None:
         return None, "the FortiOS body carries neither status nor http_status, so success cannot be shown"
     # FortiOS 7.x list bodies carry matched_count and next_idx even for a complete read (next_idx is then the
-    # index of the last entry returned), so next_idx alone is not a cursor. A read is partial only when the
-    # counts say so: more entries matched than returned, or a next_idx short of the last matched entry.
+    # index of the last entry returned), so next_idx is not read as a cursor. A read is partial when more entries
+    # matched than were returned.
     matched = as_int(cur.get("matched_count"))
-    nxt = as_int(cur.get("next_idx"))
     results = cur.get("results")
     if matched is not None and isinstance(results, list) and matched > len(results):
         return None, ("a partial read: FortiOS matched " + str(matched) + " entries and returned " + str(len(results)))
-    if matched is not None and nxt is not None and nxt < matched - 1:
-        return None, ("a partial read: next_idx " + str(nxt) + " stops short of the " + str(matched) +
-                      " matched entries")
     return cur, None
 
 
