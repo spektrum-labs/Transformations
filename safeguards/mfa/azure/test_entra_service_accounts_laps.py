@@ -113,7 +113,9 @@ def test_service_accounts_pass_and_fail(form, loader):
 def test_report_only_excluded_and_partial_blocks_do_not_count():
     assert value(SVC, svc_body([ca("ro", groups=[G_SVC, G_SVC2], state="enabledForReportingButNotEnforced")]))[0] is False
     assert value(SVC, svc_body([ca("all", all_users=True, exclude_groups=[G_SVC2]), ca("g1", groups=[G_SVC])]))[0] is False
-    assert value(SVC, svc_body([ca("all", all_users=True, exclude_groups=[G_SVC2]), ca("g2", groups=[G_SVC2])]))[0] is True
+    # an All-users block that carves out another group may let members of this group through: not counted
+    assert value(SVC, svc_body([ca("all", all_users=True, exclude_groups=[G_SVC2]), ca("g2", groups=[G_SVC2])]))[0] is False
+    assert value(SVC, svc_body([ca("g1", groups=[G_SVC]), ca("g2", groups=[G_SVC2])]))[0] is True
     assert value(SVC, svc_body([ca("apps", groups=[G_SVC, G_SVC2], apps=("app-1",))]))[0] is False
     assert value(SVC, svc_body([ca("browser", groups=[G_SVC, G_SVC2], client_types=("browser",))]))[0] is False
     assert value(SVC, svc_body([]))[0] is False
@@ -281,3 +283,58 @@ def test_keys_are_new_and_no_existing_transform_emits_them():
                 if '"' + k + '"' in text:
                     seen.append((path, k))
     assert seen == []
+
+
+def with_users(policy, **extra):
+    policy["conditions"]["users"].update(extra)
+    return policy
+
+
+@pytest.mark.parametrize("carve_out", [
+    {"excludeUsers": ["00000000-0000-0000-0000-0000000000c1"]},
+    {"excludeRoles": ["62e90394-69f5-4237-9190-012177145e10"]},
+    {"excludeGroups": [G_STAFF]},
+    {"excludeGuestsOrExternalUsers": {"guestOrExternalUserTypes": "internalGuest", "externalTenants": {"membershipKind": "all"}}},
+])
+def test_any_user_side_carve_out_is_not_a_full_block(carve_out):
+    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), **carve_out)
+    got, out = value(SVC, svc_body([pol]))
+    assert got is False
+    assert "narrowed by excludes" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_application_filter_and_unknown_conditions_narrow_the_block():
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2])
+    pol["conditions"]["applications"]["applicationFilter"] = {"mode": "exclude", "rule": "CustomSecurityAttribute.x -eq \"y\""}
+    assert value(SVC, svc_body([pol]))[0] is False
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2])
+    pol["conditions"]["insiderRiskLevels"] = "elevated"
+    got, out = value(SVC, svc_body([pol]))
+    assert got is False and "insiderRiskLevels" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2])
+    pol["conditions"]["someFutureCondition"] = {"mode": "include"}
+    assert value(SVC, svc_body([pol]))[0] is False
+    # empty or null conditions do not narrow
+    pol = ca("Block svc", groups=[G_SVC, G_SVC2])
+    pol["conditions"].update({"devices": None, "authenticationFlows": None, "insiderRiskLevels": None,
+                              "servicePrincipalRiskLevels": []})
+    assert value(SVC, svc_body([pol]))[0] is True
+    assert value(SVC, stringify(svc_body([pol])))[0] is True
+
+
+def test_disabled_policy_is_named_as_disabled_not_report_only():
+    got, out = value(SVC, svc_body([ca("Off", groups=[G_SVC, G_SVC2], state="disabled")]))
+    assert got is False
+    assert "state disabled" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_laps_rotation_overdue_does_not_count():
+    overdue = cred(2)
+    overdue["lastBackupDateTime"] = ago(400)
+    overdue["refreshDateTime"] = ago(370)
+    old_no_refresh = cred(3)
+    old_no_refresh["lastBackupDateTime"] = ago(400)
+    old_no_refresh["refreshDateTime"] = None
+    got, out = value(LAPS, laps_body([device(1), device(2), device(3)], [cred(1), overdue, old_no_refresh]))
+    assert got == round(100.0 / 3, 2)
+    assert "WS-002 (rotation overdue)" in out["additionalInfo"]["evaluation"]["failReasons"][0]

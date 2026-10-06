@@ -16,7 +16,8 @@ deviceLocalCredentialInfo: {"id": <the device's Entra deviceId>, "deviceName", "
 Denominator: Windows devices that are enabled, Entra-joined (trustType AzureAd) or hybrid-joined (ServerAd), and
 signed in within the last 90 days (Entra ID's stale-device guidance). Registered personal devices (Workplace) cannot
 use Windows LAPS and are left out. A device counts as covered when a credential entry with a lastBackupDateTime
-matches its deviceId. Scope, stated in every reason: Windows LAPS backed up to Entra ID. Devices whose LAPS
+matches its deviceId and the password is current: its scheduled rotation (refreshDateTime) is not more than 30 days
+overdue, or, with no refreshDateTime, the backup is under 365 days old. An overdue device is named "rotation overdue". Scope, stated in every reason: Windows LAPS backed up to Entra ID. Devices whose LAPS
 password is kept in on-premises Active Directory, and legacy Microsoft LAPS, are not visible to this read.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body (including the 403 a tenant
 returns before it grants DeviceLocalCredential.ReadBasic.All); either part missing, in error or truncated; or no
@@ -36,6 +37,12 @@ PARTS = ("deviceLocalCredentials", "windowsDevices")
 
 #: Entra ID's stale-device guidance: a device with no sign-in for 90 days is stale.
 ACTIVE_DAYS = 90
+
+#: A device past its scheduled LAPS rotation (refreshDateTime) by more than this many days is not managed by LAPS.
+REFRESH_GRACE_DAYS = 30
+
+#: With no refreshDateTime, a backup older than this (Windows LAPS' longest allowed password age) is stale.
+BACKUP_MAX_AGE_DAYS = 365
 
 #: trustType values of devices that can back up a Windows LAPS password to Entra ID.
 JOINED = ("azuread", "serverad")
@@ -256,12 +263,21 @@ def transform(input):
         devices, why = graph_collection(body.get("windowsDevices"), "Windows devices")
         if why:
             return not_measured(validation, "Microsoft Entra ID " + why + ".")
+        now = datetime.now(timezone.utc)
         backed_up = {}
+        stale = {}
         for c in creds:
             did = str(c.get("id") or "").strip().lower()
-            if did and parse_time(c.get("lastBackupDateTime")) is not None:
+            last = parse_time(c.get("lastBackupDateTime"))
+            if did == "" or last is None:
+                continue
+            refresh = parse_time(c.get("refreshDateTime"))
+            if refresh is not None and refresh < now - timedelta(days=REFRESH_GRACE_DAYS):
+                stale[did] = True
+            elif refresh is None and last < now - timedelta(days=BACKUP_MAX_AGE_DAYS):
+                stale[did] = True
+            else:
                 backed_up[did] = True
-        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=ACTIVE_DAYS)
         active = []
         missing = []
@@ -281,7 +297,7 @@ def transform(input):
             name = str(d.get("displayName") or did or "device")[:60]
             active.append(name)
             if did == "" or did not in backed_up:
-                missing.append(name)
+                missing.append(name + (" (rotation overdue)" if did in stale else ""))
         covered = len(active) - len(missing)
         summary = {"activeJoinedWindowsDevices": len(active), "devicesWithLapsBackup": covered,
                    "devicesWithoutLapsBackup": missing[:MAX_NAMED], "credentialEntriesRead": len(creds),

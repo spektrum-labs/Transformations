@@ -13,11 +13,13 @@ serviceaccount(s), "service account(s)", "non-interactive", "nonhuman" / "non-hu
 for a service account, so the group name is the only signal; the reasons name every group read as one.
 A group is BLOCKED when at least one enabled policy (state enabled, not report-only):
     - has grant control block,
-    - targets all cloud apps (includeApplications All, no excluded apps),
-    - includes the group (includeGroups) or All users, and does not exclude the group,
+    - targets all cloud apps (includeApplications All, no excluded apps, no application filter),
+    - includes the group (includeGroups) or All users, and excludes nothing on the user side (no excluded users,
+      roles, guests or other groups: group membership is not expanded, so any carve-out may be a service account),
     - applies to every client app type (none listed, or "all", or both browser and mobileAppsAndDesktopClients),
-    - and is not narrowed by locations, platforms, device filters or risk levels (a block "except from trusted
-      locations" still lets the accounts sign in interactively from there, so it does not count).
+    - and has no other condition with a value (locations or platforms other than All, device filters, risk levels,
+      authentication flows, or any condition this file does not know): a block "except from trusted locations" still
+      lets the accounts sign in interactively from there, so it does not count.
 True: every service-account group is blocked. False: at least one is not; the reason names it and any narrowed or
 report-only policy that targets it. Membership is not expanded: a service account outside these groups is not seen.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body; either part missing, in
@@ -219,6 +221,19 @@ def lowered(value):
     return [v.lower() for v in strs(value)]
 
 
+#: Condition keys the check reads itself. Every other condition key with a value narrows the policy, so a
+#: condition Microsoft adds later is read as narrowing (fail-closed), never as "every sign-in".
+READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "platforms")
+
+
+def has_value(value):
+    if value is None:
+        return False
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    return str(value).strip().lower() not in ("", "none", "null")
+
+
 def narrowing(cond):
     """The conditions that narrow a policy below 'every sign-in', as short labels."""
     out = []
@@ -228,21 +243,36 @@ def narrowing(cond):
         exc = strs(locs.get("excludeLocations"))
         if (inc and inc != ["all"]) or exc:
             out.append("locations")
+    elif has_value(locs):
+        out.append("locations")
     plats = cond.get("platforms")
     if isinstance(plats, dict):
         inc = lowered(plats.get("includePlatforms"))
         exc = strs(plats.get("excludePlatforms"))
         if (inc and inc != ["all"]) or exc:
             out.append("platforms")
-    devs = cond.get("devices")
-    if isinstance(devs, dict) and (isinstance(devs.get("deviceFilter"), dict) or strs(devs.get("excludeDevices"))
-                                   or strs(devs.get("includeDevices"))):
-        out.append("devices")
-    for k in ("signInRiskLevels", "userRiskLevels", "servicePrincipalRiskLevels"):
-        if strs(cond.get(k)):
-            out.append(k)
-    if isinstance(cond.get("authenticationFlows"), dict):
-        out.append("authenticationFlows")
+    elif has_value(plats):
+        out.append("platforms")
+    for k in sorted(cond.keys()):
+        if k in READ_CONDITIONS or str(k).startswith("@"):
+            continue
+        if has_value(cond.get(k)):
+            out.append(str(k)[:40])
+    return out
+
+
+def user_exclusions(users, group_id):
+    """User-side carve-outs other than this group: any of them can let a service account through."""
+    out = []
+    if strs(users.get("excludeUsers")):
+        out.append("excludes users")
+    other = [g for g in lowered(users.get("excludeGroups")) if g != group_id]
+    if other:
+        out.append("excludes other groups")
+    if strs(users.get("excludeRoles")):
+        out.append("excludes roles")
+    if has_value(users.get("excludeGuestsOrExternalUsers")):
+        out.append("excludes guests or external users")
     return out
 
 
@@ -270,10 +300,15 @@ def policy_reach(policy, group_id):
         return "excluded"
     state = str(policy.get("state") or "").strip()
     if state.lower() != "enabled":
-        return "reportonly" if state else "narrowed:no state"
+        if state == "":
+            return "narrowed:no state"
+        if state.lower() == "enabledforreportingbutnotenforced":
+            return "reportonly"
+        return "narrowed:state " + state[:30]
     apps = cond.get("applications") if isinstance(cond.get("applications"), dict) else {}
-    why = []
-    if "all" not in lowered(apps.get("includeApplications")) or strs(apps.get("excludeApplications")):
+    why = user_exclusions(users, gid)
+    if ("all" not in lowered(apps.get("includeApplications")) or strs(apps.get("excludeApplications"))
+            or has_value(apps.get("applicationFilter"))):
         why.append("not all cloud apps")
     if not all_client_apps(cond):
         why.append("not every client app type")
