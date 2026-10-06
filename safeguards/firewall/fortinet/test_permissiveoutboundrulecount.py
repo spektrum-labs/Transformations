@@ -248,7 +248,12 @@ def test_a_confirmed_failure_is_not_hidden_by_an_unresolved_policy():
 
 def test_a_paged_or_partial_read_is_not_evaluated():
     body = fortios([policy(1, ["internal"], ["wan1"], service=("HTTPS",))])
-    body["next_idx"] = 50
+    body["matched_count"] = 60
+    body["next_idx"] = 0
+    assert value(workflow(body)) is None
+    body = fortios([policy(i, ["internal"], ["wan1"], service=("HTTPS",)) for i in range(1, 4)])
+    body["matched_count"] = 5
+    body["next_idx"] = 2
     assert value(workflow(body)) is None
     body = fortios([policy(1, ["internal"], ["wan1"], service=("HTTPS",))])
     body["matched_count"] = 9
@@ -257,3 +262,15 @@ def test_a_paged_or_partial_read_is_not_evaluated():
 
 def test_an_inbound_policy_to_an_unknown_interface_does_not_grey_the_read():
     assert value(workflow(fortios([policy(1, ["wan1"], ["port9"]), policy(2, ["internal"], ["wan1"], service=("HTTPS",))]))) == 0
+
+
+def test_a_complete_fortios_7_body_with_next_idx_still_evaluates():
+    body = fortios([policy(i, ["internal"], ["wan1"], service=("HTTPS",)) for i in range(1, 4)])
+    body["matched_count"] = 3
+    body["next_idx"] = 2
+    assert value(workflow(body)) == 0
+    assert value(workflow(stringify(body))) == 0
+    one = fortios([policy(7, ["internal"], ["wan1"])])
+    one["matched_count"] = 1
+    one["next_idx"] = 0
+    assert value(workflow(one)) == 1
