@@ -14,7 +14,8 @@ report could hide a recent root sign-in.
     password_enabled "false" (no root console credentials: an Organizations member account
     created without them, or centralized root access removed them) the result is not
     evaluated, because whether root password recovery is disallowed cannot be read from the
-    member account (J.J., 6 Oct 2026).
+    member account (J.J., 6 Oct 2026), unless password_last_used shows a root sign-in
+    inside the window, which still fails.
   * password_last_used is the root user's last console sign-in. "N/A" (never signed in) and
     "no_information" (no sign-in since IAM began tracking, Oct 2014) count as not used. An ISO
     8601 timestamp fails when it is within 90 days of the report's GeneratedTime (the clock the
@@ -25,8 +26,8 @@ report could hide a recent root sign-in.
   https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_getting-report.html
 
 The IAM account summary (GetAccountSummary) can only fail this claim: AccountMFAEnabled 0 is a
-definite False only when AccountPasswordPresent is 1 (otherwise not evaluated, for the same
-reason), but it carries no sign-in history, so AccountMFAEnabled 1 alone is not
+definite False unless AccountPasswordPresent is explicitly 0 (then not evaluated, for the
+same reason), but it carries no sign-in history, so AccountMFAEnabled 1 alone is not
 evaluated (None) rather than a pass.
 
 FAIL CLOSED. An empty body, an AWS or Integration-Service error, a report with no root row or
@@ -298,6 +299,13 @@ def evaluate_report(holder):
     password = str(row.get("password_enabled", "")).strip().lower()
     summary["passwordEnabled"] = password
     if mfa == "false" and password == "false":
+        # A recorded root console sign-in inside the window still proves the claim false.
+        if last_used_raw.lower() not in NOT_USED:
+            recent = parse_time(last_used_raw)
+            if recent is not None and recent >= reference - timedelta(days=WINDOW_DAYS):
+                return False, ("the root user has no MFA and signed in " + str((reference - recent).days)
+                               + " day(s) before the " + clock + ", inside the " + str(WINDOW_DAYS)
+                               + "-day window"), summary, findings
         # A member account created in AWS Organizations, or one whose root credentials were
         # removed through centralized root access, has no root password, so there is nothing to put
         # MFA on. That is only fully locked when the organization also disallows root password
@@ -327,13 +335,13 @@ def evaluate_summary(holder):
     password = summary_value(holder, "AccountPasswordPresent")
     summary["AccountPasswordPresent"] = password
     if str(raw).strip() in ("0", "0.0"):
-        if str(password).strip() in ("1", "1.0"):
-            return False, "MFA is not enabled on the root user (AccountMFAEnabled 0)", summary, []
-        # No root password, or the summary does not say: a member account without root credentials
-        # also reads AccountMFAEnabled 0, so this is not a definite fail.
-        return None, ("AccountMFAEnabled is 0 but the summary does not show a root password "
-                      "(AccountPasswordPresent " + str(password) + "); an account with no root "
-                      "credentials cannot be told apart from one without MFA"), summary, []
+        if str(password).strip() in ("0", "0.0"):
+            # Explicitly no root password: a member account without root credentials also reads
+            # AccountMFAEnabled 0, so this is not a definite fail (J.J. 2026-10-06).
+            return None, ("AccountMFAEnabled is 0 and AccountPasswordPresent is 0 (no root console "
+                          "credentials); whether root password recovery is disallowed by the organization "
+                          "cannot be read from this account"), summary, []
+        return False, "MFA is not enabled on the root user (AccountMFAEnabled 0)", summary, []
     if str(raw).strip() in ("1", "1.0"):
         return None, ("root MFA is enabled, but the account summary carries no sign-in history, so "
                       "the 90-day root-use half of the claim cannot be read; use the credential report"), summary, []
