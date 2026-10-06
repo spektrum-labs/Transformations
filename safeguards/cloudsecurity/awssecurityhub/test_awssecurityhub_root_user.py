@@ -77,6 +77,11 @@ CASES = [
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'account_summary_root_mfa_no_keys.json', None),
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'account_summary_root_no_mfa_with_keys.json', False),
     ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'securityhub_iam4_passed.json', None),
+    # Member account with no root credentials (J.J. 2026-10-06): not evaluated, never a fail.
+    ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'credential_report_root_no_password_member_account.json', None),
+    ('isrootusermfaenabled', 'isRootUserMFAEnabled', 'account_summary_root_no_credentials.json', None),
+    ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'credential_report_root_no_password_member_account.json', True),
+    ('isrootuseraccesskeyrestricted', 'isRootUserAccessKeyRestricted', 'account_summary_root_no_credentials.json', True),
 ]
 
 
