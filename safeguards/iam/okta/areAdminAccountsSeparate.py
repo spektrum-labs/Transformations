@@ -24,12 +24,18 @@ accounts of one person, and login naming is exactly the heuristic this file repl
 A PASS NEEDS EVIDENCE THAT COULD HAVE FAILED. "No admin holds a mailbox app" means something only when
 the organisation's mailbox is reached through Okta at all. Many orgs master mail in Entra ID or Google
 directly, or never federate it; there every admin would read "dedicated" while nothing was learned. So
-True is returned only when at least one of these shows the org's productivity suite IS assigned through
-Okta:
-  * orgApps (optional) holds an ACTIVE application that is a productivity app (see MATCHING), or
-  * sampleUserAppLinks (optional) holds a productivity app link for a user who is not an admin.
-Otherwise the result is None (not evaluated): the org's mailbox app is not assigned through Okta, so
-separation cannot be shown from Okta (judge it in the Entra ID or Google Workspace integration).
+True is returned only with one of these, strongest first:
+  * sampleUserAppLinks (optional, PREFERRED) holds a productivity app link for a user who is not an
+    admin: the suite IS assigned to everyday users through Okta;
+  * orgApps (optional) holds an ACTIVE productivity app (see MATCHING) that carries an assignment signal
+    showing it is assigned to at least one user (assignedUserCount > 0, or a non-empty
+    _embedded.users / assignedUsers list, e.g. merged from GET /api/v1/apps/{id}/users?limit=1);
+  * orgApps holds an ACTIVE productivity app that carries no assignment signal. This is the weakest
+    evidence: it shows only that an active productivity app EXISTS in Okta, not that everyday users
+    reach their mailbox through it, and the pass reason says exactly that.
+An org app whose assignment signal shows NO user is not evidence. Otherwise the result is None (not
+evaluated): the org's mailbox app is not shown to be in Okta, so separation cannot be shown from Okta
+(judge it in the Entra ID or Google Workspace integration).
 
 EVIDENCE. One Integration-Service workflow (getAdminAppAssignments) merges two Okta Management API reads:
   adminAssignees  GET /api/v1/iam/assignees/users ("List all users with role assignments",
@@ -45,8 +51,10 @@ EVIDENCE. One Integration-Service workflow (getAdminAppAssignments) merges two O
                   okta.users.read.
   orgApps         OPTIONAL. GET /api/v1/apps?filter=status eq "ACTIVE" (listApplications, scope
                   okta.apps.read): [{"id", "name", "label", "status", "signOnMode"}], or {"value": [...]}.
-                  Only rows with status ACTIVE count. Missing, failed or partial: it gives no evidence (a
-                  partial list that already shows an active productivity app is still evidence).
+                  Only rows with status ACTIVE count. Optional per-row assignment signal (read when
+                  present): assignedUserCount, or _embedded.users / assignedUsers. Missing, failed or
+                  partial: it gives no evidence (a partial list that already shows an active productivity
+                  app is still evidence).
   sampleUserAppLinks
                   OPTIONAL. GET /api/v1/users/{id}/appLinks for a page of ACTIVE users (for example
                   GET /api/v1/users?filter=status eq "ACTIVE"&limit=200, iterated): a list of app-link
@@ -76,7 +84,9 @@ PAIRING. adminAppLinks is paired with adminAssignees.value by position. When a s
 was read for (an IS item-error record's "item", or a "userId" on the slot), a mismatch with the admin in
 that position makes the pairing untrusted and nothing is concluded. An AssignedAppLink's own "id" equals
 the user's id in Okta's example payload, but the schema does not promise it, so a link id that differs
-from its admin's id is reported as a finding (a hint) and never on its own makes the check not evaluated.
+from its admin's id is a hint: reported as a finding while only SOME slots mismatch. When no slot echoes
+a user and EVERY slot that carries a 00u link id mismatches its admin, the reads are most likely not the
+admins' at all, so the verdict is withheld (None).
 
 SCOPES. An SSWS API token is not scoped (it acts with its admin's rights), so the Okta definition needs no
 change of credentials. The Okta - Application (OAuth) definition needs okta.roles.read for the first
@@ -291,15 +301,23 @@ def misalignment(data, rows, slots, reads_cut):
         echoed = echoed_id(entry)
         if admin_id and echoed and echoed != admin_id:
             return "a read names a different user than the admin in its position"
+    if not [entry for entry in slots if echoed_id(entry)]:
+        mismatched, carrying = link_id_hints(rows, slots)
+        if carrying and mismatched == carrying:
+            return ("every one of the " + str(carrying) + " app-link read(s) that carry a user id (00u...) names a "
+                    "different user than the admin in its position, and no read echoes its user")
     return None
 
 
 def link_id_hints(rows, slots):
-    """How many slots carry app links whose id (00u...) differs from the admin in that position.
+    """(mismatched, carrying): slots whose app links carry a 00u... id, and how many of those differ from
+    the admin in that position.
 
-    Okta's example AssignedAppLink carries the user's id, but the schema does not promise it, so this is
-    a hint for the operator, never a reason on its own to withhold a verdict."""
-    count = 0
+    Okta's example AssignedAppLink carries the user's id, but the schema does not promise it, so a partial
+    mismatch is a hint for the operator. Only a mismatch on every id-carrying slot (with no echoed user
+    anywhere) withholds the verdict; see misalignment()."""
+    mismatched = 0
+    carrying = 0
     for index, entry in enumerate(slots):
         if index >= len(rows) or is_item_error(entry) or echoed_id(entry):
             continue
@@ -307,16 +325,35 @@ def link_id_hints(rows, slots):
         admin_id = str(row.get("id") or "").strip() if isinstance(row, dict) else ""
         if not admin_id:
             continue
-        for link in link_list(entry) or []:
-            owner = str(link.get("id") or "").strip()
-            if owner.startswith("00u") and owner != admin_id:
-                count = count + 1
-                break
-    return count
+        owners = [str(link.get("id") or "").strip() for link in link_list(entry) or []]
+        owners = [o for o in owners if o.startswith("00u")]
+        if not owners:
+            continue
+        carrying = carrying + 1
+        if [o for o in owners if o != admin_id]:
+            mismatched = mismatched + 1
+    return mismatched, carrying
+
+
+def assignment_signal(app):
+    """True / False when an org app row says whether any user is assigned to it, None when it does not say."""
+    count = app.get("assignedUserCount")
+    if isinstance(count, int) and not isinstance(count, bool):
+        return count > 0
+    embedded = app.get("_embedded")
+    users = embedded.get("users") if isinstance(embedded, dict) else None
+    if not isinstance(users, list):
+        users = app.get("assignedUsers")
+    if isinstance(users, list):
+        return len(users) > 0
+    return None
 
 
 def org_suite_apps(data):
-    """Active productivity apps in the optional orgApps read, or None when it was not read."""
+    """(assigned, unsignalled) active productivity apps in the optional orgApps read, or None when not read.
+
+    assigned: the row shows at least one assigned user. unsignalled: the row says nothing about assignment.
+    A row whose signal shows no assigned user is in neither list (it is not evidence)."""
     block = data.get("orgApps")
     if isinstance(block, dict):
         if read_error(block):
@@ -324,13 +361,19 @@ def org_suite_apps(data):
         block = block.get("value")
     if not isinstance(block, list):
         return None
-    found = []
+    assigned = []
+    unsignalled = []
     for app in block:
         if not isinstance(app, dict) or str(app.get("status") or "").strip().upper() != "ACTIVE":
             continue
-        if productivity_match(app.get("name"), app.get("label")):
-            found.append(app_display(app.get("name"), app.get("label")))
-    return found
+        if not productivity_match(app.get("name"), app.get("label")):
+            continue
+        signal = assignment_signal(app)
+        if signal is True:
+            assigned.append(app_display(app.get("name"), app.get("label")))
+        elif signal is None:
+            unsignalled.append(app_display(app.get("name"), app.get("label")))
+    return assigned, unsignalled
 
 
 def sample_suite_users(data, admin_ids):
@@ -446,7 +489,7 @@ def transform(input):
                    "adminListComplete": list_cut is False, "appLinkReadsCapped": reads_cut is True,
                    "affectedAccounts": everyday[:MAX_AFFECTED], "affectedAccountCount": len(everyday)}
         findings = []
-        hinted = link_id_hints(rows, slots)
+        hinted = link_id_hints(rows, slots)[0]
         if hinted:
             findings.append(str(hinted) + " app-link read(s) carry a link id (00u...) different from the admin in "
                             "their position. Okta does not document AssignedAppLink.id as the user id, so admins "
@@ -487,17 +530,30 @@ def transform(input):
             if isinstance(row, dict) and str(row.get("id") or "").strip():
                 admin_ids[str(row.get("id")).strip()] = True
         org_apps = org_suite_apps(data)
+        assigned_apps = org_apps[0] if org_apps is not None else []
+        unsignalled_apps = org_apps[1] if org_apps is not None else []
         sample_users = sample_suite_users(data, admin_ids)
-        summary["orgProductivityApps"] = None if org_apps is None else len(org_apps)
+        summary["orgProductivityApps"] = None if org_apps is None else len(assigned_apps) + len(unsignalled_apps)
+        summary["orgProductivityAppsWithAssignments"] = None if org_apps is None else len(assigned_apps)
         summary["nonAdminUsersWithProductivityApps"] = sample_users
+        # Strongest evidence first: everyday users holding the suite, then an assigned org app, then an app
+        # that only exists.
         evidence = []
-        if org_apps:
-            evidence.append("the org has active productivity app(s) in Okta: " + name_list(sorted(set(org_apps))))
         if sample_users:
-            evidence.append(str(sample_users) + " non-admin user(s) read are assigned a productivity app")
+            evidence.append(str(sample_users) + " non-admin user(s) read are assigned a productivity app through "
+                            "Okta")
+        if assigned_apps:
+            evidence.append("active productivity app(s) in Okta are assigned to users: "
+                            + name_list(sorted(set(assigned_apps))))
+        if unsignalled_apps and not (sample_users or assigned_apps):
+            evidence.append("an active productivity app exists in Okta (" + name_list(sorted(set(unsignalled_apps)))
+                            + "); whether everyday users are assigned to it was not read")
+        summary["suiteEvidence"] = ("nonAdminUsers" if sample_users else "assignedOrgApp" if assigned_apps
+                                    else "activeOrgApp" if unsignalled_apps else None)
         if not evidence:
             read = []
-            read.append("orgApps not read" if org_apps is None else "no active productivity app in orgApps")
+            read.append("orgApps not read" if org_apps is None
+                        else "no active productivity app in orgApps, or only ones shown to have no assigned user")
             read.append("sampleUserAppLinks not read" if sample_users is None
                         else "no non-admin user in sampleUserAppLinks holds one")
             return not_evaluated(

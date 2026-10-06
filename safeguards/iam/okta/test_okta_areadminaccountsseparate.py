@@ -261,12 +261,85 @@ def test_link_id_mismatch_is_a_hint_not_a_withheld_verdict(loader):
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
-def test_reordered_slots_still_fail_on_a_proven_productivity_admin(loader):
+def test_every_id_carrying_slot_mismatched_withholds_the_verdict(loader):
+    # Reversed: every slot's 00u link id names the other admin and nothing echoes its user.
     body = fixture("fail")
     body["adminAppLinks"].reverse()
     out = loader()(body)
-    assert verdict(out) is False
+    assert not_evaluated(out)
+    assert "every one of the 2" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    body = fixture("pass")
+    for slot in body["adminAppLinks"]:
+        for link in slot:
+            link["id"] = "00u1somebodyelse0001"
+    assert not_evaluated(loader()(body))
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_all_mismatch_rule_skipped_when_a_slot_echoes_its_user(loader):
+    body = fixture("pass")
+    body["adminAppLinks"][1] = {"userId": "00u1adm0000000000002", "value": body["adminAppLinks"][1]}
+    for link in body["adminAppLinks"][0]:
+        link["id"] = "00u1somebodyelse0001"
+    out = loader()(body)
+    assert verdict(out) is True
     assert any("hint only" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_slots_without_link_ids_are_not_counted_as_mismatched(loader):
+    body = fixture("pass")
+    for link in body["adminAppLinks"][0]:
+        link.pop("id")
+    for link in body["adminAppLinks"][1]:
+        link["id"] = "00u1somebodyelse0001"
+    assert not_evaluated(loader()(body))  # the only id-carrying slot mismatches
+    body = fixture("pass")
+    for slot in body["adminAppLinks"]:
+        for link in slot:
+            link.pop("id")
+    assert verdict(loader()(body)) is True
+
+
+# --- orgApps evidence strength (re-review of #1013) ---------------------------------------------
+
+@pytest.mark.parametrize("loader", RUNNERS)
+@pytest.mark.parametrize("signal", [{"assignedUserCount": 0}, {"_embedded": {"users": []}}, {"assignedUsers": []}])
+def test_org_app_shown_unassigned_is_not_evidence(loader, signal):
+    body = fixture("pass")
+    body["orgApps"] = [dict({"name": "office365", "label": "Microsoft Office 365", "status": "ACTIVE"}, **signal)]
+    assert not_evaluated(loader()(body))
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+@pytest.mark.parametrize("signal", [{"assignedUserCount": 12}, {"_embedded": {"users": [{"id": "00u1usr0000000000009"}]}}])
+def test_org_app_shown_assigned_is_evidence(loader, signal):
+    body = fixture("pass")
+    body["orgApps"] = [dict({"name": "office365", "label": "Microsoft Office 365", "status": "ACTIVE"}, **signal)]
+    out = loader()(body)
+    assert verdict(out) is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["suiteEvidence"] == "assignedOrgApp"
+    assert "are assigned to users" in out["additionalInfo"]["evaluation"]["passReasons"][0]
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_org_app_without_signal_passes_with_softened_reason(loader):
+    out = loader()(fixture("pass"))
+    assert verdict(out) is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["suiteEvidence"] == "activeOrgApp"
+    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
+    assert "exists in Okta" in reason and "was not read" in reason
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_sample_users_are_preferred_evidence(loader):
+    body = fixture("pass")
+    body["sampleUserAppLinks"] = [[productivity_link("00u1usr0000000000009", "office365", "Microsoft Office 365")]]
+    out = loader()(body)
+    assert verdict(out) is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["suiteEvidence"] == "nonAdminUsers"
+    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
+    assert "non-admin user" in reason and "exists in Okta" not in reason
 
 
 @pytest.mark.parametrize("loader", RUNNERS)
