@@ -201,6 +201,25 @@ def workflow_pagination_stats(body):
     return body
 
 
+def users_with_marker(key, value):
+    def mutate(body):
+        body["users"] = {"data": body["users"], key: value}
+        return body
+    return mutate
+
+
+def workflow_users_stats(body):
+    body["paginationStats"] = {"users": {"paginationTruncated": True}}
+    return body
+
+
+def hundred_users(body):
+    filler = [{"id": 500 + i, "username": "user" + str(i) + "@example.com", "enabled": True,
+               "perm_admin": False, "security_provider_id": 2} for i in range(100 - len(body["users"]))]
+    body["users"] = body["users"] + filler
+    return body
+
+
 PAGING_CASES = [
     ("100 group policies", hundred_policies, None),
     ("99 group policies", ninety_nine_policies, True),
@@ -213,6 +232,11 @@ PAGING_CASES = [
     ("members with next link", members_with_marker("next", "/api/config/v1/group-policy/1/member?current_page=2"), None),
     ("members with paginationTruncated", members_with_marker("paginationTruncated", True), None),
     ("workflow paginationStats.groupPolicies truncated", workflow_pagination_stats, None),
+    ("users with paginationTruncated", lambda b: users_with_marker("paginationTruncated", True)(b), None),
+    ("users with next link", lambda b: users_with_marker("next", "/api/config/v1/user?current_page=2")(b), None),
+    ("users with empty next", lambda b: users_with_marker("next", None)(b), True),
+    ("workflow paginationStats.users truncated", workflow_users_stats, None),
+    ("100 users", hundred_users, None),
 ]
 
 

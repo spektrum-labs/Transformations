@@ -55,8 +55,9 @@ LIMITS. Stated so a reviewer can see them, not hidden.
 FAIL CLOSED (None, dataCollection "error", never a pass): either leg missing or an error body;
 no enabled administrator in the user list (an appliance always has one, so the read is
 partial); an administrator with no security_provider_id or one that names a provider the
-providers leg does not list; a users leg of exactly 100 records with no sign it was paged
-(the API's page size, so the list may be truncated); a groupPolicies leg that is an error or
+providers leg does not list; a users leg of exactly 100 records (the API's page size, so the
+list may be truncated) or carrying a next/paging marker (next, NextToken, hasNext,
+paginationTruncated, or the workflow's paginationStats.users); a groupPolicies leg that is an error or
 not a list, a policy without perm_admin, an admin-granting policy without a members list, a
 member with no user_id, or a member user_id not in the users leg; a groupPolicies list or an
 admin-granting policy's members list of exactly 100 rows (the API page size) or carrying a
@@ -313,9 +314,11 @@ def transform(input):
         providers = as_list(data.get("securityProviders"))
         if users is None or providers is None:
             return not_evaluated("users or securityProviders is not a list")
-        if len(users) == PAGE_SIZE:
-            return not_evaluated("exactly " + str(PAGE_SIZE) + " users returned, the API page size: "
-                                 "the list may be truncated")
+        stats = data.get("paginationStats") if isinstance(data.get("paginationStats"), dict) else {}
+        paged = (paging_problem(data.get("users"), users, "users")
+                 or paging_problem(stats.get("users"), None, "users"))
+        if paged:
+            return not_evaluated(paged)
         provider_by_id = {}
         for p in providers:
             if isinstance(p, dict) and p.get("id") is not None:
@@ -331,7 +334,6 @@ def transform(input):
         policies_read = "groupPolicies" in data
         policy_count = 0
         if policies_read:
-            stats = data.get("paginationStats") if isinstance(data.get("paginationStats"), dict) else {}
             policies, problem = group_policy_admins(data.get("groupPolicies"), user_by_id,
                                                     stats.get("groupPolicies"))
             if problem:
