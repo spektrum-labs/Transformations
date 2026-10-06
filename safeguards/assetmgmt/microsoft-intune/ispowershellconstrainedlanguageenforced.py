@@ -12,8 +12,11 @@ the permission the existing device-configuration check uses), each link-paginate
 App Control for Business policies (templateFamily endpointSecurityApplicationControl, or settings whose id starts
 device_vendor_msft_policy_config_applicationcontrol) are read for their mode:
     built-in controls: a choice value ending _enable_app_control_0 is Enforce, _enable_app_control_1 is Audit;
-    uploaded policy XML (<SiPolicy>): Enforce when it enables UMCI ("Enabled:UMCI") and neither "Enabled:Audit Mode"
-    nor "Disabled:Script Enforcement" (which leaves PowerShell in FullLanguage mode).
+    uploaded policy XML (<SiPolicy>): Enforce when an <Option> enables UMCI ("Enabled:UMCI"), no <Option> sets
+    "Enabled:Audit Mode" or "Disabled:Script Enforcement", and no <Allow> file rule admits any file name or path
+    (FileName="*", FilePath="*...", Microsoft's AllowAll template) or a user-writable folder: such a policy allows the
+    %TEMP% probe script, so PowerShell stays in FullLanguage mode. Options are read only inside <Option> elements,
+    with XML comments removed.
 AppLocker comes from custom profiles (windows10CustomConfiguration) whose OMA-URI is .../AppLocker/
 ApplicationLaunchRestrictions/.../Script/Policy: EnforcementMode="Enabled" is Enforce, "AuditOnly" is Audit. An
 enforced collection is read fail-closed, rule by rule: an Allow path rule for BUILTIN\\Administrators, or under
@@ -24,6 +27,8 @@ whole drive, a Users or ProgramData folder, or a temp/profile folder keeps Power
 unlisted path, a path with "..", a broad rule with exceptions) cannot be shown safe and reads Not evaluated. An
 enforced collection with no rules at all allows every script, so it is not enforcing either (False).
 An assignment with a filter id is filtered unless its filter type is explicitly none.
+AppLocker rules from every profile that reaches a device are merged there, so an enforcing AppLocker profile does
+not count while any assigned AppLocker profile allows broadly (or cannot be read).
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
 True: at least one estate-wide policy enforces App Control (UMCI) or AppLocker script rules.
 False: App Control or AppLocker policies were read and none of them is an estate-wide enforcing policy (audit only,
@@ -285,18 +290,67 @@ def setting_pairs(node, out, depth):
     return out
 
 
+def strip_comments(low):
+    """The XML text with <!-- ... --> comments removed (bounded)."""
+    out = low
+    for step in range(200):
+        i = out.find("<!--")
+        if i < 0:
+            return out
+        j = out.find("-->", i + 4)
+        if j < 0:
+            return out[:i]
+        out = out[:i] + out[j + 3:]
+    return out
+
+
+def has_option(low, option):
+    """True when <Option>option</Option> is set in the policy rules (whitespace-insensitive, comments removed)."""
+    return ("<option>" + option + "</option>") in low
+
+
+def wdac_allows_everything(low):
+    """True when an App Control policy's file rules allow any file name or path (Microsoft's AllowAll template and
+    deny-list policies built on it), or a path under a user-writable folder, so the %TEMP% script probe is allowed."""
+    start = 0
+    for step in range(5000):
+        i = low.find("<allow", start)
+        if i < 0:
+            return False
+        j = low.find(">", i)
+        if j < 0:
+            j = len(low)
+        tag = low[i:j]
+        start = j + 1
+        if 'filename="*"' in tag or 'filepath="*' in tag:
+            return True
+        k = tag.find('filepath="')
+        if k >= 0:
+            path = tag[k + 10:tag.find('"', k + 10)]
+            for marker in ("%temp%", "%tmp%", "%userprofile%", "%appdata%", "%localappdata%", "%osdrive%\\*",
+                           "c:\\*", "\\users\\", "\\programdata"):
+                if path.startswith(marker) or marker in path:
+                    return True
+    return None
+
+
 def xml_mode(text):
-    """'enforce' / 'audit' / None for an App Control policy XML string."""
-    low = text.lower()
+    """The mode of an App Control policy XML string, or None when it is not one."""
+    low = strip_comments(text.lower()).replace(" ", "").replace("\t", "").replace("\n", "").replace("\r", "")
     if "<sipolicy" not in low:
         return None
-    if "enabled:audit mode" in low:
+    if has_option(low, "enabled:auditmode"):
         return "audit"
-    if "disabled:script enforcement" in low:
+    if has_option(low, "disabled:scriptenforcement"):
         return "script enforcement disabled"
-    if "enabled:umci" in low:
-        return "enforce"
-    return "kernel-only"
+    if not has_option(low, "enabled:umci"):
+        return "kernel-only"
+    broad = wdac_allows_everything(low)
+    if broad is None:
+        return None
+    if broad:
+        return "allows all files"
+    return "enforce"
 
 
 def app_control_mode(policy):
@@ -320,7 +374,7 @@ def app_control_mode(policy):
             m = xml_mode(v)
             if m:
                 modes.append(m)
-    for weak in ("audit", "script enforcement disabled", "kernel-only"):
+    for weak in ("audit", "script enforcement disabled", "kernel-only", "allows all files"):
         if weak in modes:
             return True, weak
     if "enforce" in modes:
@@ -508,6 +562,14 @@ def transform(input):
                     continue
                 wide, reach = estate_wide(it.get("assignments"))
                 policies.append({"name": name, "kind": kind, "mode": mode, "wide": wide, "reach": reach})
+        # AppLocker rules from every profile that reaches a device are merged there, so one profile's broad allow (or
+        # an unreadable collection) undoes another profile's enforcement on the devices it reaches. App Control
+        # policies intersect instead (a file must pass every policy), so they are judged one by one.
+        applocker_reaching = [p for p in policies if p["kind"] == "AppLocker script rules" and p["reach"] != NOT_ASSIGNED]
+        applocker_undone = [p for p in applocker_reaching if p["mode"] != "enforce" and p["mode"] != "audit"]
+        for p in policies:
+            if p["kind"] == "AppLocker script rules" and p["mode"] == "enforce" and applocker_undone:
+                p["mode"] = None if any([q["mode"] is None for q in applocker_undone]) else "merged with a broad rule"
         enforcing = [p for p in policies if p["mode"] == "enforce" and p["wide"] is True]
         summary = {"policiesRead": len(policies), "policies": [label(p) for p in policies][:MAX_NAMED],
                    "readGaps": gaps[:MAX_NAMED]}
