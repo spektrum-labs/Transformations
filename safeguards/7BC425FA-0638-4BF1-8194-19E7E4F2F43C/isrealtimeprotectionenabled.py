@@ -139,14 +139,20 @@ def evaluate(data):
 RETIRED_SCID = "scid-2011"
 
 
+#: The only configuration id this check reads from advanced-hunting rows.
+EXPECTED_SCID = "scid-2012"
+
+
 def retired_rows(data):
-    """True when the advanced-hunting rows carry the retired configuration id."""
-    rows = data.get("Results") if isinstance(data, dict) else None
+    """True when any row evaluate() would count carries a configuration id other than EXPECTED_SCID (the retired
+    id, or any other). Machines-API rows carry no ConfigurationId and are unaffected."""
+    rows = extract_devices(data)
     if not isinstance(rows, list):
         return False
     for row in rows:
-        if isinstance(row, dict) and str(row.get("ConfigurationId") or "").strip().lower() == RETIRED_SCID:
-            return True
+        if isinstance(row, dict) and "ConfigurationId" in row:
+            if str(row.get("ConfigurationId") or "").strip().lower() != EXPECTED_SCID:
+                return True
     return False
 
 
@@ -161,7 +167,7 @@ def transform(input):
         data, validation = extract_input(input)
 
         if retired_rows(data):
-            reason = ("The query read " + RETIRED_SCID + " (Defender Antivirus definitions up to date), not real-time protection (scid-2012), so "
+            reason = ("The query read a configuration other than " + EXPECTED_SCID + " (for example " + RETIRED_SCID + ", Defender Antivirus definitions up to date), not real-time protection (scid-2012), so "
                       "these rows are not evidence for this check")
             return create_response(
                 result={criteriaKey: None},
