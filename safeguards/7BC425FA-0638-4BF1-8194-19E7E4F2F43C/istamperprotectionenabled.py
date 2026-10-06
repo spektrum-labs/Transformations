@@ -155,12 +155,13 @@ EXPECTED_SCID = "scid-2003"
 
 def retired_rows(data):
     """True when any row evaluate() would count carries a configuration id other than EXPECTED_SCID (the retired
-    id, or any other). Machines-API rows carry no ConfigurationId and are unaffected."""
+    id, or any other, or an advanced-hunting row with no id at all). Machines-API rows carry neither
+    ConfigurationId nor IsCompliant and are unaffected."""
     rows = extract_devices(data)
     if not isinstance(rows, list):
         return False
     for row in rows:
-        if isinstance(row, dict) and "ConfigurationId" in row:
+        if isinstance(row, dict) and ("ConfigurationId" in row or "IsCompliant" in row):
             if str(row.get("ConfigurationId") or "").strip().lower() != EXPECTED_SCID:
                 return True
     return False
