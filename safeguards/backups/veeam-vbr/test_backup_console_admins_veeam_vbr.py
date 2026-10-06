@@ -155,3 +155,65 @@ def test_unmarked_identity_reads_not_evaluated():
     assert out["transformedResponse"][KEY] is None
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert "no admin marker" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+# The naming rule is the same block in all five IAM-004 transforms; these rows are the same in every test file.
+
+def load_module():
+    spec = importlib.util.spec_from_file_location(MODULE_NAME + "_rule", FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MARKER_ROWS = [
+    ("adm-jdoe@example.com", True), ("jdoe-adm@example.com", True), ("a-jdoe@example.com", True),
+    ("jdoe_a@example.com", True), ("adminjdoe@example.com", True), ("admin01@example.com", True),
+    ("t0.jdoe@example.com", True), ("pam-jdoe@example.com", True), ("root_backup@example.com", True),
+    ("veeamadmin@example.com", True), ("jdoe@admin.example.com", True), ("jdoe@t0.corp.example", True),
+    ("ADM\\jdoe", True), ("CORP-ADM\\jdoe", True),
+    # personal names, not markers
+    ("pam.smith@example.com", False), ("pam@example.com", False), ("joe.root@example.com", False),
+    ("administration@example.com", False), ("badmin@example.com", False), ("padmin@example.com", False),
+    ("jdoeadmin@example.com", False), ("doe.a@example.com", False), ("admiral.jones@example.com", False),
+    # the organisation's own domain is never a marker; a domain label matches only as a whole word
+    ("jdoe@privatebank.com", False), ("jdoe@adminsoft.com", False), ("jdoe@cityadm.gov", False),
+    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
+]
+
+
+@pytest.mark.parametrize("name,marked", MARKER_ROWS)
+def test_shared_admin_marker(name, marked):
+    assert load_module().has_admin_marker(name, False) is marked
+
+
+@pytest.mark.parametrize("group,cls", [
+    ("PRIVATECO\\Domain Users", "everyday-group"), ("CITYADM\\Staff", "everyday-group"),
+    ("CORP\\Backup-Admins", "group"), ("BUILTIN\\Administrators", "group"), ("ADM\\Backup Operators", "group"),
+])
+def test_shared_group_marker(group, cls):
+    assert load_module().classify([group], "group", "directory") == cls
+
+
+#: Everyday addresses that the earlier rule read as admin accounts. Each, holding admin, reads Not evaluated.
+UNMARKED_NAMES = ["pam.smith@example.com", "pam@example.com", "joe.root@example.com", "jdoe@privatebank.com",
+                  "jdoe@adminsoft.com", "jdoe@cityadm.gov", "jdoe@admin.ch"]
+
+
+@pytest.mark.parametrize("name", UNMARKED_NAMES)
+def test_everyday_names_read_not_evaluated(name):
+    assert value(coll([entry("CORP\\adm-jdoe"), entry(name, "ExternalUser")])) is None
+
+
+def test_privateco_domain_users_group_fails():
+    assert value(coll([entry("CORP\\adm-jdoe"), entry("PRIVATECO\\Domain Users", "InternalGroup")])) is False
+
+
+def test_dot_local_windows_account_is_local():
+    assert value(coll([entry(".\\backupuser")])) is True
+
+
+def test_host_local_account_is_judged_by_name():
+    """The response carries no host name, so VBR01\\veeamop cannot be told from a domain account (Limits)."""
+    assert value(coll([entry("VBR01\\veeamop")])) is None
+    assert value(coll([entry("VBR01\\veeamadmin")])) is True

@@ -11,10 +11,13 @@ API Source: workflow getConsoleAdmins, two read-only calls merged under output k
                                                                         roleType, enabled)
     Each is a VSPC v3 collection {"meta": {"pagingInfo": {"total", "count", "offset"}}, "data": [...], "errors": null}.
     Schema: VSPC REST API v3 OpenAPI (User, LocalUserRule, WinContextType, LocalUserRuleRoleType).
-Rule: administrators are enabled portal users with an administrator or owner role (PortalAdministrator,
-SiteAdministrator, ResellerOwner, ResellerAdministrator, CompanyOwner, CompanyAdministrator,
-CompanyLocationAdministrator) and enabled local-user rules with roleType portalAdministrator or
-siteAdministrator. A Windows user local to the VSPC server (contextType machine) is a console account
+Rule: administrators of the provider's console are enabled portal users with a provider-scope role
+(PortalAdministrator, SiteAdministrator, PortalOperator) and enabled local-user rules with roleType
+portalAdministrator, siteAdministrator or portalOperator. Tenant-scope roles (CompanyOwner,
+CompanyAdministrator, CompanyLocationAdministrator, ResellerOwner, ResellerAdministrator and the other
+company and reseller roles) belong to the provider's customers and resellers: they administer their own
+tenant, not the provider's console, so they are not counted. Every managed company has a mandatory Company
+Owner, and counting those would make the provider's answer depend on its customers' account names. A Windows user local to the VSPC server (contextType machine) is a console account
 (dedicated). A domain user is dedicated only when its name marks it as an admin account; a Windows group only
 when its name marks it as an admin group. VSPC does not say whether a portal user signs in with a VSPC password
 or through an identity provider, so an unmarked portal administrator cannot be classified (not evaluated).
@@ -34,20 +37,47 @@ NONE_MEANS_NOT_EVALUATED = (KEY,)
 WRAPPERS = ("apiResponse", "api_response", "response", "result", "Output", "_response_data")
 
 #: Words that name an account as an administrative identity (adm-jsmith, jsmith.admin, t0-jsmith,
-#: BUILTIN\Administrators, Backup-Admins). Matched as whole words of the account name; "admin" is also
-#: matched as a prefix or suffix of a word (adminjsmith, veeamadmin).
+#: BUILTIN\Administrators, Backup-Admins). Matched only as whole words of the account name (split on every
+#: character that is not a letter or digit), never as a prefix or suffix of a longer word, so badmin, padmin
+#: and administration are not markers. "pam" and "root" are not here: both are personal names (pam.smith@,
+#: joe.root@), so they count only as a joined affix (SHORT_AFFIXES).
 ADMIN_WORDS = ("adm", "admin", "admins", "administrator", "administrators", "priv", "privileged",
-               "pam", "breakglass", "emergency", "sysadmin", "sysadmins", "superuser", "root",
+               "breakglass", "emergency", "sysadmin", "sysadmins", "superuser", "superadmin",
                "tier0", "tier1", "t0", "t1")
+
+#: Product- or function-prefixed admin words, listed one by one (VBR01\veeamadmin, rubrikadmin@). A word that
+#: only ends in "admin" is not a marker unless it is listed here.
+PREFIXED_ADMIN_WORDS = ("veeamadmin", "veeamadmins", "vbradmin", "vspcadmin", "vspcadmins", "rubrikadmin",
+                        "rubrikadmins", "rscadmin", "cohesityadmin", "cohesityadmins", "heliosadmin",
+                        "commvaultadmin", "commvaultadmins", "cvadmin", "cvadmins", "backupadmin", "backupadmins",
+                        "bkpadmin", "localadmin", "domainadmin", "domainadmins")
+
+#: "admin" written straight onto a name (adminjsmith, admin01) is a common admin-account convention, and no
+#: common given name or surname starts with "admin". Such a word counts when any digits or at least three more
+#: characters follow "admin". The English words that start with "admin" (administer, administration,
+#: administrative, adminicle) all start with "administ" or "adminic", and those do not count.
+ADMIN_PREFIX = "admin"
+NOT_ADMIN_PREFIXED = ("administ", "adminic")
 
 #: Words that name a user as a non-person service or console account (svc-backup, veeam.service).
 #: Accepted for users only: a group named after the product ("Veeam Users") is not an admin group.
 SERVICE_WORDS = ("svc", "service", "services", "serviceaccount", "backup", "backups", "bkp",
                  "veeam", "rubrik", "cohesity", "commvault", "helios", "vspc", "vbr", "rsc")
 
-#: Short tier prefixes or suffixes (a-jsmith, jsmith_a, pa-jsmith). Only with a hyphen or an underscore,
-#: never a dot, so a surname plus initial (smith.a) is not read as an admin account.
-SHORT_AFFIXES = ("a", "pa", "da", "ea", "sa", "x")
+#: Short or ambiguous tier prefixes or suffixes (a-jsmith, jsmith_a, pa-jsmith, pam-jsmith, root_backup). Only
+#: when joined to the rest of the account with a hyphen or an underscore, never a dot and never alone, so a
+#: surname plus initial (smith.a) and a person named Pam or Root (pam.smith@, pam@, joe.root@) are not read
+#: as admin accounts.
+SHORT_AFFIXES = ("a", "pa", "da", "ea", "sa", "x", "pam", "root")
+
+#: Whole words of a domain label that name an admin directory or tier (jsmith@admin.corp.example, ADM\jsmith,
+#: CORP-ADM\jsmith, jsmith@t0.corp.example). Matched only as whole words, never as a prefix or suffix, so
+#: PRIVATECO\, jdoe@cityadm.gov and jdoe@adminsoft.com are not markers.
+DOMAIN_ADMIN_WORDS = ("adm", "admin", "admins", "priv", "privileged", "t0", "tier0")
+
+#: Second-level labels under a two-letter country code (example.co.uk, example.com.au). The registrable domain
+#: is the organisation's own name and is never read as a marker: jdoe@admin.ch is an everyday address.
+SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "mil", "ltd", "plc")
 
 MAX_LISTED = 25
 
@@ -182,9 +212,28 @@ def split_identity(name):
 
 
 def word_is_admin(word):
-    if word in ADMIN_WORDS:
+    """True for a whole admin word, a listed product-prefixed admin word, or "admin" written onto a name."""
+    if word in ADMIN_WORDS or word in PREFIXED_ADMIN_WORDS:
         return True
-    return word.startswith("admin") or word.endswith("admin") or word.endswith("admins")
+    if not word.startswith(ADMIN_PREFIX):
+        return False
+    for p in NOT_ADMIN_PREFIXED:
+        if word.startswith(p):
+            return False
+    rest = word[len(ADMIN_PREFIX):]
+    return rest.isdigit() or len(rest) >= 3
+
+
+def domain_labels(domain):
+    """The domain labels that may name an admin directory: a NetBIOS name (CORP-ADM) as it is, or the
+    subdomain labels of a DNS name (admin in admin.corp.example). Never the registrable domain itself."""
+    labels = [x for x in domain.split(".") if x]
+    if len(labels) <= 1:
+        return labels
+    keep = 2
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in SECOND_LEVEL_LABELS:
+        keep = 3
+    return labels[:-keep]
 
 
 def has_admin_marker(name, allow_service):
@@ -203,11 +252,9 @@ def has_admin_marker(name, allow_service):
             return True
         if account.endswith("-" + a) or account.endswith("_" + a):
             return True
-    label = domain.split(".")[0] if domain else ""
-    if label:
-        label_words = [w for w in re.split(r"[^a-z0-9]+", label) if w]
-        for w in label_words:
-            if word_is_admin(w) or w.endswith("adm") or w.startswith("priv") or w in ("t0", "tier0"):
+    for label in domain_labels(domain):
+        for w in re.split(r"[^a-z0-9]+", label):
+            if w in DOMAIN_ADMIN_WORDS:
                 return True
     return False
 
@@ -328,11 +375,12 @@ def verdict(validation, admins, role_label, summary_extra=None):
 METHOD = "getConsoleAdmins"
 VENDOR = "Veeam"
 PRODUCT = "Veeam Service Provider Console (REST API v3)"
-ROLE_LABEL = "a VSPC administrator or owner role"
+ROLE_LABEL = "a VSPC provider administrator or operator role"
 
-PORTAL_ADMIN_ROLES = ("portaladministrator", "siteadministrator", "reselleradministrator", "resellerowner",
-                      "companyowner", "companyadministrator", "companylocationadministrator")
-RULE_ADMIN_ROLES = ("portaladministrator", "siteadministrator")
+#: Provider-scope portal roles only. Tenant roles (companyowner, companyadministrator, resellerowner, ...) are
+#: scoped to one customer or reseller and do not administer the provider's console.
+PORTAL_ADMIN_ROLES = ("portaladministrator", "siteadministrator", "portaloperator")
+RULE_ADMIN_ROLES = ("portaladministrator", "siteadministrator", "portaloperator")
 
 
 def collection_error(obj):

@@ -71,9 +71,11 @@ def test_no_evidence_is_not_evaluated_when_wrapped(body):
     assert value(ts_wrap(body)) is None
 
 
-def cv_user(uid, name, upn=None, enabled=True):
-    return {"id": uid, "name": name, "email": upn, "userPrincipalName": upn, "enabled": enabled,
-            "fullName": name, "company": {"id": 0, "name": "CommCell"}}
+def cv_user(uid, name, upn=None, enabled=True, **extra):
+    u = {"id": uid, "name": name, "email": upn, "userPrincipalName": upn, "enabled": enabled,
+         "fullName": name, "company": {"id": 0, "name": "CommCell"}}
+    u.update(extra)
+    return u
 
 
 def merged(members, externals, users, name="master", total=None):
@@ -86,7 +88,7 @@ def merged(members, externals, users, name="master", total=None):
 ADMIN = cv_user(1, "admin")
 ADM_JDOE = cv_user(2, "EXAMPLE\\adm-jdoe", "adm-jdoe@example.com")
 JDOE = cv_user(3, "EXAMPLE\\jdoe", "jdoe@example.com")
-CVLOCAL = cv_user(4, "backupops")
+CVLOCAL = cv_user(4, "backupops", userType="LOCAL")
 SSO_JROE = cv_user(5, "jroe@example.com", "jroe@example.com")
 OLD = cv_user(6, "EXAMPLE\\olduser", enabled=False)
 
@@ -149,3 +151,69 @@ def test_unmarked_identity_reads_not_evaluated():
     assert out["transformedResponse"][KEY] is None
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert "no admin marker" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+# The naming rule is the same block in all five IAM-004 transforms; these rows are the same in every test file.
+
+def load_module():
+    spec = importlib.util.spec_from_file_location(MODULE_NAME + "_rule", FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+MARKER_ROWS = [
+    ("adm-jdoe@example.com", True), ("jdoe-adm@example.com", True), ("a-jdoe@example.com", True),
+    ("jdoe_a@example.com", True), ("adminjdoe@example.com", True), ("admin01@example.com", True),
+    ("t0.jdoe@example.com", True), ("pam-jdoe@example.com", True), ("root_backup@example.com", True),
+    ("veeamadmin@example.com", True), ("jdoe@admin.example.com", True), ("jdoe@t0.corp.example", True),
+    ("ADM\\jdoe", True), ("CORP-ADM\\jdoe", True),
+    # personal names, not markers
+    ("pam.smith@example.com", False), ("pam@example.com", False), ("joe.root@example.com", False),
+    ("administration@example.com", False), ("badmin@example.com", False), ("padmin@example.com", False),
+    ("jdoeadmin@example.com", False), ("doe.a@example.com", False), ("admiral.jones@example.com", False),
+    # the organisation's own domain is never a marker; a domain label matches only as a whole word
+    ("jdoe@privatebank.com", False), ("jdoe@adminsoft.com", False), ("jdoe@cityadm.gov", False),
+    ("jdoe@admin.ch", False), ("jdoe@admin.co.uk", False), ("PRIVATECO\\jdoe", False), ("CORPADM\\jdoe", False),
+]
+
+
+@pytest.mark.parametrize("name,marked", MARKER_ROWS)
+def test_shared_admin_marker(name, marked):
+    assert load_module().has_admin_marker(name, False) is marked
+
+
+@pytest.mark.parametrize("group,cls", [
+    ("PRIVATECO\\Domain Users", "everyday-group"), ("CITYADM\\Staff", "everyday-group"),
+    ("CORP\\Backup-Admins", "group"), ("BUILTIN\\Administrators", "group"), ("ADM\\Backup Operators", "group"),
+])
+def test_shared_group_marker(group, cls):
+    assert load_module().classify([group], "group", "directory") == cls
+
+
+#: Everyday addresses that the earlier rule read as admin accounts. Each, holding admin, reads Not evaluated.
+UNMARKED_NAMES = ["pam.smith@example.com", "pam@example.com", "joe.root@example.com", "jdoe@privatebank.com",
+                  "jdoe@adminsoft.com", "jdoe@cityadm.gov", "jdoe@admin.ch"]
+
+
+@pytest.mark.parametrize("name", UNMARKED_NAMES)
+def test_everyday_names_read_not_evaluated(name):
+    u = cv_user(9, name, name)
+    assert value(merged([ADMIN, u], [], [ADMIN, u])) is None
+
+
+def test_privateco_domain_users_group_fails():
+    assert value(merged([ADMIN], ["PRIVATECO\\Domain Users"], [ADMIN])) is False
+
+
+@pytest.mark.parametrize("extra,expected", [
+    ({}, None),
+    ({"userType": "LOCAL"}, True), ({"providerType": {"id": 1, "name": "Local"}}, True),
+    ({"userType": "CommCell User"}, True), ({"domain": ""}, True), ({"domain": None}, True),
+    ({"domain": {"id": 0, "name": ""}}, True),
+    ({"userType": "AD"}, None), ({"providerType": "SAML"}, None), ({"domain": "CORP"}, None),
+    ({"domain": {"id": 3, "name": "corp.example"}}, None), ({"userType": 2}, None),
+])
+def test_bare_name_is_local_only_when_the_record_proves_it(extra, expected):
+    u = cv_user(9, "jroe", **extra)
+    assert value(merged([ADMIN, u], [], [ADMIN, u])) is expected
