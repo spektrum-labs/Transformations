@@ -57,7 +57,8 @@ no enabled administrator in the user list (an appliance always has one, so the r
 partial); an administrator with no security_provider_id or one that names a provider the
 providers leg does not list; a users leg of exactly 100 records (the API's page size, so the
 list may be truncated) or carrying a next/paging marker (next, NextToken, hasNext,
-paginationTruncated, or the workflow's paginationStats.users); a groupPolicies leg that is an error or
+paginationTruncated, or the workflow's paginationStats.users); a securityProviders leg held to
+the same rule (the local-only exception below relies on it being complete); a groupPolicies leg that is an error or
 not a list, a policy without perm_admin, an admin-granting policy without a members list, a
 member with no user_id, or a member user_id not in the users leg; a groupPolicies list or an
 admin-granting policy's members list of exactly 100 rows (the API page size) or carrying a
@@ -234,7 +235,9 @@ def paging_problem(leg, rows, what):
                 "list may be truncated")
     if isinstance(leg, dict):
         for key in PAGING_FLAGS:
-            if leg.get(key) is True or str(leg.get(key)).strip().lower() == "true":
+            flag = leg.get(key)
+            numeric = isinstance(flag, (int, float)) and not isinstance(flag, bool) and flag > 0
+            if flag is True or numeric or str(flag).strip().lower() == "true":
                 return what + " carry a paging marker (" + key + "): the list is partial"
         for key in PAGING_KEYS:
             value = leg.get(key)
@@ -316,7 +319,9 @@ def transform(input):
             return not_evaluated("users or securityProviders is not a list")
         stats = data.get("paginationStats") if isinstance(data.get("paginationStats"), dict) else {}
         paged = (paging_problem(data.get("users"), users, "users")
-                 or paging_problem(stats.get("users"), None, "users"))
+                 or paging_problem(stats.get("users"), None, "users")
+                 or paging_problem(data.get("securityProviders"), providers, "security providers")
+                 or paging_problem(stats.get("securityProviders"), None, "security providers"))
         if paged:
             return not_evaluated(paged)
         provider_by_id = {}
