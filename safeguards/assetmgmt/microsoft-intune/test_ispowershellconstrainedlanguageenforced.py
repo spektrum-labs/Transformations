@@ -295,7 +295,9 @@ def test_unknown_principals_and_paths_are_not_read():
 def test_an_enforced_collection_with_no_rules_is_not_enforcing():
     p = applocker("AL")
     p["omaSettings"][0]["value"] = "<RuleCollection Type=\"Script\" EnforcementMode=\"Enabled\" />"
-    assert value(body([], [p]))[0] is False
+    got, out = value(body([], [p]))
+    assert got is False
+    assert "no script rules" in out["additionalInfo"]["evaluation"]["failReasons"][0]
     q = applocker("AL")
     q["omaSettings"][0]["value"] = ("<RuleCollection Type=\"Script\" EnforcementMode=\"Enabled\"><FileHashRule Id=\"1\" "
                                     "Name=\"h\" UserOrGroupSid=\"S-1-1-0\" Action=\"Allow\" /></RuleCollection>")

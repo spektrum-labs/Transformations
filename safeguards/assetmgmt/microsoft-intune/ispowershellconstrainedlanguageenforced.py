@@ -390,7 +390,7 @@ def allows_user_writable(low):
     False when every Allow path rule is known-safe."""
     if "<filepathrule" not in low and "<filehashrule" not in low and "<filepublisherrule" not in low:
         # A rule collection with no rules allows every file of that type (AppLocker), so the %TEMP% probe runs.
-        return True
+        return "no rules"
     start = 0
     unknown = False
     for step in range(500):
@@ -441,6 +441,8 @@ def applocker_mode(profile):
                 broad = allows_user_writable(low)
                 if broad is None:
                     modes.append(None)
+                elif broad == "no rules":
+                    modes.append("no script rules")
                 elif broad:
                     modes.append("allows user-writable paths")
                 else:
@@ -449,7 +451,7 @@ def applocker_mode(profile):
                 modes.append(None)
     if not found:
         return False, None
-    for weak in ("audit", "allows user-writable paths"):
+    for weak in ("audit", "no script rules", "allows user-writable paths"):
         if weak in modes:
             return True, weak
     if None in modes:
