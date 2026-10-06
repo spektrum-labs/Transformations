@@ -62,9 +62,10 @@ def app_control(name, mode="enforce", assignments=None, family="endpointSecurity
             "settings": settings, "assignments": [ALL_DEVICES] if assignments is None else assignments}
 
 
-def xml_policy(name, options, assignments=None):
-    xml = "<SiPolicy xmlns=\"urn:schemas-microsoft-com:sipolicy\"><Rules>" + "".join(
-        "<Rule><Option>" + o + "</Option></Rule>" for o in options) + "</Rules></SiPolicy>"
+def xml_policy(name, options, assignments=None, file_rules="<Allow ID=\"ID_ALLOW_A\" FriendlyName=\"MS\" FilePath=\"%WINDIR%\\\\*\" />"):
+    xml = ("<SiPolicy xmlns=\"urn:schemas-microsoft-com:sipolicy\"><Rules>" + "".join(
+        "<Rule><Option>" + o + "</Option></Rule>" for o in options) + "</Rules><FileRules>" + file_rules +
+        "</FileRules></SiPolicy>")
     settings = [{"settingInstance": {"settingDefinitionId": "device_vendor_msft_policy_config_applicationcontrol_policies_{policyguid}_xml",
                                      "simpleSettingValue": {"value": xml}}}]
     return {"id": "x-" + name, "name": name, "templateReference": {"templateFamily": "endpointSecurityApplicationControl"},
@@ -306,3 +307,35 @@ def test_an_enforced_collection_with_no_rules_is_not_enforcing():
 
 def test_a_safe_root_with_dot_dot_is_not_read():
     assert value(body([], [collection([("S-1-1-0", "%WINDIR%\\..\\Users\\*", "")])]))[0] is not True
+
+
+@pytest.mark.parametrize("rule", ["<Allow ID=\"ID_ALLOW_A_1\" FriendlyName=\"Allow All\" FileName=\"*\" />",
+                                  "<Allow ID=\"ID_ALLOW_A_2\" FriendlyName=\"Allow All\" FilePath=\"*\" />",
+                                  "<Allow ID=\"ID_ALLOW_A_3\" FriendlyName=\"Temp\" FilePath=\"%TEMP%\\\\*\" />"])
+def test_allow_all_or_user_writable_wdac_is_not_enforcing(rule):
+    got, out = value(body([xml_policy("AllowAll", ["Enabled:UMCI"], file_rules=rule)]))
+    assert got is False
+    assert "allows all files" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_options_are_read_only_inside_option_elements():
+    p = xml_policy("x", [])
+    s = p["settings"][0]["settingInstance"]["simpleSettingValue"]
+    s["value"] = s["value"].replace("<Rules>", "<!-- <Option>Enabled:UMCI</Option> --><Rules>")
+    assert value(body([p]))[0] is False
+
+
+def test_applocker_profiles_merge_on_devices():
+    broad = collection([("S-1-1-0", "*", "")])
+    broad["assignments"] = [group("g-sales")]
+    got, out = value(body([], [applocker("Baseline AL"), broad]))
+    assert got is False
+    assert "merged with a broad rule" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    unreadable = applocker("Secret AL", encrypted=True, assignments=[group("g-x")])
+    assert value(body([], [applocker("Baseline AL"), unreadable]))[0] is None
+    # an unassigned broad profile reaches no device
+    broad["assignments"] = []
+    assert value(body([], [applocker("Baseline AL"), broad]))[0] is True
+    # App Control enforcement is not undone by an AppLocker profile
+    broad["assignments"] = [group("g-sales")]
+    assert value(body([app_control("ACfB")], [broad]))[0] is True
