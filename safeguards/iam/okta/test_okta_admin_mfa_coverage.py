@@ -264,6 +264,30 @@ class IndexAlignment(unittest.TestCase):
         self.assertIs(run(body(["a"], [[own]]))[0], False)
 
 
+class SameKeysOnEveryPath(unittest.TestCase):
+    def test_coverage_keys_are_present_on_every_coverage_return(self):
+        cases = [
+            body(["a"], [[enrol("webauthn")]]),                                # True
+            body(["a"], [[enrol("okta_email")]]),                               # False
+            body(["a"], [[enrol("okta_verify")]]),                              # not evaluated, indeterminate
+            body(["a", "b"], [[enrol("okta_email")]]),                          # not evaluated, misaligned
+            {"adminEnrollments": []},                                           # not evaluated, no admin list
+            {"adminAssignees": admins("a"), "adminEnrollments": None},          # not evaluated, no enrollments
+            body([], []),                                                       # not evaluated, no admins
+        ]
+        for data in cases:
+            with self.subTest(data=data):
+                out = run(data)[2]["transformedResponse"]
+                for k in (PCT, "adminsAssessed", "adminsCovered"):
+                    self.assertIn(k, out)
+                if out[KEY] is None:
+                    self.assertIsNone(out[PCT])
+
+    def test_not_evaluated_carries_the_counts(self):
+        out = run(body(["a", "b"], [[enrol("webauthn")], [enrol("okta_verify")]]))[2]["transformedResponse"]
+        self.assertEqual((out["adminsAssessed"], out["adminsCovered"]), (2, 1))
+
+
 class Messages(unittest.TestCase):
     def test_indeterminate_message_does_not_claim_every_admin_is_covered(self):
         _, _, r = run(body(["a"], [[enrol("okta_verify")]]))

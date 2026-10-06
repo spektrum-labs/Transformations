@@ -572,8 +572,11 @@ def coverage_response(data, validation):
         else:
             lead = (f"{covered} of {assessed} administrators assessed have a phishing-resistant authenticator and "
                     f"none is known to lack one")
-        return unevaluated_response(
+        response = unevaluated_response(
             validation, lead + ", but 100% coverage cannot be confirmed: " + "; ".join(whys) + ".", summary)
+        response["transformedResponse"]["adminsAssessed"] = assessed
+        response["transformedResponse"]["adminsCovered"] = covered
+        return response
 
     result[KEY] = True
     return create_response(
@@ -587,7 +590,13 @@ def coverage_response(data, validation):
 def transform(input):
     data, validation = extract_input(input)
     if isinstance(data, dict) and "adminEnrollments" in data:
-        return coverage_response(data, validation)
+        response = coverage_response(data, validation)
+        # Every coverage return carries the same keys: a threshold token must meet None, never a missing key.
+        result = response["transformedResponse"]
+        for k in (COVERAGE_KEY, "adminsAssessed", "adminsCovered"):
+            if k not in result:
+                result[k] = None
+        return response
     factors = factor_list(data)
     if factors is None:
         return unevaluated_response(validation, "No Okta org factor list in the response (GET /api/v1/org/factors); "
