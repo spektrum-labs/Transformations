@@ -81,17 +81,20 @@ from datetime import datetime
 #     only risk-only policies (EXCLUDE_RISK_CONDITIONED) do not count;
 #   - "All" users reaches everyone; an included group must have been read whole, or nothing fails;
 #   - an excluded group or directory role whose members are not read excludes nobody;
-#   - a policy that includes a directory role reaches its role holders, who are not read: the key still fails,
-#     and the reason says the count may include members who hold such a role (they would be covered for MFA);
+#   - a policy whose grant asks for an authentication strength (Multifactor, Passwordless, Phishing-resistant or
+#     custom) reaches its included users like one that asks for the built-in "mfa" control;
+#   - any MFA policy that includes a directory role keeps the key not evaluated: its holders are not read, so a
+#     member counted as outside may be covered by it;
 #   - accounts left outside only because a policy excludes them by name are break-glass when there are at most
 #     MAX_EXCLUDED_ACCOUNTS of them, and are not counted as outside.
 # Other evidence, read only when the merged input carries it:
 #   "securityDefaults": GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy. Enabled (or not read whole):
 #                       no False; the key stays not evaluated (security defaults are not graded here);
 #   "perUserMfaStates": a Graph list of {"id", "perUserMfaState"} (GET /beta/users/{id}/authentication/requirements,
-#                       one item per user). "enforced" or "enabled" covers that account; a list not read whole means
-#                       no False. When CA group coverage plus per-user MFA covers every enabled Member, the key passes.
-MFA_PER_USER_STATES = ("enforced", "enabled")
+#                       one item per user). Only "enforced" covers that account ("enabled" means enrolled, and legacy
+#                       clients can still sign in with a password); a list not read whole means no False. When CA
+#                       group coverage plus enforced per-user MFA covers every enabled Member, the key passes.
+MFA_PER_USER_STATES = ("enforced",)
 EXCLUDE_RISK_CONDITIONED = True
 ALL_USERS_TARGET_MODE = "unevaluated"
 RISK_REASON = "fires only on sign-in or user risk"
@@ -488,6 +491,17 @@ def per_user_mfa(data):
     return ids, ""
 
 
+def requires_mfa_reach(policy):
+    """For the members-outside rule only: the grant asks for MFA, either the built-in "mfa" control or an
+    authentication strength (built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength).
+    Generous on purpose: counting a policy can only remove members from "outside", never add a False."""
+    grant = as_dict(policy.get("grantControls"))
+    if "mfa" in lowered(grant.get("builtInControls")):
+        return True
+    strength = grant.get("authenticationStrength")
+    return isinstance(strength, dict) and bool(strength)
+
+
 def members_outside(data, policies):
     """({'outside': ids, 'membersTotal': n}, '') for the enabled Member accounts that no enabled MFA-granting policy
     reaches (generous reach, see the header), or (None, reason) when that cannot be decided."""
@@ -499,18 +513,18 @@ def members_outside(data, policies):
         return None, "a group member read was refused"
     reached = set()
     named_excluded = set()
-    role_scoped = False
     for policy in policies:
         if not isinstance(policy, dict) or policy.get("state") != "enabled":
             continue
-        if "mfa" not in lowered(as_dict(policy.get("grantControls")).get("builtInControls")):
+        if not requires_mfa_reach(policy):
             continue
         conditions = as_dict(policy.get("conditions"))
         if EXCLUDE_RISK_CONDITIONED and risk_conditioned(conditions):
             continue
         users = as_dict(conditions.get("users"))
         if present(users.get("includeRoles")):
-            role_scoped = True
+            return None, ("an MFA policy includes a directory role, and role holders are not read, so members "
+                          "counted as outside may hold that role and be covered")
         include = lowered(users.get("includeUsers"))
         reach = set(workforce) if "all" in include else (object_ids(users.get("includeUsers")) & workforce)
         for gid in object_ids(users.get("includeGroups")):
@@ -531,7 +545,7 @@ def members_outside(data, policies):
     break_glass = outside & named_excluded
     if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
         outside = outside - break_glass
-    return {"outside": outside, "membersTotal": len(workforce), "roleScoped": role_scoped}, ""
+    return {"outside": outside, "membersTotal": len(workforce)}, ""
 
 
 def candidate_reach(data, candidates):
@@ -688,7 +702,6 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         return None
     input_summary["membersTotal"] = total
     input_summary["membersWithoutMfaPolicy"] = len(outside)
-    details["roleScopedPolicyPresent"] = found["roleScoped"]
     result = {criteriaKey: False}
     result.update(details)
     word = "account is" if len(outside) == 1 else "accounts are"
@@ -697,9 +710,7 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         pass_reasons=[f"MFA methods enabled: {', '.join(enabled_methods)}"],
         fail_reasons=[f"{len(outside)} of {total} enabled member {word} not covered by any enabled Conditional Access "
                       "policy that requires MFA: they are in none of the groups or user lists those policies include "
-                      "(group membership read), so MFA is not enforced for them"
-                      + ("; an MFA policy also includes directory roles, whose holders are not read, so any of these "
-                         "members who hold such a role are covered for MFA" if found["roleScoped"] else "")],
+                      "(group membership read), so MFA is not enforced for them"],
         recommendations=["Add these members to a group an MFA policy includes, or target an MFA policy at All users"],
         input_summary=input_summary)
 
