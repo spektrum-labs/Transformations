@@ -102,12 +102,12 @@ def test_dedicated_admins_pass(loader):
 
 
 @pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
-def test_everyday_directory_admin_fails(loader):
-    assert run(FAILING, loader)["transformedResponse"][KEY] is False
+def test_unmarked_directory_admin_not_evaluated(loader):
+    assert run(FAILING, loader)["transformedResponse"][KEY] is None
 
 
-def test_everyday_sso_admin_fails():
-    assert value(merged([ADMIN, SSO_JROE], [], [ADMIN, SSO_JROE])) is False
+def test_unmarked_sso_admin_not_evaluated():
+    assert value(merged([ADMIN, SSO_JROE], [], [ADMIN, SSO_JROE])) is None
 
 
 def test_general_external_group_fails():
@@ -116,7 +116,7 @@ def test_general_external_group_fails():
 
 def test_wrapped_same_answers():
     assert value(ts_wrap(PASSING)) is True
-    assert value(ts_wrap(FAILING)) is False
+    assert value(ts_wrap(FAILING)) is None
 
 
 def test_group_one_not_master_not_evaluated():
@@ -142,3 +142,10 @@ def test_membership_not_read_not_evaluated():
     del body["masterGroup"]["users"]
     del body["masterGroup"]["associatedExternalGroups"]
     assert value(body) is None
+
+
+def test_unmarked_identity_reads_not_evaluated():
+    out = run(FAILING)
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "no admin marker" in out["additionalInfo"]["evaluation"]["failReasons"][0]

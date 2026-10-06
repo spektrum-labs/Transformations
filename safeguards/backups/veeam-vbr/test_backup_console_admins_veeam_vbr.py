@@ -109,8 +109,8 @@ def test_dedicated_admins_pass(loader):
 
 
 @pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
-def test_everyday_domain_admin_fails(loader):
-    assert run(FAILING, loader)["transformedResponse"][KEY] is False
+def test_unmarked_domain_admin_not_evaluated(loader):
+    assert run(FAILING, loader)["transformedResponse"][KEY] is None
 
 
 def test_general_group_fails():
@@ -119,7 +119,7 @@ def test_general_group_fails():
 
 def test_wrapped_same_answers():
     assert value(ts_wrap(PASSING)) is True
-    assert value(ts_wrap(FAILING)) is False
+    assert value(ts_wrap(FAILING)) is None
 
 
 def test_partial_page_not_evaluated():
@@ -148,3 +148,10 @@ def test_missing_roles_not_evaluated():
 
 def test_unknown_type_unmarked_not_evaluated():
     assert value(coll([entry("jdoe", "NewType")])) is None
+
+
+def test_unmarked_identity_reads_not_evaluated():
+    out = run(FAILING)
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "no admin marker" in out["additionalInfo"]["evaluation"]["failReasons"][0]

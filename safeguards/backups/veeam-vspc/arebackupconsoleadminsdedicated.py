@@ -18,7 +18,8 @@ siteAdministrator. A Windows user local to the VSPC server (contextType machine)
 (dedicated). A domain user is dedicated only when its name marks it as an admin account; a Windows group only
 when its name marks it as an admin group. VSPC does not say whether a portal user signs in with a VSPC password
 or through an identity provider, so an unmarked portal administrator cannot be classified (not evaluated).
-True: every administrator is dedicated. False: any administrator is an everyday domain account or group.
+True: every administrator is dedicated. False: any administrator holds the role through a
+general-purpose group. Unevaluated: a directory or SSO identity whose name carries no admin marker.
 None (not evaluated): empty, error or partial input, unclassifiable administrators, or none in the read.
 """
 import json
@@ -218,7 +219,8 @@ def classify(names, principal, identity):
     "service" (a non-person API or service account), "directory" (a directory account such as
     DOMAIN\\user), "sso" (an identity-provider identity) or "unknown" (the API does not say).
     Returns one of: local, service, named (a directory or SSO identity named as an admin account),
-    group (a group named as an admin group), everyday, everyday-group, unclassified.
+    group (a group named as an admin group), unmarked (a directory or SSO identity with no admin
+    marker: dedicated versus everyday cannot be told from the name), everyday-group, unclassified.
     """
     marked_admin = False
     marked_service = False
@@ -236,7 +238,7 @@ def classify(names, principal, identity):
     if marked_service:
         return "named"
     if identity in ("directory", "sso"):
-        return "everyday"
+        return "unmarked"
     return "unclassified"
 
 
@@ -250,17 +252,19 @@ def first_name(names):
 def verdict(validation, admins, role_label, summary_extra=None):
     """The criterion from the console administrators found in a complete read.
 
-    admins: list of {"name", "class", "role"}. False when any administrator is an everyday identity or
-    an everyday group; None when none was found or any could not be classified; True only when every
+    admins: list of {"name", "class", "role"}. False when any administrator is an everyday group; None
+    when none was found, any directory or SSO identity carries no admin marker, or any could not be
+    classified; True only when every
     administrator is a local console account, a service account, an admin-named identity or an
     admin-named group.
     """
     counts = {}
-    for c in ("local", "service", "named", "group", "everyday", "everyday-group", "unclassified"):
+    for c in ("local", "service", "named", "group", "unmarked", "everyday-group", "unclassified"):
         counts[c] = 0
     for a in admins:
         counts[a["class"]] = counts.get(a["class"], 0) + 1
-    everyday = [a["name"] for a in admins if a["class"] in ("everyday", "everyday-group")]
+    everyday = [a["name"] for a in admins if a["class"] == "everyday-group"]
+    unmarked = [a["name"] for a in admins if a["class"] == "unmarked"]
     unclassified = [a["name"] for a in admins if a["class"] == "unclassified"]
     summary = {
         "consoleAdministrators": len(admins),
@@ -268,10 +272,11 @@ def verdict(validation, admins, role_label, summary_extra=None):
         "serviceAccounts": counts["service"],
         "adminNamedIdentities": counts["named"],
         "adminNamedGroups": counts["group"],
-        "everydayIdentities": counts["everyday"],
+        "unmarkedIdentities": counts["unmarked"],
         "everydayGroups": counts["everyday-group"],
         "unclassified": counts["unclassified"],
         "everydayAdministrators": everyday[:MAX_LISTED],
+        "unmarkedAdministrators": unmarked[:MAX_LISTED],
         "unclassifiedAdministrators": unclassified[:MAX_LISTED],
     }
     if summary_extra:
@@ -286,14 +291,21 @@ def verdict(validation, admins, role_label, summary_extra=None):
             result={KEY: False},
             validation=validation,
             fail_reasons=[str(len(everyday)) + " of " + str(len(admins)) + " console administrators hold " + role_label +
-                          " on an everyday identity (a directory or SSO account, or a group, not named as a dedicated "
-                          "admin account): " + ", ".join(everyday[:10]) + ("" if len(everyday) <= 10 else ", ...")],
+                          " through a general-purpose group (a group not named as a dedicated admin group): " + ", ".join(everyday[:10]) + ("" if len(everyday) <= 10 else ", ...")],
             recommendations=["Grant " + role_label + " only to dedicated admin accounts: a local console account, a "
                              "service account, or a separate directory or SSO identity named as an admin account "
                              "(for example adm-<name>), or a dedicated admin group. Remove it from everyday identities "
                              "and general-purpose groups."],
             input_summary=summary,
         )
+    if len(unmarked) > 0:
+        return not_measured(validation,
+                            str(len(unmarked)) + " of " + str(len(admins)) + " console administrators are directory or "
+                            "SSO identities whose names carry no admin marker (" + ", ".join(unmarked[:10]) +
+                            "). A dedicated admin identity and an everyday one look the same here, so dedicated versus "
+                            "everyday cannot be shown.",
+                            "Name dedicated admin identities distinctly (for example adm-<name>), or provide the "
+                            "identity provider's record showing these are separate admin accounts.", summary)
     if len(unclassified) > 0:
         return not_measured(validation,
                             str(len(unclassified)) + " of " + str(len(admins)) + " console administrators could not be "
