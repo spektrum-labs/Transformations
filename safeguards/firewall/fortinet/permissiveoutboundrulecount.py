@@ -22,7 +22,7 @@ named address objects or service groups that happen to cover everything are not 
 address and "ALL" service are read). A policy whose service or destination is negated (service-negate,
 dstaddr-negate, dstaddr6-negate) does not match that field.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body; the policy, interface or
-zone read missing or not successful; or, when no permissive policy is confirmed, an accept-ALL-to-all policy whose
+zone read missing, not successful or partial (next_idx, or matched_count above the results returned); or, when no permissive policy is confirmed, an accept-ALL-to-all policy whose
 destination interface cannot be resolved to an interface or zone. A confirmed permissive policy is a failure even
 when others are unresolved (they can only add to the count; the reason names them).
 """
@@ -196,6 +196,14 @@ def fortios_body(part):
         return None, "FortiOS answered status " + str(cur.get("status")) + " (HTTP " + str(http_status) + ")"
     if status == "" and http_status is None:
         return None, "the FortiOS body carries neither status nor http_status, so success cannot be shown"
+    if cur.get("next_idx") not in (None, "", "None"):
+        return None, "a partial read: FortiOS returned next_idx, so more results were not read"
+    matched = cur.get("matched_count")
+    if isinstance(matched, str) and matched.strip().isdigit():
+        matched = int(matched.strip())
+    results = cur.get("results")
+    if isinstance(matched, int) and not isinstance(matched, bool) and isinstance(results, list) and matched > len(results):
+        return None, ("a partial read: FortiOS matched " + str(matched) + " entries and returned " + str(len(results)))
     return cur, None
 
 
@@ -321,12 +329,12 @@ def transform(input):
             src_intf = lower_set(names(pol.get("srcintf")))
             unknown = [n for n in dst_intf if n not in known]
             to_wan = [n for n in dst_intf if n in wan]
+            from_internal = [n for n in src_intf if n not in wan or n == "any"]
             if to_wan:
-                from_internal = [n for n in src_intf if n not in wan or n == "any"]
                 if from_internal or len(src_intf) == 0:
                     permissive.append(label + " (" + ",".join(sorted(src_intf))[:60] + " -> " + ",".join(sorted(dst_intf))[:60] + ")")
                 continue
-            if unknown or len(dst_intf) == 0:
+            if (unknown or len(dst_intf) == 0) and (from_internal or len(src_intf) == 0):
                 unresolved.append(label + " (destination interface " + (",".join(sorted(unknown)) or "none") + ")")
         summary = {"vdom": vdom, "policiesRead": len(policies), "internetFacingInterfaces": sorted(wan)[:MAX_NAMED],
                    "permissivePolicies": permissive[:MAX_NAMED], "unresolvedPolicies": unresolved[:MAX_NAMED],
