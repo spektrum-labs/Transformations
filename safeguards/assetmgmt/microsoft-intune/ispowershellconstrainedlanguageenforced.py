@@ -31,7 +31,8 @@ AppLocker rules from every profile that reaches a device are merged there, so an
 not count while any assigned AppLocker profile allows broadly (False), or cannot be read or audits the collection
 (Not evaluated). A supplemental App Control policy (PolicyType="Supplemental Policy") adds allow rules to its base
 and never enforces on its own: a broad one undoes App Control enforcement (False), an unreadable one makes it
-Not evaluated. An App Control policy delivered as a binary .cip through a custom OMA-URI profile
+Not evaluated, and so does any other reaching App Control policy whose mode or rules cannot be read. An App Control
+policy delivered as a binary .cip through a custom OMA-URI profile
 (./Vendor/MSFT/ApplicationControl/Policies/...) cannot be read; when one reaches devices, App Control enforcement is
 Not evaluated. Attribute quotes may be single or double.
 A policy is ESTATE-WIDE when assigned to All devices or All users with no exclusion group and no filter.
@@ -592,10 +593,13 @@ def transform(input):
                 else:
                     is_it, mode = applocker_mode(it)
                     kind = "AppLocker script rules"
-                    if not is_it and oma_app_control(it):
+                    if oma_app_control(it):
                         # An App Control policy delivered as a binary .cip through a custom OMA-URI profile: it may
-                        # be a base or a supplemental, and its rules cannot be read here.
-                        is_it, mode, kind = True, None, "App Control (custom OMA-URI)"
+                        # be a base or a supplemental, and its rules cannot be read here. Recorded on its own, even
+                        # when the same profile also carries AppLocker settings.
+                        wide2, reach2 = estate_wide(it.get("assignments"))
+                        policies.append({"name": name, "kind": "App Control (custom OMA-URI)", "mode": None,
+                                         "wide": wide2, "reach": reach2})
                 if not is_it:
                     continue
                 wide, reach = estate_wide(it.get("assignments"))
@@ -612,8 +616,10 @@ def transform(input):
         applocker_unsure = [p for p in applocker_reaching if p["mode"] is None or p["mode"] == "audit"]
         supplemental_reaching = [p for p in policies if p["kind"].startswith("App Control") and p["reach"] != NOT_ASSIGNED]
         supplemental_broad = [p for p in supplemental_reaching if p["mode"] == SUPPLEMENTAL_BROAD]
+        # Any reaching App Control policy that cannot be shown NOT to be a broad supplemental (unreadable mode or
+        # rules, or a binary OMA-URI policy) makes App Control enforcement unreadable.
         supplemental_unsure = [p for p in supplemental_reaching
-                               if p["mode"] == SUPPLEMENTAL_UNREAD or p["kind"] == "App Control (custom OMA-URI)"]
+                               if p["mode"] in (None, SUPPLEMENTAL_UNREAD) or p["kind"] == "App Control (custom OMA-URI)"]
         for p in policies:
             if p["mode"] != "enforce":
                 continue

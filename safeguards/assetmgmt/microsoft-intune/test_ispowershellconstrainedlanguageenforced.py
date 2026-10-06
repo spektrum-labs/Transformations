@@ -159,7 +159,14 @@ def test_unreadable_mode_or_assignments_is_not_evaluated_unless_something_enforc
     q = app_control("y")
     del q["assignments"]
     assert value(body([q]))[0] is None
-    assert value(body([p, q, app_control("z")]))[0] is True
+    # an unreadable App Control policy that reaches devices may be a broad supplemental: not a pass
+    assert value(body([p, app_control("z")]))[0] is None
+    # an enforcing base whose assignments cannot be read is readable as a base, so it cannot be a broad
+    # supplemental: the estate-wide enforcing policy still counts
+    assert value(body([q, app_control("z")]))[0] is True
+    # an unassigned unreadable one reaches nothing
+    p["assignments"] = []
+    assert value(body([p, app_control("z")]))[0] is True
 
 
 def test_partial_reads():
@@ -390,3 +397,10 @@ def test_single_quoted_supplemental_is_recognised():
     v = sup["settings"][0]["settingInstance"]["simpleSettingValue"]
     v["value"] = v["value"].replace("PolicyType=\"Supplemental Policy\"", "PolicyType='Supplemental Policy'")
     assert value(body([base, sup]))[0] is False
+
+
+def test_a_profile_with_both_applocker_and_app_control_settings_records_both():
+    both = applocker("Mixed", assignments=[group("g-1")])
+    both["omaSettings"].append({"@odata.type": "#microsoft.graph.omaSettingBase64",
+                                "omaUri": "./Vendor/MSFT/ApplicationControl/Policies/{guid}/Policy", "value": "AAAA"})
+    assert value(body([app_control("Base")], [both]))[0] is None
