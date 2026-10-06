@@ -5,7 +5,7 @@ Evaluates: Whether real-time protection is active across all devices
 
 Data source: Advanced Hunting API (POST /api/advancedqueries/run)
 Query: DeviceTvmSecureConfigurationAssessment
-       | where ConfigurationId == 'scid-2011'
+       | where ConfigurationId == 'scid-2012'
        | project DeviceId, DeviceName, ConfigurationId, IsCompliant, IsApplicable
 Permission: AdvancedQuery.Read.All
 
@@ -79,7 +79,7 @@ def evaluate(data):
     """Evaluate real-time protection across all devices.
 
     Supports two response formats:
-    1. Advanced Hunting (scid-2011): IsCompliant field per device
+    1. Advanced Hunting (scid-2012): IsCompliant field per device
     2. Legacy machines API: avMode field per device
     """
     try:
@@ -98,7 +98,7 @@ def evaluate(data):
 
             device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
 
-            # Advanced Hunting format (scid-2011): IsCompliant
+            # Advanced Hunting format (scid-2012): IsCompliant
             if "IsCompliant" in device:
                 is_applicable = to_bool(device.get("IsApplicable", True))
                 if not is_applicable:
@@ -134,6 +134,22 @@ def evaluate(data):
         return {"isRealTimeProtectionEnabled": False, "error": str(e)}
 
 
+#: The id the method used to query by mistake, and what it really measures. Its rows are not evidence for this
+#: check: they read Not evaluated until the method queries scid-2012.
+RETIRED_SCID = "scid-2011"
+
+
+def retired_rows(data):
+    """True when the advanced-hunting rows carry the retired configuration id."""
+    rows = data.get("Results") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("ConfigurationId") or "").strip().lower() == RETIRED_SCID:
+            return True
+    return False
+
+
 def transform(input):
     criteriaKey = "isRealTimeProtectionEnabled"
     try:
@@ -143,6 +159,17 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
+
+        if retired_rows(data):
+            reason = ("The query read " + RETIRED_SCID + " (Defender Antivirus definitions up to date), not real-time protection (scid-2012), so "
+                      "these rows are not evidence for this check")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[reason],
+                recommendations=["Point the Windows Defender method at scid-2012 (real-time protection)"],
+                api_errors=[reason],
+            )
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)

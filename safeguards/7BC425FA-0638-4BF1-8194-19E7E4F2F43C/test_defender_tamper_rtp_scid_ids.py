@@ -48,3 +48,23 @@ def test_old_ids_are_not_evidence():
         assert out["transformedResponse"]["isRealTimeProtectionEnabled"] is None
         assert out["additionalInfo"]["dataCollection"]["status"] == "error"
         assert "scid-2003" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def load_legacy(name):
+    spec = importlib.util.spec_from_file_location("legacy_" + name, os.path.join(HERE, name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.transform
+
+
+def test_legacy_files_refuse_the_retired_ids_and_read_the_right_ones():
+    tamper = load_legacy("istamperprotectionenabled")
+    rtp = load_legacy("isrealtimeprotectionenabled")
+    out = tamper(hunting([row("scid-2010", 1)]))
+    assert out["transformedResponse"]["isTamperProtectionEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    out = rtp(hunting([row("scid-2011", 1)]))
+    assert out["transformedResponse"]["isRealTimeProtectionEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert tamper(hunting([row("scid-2003", 1)]))["transformedResponse"]["isTamperProtectionEnabled"] is True
+    assert rtp(hunting([row("scid-2012", 1)]))["transformedResponse"]["isRealTimeProtectionEnabled"] is True
