@@ -43,6 +43,10 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 TRUNCATION_WARNING_CODE = '1980'
+# WARNING/CODE and WARNING/TEXT are vendor strings and go into dataCollection.errors and
+# failReasons, which a customer reads. Neither has a documented length, so both are cut here
+# rather than copied whole into every reason string.
+MAX_WARNING_TEXT = 200
 
 
 def detection_status(detection):
@@ -70,6 +74,8 @@ def truncated_read(data, criteria_key):
     user guide p1127 for the default, p1143 for the warning). Nothing here follows that URL, so
     a body carrying the warning is a sample of the estate and not the estate: a count, a mean or
     a percentage over it is not a measurement of this customer and must not be reported as one.
+
+    The vendor's own CODE and TEXT are quoted in the reason, cut to MAX_WARNING_TEXT characters.
     """
     try:
         response = data.get('HOST_LIST_VM_DETECTION_OUTPUT', {}) if isinstance(data, dict) else {}
@@ -91,8 +97,8 @@ def truncated_read(data, criteria_key):
         code = str(warning.get('CODE', '')).strip()
         text = str(warning.get('TEXT', '')).strip()
         if code == TRUNCATION_WARNING_CODE or 'record limit exceeded' in text.lower():
-            return ('Qualys truncated the host list (WARNING ' + (code or TRUNCATION_WARNING_CODE)
-                    + ': ' + (text or 'record limit exceeded') + '), so this reply is a sample of '
+            return ('Qualys truncated the host list (WARNING ' + (code[:MAX_WARNING_TEXT] or TRUNCATION_WARNING_CODE)
+                    + ': ' + (text[:MAX_WARNING_TEXT] or 'record limit exceeded') + '), so this reply is a sample of '
                     'the estate rather than the estate, and ' + criteria_key
                     + ' was not measured.')
     return None

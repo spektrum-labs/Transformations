@@ -218,3 +218,62 @@ def test_a_body_whose_reads_raise_is_still_graded_which_is_a_separate_finding():
 
     assert value_and_status(load("criticalvulnerabilitycount")(Poisoned()),
                             "criticalVulnerabilityCount") == (0, "success")
+
+
+# --- the vendor's own warning text is quoted, not copied whole ------------------------------
+
+@pytest.mark.parametrize("name,key", [
+    ("criticalvulnerabilitycount", "criticalVulnerabilityCount"),
+    ("knownexploitedvulncount", "knownExploitedVulnCount"),
+    ("meantimetoremediatecritical", "meanTimeToRemediateCritical"),
+    ("patchcompliancepercentage", "patchCompliancePercentage"),
+])
+def test_an_overlong_vendor_warning_is_cut_before_it_reaches_the_customer(name, key):
+    """WARNING/TEXT and WARNING/CODE are vendor strings with no documented length, and they went verbatim
+    into dataCollection.errors and failReasons, which a customer reads."""
+    body = reply([detection(5, "ACTIVE")], truncated=True)
+    warning = body["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"]
+    warning["TEXT"] = "1000 record limit exceeded. " + ("X" * 9000)
+    warning["CODE"] = "1980" + ("9" * 9000)
+    out = load(name)(body)
+    assert value_and_status(out, key) == (None, "error")
+    reason = out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert out["additionalInfo"]["evaluation"]["failReasons"][0] == reason
+    assert len(reason) < 700
+    assert "XXXX" in reason          # the start of the vendor's text is still quoted
+    assert "X" * 300 not in reason   # but not all 9,000 characters of it
+
+
+def test_the_warning_url_is_still_left_out_of_every_reason():
+    """The URL carries id_min; the fix must not start quoting it on the way to cutting TEXT."""
+    body = reply([detection(5, "ACTIVE")], truncated=True)
+    out = load("criticalvulnerabilitycount")(body)
+    assert "id_min" not in " ".join(out["additionalInfo"]["dataCollection"]["errors"]
+                                    + out["additionalInfo"]["evaluation"]["failReasons"]
+                                    + out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+# --- a truncated count carries its lower bound as evidence, not as the answer ---------------
+
+def test_a_truncated_count_reports_the_lower_bound_without_answering_from_it():
+    """The hosts Qualys cut off can only add criticals, so the sample is a lower bound on the estate. This
+    transformation is never told the threshold it is judged against -- Token-Service compares the number it
+    returns -- so returning the bound would hand a passing sample to a tenant whose estate does not pass.
+    The bound is reported where a reader can act on it and the evaluator cannot grade it."""
+    out = load("criticalvulnerabilitycount")(reply([detection(5, "ACTIVE")] * 50, truncated=True))
+    assert value_and_status(out, "criticalVulnerabilityCount") == (None, "error")
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["sampleCount"] == 50
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["truncated"] is True
+    findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
+    assert "50 open critical/high detections" in findings
+    assert "at least that many" in findings
+
+
+def test_a_sample_that_found_nothing_states_no_bound():
+    """"At least 0" says nothing, so a warning over a host list with no open critical records the count and
+    leaves the findings empty rather than filling them with a vacuous claim."""
+    body = {"HOST_LIST_VM_DETECTION_OUTPUT": {"RESPONSE": {"WARNING": TRUNCATION_WARNING}}}
+    out = load("criticalvulnerabilitycount")(body)
+    assert value_and_status(out, "criticalVulnerabilityCount") == (None, "error")
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["sampleCount"] == 0
+    assert out["additionalInfo"]["evaluation"]["additionalFindings"] == []
