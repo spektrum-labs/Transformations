@@ -99,10 +99,19 @@ def test_documented_example_body_passes():
     assert outcome(body, load_plain()) == (True, "success")
 
 
-def test_standby_member_of_active_passive_pair_is_not_counted():
+def test_a_connected_standby_is_not_counted():
+    body = page([firewall(0, cluster=("activePassive", "primary")),
+                 firewall(1, cluster=("activePassive", "auxiliary"))])
+    assert outcome(body, load_plain()) == (True, "success")
+
+
+def test_a_disconnected_standby_is_not_evaluated_rather_than_excluded():
+    """Excluding the standby is an interpretation; the docs do not say whether a standby
+    reports itself connected. Excluding one that says DISCONNECTED would let that
+    interpretation pass a fleet whose standby is genuinely down."""
     body = page([firewall(0, cluster=("activePassive", "primary")),
                  firewall(1, connected=False, cluster=("activePassive", "auxiliary"))])
-    assert outcome(body, load_plain()) == (True, "success")
+    assert outcome(body, load_plain()) == (None, "error")
 
 
 def test_active_active_auxiliary_is_counted():

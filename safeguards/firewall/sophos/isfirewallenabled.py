@@ -10,7 +10,9 @@ The control is "the firewalls are on", so every firewall Central lists must be c
 when any one firewall was connected, so 1 of 50 connected with 49 offline was a pass; an offline firewall now fails.
 A firewall whose cluster.status is "auxiliary" in an "activePassive" cluster is the standby member of a
 high-availability pair and is judged through its primary, so it is reported but not counted; an active-active
-auxiliary carries traffic and is counted.
+auxiliary carries traffic and is counted. The docs do not say whether a standby reports itself connected, so
+that exclusion is an interpretation: a standby reporting DISCONNECTED is therefore not evaluated rather than
+excluded, which would let an interpretation pass a fleet whose standby is genuinely down.
 
 - True: the list was read whole, it lists at least one firewall, and every counted firewall has status.connected true.
 - False: the list was read whole and at least one counted firewall has status.connected false.
@@ -117,6 +119,7 @@ def transform(input):
         counted = 0
         connected = 0
         auxiliary = 0
+        auxiliary_offline = 0
         unreadable = 0
         for fw in items:
             status = fw.get("status") if isinstance(fw, dict) else None
@@ -128,13 +131,16 @@ def transform(input):
             standby = isinstance(cluster, dict) and cluster.get("mode") == "activePassive"
             if standby and cluster.get("status") == "auxiliary":
                 auxiliary = auxiliary + 1
+                if not state:
+                    auxiliary_offline = auxiliary_offline + 1
                 continue
             counted = counted + 1
             if state:
                 connected = connected + 1
 
         summary = {"firewalls": len(items), "counted": counted, "connected": connected,
-                   "haAuxiliary": auxiliary, "unreadable": unreadable}
+                   "haAuxiliary": auxiliary, "haAuxiliaryOffline": auxiliary_offline,
+                   "unreadable": unreadable}
         result = {CRITERIA_KEY: None, "totalFirewalls": counted, "connectedFirewalls": connected}
         if unreadable:
             return not_evaluated(f"{unreadable} of {len(items)} Sophos firewall(s) carry no boolean status.connected",
@@ -142,6 +148,16 @@ def transform(input):
         if not counted:
             return not_evaluated("Sophos Central lists only standby high-availability firewalls", validation,
                                  summary=summary)
+        # A standby is excluded because the docs do not say whether it reports connected, and
+        # that is an interpretation rather than a documented rule. Excluding a standby that
+        # reports DISCONNECTED would turn the interpretation into an assertion: it could pass a
+        # fleet whose standby is genuinely down. Measure what the docs support, and say
+        # "not measured" for the case they do not cover.
+        if auxiliary_offline:
+            return not_evaluated(
+                f"{auxiliary_offline} standby high-availability firewall(s) report status.connected false, and "
+                "the Sophos documentation does not say whether a standby reports itself connected",
+                validation, summary=summary)
         if connected < counted:
             result[CRITERIA_KEY] = False
             return create_response(result, validation, failed=[
