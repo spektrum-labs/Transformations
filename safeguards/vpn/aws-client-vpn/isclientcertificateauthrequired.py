@@ -19,9 +19,9 @@ def transform(input):
     """
     isClientCertificateAuthRequired - True only when there is at least one active Client VPN
     endpoint and every active endpoint has a "certificate-authentication" option (mutual TLS: the
-    device must present a client certificate issued under the configured root chain). Together
-    with a federated or directory option this means both a device certificate and a user sign-in
-    are required. False when any active endpoint does not require a client certificate.
+    device must present a client certificate issued under the configured root chain). False when an
+    endpoint's options are all recognised and none is a certificate. Not evaluated (None) when an
+    endpoint reports no option, or an option type this code does not recognise, and none fails.
     """
     import json
     from datetime import datetime, timezone
@@ -91,6 +91,18 @@ def transform(input):
         label = as_text(field(endpoint, "clientVpnEndpointId", "ClientVpnEndpointId"))
         return label or "an endpoint with no id"
 
+    def decide(verdicts, extra_name, fail_text, pass_text, summary, more=None):
+        failed = [v[0] for v in verdicts if v[1] == "fail"]
+        unknown = [v[0] for v in verdicts if v[1] == "unknown"]
+        extra = {"clientVpnEndpoints": len(verdicts), extra_name: len(failed)}
+        for name in (more or {}):
+            extra[name] = more[name]
+        if failed:
+            return respond(False, extra, [], [fail_text + ": " + ", ".join(failed[:20])], summary, [])
+        if unknown:
+            return not_evaluated("Not reported, so not judged, on: " + ", ".join(unknown[:20]), extra, summary)
+        return respond(True, extra, [pass_text + " (" + str(len(verdicts)) + ")"], [], summary, [])
+
     try:
         data = input
         if isinstance(data, bytes):
@@ -138,18 +150,24 @@ def transform(input):
             return not_evaluated("No active AWS Client VPN endpoint in this Region: AWS Client VPN does not "
                                  "provide remote access here, so it has no answer", {"clientVpnEndpoints": 0}, summary)
 
-        missing = []
-        for endpoint in endpoints:
+        def auth_types(endpoint):
             types = []
             for option in as_list(field(endpoint, "authenticationOptions", "AuthenticationOptions")):
                 types.append(as_text(field(option, "type", "Type")).lower())
-            if "certificate-authentication" not in types:
-                missing.append(endpoint_label(endpoint))
-        extra = {"clientVpnEndpoints": len(endpoints), "endpointsWithoutClientCertificate": len(missing)}
-        if missing:
-            return respond(False, extra, [], ["No client certificate (mutual authentication) required on: "
-                                              + ", ".join(missing[:20])], summary, [])
-        return respond(True, extra, ["Every active Client VPN endpoint (" + str(len(endpoints))
-                                     + ") requires a client certificate"], [], summary, [])
+            return types
+
+        known = ["certificate-authentication", "directory-service-authentication", "federated-authentication"]
+        verdicts = []
+        for endpoint in endpoints:
+            types = auth_types(endpoint)
+            if "certificate-authentication" in types:
+                verdicts.append([endpoint_label(endpoint), "pass"])
+            elif types and all([t in known for t in types]):
+                verdicts.append([endpoint_label(endpoint), "fail"])
+            else:
+                verdicts.append([endpoint_label(endpoint), "unknown"])
+        return decide(verdicts, "endpointsWithoutClientCertificate",
+                      "No client certificate (mutual authentication) required on",
+                      "Every active Client VPN endpoint requires a client certificate", summary)
     except Exception as e:
         return not_evaluated("Could not evaluate the Client VPN endpoint list: the response has an unexpected shape")

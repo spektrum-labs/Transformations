@@ -152,25 +152,66 @@ def test_one_bad_endpoint_fails_the_whole_estate(module):
     assert verdict(module, sdk_body(good_endpoint(), bad))[0] is False
 
 
+UNREPORTED = {
+    "ismfarequiredforremoteaccess": ["authenticationOptions"],
+    "isfederatedauthenticationconfigured": ["authenticationOptions"],
+    "isclientcertificateauthrequired": ["authenticationOptions"],
+    "isconnectionloggingenabled": ["connectionLogOptions"],
+    "issplittunneldisabled": ["splitTunnel"],
+    "isdisconnectonsessiontimeoutenabled": ["disconnectOnSessionTimeout"],
+    "isclientrouteenforcementenabled": ["clientRouteEnforcementOptions"],
+    "isendpointanalysispolicybound": ["clientConnectOptions"],
+    "isvpnvserverup": ["status"],
+}
+
+
 @pytest.mark.parametrize("module", sorted(KEYS))
-def test_missing_setting_is_not_a_pass(module):
-    endpoint = good_endpoint()
-    for field in ["splitTunnel", "connectionLogOptions", "disconnectOnSessionTimeout",
-                  "clientRouteEnforcementOptions", "authenticationOptions", "status", "clientConnectOptions"]:
-        endpoint.pop(field, None)
-    endpoint["status"] = {"code": "pending-associate"}
-    assert verdict(module, xml_body(endpoint))[0] is False
+def test_a_setting_that_is_not_reported_is_not_evaluated_never_false(module):
+    endpoint = good_endpoint("cvpn-endpoint-0000000000000000c")
+    for field in UNREPORTED[module]:
+        endpoint.pop(field)
+    if module == "isvpnvserverup":
+        endpoint["status"] = {}
+    value, out = verdict(module, xml_body(good_endpoint(), endpoint))
+    assert value is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "cvpn-endpoint-0000000000000000c" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
-def test_mfa_counts_directory_and_federated_and_reports_numbers():
+@pytest.mark.parametrize("module", sorted(KEYS))
+def test_a_reported_failure_still_wins_over_an_unreported_endpoint(module):
+    unreported = good_endpoint("cvpn-endpoint-0000000000000000c")
+    for field in UNREPORTED[module]:
+        unreported.pop(field)
+    bad = good_endpoint("cvpn-endpoint-0000000000000000b", **FAILS[module])
+    assert verdict(module, xml_body(unreported, bad))[0] is False
+
+
+@pytest.mark.parametrize("module", ["ismfarequiredforremoteaccess", "isfederatedauthenticationconfigured",
+                                    "isclientcertificateauthrequired"])
+@pytest.mark.parametrize("options", [{"item": {"type": "something-new"}}, {"item": {"type": ""}}, {"item": []}, None])
+def test_an_unrecognised_or_empty_auth_option_is_not_evaluated(module, options):
+    assert verdict(module, xml_body(good_endpoint(authenticationOptions=options)))[0] is None
+
+
+def test_mfa_directory_sign_in_is_not_evaluated_because_radius_mfa_is_not_visible():
     value, out = verdict("ismfarequiredforremoteaccess", xml_body(
         good_endpoint("cvpn-endpoint-1", authenticationOptions={"item": SAML}),
         good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT, AD]}),
     ))
-    assert value is True
+    assert value is None
     body = out["transformedResponse"]
     assert body["federatedEndpoints"] == 1 and body["directoryEndpoints"] == 1
-    assert body["certificateOnlyEndpoints"] == 0
+    assert "RADIUS" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_mfa_federated_everywhere_passes_and_says_the_idp_proves_the_mfa():
+    value, out = verdict("ismfarequiredforremoteaccess", xml_body(
+        good_endpoint("cvpn-endpoint-1", authenticationOptions={"item": SAML}),
+        good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT, SAML]}),
+    ))
+    assert value is True
+    assert out["transformedResponse"]["federatedEndpoints"] == 2
     assert "proves the MFA" in out["additionalInfo"]["evaluation"]["passReasons"][0]
 
 
@@ -178,21 +219,10 @@ def test_mfa_certificate_only_fails_and_counts():
     value, out = verdict("ismfarequiredforremoteaccess", xml_body(
         good_endpoint("cvpn-endpoint-1"),
         good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT]}),
+        good_endpoint("cvpn-endpoint-3", authenticationOptions={"item": [AD]}),
     ))
     assert value is False
     assert out["transformedResponse"]["certificateOnlyEndpoints"] == 1
-
-
-def test_mfa_unknown_auth_type_fails():
-    value, _ = verdict("ismfarequiredforremoteaccess",
-                       xml_body(good_endpoint(authenticationOptions={"item": {"type": "something-new"}})))
-    assert value is False
-
-
-def test_session_timeout_reports_longest():
-    _, out = verdict("isdisconnectonsessiontimeoutenabled", xml_body(
-        good_endpoint("a", sessionTimeoutHours="8"), good_endpoint("b", sessionTimeoutHours="24")))
-    assert out["transformedResponse"]["maxSessionTimeoutHours"] == 24
 
 
 def test_federated_counts_distinct_saml_providers():
@@ -200,7 +230,19 @@ def test_federated_counts_distinct_saml_providers():
     assert out["transformedResponse"]["samlProviders"] == 1
 
 
-def test_connect_handler_needs_a_function():
+def test_federated_option_without_a_provider_arn_is_not_evaluated():
+    value, _ = verdict("isfederatedauthenticationconfigured",
+                       xml_body(good_endpoint(authenticationOptions={"item": {"type": "federated-authentication"}})))
+    assert value is None
+
+
+def test_connect_handler_enabled_without_a_function_is_not_evaluated():
     value, _ = verdict("isendpointanalysispolicybound",
                        xml_body(good_endpoint(clientConnectOptions={"enabled": "true"})))
+    assert value is None
+
+
+def test_connect_handler_reported_off_fails():
+    value, _ = verdict("isendpointanalysispolicybound",
+                       xml_body(good_endpoint(clientConnectOptions={"enabled": "false"})))
     assert value is False

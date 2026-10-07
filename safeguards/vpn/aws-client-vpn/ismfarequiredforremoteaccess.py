@@ -18,22 +18,25 @@
 def transform(input):
     """
     isMFARequiredForRemoteAccess (AWS side) - True only when there is at least one active Client VPN
-    endpoint and EVERY active endpoint requires an identity-provider sign-in: one of its
-    AuthenticationOptions is "federated-authentication" (SAML 2.0 through an IAM SAML provider) or
-    "directory-service-authentication" (Active Directory). An endpoint whose only option is
-    "certificate-authentication" (mutual TLS, no user sign-in) fails it: a device certificate alone
-    opens the tunnel, and no identity provider can demand a second factor on that path.
+    endpoint and EVERY active endpoint signs users in through a SAML identity provider: one of its
+    AuthenticationOptions is "federated-authentication" (an IAM SAML provider). An endpoint whose
+    only option is "certificate-authentication" (mutual TLS, no user sign-in) fails it: a device
+    certificate alone opens the tunnel, and no identity provider can demand a second factor.
 
-    What AWS can prove: an identity provider is in the path of every Client VPN connection.
+    Not evaluated (None) when no endpoint fails but one or more:
+      * use "directory-service-authentication" without a federated option. Active Directory
+        without a RADIUS second factor is password-only, and the EC2 API does not show whether the
+        directory has RADIUS MFA, so AWS cannot answer for that endpoint;
+      * report no authentication option, or a type this code does not recognise.
+
+    What AWS can prove: the SAML identity provider is in the path of every Client VPN connection.
     What AWS cannot prove: that the identity provider demands MFA. That is the identity provider's
     own check (for Okta, its isMFARequiredForRemoteAccess reads the authentication policy of the
     AWS Client VPN app). Each tool speaks only for what it protects; neither line alone is the
-    whole control. Directory authentication counts as "IdP in the path" here, but AWS cannot show
-    whether that directory enforces MFA (a RADIUS second factor) either.
+    whole control.
 
-    Returns None (not evaluated) for an error body, a body with no endpoint list, a partial page,
-    or no active endpoint. Also returns clientVpnEndpoints, federatedEndpoints,
-    directoryEndpoints and certificateOnlyEndpoints, as numbers.
+    Also returns clientVpnEndpoints, federatedEndpoints, directoryEndpoints and
+    certificateOnlyEndpoints, as numbers.
     """
     import json
     from datetime import datetime, timezone
@@ -103,6 +106,18 @@ def transform(input):
         label = as_text(field(endpoint, "clientVpnEndpointId", "ClientVpnEndpointId"))
         return label or "an endpoint with no id"
 
+    def decide(verdicts, extra_name, fail_text, pass_text, summary, more=None):
+        failed = [v[0] for v in verdicts if v[1] == "fail"]
+        unknown = [v[0] for v in verdicts if v[1] == "unknown"]
+        extra = {"clientVpnEndpoints": len(verdicts), extra_name: len(failed)}
+        for name in (more or {}):
+            extra[name] = more[name]
+        if failed:
+            return respond(False, extra, [], [fail_text + ": " + ", ".join(failed[:20])], summary, [])
+        if unknown:
+            return not_evaluated("Not reported, so not judged, on: " + ", ".join(unknown[:20]), extra, summary)
+        return respond(True, extra, [pass_text + " (" + str(len(verdicts)) + ")"], [], summary, [])
+
     try:
         data = input
         if isinstance(data, bytes):
@@ -150,36 +165,34 @@ def transform(input):
             return not_evaluated("No active AWS Client VPN endpoint in this Region: AWS Client VPN does not "
                                  "provide remote access here, so it has no answer", {"clientVpnEndpoints": 0}, summary)
 
-        federated = 0
-        directory = 0
-        cert_only = []
-        unknown = []
-        for endpoint in endpoints:
+        def auth_types(endpoint):
             types = []
             for option in as_list(field(endpoint, "authenticationOptions", "AuthenticationOptions")):
                 types.append(as_text(field(option, "type", "Type")).lower())
+            return types
+
+        federated = 0
+        directory = 0
+        cert_only = 0
+        verdicts = []
+        for endpoint in endpoints:
+            types = auth_types(endpoint)
             if "federated-authentication" in types:
                 federated = federated + 1
+                verdicts.append([endpoint_label(endpoint), "pass"])
             elif "directory-service-authentication" in types:
                 directory = directory + 1
+                verdicts.append([endpoint_label(endpoint) + " (directory sign-in: AWS cannot show RADIUS MFA)", "unknown"])
             elif types and all([t == "certificate-authentication" for t in types]):
-                cert_only.append(endpoint_label(endpoint))
+                cert_only = cert_only + 1
+                verdicts.append([endpoint_label(endpoint), "fail"])
             else:
-                unknown.append(endpoint_label(endpoint))
-        extra = {"clientVpnEndpoints": len(endpoints), "federatedEndpoints": federated,
-                 "directoryEndpoints": directory, "certificateOnlyEndpoints": len(cert_only)}
-        if cert_only:
-            return respond(False, extra, [], [
-                "Certificate-only authentication (no identity-provider sign-in, so no MFA is possible) on: "
-                + ", ".join(cert_only[:20])], summary, [])
-        if unknown:
-            return respond(False, extra, [], [
-                "No recognised identity-provider authentication option on: " + ", ".join(unknown[:20])],
-                summary, [])
-        return respond(True, extra, [
-            "Every active Client VPN endpoint (" + str(len(endpoints)) + ") requires an identity-provider "
-            "sign-in: " + str(federated) + " SAML federated, " + str(directory) + " directory. AWS shows the "
-            "identity provider is in the path; the identity provider's own check proves the MFA."],
-            [], summary, [])
+                verdicts.append([endpoint_label(endpoint) + " (no recognised authentication option)", "unknown"])
+        return decide(verdicts, "endpointsWithoutIdentityProvider",
+                      "Certificate-only authentication (no identity-provider sign-in, so no MFA is possible) on",
+                      "Every active Client VPN endpoint signs in through a SAML identity provider. AWS shows the "
+                      "identity provider is in the path; the identity provider's own check proves the MFA",
+                      summary, {"federatedEndpoints": federated, "directoryEndpoints": directory,
+                                "certificateOnlyEndpoints": cert_only})
     except Exception as e:
         return not_evaluated("Could not evaluate the Client VPN endpoint list: the response has an unexpected shape")
