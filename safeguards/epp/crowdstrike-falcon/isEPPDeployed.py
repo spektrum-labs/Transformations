@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 # ---- fail-closed guard (2026-10-03) ------------------------------------------------------------
 # A read that proves nothing about the estate is Unevaluated: every key None plus a dataCollection
@@ -8,8 +9,18 @@ from datetime import datetime
 # Falcon host records (for example the customer-settings body of getLicenseStatus), and a partial
 # read (meta.pagination.total above the records read, a paginationTruncated or
 # meta.pagination.truncated flag, or a next-page token left) that would otherwise have produced
-# False. A partial read that already shows the sensor on a host still answers True: hosts not
-# read cannot undo a host that was read.
+# False.
+#
+# Measured, not asserted (2026-10-07): this file used to answer `"isEPPDeployed": True` whenever any
+# host ID or host record was present, with no branch that could return False. Replayed against real
+# captured Falcon bodies it answered True for a fleet whose every host had been dark for 90 days and
+# for one 100-record page of a 1,511-host tenant. isEPPDeployed is now the share of hosts with a
+# reporting sensor, against DEPLOYED_THRESHOLD, from host records read whole:
+#   - a host counts when it has an agent_version, is not in Reduced Functionality Mode, and checked in
+#     (last_seen) within ACTIVE_WINDOW_DAYS -- the same window and clock as the sibling host checks;
+#   - mobile hosts stay out of the denominator, as isEPPConfiguredFromHosts does;
+#   - a host-ID list (devices-scroll, queries/devices) carries no last_seen, so it proves enrolment, not
+#     a reporting sensor, and is Unevaluated; so is any partial read, since a share needs every host.
 
 #: platform wrappers peeled off the vendor body, at most three levels deep
 WRAPPER_KEYS = ("api_response", "response", "result", "apiResponse", "Output")
@@ -239,21 +250,106 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 METADATA = {"transformationId": "isEPPDeployed", "vendor": "CrowdStrike Falcon", "category": "epp"}
 
+#: share of non-mobile hosts (percent) that must carry a reporting, fully functional Falcon sensor
+#: for isEPPDeployed to hold. The same bar the CrowdStrike MDR transform applies to isMDRConfigured.
+DEPLOYED_THRESHOLD = 95.0
+
+#: reduced_functionality_mode values (trimmed, any case) that mean the sensor is / is not in RFM
+RFM_YES = ("yes", "true")
+RFM_NO = ("no", "false")
+
+#: the keys this file answers; all None when nothing was measured
+RESULT_KEYS = ("isEPPDeployed", "sensorDeploymentPercentage", "totalDevices", "reportingDevices")
+
 
 def unevaluated(problem, validation=None, transformation_errors=None, input_summary=None):
     """isEPPDeployed as None plus a dataCollection error: reads Unevaluated, never True or False."""
+    result = {}
+    for key in RESULT_KEYS:
+        result[key] = None
     return create_response(
-        result={"isEPPDeployed": None, "totalDevices": None},
+        result=result,
         validation=validation,
         fail_reasons=[problem],
         recommendations=[
-            "Verify CrowdStrike API credentials/scopes and retry the devices-scroll query to confirm sensor deployment."
+            "Verify CrowdStrike API credentials/scopes, and read isEPPDeployed from host records "
+            "(GET /devices/combined/devices/v1, getDeviceDetails) read in full."
         ],
         input_summary=input_summary or {"totalDevices": None, "resourcesInPage": None},
         metadata=METADATA,
         api_errors=[problem],
         transformation_errors=transformation_errors,
     )
+
+
+# A host counts as reporting only when its last_seen is within this many days of the response's
+# clock. The same window, clock and rule are written identically in requiredCoveragePercentage.py,
+# isEPPConfiguredFromHosts.py, isEDRDeployed.py, isEPPDeployed.py and
+# isPatchManagementEnabledFromHosts.py, so every CrowdStrike host check agrees on which hosts are
+# reporting.
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_time(value):
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Falcon sends Z; an offset is converted rather than dropped. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
+        return None
+    try:
+        when = datetime.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
+
+
+def reference_clock(devices):
+    """The newest last_seen in the response, so a scan of cached data judges hosts against the data's
+    own time. When that newest check-in is itself older than the window the whole fleet is dark, and
+    the wall clock is used so every host is stale rather than every host fresh."""
+    known = [parse_time(d.get("last_seen")) for d in devices if isinstance(d, dict)]
+    known = [t for t in known if t is not None]
+    wall = datetime.utcnow()
+    if not known:
+        return wall
+    # Capped at the wall clock: one future-dated record must not make every real host stale.
+    newest = min(max(known), wall)
+    if newest < wall - timedelta(days=ACTIVE_WINDOW_DAYS):
+        return wall
+    return newest
+
+
+def is_reporting(device, clock):
+    """A missing or unreadable last_seen is not reporting, never reporting."""
+    seen = parse_time(device.get("last_seen"))
+    return seen is not None and seen >= clock - timedelta(days=ACTIVE_WINDOW_DAYS)
+
+
+def rfm_state(value):
+    """'rfm', 'not_rfm', 'absent' or 'unknown' for a host's reduced_functionality_mode value."""
+    if value is None:
+        return "absent"
+    if value is True:
+        return "rfm"
+    if value is False:
+        return "not_rfm"
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in RFM_YES:
+            return "rfm"
+        if text in RFM_NO:
+            return "not_rfm"
+    return "unknown"
+
+
+def is_mobile(device):
+    return device.get("product_type_desc") == "Mobile" or device.get("platform_name") in ("Android", "iOS")
 
 
 def transform(input):
@@ -274,52 +370,124 @@ def evaluate(input):
     if not isinstance(resources, list) or len(resources) == 0:
         return unevaluated("CrowdStrike returned no host records. A failed or partial read returns an empty "
                            "list, so zero hosts is not evidence either way", validation)
-    # devices-scroll returns device IDs (aids); the combined endpoints return host records. Only those count:
-    # a list of other strings is a misrouted ID-list body (wrong method) and proves nothing about hosts.
-    hosts_seen = 0
+    host_records = []
+    device_ids = 0
     other_strings = 0
     for item in resources:
-        if is_host_record(item) or is_device_id(item):
-            hosts_seen = hosts_seen + 1
+        if is_host_record(item):
+            host_records.append(item)
+        elif is_device_id(item):
+            device_ids = device_ids + 1
         elif isinstance(item, str):
             other_strings = other_strings + 1
-    if hosts_seen == 0 and other_strings > 0:
+    if not host_records and device_ids == 0 and other_strings > 0:
         return unevaluated("The response lists " + str(other_strings) + " ID(s) that are not Falcon device IDs "
                            "(32 hex characters) and no host records: this is not a host list (wrong method), so "
                            "nothing was measured", validation)
-    if hosts_seen == 0:
+    if not host_records and device_ids > 0:
+        # GET /devices/queries/devices-scroll/v1 and /devices/queries/devices/v1 return host IDs only.
+        return unevaluated("The response lists " + str(device_ids) + " Falcon device ID(s) and no host records. "
+                           "An ID list proves a host is enrolled, not that its sensor is reporting (no "
+                           "last_seen, agent_version or reduced_functionality_mode), so deployment was not "
+                           "measured", validation,
+                           input_summary={"totalDevices": None, "resourcesInPage": len(resources)})
+    if not host_records:
         return unevaluated("The response carries no Falcon host records (for example the customer-settings "
                            "body of getLicenseStatus): nothing was measured", validation)
 
-    pagination = pagination_of(data)[1]
-    total = as_int(pagination.get("total"))
-    if total is None:
-        total = len(resources)
-
-    input_summary = {"totalDevices": total, "resourcesInPage": len(resources)}
-
-    if total <= 0:
-        return unevaluated("meta.pagination.total is " + str(total) + " but " + str(hosts_seen) + " host "
+    total = as_int(pagination_of(data)[1].get("total"))
+    input_summary = {"totalDevices": total if total is not None else len(resources),
+                     "resourcesInPage": len(resources)}
+    if total is not None and total <= 0:
+        return unevaluated("meta.pagination.total is " + str(total) + " but " + str(len(host_records)) + " host "
                            "records were returned: the read is inconsistent, so nothing was measured",
                            validation, input_summary=input_summary)
-
-    additional_findings = []
     partial = partial_read(data, len(resources), truncated)
     if partial:
-        additional_findings.append("Partial read (" + partial + "); meta.pagination.total counts every "
-                                   "enrolled host, so the verdict does not depend on the pages not read.")
+        return unevaluated("The read is partial (" + partial + "): a deployment share needs every host, so "
+                           "nothing was measured", validation, input_summary=input_summary)
 
-    result = {"isEPPDeployed": True, "totalDevices": total}
-    pass_reasons = [
-        "meta.pagination.total reports %d enrolled devices in the tenant, confirming Falcon sensors are installed and reporting." % total
-    ]
+    clock = reference_clock(host_records)
+    hosts = 0
+    mobile = 0
+    reporting = 0
+    not_reporting = 0
+    no_agent = 0
+    rfm = 0
+    unknown_rfm = 0
+    for device in host_records:
+        if is_mobile(device):
+            mobile = mobile + 1
+            continue
+        hosts = hosts + 1
+        if not is_reporting(device, clock):
+            not_reporting = not_reporting + 1
+            continue
+        agent_version = device.get("agent_version") or device.get("agentVersion") or device.get("sensor_version")
+        if not (isinstance(agent_version, str) and agent_version.strip()):
+            no_agent = no_agent + 1
+            continue
+        state = rfm_state(device.get("reduced_functionality_mode"))
+        if state == "rfm":
+            rfm = rfm + 1
+        elif state == "unknown":
+            unknown_rfm = unknown_rfm + 1
+        else:
+            reporting = reporting + 1
+
+    input_summary.update({"hostsMeasured": hosts, "mobileSkipped": mobile, "reportingDevices": reporting,
+                          "notReportingDevices": not_reporting, "noAgentVersion": no_agent,
+                          "reducedFunctionalityMode": rfm, "rfmUnknown": unknown_rfm,
+                          "activeWindowDays": ACTIVE_WINDOW_DAYS, "thresholdPercent": DEPLOYED_THRESHOLD})
+    if hosts == 0:
+        return unevaluated("Every host record read is a mobile host, which this check does not measure: "
+                           "nothing was measured", validation, input_summary=input_summary)
+
+    percentage = round(reporting * 100.0 / hosts, 2)
+    deployed = percentage >= DEPLOYED_THRESHOLD
+    if not deployed and unknown_rfm > 0 and (reporting + unknown_rfm) * 100.0 / hosts >= DEPLOYED_THRESHOLD:
+        # False needs every host decided: these hosts would carry the share over the bar unless in RFM.
+        return unevaluated(str(unknown_rfm) + " reporting host(s) carry a reduced_functionality_mode value that "
+                           "is neither yes/true nor no/false, and they decide whether " + str(DEPLOYED_THRESHOLD) +
+                           "% is reached, so the verdict cannot be decided", validation,
+                           input_summary=input_summary)
+
+    detail = (str(reporting) + " of " + str(hosts) + " hosts (" + str(percentage) + "%) have a Falcon sensor "
+              "(agent_version) that is not in Reduced Functionality Mode and checked in within " +
+              str(ACTIVE_WINDOW_DAYS) + " days of the newest check-in (" + clock.isoformat() + "Z)")
+    gaps = []
+    if not_reporting:
+        gaps.append(str(not_reporting) + " not seen within " + str(ACTIVE_WINDOW_DAYS) + " days")
+    if rfm:
+        gaps.append(str(rfm) + " in Reduced Functionality Mode")
+    if no_agent:
+        gaps.append(str(no_agent) + " with no agent_version")
+    if unknown_rfm:
+        gaps.append(str(unknown_rfm) + " with an unreadable reduced_functionality_mode")
+    additional_findings = []
+    if gaps:
+        additional_findings.append("Not counted as deployed: " + ", ".join(gaps) + ".")
+    if mobile:
+        additional_findings.append(str(mobile) + " mobile host(s) were left out of the share.")
+
+    if deployed:
+        pass_reasons = [detail + ", at or above the " + str(DEPLOYED_THRESHOLD) + "% bar."]
+        fail_reasons = []
+        recommendations = []
+    else:
+        pass_reasons = []
+        fail_reasons = [detail + ", below the " + str(DEPLOYED_THRESHOLD) + "% bar."]
+        recommendations = ["Bring hosts that have stopped checking in or are in Reduced Functionality Mode back "
+                           "to a reporting sensor, and hide decommissioned hosts in Falcon so they leave the "
+                           "host list."]
 
     return create_response(
-        result=result,
+        result={"isEPPDeployed": deployed, "sensorDeploymentPercentage": percentage, "totalDevices": hosts,
+                "reportingDevices": reporting},
         validation=validation,
         pass_reasons=pass_reasons,
-        fail_reasons=[],
-        recommendations=[],
+        fail_reasons=fail_reasons,
+        recommendations=recommendations,
         input_summary=input_summary,
         metadata=METADATA,
         additional_findings=additional_findings,
