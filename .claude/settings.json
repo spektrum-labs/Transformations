@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff)",
+      "Bash(git diff --stat)",
+      "Bash(git log --oneline)",
+      "Bash(git fetch origin)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr list:*)",
+      "Bash(python tools/check_fail_closed.py:*)",
+      "Bash(python tools/check_discriminates.py:*)",
+      "Bash(python tools/check_none_not_evaluated.py:*)",
+      "Bash(python tools/check_sandbox_compile.py:*)",
+      "Bash(python tools/check_test_floor.py:*)"
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "spektrum": {
+      "source": {
+        "source": "github",
+        "repo": "spektrum-labs/spektrum-skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "spektrum-harness@spektrum": true
+  }
+}

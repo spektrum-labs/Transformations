@@ -56,3 +56,38 @@ def _parse_input(input):
 - Each SRN directory typically contains:
   - A main `*_transform.py` file
   - Individual criteria check files (e.g., `confirmedlicensepurchased.py`)
+
+## Team rules
+
+**This repository is PUBLIC.** Everything in a PR title, PR body, commit message, fixture, comment or review thread is world-readable and GitHub keeps edit history, so a later edit does not un-leak it.
+
+- NEVER include customer or company names, customer or company IDs, tenant IDs, passport SRNs or SRN prefixes, domains, per-customer counts, internal hostnames or URLs, or any secret or credential. Not in code, tests, fixtures, comments, commits or PR bodies.
+- Fixtures are synthetic: made-up GUIDs and placeholder values, or a vendor's published well-known identifiers. Never paste a real vendor API response; sanitise it fully first.
+- Describe replay or test results generically ("no new passes; N checks changed") and say "estate A / estate B" instead of naming anyone. Keep per-customer results in local, private notes.
+- Before opening a PR, grep the diff and the PR body for names, IDs and hostnames.
+
+### Run checks locally
+
+- `pip install -r requirements-test.txt` (pytest, pydantic, RestrictedPython), then run what CI runs from the repo root: `python tools/check_fail_closed.py`, `python tools/check_discriminates.py`, `python tools/check_none_not_evaluated.py`, `python tools/check_sandbox_compile.py`, `python tools/check_test_floor.py` (each has a `--self-test`). Do not edit `check_test_floor.py` in a feature PR.
+- Try a transform on a sample: `python local_tester.py <transform.py> <sample.json>`.
+- Transforms run under RestrictedPython in production: no `re.compile` or `getattr`-style escapes, standard library only. Fail closed: a criterion is only `True` from a body that shows it is satisfied.
+
+### Shared Claude Code settings
+
+- `.claude/settings.json` pre-approves a short list of commands as a convenience, not a security boundary: the `tools/check_*.py` entries run reviewed repo scripts; `local_tester.py` and `pytest` are deliberately not pre-approved because they execute code fetched from a URL or from untracked files, so extra care is needed on untrusted branches or fork PRs. Git entries are exact forms on purpose; do not widen them to prefix rules (`git diff:*` also matches `--output=<path>`, `git fetch:*` accepts any URL).
+- It enables the `spektrum-harness` plugin from the `spektrum-labs/spektrum-skills` marketplace, which is not pinned to a ref. Plugins can ship hooks and MCP servers that run commands on each contributor's machine, so push access to that repo is code execution here. Keep its default branch protected with required reviews.
+
+### Release rules
+
+- Open PRs against `develop`. `main` is live on merge, so staging -> main merges are release PRs; merge them in order once green with 0 critical/high review findings.
+- Hotfixes to `main` need a twin PR into `develop`.
+- When resolving a staging -> main (or main -> staging) merge, keep main's version of the six endpoint-rule files changed in PR #693 (`safeguards/epp/ninjaone-endpoint-management/` endpointOperationalStatusUnprotectedCount.py, isEPPConfigured.py, isEPPEnabled.py, isSignatureUpToDate.py, staleSensorCount.py, and `safeguards/epp/sophos/iseppconfigured.py`). A blanket "take staging" silently reverts them.
+- Transform code is cached by the evaluation service for up to 1 hour per task. A SHA-pinned URL takes effect at once; a branch URL can lag. Pins must reference a commit reachable from `main`.
+- Condition operators in the evaluation service: `greaterThan` and `lessThan` are inclusive (>= and <=) and both sides are truncated to int.
+
+### PR rules
+
+- Every PR body carries an OWASP result: run the `owasp-security` skill on the diff, exploitability first, and say what is reachable and why anything downgraded is not. A reachable High or Critical blocks merge.
+- Fix Medium, High and Critical review findings. List Lows in the PR body and leave them.
+- Read the review job's "N critical/high finding(s)" count; N > 0 blocks merge. Resolve every review thread; the rulesets block merge on open threads.
+- Never log credential values.
