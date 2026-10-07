@@ -4,7 +4,9 @@ Vendor: NinjaOne
 Category: Identity / Authentication
 Method: getTechnicians (GET /v2/user/technicians)
 
-True when at least one active NinjaOne technician signs in through single sign-on. NinjaOne
+True when EVERY active NinjaOne technician signs in through single sign-on. Technicians are the
+administrators of the tool, so one technician on a native NinjaOne password is an administrator
+account outside the identity provider, and the control fails. NinjaOne
 exposes no tenant-level SSO or identity-provider setting; the evidence it does publish is the
 per-technician `authType` field (NinjaOne Public API 2.0, Technician schema: "Native or SSO
 authentication"; https://app.ninjarmm.com/apidocs/NinjaRMM-API-v2.json, operationId
@@ -162,16 +164,18 @@ def measure(data):
     if not active:
         return None, summary, ("No enabled, registered technician in the list: nothing about "
                                "sign-in was measured")
-    if sso:
-        return True, summary, None
-    # No technician classified as SSO. If any carried an authType this code does not recognise,
-    # "no SSO" is not a measurement: the enum spelling comes from the spec and has never been
-    # checked against a captured body, so an unseen value (a new IdP type, a different case or
-    # spelling) would put every SSO technician in `other` and return a confident false.
+    # Every technician is an administrator of the tool, so the rule is "all of them on SSO".
+    # A technician known to sign in natively fails it outright, whatever else is in the list.
+    if native:
+        return False, summary, None
+    # No native technician, but some carry an authType this code does not recognise. "All on
+    # SSO" cannot be confirmed: the enum spelling comes from the spec and has never been checked
+    # against a captured body, so an unseen value (a new IdP type, a different case or spelling)
+    # could be either. Not measured, rather than a confident answer in either direction.
     if other:
         return None, summary, (str(other) + " active technician(s) carry an authType this check does "
                                "not recognise, so sign-in was not measured")
-    return False, summary, None
+    return True, summary, None
 
 
 def transform(input):
@@ -205,19 +209,13 @@ def transform(input):
         recommendations = []
         additional_findings = []
         if value:
-            pass_reasons.append("%d of %d active technicians sign in through SSO"
-                                % (summary["ssoTechnicians"], summary["activeTechnicians"]))
-            if summary["nativeTechnicians"]:
-                additional_findings.append({
-                    "metric": "nativeTechnicians",
-                    "status": "info",
-                    "reason": "%d active technicians still sign in with a native NinjaOne password"
-                              % summary["nativeTechnicians"]
-                })
+            pass_reasons.append("All %d active technicians sign in through SSO"
+                                % summary["activeTechnicians"])
         else:
-            fail_reasons.append("No active technician signs in through SSO (%d native)"
-                                % summary["nativeTechnicians"])
-            recommendations.append("Configure an identity provider for NinjaOne and move technicians to SSO")
+            fail_reasons.append("%d of %d active technicians sign in with a native NinjaOne password, "
+                                "not SSO" % (summary["nativeTechnicians"], summary["activeTechnicians"]))
+            recommendations.append("Move every NinjaOne technician to the identity provider; technicians "
+                                   "administer the tool, so none should sign in natively")
 
         return create_response(
             result={KEY: value},

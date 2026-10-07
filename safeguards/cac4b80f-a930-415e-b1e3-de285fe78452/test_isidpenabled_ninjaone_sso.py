@@ -48,22 +48,29 @@ def verdict(body):
     return out["transformedResponse"]["isSSOEnabled"], out["additionalInfo"]["dataCollection"]["status"]
 
 
-def test_an_sso_technician_passes():
-    assert verdict([tech("SSO"), tech("NATIVE", administrator=True)]) == (True, "success")
+def test_every_technician_on_sso_passes():
+    assert verdict([tech("SSO"), tech("SSO", administrator=True)]) == (True, "success")
+
+
+def test_one_native_technician_fails_even_beside_sso_ones():
+    """Technicians administer the tool, so one native sign-in is an administrator outside
+    the identity provider."""
+    assert verdict([tech("SSO"), tech("NATIVE", administrator=True)]) == (False, "success")
 
 
 def test_only_native_technicians_fail():
     assert verdict([tech("NATIVE"), tech("NATIVE")]) == (False, "success")
 
 
-def test_an_unrecognised_auth_type_is_not_measured_rather_than_false():
-    """The enum spelling comes from the spec, not a captured body. If NinjaOne sends a value
-    this check does not know, "no SSO found" is not a measurement."""
-    assert verdict([tech("NATIVE"), tech("SAML")]) == (None, "error")
+def test_an_unrecognised_auth_type_beside_sso_is_not_measured():
+    """The enum spelling comes from the spec, not a captured body. With no native technician,
+    "all on SSO" cannot be confirmed while any authType is unrecognised."""
+    assert verdict([tech("SSO"), tech("SAML")]) == (None, "error")
 
 
-def test_an_unrecognised_auth_type_beside_a_real_sso_still_passes():
-    assert verdict([tech("SSO"), tech("SAML")]) == (True, "success")
+def test_a_native_technician_fails_even_beside_an_unrecognised_auth_type():
+    # A known native sign-in already fails "every technician on SSO", whatever the rest are.
+    assert verdict([tech("NATIVE"), tech("SAML")]) == (False, "success")
 
 
 def test_a_data_wrapped_technician_list_is_read():
