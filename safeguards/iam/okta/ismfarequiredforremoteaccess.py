@@ -15,6 +15,13 @@
 # Rules are matched to their policy by the policy id in each rule's own self link, never by the
 # position of the rule list in the response.
 #
+# Completeness. A cut-off read must never be judged, because the missing app or rule may be the weak
+# one. Not evaluated when any envelope level (before or after unwrapping) carries paginationTruncated,
+# iterateTruncated, paginationStats.<key>.paginationTruncated or iterateStats.<key> truncation or item
+# errors; when a single rule list's wrapper still has _links.next.href or truncated: true; when a
+# policy id is returned twice; and when a remote-access app's policy rules do not include the policy's
+# system Catch-all Rule (Okta always lists it last, and it is often the permissive one).
+#
 # WHICH APPS ARE "REMOTE ACCESS". Only AWS Client VPN is recognised today. Okta speaks here only for
 # the remote-access apps it fronts, and an app counts only when it is one of these, never because of
 # its label (labels are chosen by the customer and prove nothing):
@@ -46,7 +53,8 @@ def transform(input):
     or 2FA_If_Possible: a measured single-factor path.
 
     Returns None (not evaluated, dataCollection.status "error") when nothing can be judged: an error
-    body, missing lists, a truncated app list or rule fan-out, a rule that cannot be tied to a policy,
+    body, missing lists, any sign of an incomplete read (see the header), a rule that cannot be tied
+    to a policy,
     no ACTIVE AWS Client VPN app in Okta (this tool does not front remote access, so it has no
     answer), a remote-access app whose policy or rules were not returned, or an ALLOW rule whose
     verification method this code does not recognise (for example AUTH_METHOD_CHAIN).
@@ -130,11 +138,31 @@ def transform(input):
             return ""
         return href.split("/policies/")[1].split("/")[0]
 
-    def truncated(data):
-        if data.get("paginationTruncated") is True or data.get("iterateTruncated") is True:
+    def truncated(level):
+        if not isinstance(level, dict):
+            return False
+        if level.get("paginationTruncated") is True or level.get("iterateTruncated") is True:
             return True
-        stats = as_dict(as_dict(data.get("paginationStats")).get("applications"))
-        return stats.get("paginationTruncated") is True
+        page_stats = as_dict(level.get("paginationStats"))
+        for name in page_stats:
+            if as_dict(page_stats[name]).get("paginationTruncated") is True:
+                return True
+        iterate_stats = as_dict(level.get("iterateStats"))
+        for name in iterate_stats:
+            stats = as_dict(iterate_stats[name])
+            if stats.get("iterateTruncated") is True:
+                return True
+            errors = stats.get("itemErrors")
+            if isinstance(errors, int) and not isinstance(errors, bool) and errors > 0:
+                return True
+        return False
+
+    def page_left(wrapper):
+        if not isinstance(wrapper, dict):
+            return False
+        if wrapper.get("truncated") is True:
+            return True
+        return bool(as_text(as_dict(as_dict(wrapper.get("_links")).get("next")).get("href")))
 
     try:
         data = input
@@ -142,8 +170,10 @@ def transform(input):
             data = data.decode("utf-8")
         if isinstance(data, str):
             data = json.loads(data)
+        envelopes = []
         for wrapper in ["data", "response", "result", "apiResponse", "_response_data"]:
             if isinstance(data, dict) and wrapper in data and "applications" not in data:
+                envelopes.append(data)
                 data = data[wrapper]
         if not isinstance(data, dict):
             return not_evaluated("Response is not an object with application, policy and rule lists")
@@ -156,7 +186,8 @@ def transform(input):
         rule_lists = data.get("accessRules")
         if not isinstance(apps, list):
             return not_evaluated("Application list is missing")
-        if truncated(data):
+        envelopes.append(data)
+        if any([truncated(level) for level in envelopes]):
             return not_evaluated("The application list or the rule fan-out was truncated, so not every "
                                  "app or rule was read")
         if not isinstance(policies, list):
@@ -167,10 +198,14 @@ def transform(input):
         by_id = {}
         for policy in policies:
             if isinstance(policy, dict) and as_text(policy.get("id")):
+                if as_text(policy.get("id")) in by_id:
+                    return not_evaluated("A policy was returned twice, so its rules cannot be read unambiguously")
                 by_id[as_text(policy.get("id"))] = policy
 
         rules_by_policy = {}
         for rule_list in rule_lists:
+            if page_left(rule_list):
+                return not_evaluated("A policy rule list has more pages that were not read")
             rule_list = unwrap_list(rule_list)
             if not isinstance(rule_list, list):
                 return not_evaluated("A policy rule list is unreadable")
@@ -217,6 +252,9 @@ def transform(input):
             policy_rules = rules_by_policy.get(policy_id, [])
             if not policy_rules:
                 unmeasured.append(label + " (no rules returned for its policy)")
+                continue
+            if not any([rule.get("system") is True for rule in policy_rules]):
+                unmeasured.append(label + " (the policy's Catch-all Rule was not returned, so its rule list may be incomplete)")
                 continue
             allow = 0
             single = []
