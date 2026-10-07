@@ -99,18 +99,21 @@ def level_truncated(level):
 
 
 def any_level_truncated(input_data):
-    level = input_data
+    """A partial-read marker on any wrapper level, following every wrapper key (not only the first)."""
+    levels = [input_data]
     for attempt in range(6):
-        if not isinstance(level, dict):
+        following = []
+        for level in levels:
+            if not isinstance(level, dict):
+                continue
+            if level_truncated(level):
+                return True
+            for key in ["data", "api_response", "response", "result", "apiResponse", "Output", "_response_data"]:
+                if isinstance(level.get(key), dict):
+                    following.append(level[key])
+        if not following:
             return False
-        if level_truncated(level):
-            return True
-        nxt = None
-        for key in ["data", "api_response", "response", "result", "apiResponse", "Output", "_response_data"]:
-            if isinstance(level.get(key), dict):
-                nxt = level[key]
-                break
-        level = nxt
+        levels = following[:50]
     return False
 
 
