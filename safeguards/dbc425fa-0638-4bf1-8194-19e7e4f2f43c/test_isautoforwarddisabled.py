@@ -128,8 +128,12 @@ class AutoForwardTests(unittest.TestCase):
     def test_root_on_is_false(self):
         self.assertIs(self.run_t(body(forwarding("True")))[0], False)
 
-    def test_field_absent_in_value_is_documented_default_allowed(self):
-        self.assertIs(self.run_t(body(forwarding(None)))[0], False)
+    def test_field_absent_in_value_is_unevaluated(self):
+        # No default is assumed: proto3-style serializers drop false-valued fields, so {} could mean off.
+        self.assert_unevaluated(body(forwarding(None)))
+        self.assert_unevaluated(body(forwarding("False"), forwarding(None, ptype="SYSTEM", order="101.00125")))
+        self.assertIs(self.run_t(body(forwarding(None, ou=CHILD, order="203"), forwarding("True", ou=CHILD, order="204"),
+                                      SYSTEM_ALLOW))[0], False)
 
     def test_child_ou_override_allows_is_false(self):
         value, out = self.run_t(body(forwarding("False"), forwarding("True", ou=CHILD, order="203")))

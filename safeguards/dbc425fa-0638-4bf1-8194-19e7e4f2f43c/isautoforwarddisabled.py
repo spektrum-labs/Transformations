@@ -214,14 +214,15 @@ def as_order(value):
 
 
 def allowed_value(setting):
-    """enableAutoForwarding as True/False; absent field = documented default True; None when unreadable."""
+    """enableAutoForwarding as True/False; None when absent or unreadable. An absent field is not read as
+    Google's default: a serializer that drops false-valued fields would make an empty value mean off."""
     value = setting.get("value")
     if not isinstance(value, dict):
         return None
     camel = "enableAutoForwarding" in value
     snake = "enable_auto_forwarding" in value
     if not camel and not snake:
-        return True
+        return None
     first = as_bool(value.get("enableAutoForwarding")) if camel else None
     second = as_bool(value.get("enable_auto_forwarding")) if snake else None
     if camel and first is None:
