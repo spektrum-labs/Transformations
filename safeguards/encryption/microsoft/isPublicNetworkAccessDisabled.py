@@ -8,10 +8,10 @@ Criterion: the vault does not accept traffic from the public internet.
 Data source: getVaultProperties -- GET https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroupName}/providers/Microsoft.KeyVault/vaults/{vaultName}?api-version=2023-07-01
 (https://learn.microsoft.com/en-us/rest/api/keyvault/keyvault/vaults/get?view=rest-keyvault-keyvault-2023-07-01). properties.publicNetworkAccess (default "enabled"): "If set to 'disabled' all
 traffic except private endpoint traffic and that that originates from trusted services will be
-blocked. This will override the set firewall rules". Otherwise networkAcls decides.
+blocked. This will override the set firewall rules". networkAcls is reported as evidence only:
+a deny-all firewall still leaves the public endpoint enabled (see isFirewallEnabled).
 
-  true  = publicNetworkAccess is "disabled" (any case), or networkAcls.defaultAction is Deny
-          with no ipRules
+  true  = publicNetworkAccess is "disabled" (any case)
   false = anything else read from a vault body
   None  = not a Key Vault body, an Azure error, or an exception
 
@@ -148,10 +148,14 @@ def evaluate(data, validation):
     # policy "Azure Key Vault should disable public network access" tests publicNetworkAccess
     # alone, and the deny-all case is what isFirewallEnabled already measures. So this key means
     # exactly what its name says.
-    return respond(False, "The vault accepts public traffic: publicNetworkAccess is " + str(public_access)
-                   + " and the firewall admits " + ("all networks" if acls.get("defaultAction") != "Deny"
-                                                    else str(len(ip_rules)) + " public IP rule(s)"),
-                   validation, extra, ["Disable public network access and use a private endpoint"])
+    if acls.get("defaultAction") != "Deny":
+        reach = "the firewall admits all networks"
+    elif ip_rules:
+        reach = "the firewall admits " + str(len(ip_rules)) + " public IP rule(s)"
+    else:
+        reach = "the public endpoint is still enabled behind a deny-all firewall"
+    return respond(False, "Public network access is not disabled: publicNetworkAccess is " + str(public_access)
+                   + " and " + reach, validation, extra, ["Disable public network access and use a private endpoint"])
 
 
 def transform(input):
