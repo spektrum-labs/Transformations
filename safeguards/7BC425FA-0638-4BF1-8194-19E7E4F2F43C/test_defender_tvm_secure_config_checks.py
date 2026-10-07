@@ -1,5 +1,6 @@
 """Defender Vulnerability Management secure-configuration checks (EP-005 / EP-007):
-smbV1EnabledDeviceCount, isWDigestDisabled, isNTLMv1Disabled, isSMBSigningRequired.
+smbV1EnabledDeviceCount, isWDigestDisabled, isNTLMv1Disabled, isSMBSigningRequired,
+isScreenLockWithin15MinutesOnAllApplicableDevices, isLAPSEnabledOnAllApplicableDevices.
 
 Fixtures follow the advanced-hunting response shape ({"Schema": [...], "Results": [...]}) of the query each
 new One-Click method runs (DeviceTvmSecureConfigurationAssessment joined with its KB table). Every check is
@@ -19,6 +20,8 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 NAMES = {
     "scid-53": "Disable SMBv1 client driver",
     "scid-54": "Disable SMBv1 server",
+    "scid-28": "Set 'Interactive logon: Machine inactivity limit' to '1-900 seconds'",
+    "scid-113": "Ensure LAPS is enabled on every endpoint and server",
     "scid-57": "Disable 'WDigest Authentication'",
     "scid-72": "Set LAN Manager authentication level to 'Send NTLMv2 response only. Refuse LM & NTLM'",
     "scid-95": "Enable 'Microsoft network client: Digitally sign communications (always)'",
@@ -30,10 +33,13 @@ CHECKS = {
     "iswdigestdisabled": ("isWDigestDisabled", ("scid-57",)),
     "isntlmv1disabled": ("isNTLMv1Disabled", ("scid-72",)),
     "issmbsigningrequired": ("isSMBSigningRequired", ("scid-95", "scid-9999")),
+    "isscreenlockwithin15minutesonallapplicabledevices": ("isScreenLockWithin15MinutesOnAllApplicableDevices", ("scid-28",)),
+    "islapsenabledonallapplicabledevices": ("isLAPSEnabledOnAllApplicableDevices", ("scid-113",)),
 }
 
 SAFE = {"smbV1EnabledDeviceCount": 0, "isWDigestDisabled": True, "isNTLMv1Disabled": True,
-        "isSMBSigningRequired": True}
+        "isSMBSigningRequired": True, "isScreenLockWithin15MinutesOnAllApplicableDevices": True,
+        "isLAPSEnabledOnAllApplicableDevices": True}
 
 
 def load_plain(name):
@@ -244,7 +250,7 @@ def test_module_declares_none_means_not_evaluated(name):
 
 
 def test_keys_are_new_and_no_existing_transform_emits_them():
-    """Additive only: no transform outside these four files names these keys, so wiring them cannot change any
+    """Additive only: no transform outside these files names these keys, so wiring them cannot change any
     existing check's output."""
     keys = [CHECKS[n][0] for n in CHECKS]
     ours = set(os.path.join(HERE, n + ".py") for n in CHECKS)
@@ -305,3 +311,97 @@ def test_a_name_only_part_needs_a_well_formed_id(bad_id):
     rows = [row("ws-01", "scid-95"),
             row("ws-01", bad_id, name="Enable 'Microsoft network server: Digitally sign communications (always)'")]
     assert value("issmbsigningrequired", result(rows))[0] is None
+
+
+def test_screen_lock_reads_only_the_pinned_id_under_its_knowledge_base_name():
+    """scid-28 counts only while its KB name says "machine inactivity limit"; another id carrying that name, or
+    scid-28 under another name (or none: the tenant's KB lacks it), is Not evaluated, never passed."""
+    name = "isscreenlockwithin15minutesonallapplicabledevices"
+    good = [row(d, "scid-28") for d in ("ws-01", "ws-02")]
+    assert value(name, result(good))[0] is True
+    other_id = [row("ws-01", "scid-9998", name=NAMES["scid-28"])]
+    assert value(name, result(other_id))[0] is None
+    for kb_name in ("Turn on screen saver", "Enable 'Require password on wake'", None, ""):
+        bad = row("ws-01", "scid-28")
+        bad["ConfigurationName"] = kb_name
+        got, out = value(name, result([bad]))
+        assert got is None
+        assert "scid-28" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_screen_lock_names_the_device_over_the_limit():
+    rows = [row("ws-01", "scid-28"), row("ws-02", "scid-28", 1, 0), row("kiosk-01", "scid-28", 0, 0)]
+    got, out = value("isscreenlockwithin15minutesonallapplicabledevices", result(rows))
+    assert got is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "1 of 2 applicable" in reason and "ws-02.example.test" in reason
+    assert "1-900 seconds" in reason
+    assert "Machine inactivity limit" in out["additionalInfo"]["evaluation"]["recommendations"][0]
+
+
+def test_laps_reads_only_the_pinned_id_under_its_knowledge_base_name():
+    """scid-113 counts only while its KB name says LAPS is enabled; another id under that name, or scid-113 under
+    another name (or none: the tenant's KB lacks it), is Not evaluated, never passed."""
+    name = "islapsenabledonallapplicabledevices"
+    good = [row(d, "scid-113") for d in ("ws-01", "srv-01")]
+    assert value(name, result(good))[0] is True
+    assert value(name, result([row("ws-01", "scid-9997", name=NAMES["scid-113"])]))[0] is None
+    for kb_name in ("Set 'Interactive logon: Machine inactivity limit' to '1-900 seconds'",
+                    "Disable 'WDigest Authentication'", None, ""):
+        bad = row("ws-01", "scid-113")
+        bad["ConfigurationName"] = kb_name
+        got, out = value(name, result([bad]))
+        assert got is None
+        assert "scid-113" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_laps_names_the_server_without_it():
+    rows = [row("ws-01", "scid-113"), row("srv-01", "scid-113", 1, 0), row("kiosk-01", "scid-113", 0, 0)]
+    got, out = value("islapsenabledonallapplicabledevices", result(rows))
+    assert got is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "1 of 2 applicable" in reason and "srv-01.example.test" in reason and "LAPS enabled" in reason
+
+
+def test_a_tenant_without_vulnerability_management_tables_is_not_evaluated():
+    """No TVM tables (licence): the fuzzy unions return an empty result, which never passes or fails."""
+    for name in ("isscreenlockwithin15minutesonallapplicabledevices", "islapsenabledonallapplicabledevices"):
+        got, out = value(name, ts_wrap(result([])))
+        assert got is None
+        assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+NEW_CHECKS = ("isscreenlockwithin15minutesonallapplicabledevices", "islapsenabledonallapplicabledevices")
+
+
+def rated_fleet(scid, rated, assessed, bad=False):
+    rows = []
+    for i in range(assessed):
+        applicable = 1 if i < rated else 0
+        rows.append(row("ws-%02d" % i, scid, applicable, 0 if (bad and i == 0) else applicable))
+    return result(rows)
+
+
+def opening(out):
+    ev = out["additionalInfo"]["evaluation"]
+    return (ev["passReasons"] or ev["failReasons"])[0]
+
+
+@pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
+@pytest.mark.parametrize("name", NEW_CHECKS)
+def test_every_result_says_n_rated_of_m_assessed(name, loader):
+    """J.J. 6 Oct: the check says what was measured. Rated = applicable; the pass rule is unchanged."""
+    key, scids = CHECKS[name]
+    transform = loader(name)
+    for body, value, words in ((rated_fleet(scids[0], 1, 9), True, "1 rated of 9 assessed: compliant. "),
+                               (rated_fleet(scids[0], 3, 5, bad=True), False, "3 rated of 5 assessed: not compliant. "),
+                               (rated_fleet(scids[0], 0, 4), None, "0 rated of 4 assessed: not evaluated. "),
+                               (result([]), None, "0 rated of 0 assessed: not evaluated. "),
+                               ({}, None, "0 rated of 0 assessed: not evaluated. ")):
+        out = transform(body)
+        assert out["transformedResponse"][key] is value
+        assert opening(out).startswith(words), opening(out)
+        summary = out["additionalInfo"]["transformation"]["inputSummary"]
+        assert summary["ratedOfAssessed"] == words.split(":")[0]
+        if value is None:
+            assert out["additionalInfo"]["dataCollection"]["errors"][0].startswith(words)

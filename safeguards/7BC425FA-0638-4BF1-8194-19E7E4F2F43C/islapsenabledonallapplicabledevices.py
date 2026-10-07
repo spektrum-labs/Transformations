@@ -1,14 +1,20 @@
 """
-Transformation: isNTLMv1Disabled
+Transformation: isLAPSEnabledOnAllApplicableDevices
 Vendor: Microsoft Defender for Endpoint (One-Click)  |  Category: Endpoint Security
-Claim (EP-007): NTLMv1 and LM are refused. True: every applicable device is compliant for
-"Set LAN Manager authentication level to 'Send NTLMv2 response only. Refuse LM & NTLM'"
-(scid-72, LmCompatibilityLevel 5). False: at least one applicable device is not.
+Check of the Windows Defender One-Click integration: Defender: LAPS enabled on all applicable devices (scid-113).
+True: every applicable device is compliant for the Defender Vulnerability Management secure configuration
+scid-113, knowledge-base name "Ensure LAPS is enabled on every endpoint and server". False: at least one
+applicable device is not.
+The id is pinned and its knowledge-base name must contain "laps" and "enabled": scid-113 under another name,
+with no name (the knowledge base lacks it), or another id under that name reads Not evaluated, never passed.
+What it proves: the LAPS policy is on for each assessed device. It does not prove the age of the current
+password or that every local administrator account is covered. Journeys that ask whether local administrator
+passwords are managed may consume it.
 
-Source: a new One-Click method (an advanced-hunting query, POST /api/advancedqueries/run, the same API and
-application permission as the existing getTamperProtectionStatus method) over
-DeviceTvmSecureConfigurationAssessment, joined with DeviceTvmSecureConfigurationAssessmentKB so each row
-carries its ConfigurationName:
+Source: a One-Click method of the Windows Defender One-Click integration (an advanced-hunting query,
+POST /api/advancedqueries/run, the same API and application permission as the existing
+getTamperProtectionStatus method) over DeviceTvmSecureConfigurationAssessment, joined with
+DeviceTvmSecureConfigurationAssessmentKB so each row carries its ConfigurationName:
     {"Schema": [...], "Results": [{"DeviceId", "DeviceName", "OSPlatform", "ConfigurationId",
                                    "ConfigurationName", "IsApplicable", "IsCompliant"}, ...]}
 IsApplicable / IsCompliant arrive as SByte (1/0), booleans, or their strings.
@@ -18,7 +24,8 @@ id means; any other row makes the read Not evaluated rather than being guessed a
 no reading for one part of the claim is not shown to comply, and a part no device reads as applicable was not
 measured: with no failure elsewhere, either makes the read Not evaluated.
 Scope: devices onboarded to Defender for Endpoint and assessed by Defender Vulnerability Management. Devices
-that are not onboarded are not seen; device coverage is reported by the coverage checks.
+that are not onboarded are not seen; device coverage is reported by the coverage checks. A tenant without
+Defender Vulnerability Management (no TVM tables) returns no rows, which reads Not evaluated.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body, a result at the
 100,000-row advanced-hunting limit, a row this file cannot identify, a part of the claim with no assessment
 row, or no applicable device.
@@ -26,15 +33,15 @@ row, or no applicable device.
 import json
 from datetime import datetime, timezone
 
-KEY = 'isNTLMv1Disabled'
-CLAIM = "the LAN Manager authentication level setting (scid-72, 'Send NTLMv2 response only. Refuse LM & NTLM')"
-WHAT = "the LAN Manager authentication level at 'Send NTLMv2 response only. Refuse LM & NTLM' (scid-72)"
-FIX = "Set 'Network security: LAN Manager authentication level' to 'Send NTLMv2 response only. Refuse LM & NTLM' (LmCompatibilityLevel 5) on the devices named, through Intune or Group Policy."
+KEY = 'isLAPSEnabledOnAllApplicableDevices'
+CLAIM = '"Ensure LAPS is enabled on every endpoint and server" (scid-113)'
+WHAT = 'LAPS enabled (scid-113)'
+FIX = "Enable Windows LAPS (Intune Account Protection: Local admin password solution, or Group Policy: LAPS 'Configure password backup directory') on the devices named."
 
 #: The parts of the claim: a row belongs to a part when its id is listed (or the list is empty)
 #: and every word appears in its lower-cased knowledge-base ConfigurationName.
 PARTS = (
-    {"part": 'LAN Manager authentication level', "ids": ('scid-72',), "words": ('lan manager authentication level', 'ntlmv2')},
+    {"part": 'LAPS enabled', "ids": ('scid-113',), "words": ('laps', 'enabled')},
 )
 
 #: The criterion this file answers. None means "not measured", never "failed".
