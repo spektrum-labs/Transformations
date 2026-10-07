@@ -176,6 +176,14 @@ def test_envelope_truncation_marker_is_seen_on_a_dict_body():
         assert all(value is None for value in tr.values())
 
 
+def test_partly_unreadable_list_is_unevaluated():
+    """One unreadable item used to be dropped silently and the remainder scored as the whole estate."""
+    for junk in ({"garbage": 1}, "not-an-endpoint", 7, None):
+        tr, status = run({"items": [endpoint("computer", FULL), junk]})
+        assert status == "error"
+        assert all(value is None for key, value in tr.items() if key != "staleEndpointCount")
+
+
 def test_xdr_alone_is_not_managed_detection_and_response():
     """xdr is Intercept X Advanced with XDR, which the customer runs; mtr is the managed service."""
     tr, status = run({"items": [endpoint("computer", ["coreAgent", "endpointProtection", "xdr"])]})

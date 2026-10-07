@@ -12,9 +12,9 @@ scored (endpoint rules 2026-09-29); the rest are reported as staleEndpointCount.
 A product counts only when its assignedProducts entry reads status "installed".
 
 Fail closed (2026-10-07, back-ported from the CrowdStrike copy): a read that is not a
-complete Sophos endpoint list -- no body, an error envelope, no endpoint records, a list the
-connector stopped paging before the end, or a list with no active computer or server in it --
-is Unevaluated for every key.
+complete Sophos endpoint list -- no body, an error envelope, no endpoint records, a list holding
+items this file cannot read, a list the connector stopped paging before the end, or a list with no
+active computer or server in it -- is Unevaluated for every key.
 
 Known gap (2026-10-07 review of PR #1067): Token-Service has one not-evaluated channel for the
 whole response, additionalInfo.dataCollection.status. Within a successful read there is no way
@@ -545,6 +545,13 @@ def no_endpoint_evidence(data, items, truncated=False):
             recognised = recognised + 1
     if recognised == 0:
         return "The response carries no Sophos endpoint records: nothing was measured"
+    if recognised < len(items):
+        # A list this file can only partly read is not the estate either: the unreadable items used
+        # to be dropped silently at the is_endpoint_record filter, and what remained was scored as
+        # though it were the whole list.
+        return ("The response carries " + str(len(items) - recognised) + " of " + str(len(items)) +
+                " items that are not Sophos endpoint records: a list that cannot be read in full "
+                "is not the estate")
     if truncated:
         return ("Integration-Service stopped paging this read (paginationTruncated): "
                 "a sample is not the estate")
