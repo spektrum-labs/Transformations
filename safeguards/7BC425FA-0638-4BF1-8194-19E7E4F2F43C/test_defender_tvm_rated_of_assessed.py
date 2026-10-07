@@ -19,6 +19,8 @@ CHECKS = {
     "isntlmv1disabled": ("isNTLMv1Disabled", ("scid-72",), True, False),
     "issmbsigningrequired": ("isSMBSigningRequired", ("scid-95", "scid-9999"), True, False),
     "smbv1enableddevicecount": ("smbV1EnabledDeviceCount", ("scid-53", "scid-54"), 0, 1),
+    "issmbclientsigningrequiredonallapplicabledevices": ("isSMBClientSigningRequiredOnAllApplicableDevices",
+                                                         ("scid-95",), True, False),
 }
 NAMES = {
     "scid-53": "Disable SMBv1 client driver",
@@ -109,3 +111,56 @@ def test_a_device_rated_on_one_part_only_counts_once():
     out = load_plain("issmbsigningrequired")(result(rows))
     summary = out["additionalInfo"]["transformation"]["inputSummary"]
     assert (summary["ratedDevices"], summary["assessedDevices"]) == (1, 2)
+
+
+CLIENT = "issmbclientsigningrequiredonallapplicabledevices"
+
+
+def test_client_signing_is_the_kb_entry_confirmed_on_a_tenant():
+    """scid-95 under its knowledge-base name: every applicable device compliant passes, one not compliant fails
+    and is named; scid-95 under another name or none (the tenant's KB lacks it), or another id under that name,
+    is Not evaluated, never passed."""
+    transform = load_plain(CLIENT)
+    good = [row("ws-01", "scid-95"), row("srv-01", "scid-95"), row("kiosk-01", "scid-95", 0, 0)]
+    out = transform(result(good))
+    assert out["transformedResponse"]["isSMBClientSigningRequiredOnAllApplicableDevices"] is True
+    assert out["additionalInfo"]["evaluation"]["passReasons"][0].startswith("2 rated of 3 assessed: compliant. ")
+    bad = [row("ws-01", "scid-95"), row("srv-01", "scid-95", 1, 0)]
+    out = transform(result(bad))
+    assert out["transformedResponse"]["isSMBClientSigningRequiredOnAllApplicableDevices"] is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert reason.startswith("2 rated of 2 assessed: not compliant. ") and "srv-01.example.test" in reason
+    for kb_name in ("Enable 'Microsoft network server: Digitally sign communications (always)'",
+                    "Disable 'WDigest Authentication'", None, ""):
+        r = row("ws-01", "scid-95")
+        r["ConfigurationName"] = kb_name
+        assert transform(result([r]))["transformedResponse"]["isSMBClientSigningRequiredOnAllApplicableDevices"] is None
+    other = row("ws-01", "scid-95")
+    other["ConfigurationId"] = "scid-9999"
+    assert transform(result([other]))["transformedResponse"]["isSMBClientSigningRequiredOnAllApplicableDevices"] is None
+
+
+def test_client_signing_passes_where_the_superseded_check_never_can():
+    """Defender's KB has no server-side signing entry: the old two-part check stays Not evaluated on the same body."""
+    body = result([row("ws-01", "scid-95"), row("ws-02", "scid-95")])
+    assert load_plain(CLIENT)(body)["transformedResponse"]["isSMBClientSigningRequiredOnAllApplicableDevices"] is True
+    assert load_plain("issmbsigningrequired")(body)["transformedResponse"]["isSMBSigningRequired"] is None
+
+
+def test_superseded_file_says_so():
+    with open(os.path.join(HERE, "issmbsigningrequired.py")) as fh:
+        head = fh.read(600)
+    assert "SUPERSEDED" in head and "isSMBClientSigningRequiredOnAllApplicableDevices" in head and "Do not wire" in head
+
+
+def test_client_signing_key_is_named_by_no_other_transform():
+    key = "isSMBClientSigningRequiredOnAllApplicableDevices"
+    seen = []
+    for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, "safeguards")):
+        for fn in filenames:
+            if fn.endswith(".py") and not fn.startswith("test_") and fn != CLIENT + ".py":
+                with open(os.path.join(dirpath, fn), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+                if "'" + key + "'" in text or '"' + key + '"' in text:
+                    seen.append(fn)
+    assert seen == []

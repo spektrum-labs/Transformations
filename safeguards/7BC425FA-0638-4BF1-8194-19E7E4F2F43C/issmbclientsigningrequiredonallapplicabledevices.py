@@ -1,19 +1,17 @@
 """
-SUPERSEDED (6 Oct 2026) by isSMBClientSigningRequiredOnAllApplicableDevices
-(issmbclientsigningrequiredonallapplicabledevices.py). Do not wire this file: Defender's knowledge base has no
-server-side "Microsoft network server: Digitally sign communications (always)" entry, so the server part is
-never measured and this check can never pass. It is kept only because it is on main; it is not mapped or pinned.
-
-Transformation: isSMBSigningRequired
+Transformation: isSMBClientSigningRequiredOnAllApplicableDevices
 Vendor: Microsoft Defender for Endpoint (One-Click)  |  Category: Endpoint Security
-Claim (EP-005): SMB packet signing is required by both the SMB client and the SMB server.
-True: every applicable device is compliant for both "Microsoft network client: Digitally sign
-communications (always)" (scid-95) and "Microsoft network server: Digitally sign communications
-(always)". False: at least one applicable device is not compliant for either. The server-side
-configuration is matched by its knowledge-base name only (its id is not pinned; scid-95 never
-counts as the server side). Every applicable device needs both readings: a device read for one
-side only makes the check Not evaluated unless another device already fails, so it never passes
-on the client side alone.
+Check of the Windows Defender One-Click integration: Defender: SMB client signing required (scid-95) on all
+applicable devices.
+True: every applicable device is compliant for the Defender Vulnerability Management secure configuration
+scid-95, knowledge-base name "Enable 'Microsoft network client: Digitally sign communications (always)'".
+False: at least one applicable device is not. Every result's first reason states "N rated of M assessed".
+The id is pinned and its knowledge-base name must contain "microsoft network client" and "digitally sign
+communications (always)": scid-95 under another name, with no name (the knowledge base lacks it), or another id
+under that name reads Not evaluated, never passed.
+Client side only: Defender's knowledge base has no server-side "Microsoft network server: Digitally sign
+communications (always)" entry, so the server side is not measured here. This replaces isSMBSigningRequired,
+which needs a server-side reading and so could never pass.
 
 Source: a new One-Click method (an advanced-hunting query, POST /api/advancedqueries/run, the same API and
 application permission as the existing getTamperProtectionStatus method) over
@@ -36,16 +34,16 @@ row, or no applicable device.
 import json
 from datetime import datetime, timezone
 
-KEY = 'isSMBSigningRequired'
-CLAIM = "SMB signing (client scid-95 and the server-side 'Digitally sign communications (always)' setting)"
-WHAT = 'SMB signing required on client and server'
-FIX = "Enable 'Microsoft network client: Digitally sign communications (always)' and 'Microsoft network server: Digitally sign communications (always)' (LanmanWorkstation and LanmanServer RequireSecuritySignature) on the devices named, through Intune or Group Policy."
+KEY = 'isSMBClientSigningRequiredOnAllApplicableDevices'
+CLAIM = '"Enable \'Microsoft network client: Digitally sign communications (always)\'" (scid-95)'
+WHAT = 'SMB client signing required (scid-95)'
+FIX = "Enable 'Microsoft network client: Digitally sign communications (always)' (LanmanWorkstation RequireSecuritySignature = 1) on the devices named, through Intune or Group Policy."
 
 #: The parts of the claim: a row belongs to a part when its id is listed (or the list is empty)
 #: and every word appears in its lower-cased knowledge-base ConfigurationName.
 PARTS = (
-    {"part": 'SMB client signing', "ids": ('scid-95',), "words": ('digitally sign communications (always)', 'client')},
-    {"part": 'SMB server signing', "ids": (), "words": ('digitally sign communications (always)', 'server')},
+    {"part": 'SMB client signing', "ids": ('scid-95',),
+     "words": ('microsoft network client', 'digitally sign communications (always)')},
 )
 
 #: The criterion this file answers. None means "not measured", never "failed".
