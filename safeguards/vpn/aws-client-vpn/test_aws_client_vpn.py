@@ -194,15 +194,36 @@ def test_an_unrecognised_or_empty_auth_option_is_not_evaluated(module, options):
     assert verdict(module, xml_body(good_endpoint(authenticationOptions=options)))[0] is None
 
 
-def test_idp_directory_sign_in_is_not_evaluated():
+def test_idp_directory_sign_in_is_a_measured_not_saml_and_fails():
+    """Master's ruling (7 Oct): directory sign-in is a measured "not SAML" the customer can fix."""
     value, out = verdict("isidentityproviderrequiredforremoteaccess", xml_body(
         good_endpoint("cvpn-endpoint-1", authenticationOptions={"item": SAML}),
         good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT, AD]}),
     ))
-    assert value is None
+    assert value is False
     body = out["transformedResponse"]
     assert body["federatedEndpoints"] == 1 and body["directoryEndpoints"] == 1
-    assert "directory sign-in" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert "cvpn-endpoint-2 (directory sign-in, not SAML)" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_idp_directory_only_fails():
+    assert verdict("isidentityproviderrequiredforremoteaccess",
+                   xml_body(good_endpoint(authenticationOptions={"item": AD})))[0] is False
+
+
+def test_idp_directory_beside_an_unrecognised_option_is_not_evaluated():
+    value, _ = verdict("isidentityproviderrequiredforremoteaccess",
+                       xml_body(good_endpoint(authenticationOptions={"item": [AD, {"type": "something-new"}]})))
+    assert value is None
+
+
+def test_idp_directory_failure_wins_over_a_federated_mismatch():
+    value, _ = verdict("isidentityproviderrequiredforremoteaccess", xml_body(
+        good_endpoint("a", authenticationOptions={"item": [{"type": "federated-authentication"}]}),
+        good_endpoint("b", authenticationOptions={"item": AD}),
+    ))
+    assert value is False
 
 
 def test_idp_federated_everywhere_passes_and_never_claims_mfa():
