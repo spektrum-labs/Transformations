@@ -28,7 +28,6 @@ from datetime import datetime, timezone
 
 KEY = "isFirewallEnabled"
 
-#: keys the definition routes to this file that its body cannot answer; None on the not-measured path
 #: The definition currently routes three criteria to this file. It can answer exactly one.
 #: isFirewallLoggingEnabled would need firewall traffic logging (the wired method reads the
 #: ADMIN audit log, which is a different thing) and isFirewallUpdated needs upgrade packages,
