@@ -24,7 +24,7 @@ def load():
 
 
 def rule(name, policy, mode="2FA", access="ALLOW", status="ACTIVE", kind="ASSURANCE"):
-    return {"name": name, "status": status,
+    return {"name": name, "status": status, "system": name == "Catch-all Rule",
             "_links": {"self": {"href": BASE + policy + "/rules/rul" + name.replace(" ", "")}},
             "actions": {"appSignOn": {"access": access, "verificationMethod": {"type": kind, "factorMode": mode}}}}
 
@@ -53,9 +53,9 @@ REAL = {"result": {
         {"id": "rstOther", "name": "Other", "status": "ACTIVE"},
     ],
     "accessRules": [
-        [rule("Admin App Policy", "rstAdmin")],
+        [rule("Admin App Policy", "rstAdmin"), rule("Catch-all Rule", "rstAdmin")],
         [rule("Catch-all Rule", "rstVPN")],
-        [rule("Password only", "rstOther", mode="1FA")],
+        [rule("Password only", "rstOther", mode="1FA"), rule("Catch-all Rule", "rstOther", mode="1FA")],
     ],
 }}
 
@@ -99,7 +99,8 @@ class RemoteAccessMfaTests(unittest.TestCase):
 
     def test_unknown_verification_method_is_not_evaluated(self):
         flipped = copy.deepcopy(REAL)
-        flipped["result"]["accessRules"][1] = [rule("Chain", "rstVPN", kind="AUTH_METHOD_CHAIN", mode="")]
+        flipped["result"]["accessRules"][1] = [rule("Chain", "rstVPN", kind="AUTH_METHOD_CHAIN", mode=""),
+                                               rule("Catch-all Rule", "rstVPN")]
         self.assert_not_evaluated(flipped)
 
     def test_unknown_factor_mode_is_not_evaluated(self):
@@ -110,7 +111,8 @@ class RemoteAccessMfaTests(unittest.TestCase):
     def test_measured_weak_rule_beats_unknown_rule(self):
         flipped = copy.deepcopy(REAL)
         flipped["result"]["accessRules"][1] = [rule("Chain", "rstVPN", kind="AUTH_METHOD_CHAIN", mode=""),
-                                               rule("Password", "rstVPN", mode="1FA")]
+                                               rule("Password", "rstVPN", mode="1FA"),
+                                               rule("Catch-all Rule", "rstVPN")]
         self.assertIs(self.out(flipped)[KEY], False)
 
     def test_one_vpn_app_on_weak_policy_fails(self):
@@ -234,6 +236,47 @@ class RemoteAccessMfaTests(unittest.TestCase):
     def test_rule_without_self_link_is_not_evaluated(self):
         flipped = copy.deepcopy(REAL)
         del flipped["result"]["accessRules"][2][0]["_links"]
+        self.assert_not_evaluated(flipped)
+
+    def test_marker_on_outer_envelope_is_not_evaluated(self):
+        flipped = copy.deepcopy(REAL)
+        flipped["paginationTruncated"] = True
+        self.assert_not_evaluated(flipped)
+        flipped = copy.deepcopy(REAL)
+        flipped["paginationStats"] = {"applications": {"paginationTruncated": True}}
+        self.assert_not_evaluated(flipped)
+
+    def test_iterate_stats_errors_or_truncation_are_not_evaluated(self):
+        for stats in [{"itemsTotal": 3, "itemsProcessed": 3, "itemErrors": 1, "iterateTruncated": False},
+                      {"itemsTotal": 3, "itemsProcessed": 2, "itemErrors": 0, "iterateTruncated": True}]:
+            flipped = copy.deepcopy(REAL)
+            flipped["result"]["iterateStats"] = {"accessRules": stats}
+            with self.subTest(stats=stats):
+                self.assert_not_evaluated(flipped)
+
+    def test_clean_iterate_stats_still_pass(self):
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["iterateStats"] = {"accessRules": {"itemsTotal": 3, "itemsProcessed": 3,
+                                                             "itemErrors": 0, "iterateTruncated": False}}
+        self.assertIs(self.out(flipped)[KEY], True)
+
+    def test_rule_page_with_next_link_is_not_evaluated(self):
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["accessRules"][1] = {"apiResponse": flipped["result"]["accessRules"][1],
+                                               "_links": {"next": {"href": BASE + "rstVPN/rules?after=x"}}}
+        self.assert_not_evaluated(flipped)
+        flipped["result"]["accessRules"][1] = {"apiResponse": REAL["result"]["accessRules"][1], "truncated": True}
+        self.assert_not_evaluated(flipped)
+
+    def test_missing_catch_all_rule_is_not_evaluated(self):
+        # The permissive system rule is the one most likely to sit on an unread page.
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["accessRules"][1] = [rule("Office network", "rstVPN")]
+        self.assert_not_evaluated(flipped)
+
+    def test_duplicate_policy_is_not_evaluated(self):
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["accessPolicies"].append({"id": "rstVPN", "name": "Any two factors", "status": "ACTIVE"})
         self.assert_not_evaluated(flipped)
 
     def test_empty_and_error_bodies_are_not_evaluated(self):
