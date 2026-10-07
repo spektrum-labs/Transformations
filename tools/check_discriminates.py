@@ -16,11 +16,15 @@ on.
 
 WHAT IS NOT A FINDING, and why the exemptions are a list rather than an inference:
 
-  * A control the vendor's product does not let anyone disable is legitimately always
-    true, and saying so is correct rather than lazy. CrashPlan and Datto encryption are
-    argued on exactly these grounds. Such a criterion belongs in the allowlist with a
-    reason, adjudicated by someone who owns the vendor relationship -- NOT by this
-    checker, which cannot read a product manual.
+  * A control the vendor's product does not let anyone disable may be argued to be
+    always true. Such a criterion belongs in the allowlist with a reason, adjudicated by
+    someone who owns the vendor relationship -- NOT by this checker, which cannot read a
+    product manual. The allowlist is EMPTY: no such exemption is in force. CrashPlan and
+    Datto encryption were once argued on these grounds and no longer need it -- CrashPlan
+    reads the tenant's `encryptionEnabled` override and refuses an empty or error body,
+    Datto measures each active asset -- so both now discriminate on their own. Prefer that:
+    measure the setting the API exposes, and where it exposes none, report the criterion
+    as not measured rather than assert the product fact as a measurement.
   * A criterion whose `true` denotes the INSECURE condition is handled by the shared
     INVERTED set in check_fail_closed.py; `true` everywhere is a different (and also
     wrong) shape there, but it is not THIS contract's business.
