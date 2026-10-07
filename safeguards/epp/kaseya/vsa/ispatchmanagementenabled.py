@@ -97,6 +97,7 @@ def transform(input):
             for device in devices:
                 if isinstance(device, list):
                     device = device[0] if len(device) > 0 else {}
+                device_patched = False
 
                 # Check for patch management policy assignment
                 patch_policy = device.get("patchManagementPolicy", device.get("patchPolicy", ""))
@@ -112,27 +113,24 @@ def transform(input):
 
                     # Consider patched if up to date or no critical patches pending
                     if is_patched or (pending_patches == 0) or (critical_pending == 0):
-                        patched_devices += 1
+                        device_patched = True
                 elif isinstance(patch_status, str):
                     if patch_status.lower() in ["current", "compliant", "up-to-date", "uptodate"]:
-                        patched_devices += 1
+                        device_patched = True
 
                 # Check last patch date for SLA compliance
                 last_patch_date = device.get("lastPatchDate", device.get("lastUpdateDate", ""))
                 if last_patch_date:
                     try:
                         if isinstance(last_patch_date, str):
-                            # Try common date formats
-                            for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%SZ"]:
-                                try:
-                                    patch_date = datetime.strptime(last_patch_date[:19], fmt)
-                                    if patch_date >= sla_threshold:
-                                        patched_devices += 1
-                                    break
-                                except ValueError:
-                                    continue
+                            patch_date = datetime.fromisoformat(last_patch_date[:19])
+                            if patch_date >= sla_threshold:
+                                device_patched = True
                     except:
                         pass
+
+                if device_patched:
+                    patched_devices += 1
 
             # Calculate coverage
             result["totalDevices"] = total_devices

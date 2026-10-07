@@ -1,0 +1,200 @@
+{
+ "policies": [
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-0",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.mail_delegation",
+    "value": {
+     "enableMailDelegation": "True"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-1",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.auto_forwarding",
+    "value": {
+     "enableAutoForwarding": "True"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-2",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.workspace_sync_for_outlook",
+    "value": {
+     "enableGoogleWorkspaceSyncForMicrosoftOutlook": "True"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-0",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.pop_access",
+    "value": {
+     "enablePopAccess": "True"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-1",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.imap_access",
+    "value": {
+     "enableImapAccess": "True"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-2",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.per_user_outbound_gateway",
+    "value": {
+     "allowUsersToUseExternalSmtpServers": "False"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-0",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.gmail_name_format",
+    "value": {
+     "allowCustomDisplayNames": "True",
+     "defaultDisplayNameFormat": "FIRSTNAME_LASTNAME"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-1",
+    "sortOrder": "101"
+   },
+   "setting": {
+    "type": "settings/gmail.user_email_uploads",
+    "value": {
+     "enableMailAndContactsImport": "False"
+    }
+   },
+   "type": "SYSTEM"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-2",
+    "sortOrder": "201.00183"
+   },
+   "setting": {
+    "type": "settings/gmail.confidential_mode",
+    "value": {
+     "enableConfidentialMode": "False"
+    }
+   },
+   "type": "ADMIN"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-0",
+    "sortOrder": "201.00183"
+   },
+   "setting": {
+    "type": "settings/gmail.email_spam_filter_ip_allowlist",
+    "value": {
+     "allowedIpAddresses": [
+      "192.0.2.1",
+      "192.0.2.2"
+     ]
+    }
+   },
+   "type": "ADMIN"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-1",
+    "sortOrder": "201.00183"
+   },
+   "setting": {
+    "type": "settings/gmail.links_and_external_images",
+    "value": {
+     "enableShortenerScanning": "True",
+     "enableExternalImageScanning": "True",
+     "enableAggressiveWarningsOnUntrustedLinks": "True"
+    }
+   },
+   "type": "ADMIN"
+  },
+  {
+   "name": "policies/redacted",
+   "customer": "customers/redacted",
+   "policyQuery": {
+    "orgUnit": "orgUnits/redacted-2",
+    "sortOrder": "201.00183"
+   },
+   "setting": {
+    "type": "settings/gmail.email_attachment_safety",
+    "value": {
+     "enableEncryptedAttachmentProtection": "True",
+     "encryptedAttachmentProtectionConsequence": "SPAM_FOLDER",
+     "enableAttachmentWithScriptsProtection": "True",
+     "attachmentWithScriptsProtectionConsequence": "SPAM_FOLDER",
+     "enableAnomalousAttachmentProtection": "True",
+     "anomalousAttachmentProtectionConsequence": "SPAM_FOLDER",
+     "applyFutureRecommendedSettingsAutomatically": "True",
+     "encryptedAttachmentProtectionQuarantineId": "0",
+     "attachmentWithScriptsProtectionQuarantineId": "0",
+     "anomalousAttachmentProtectionQuarantineId": "0"
+    }
+   },
+   "type": "ADMIN"
+  }
+ ],
+ "nextPageToken": "redacted-present"
+}
