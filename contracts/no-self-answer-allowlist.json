@@ -3,7 +3,7 @@
   "why": "a transform may not answer criterion X by reading a field named X out of the vendor body it is judging; this list may only shrink",
   "generated_by": "tools/check_no_self_answer.py --emit-allowlist",
   "how_to_exempt": "only when the line is provably unreachable -- OR'd with a real parse that always runs -- or when the vendor's PUBLISHED SCHEMA documents a field of that name. Record the reason. A body we construct contains whatever our own code reads, so a sample body is not evidence.",
-  "count": 34,
+  "count": 32,
   "instances": [
     "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/firewall_transform.py",
     "safeguards/0C281CE9-8024-4D70-AC85-D923A6B9635C/epp_transform.py",
@@ -13,7 +13,6 @@
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/isidpenabled.py",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/ispatchmanagementenabled.py",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/mdr_transform.py",
-    "safeguards/2B2849D8-2FEA-4CAE-9A3C-8B315280752A/firewall_transform.py",
     "safeguards/2BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py",
     "safeguards/2BC425FA-0638-4BF1-8194-19E7E4F2F43C/isidpenabled.py",
     "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py",
@@ -37,7 +36,6 @@
     "safeguards/emailsecurity/avanan/isemailsecurityloggingenabled.py",
     "safeguards/emailsecurity/avanan/isurlrewriteenabled.py",
     "safeguards/epp/crowdstrike/epp_transform.py",
-    "safeguards/firewall/cisco/fmc/firewall_transform.py",
     "safeguards/firewall/meraki/network_transform.py"
   ]
 }
