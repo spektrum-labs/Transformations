@@ -254,6 +254,31 @@ class MimecastDnsEnforcementTests(unittest.TestCase):
         self.assert_measured(response, isSPFConfigured=False, isDMARCConfigured=False,
                              isDKIMConfigured=False, isDNSConfigured=False)
 
+    def test_a_stringified_true_reads_exactly_like_the_bool_it_is(self):
+        # The probe answers each protocol with a bool, a record string, or false. When
+        # it stringifies the bool, "True" has to mean what True means. Otherwise the
+        # negative form ("false", "no") is read correctly as an absence while the
+        # positive form drops through to "record", fails the v=spf1 and v=DMARC1 tests,
+        # and ships as a measured red -- a gap written out of a yes.
+        reference = self.values(self.run_transform({"SPF": True, "DMARC": True, "DKIM": True}))
+        for word in ("True", "true", "yes", "present", "configured", "enabled"):
+            response = self.run_transform({"SPF": word, "DMARC": word, "DKIM": word})
+            self.assertEqual(self.values(response), reference, word)
+            self.assert_not_measured(response, SPF, DMARC, DNS)
+            self.assertIs(self.values(response)[DKIM], True, word)
+
+    def test_a_selector_hostname_carrying_the_word_error_is_still_a_selector(self):
+        # A DKIM CNAME target is built from the tenant and domain names, so the
+        # customer's own words are in it. The probe-failure substring test must not
+        # read a customer's domain name as our own probe failing -- that leaves the
+        # tenant permanently Unevaluated for a reason it cannot fix.
+        for target in ("selector1-errorlogic-com._domainkey.errorlogic.onmicrosoft.com",
+                       "selector2-failedbank-com._domainkey.failedbank.onmicrosoft.com",
+                       "s1._domainkey.refused-example.com.dkim.mimecast.com"):
+            response = self.run_transform(
+                {"SPF": MS_SPF, "DMARC": "v=DMARC1; p=reject", "DKIM": target})
+            self.assert_measured(response, isDKIMConfigured=True, isDNSConfigured=True)
+
     # -- not measured -----------------------------------------------------------
 
     def test_unknown_and_not_available_are_not_measured(self):

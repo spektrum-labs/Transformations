@@ -69,6 +69,15 @@ NOT_MEASURED = ("unknown", "n/a", "na", "not available", "unavailable",
                 "not queried", "pending", "error", "timeout", "timed out",
                 "servfail", "refused")
 
+# The probe answers each protocol with a bool, a record string, or false. When it
+# stringifies the bool, "True" has to mean what True means -- the probe said yes without
+# returning the record -- or the positive form of the same answer ships as a measured red
+# while the negative form ("false", "no") is correctly read as an absence. These are
+# PRESENCE, not proof: the record cannot be judged, so the verdict is None for SPF and
+# DMARC and presence-only for DKIM, exactly as for the bool.
+PRESENT_ONLY = ("true", "yes", "y", "present", "configured", "enabled", "found",
+                "published", "ok", "pass", "passed", "1")
+
 # Substrings that mark the probe describing its own failure rather than quoting a
 # record.  Tested only on values that do not open a version section, so an SPF record
 # that includes a host named "mail-error.example.com" is still read as a record.
@@ -91,6 +100,38 @@ def probe_failure_text(low):
     """True when the lowercased text reads as the probe's own error, not a record."""
     for marker in PROBE_FAILURE:
         if marker in low:
+            return True
+    return False
+
+
+DKIM_SELECTOR_SUFFIXES = (".onmicrosoft.com", ".dkim.mail.microsoft", ".mimecast.com",
+                          ".dkim.amazonses.com", ".dkim.mailchannels.net")
+
+
+def dkim_selector_target(text):
+    """True when the text is the HOSTNAME a DKIM CNAME selector points at.
+
+    Microsoft 365, Mimecast and Amazon SES publish DKIM as a CNAME, so the probe sees a
+    target hostname and no v=DKIM1 tag. That is the only reason a value without the tag
+    may count as published. The test must be for a hostname, not for "not in the
+    stop-list": every error string the probe has not been taught to name would otherwise
+    read as a selector. A hostname is one token with a dot in it and no tag punctuation,
+    and it names the _domainkey subtree the selector lives in (RFC 6376 s3.6.1).
+    """
+    if not text:
+        return False
+    if len(text.split()) != 1:
+        return False
+    low = text.lower().strip(".")
+    for punctuation in ("=", ";", ":", "/", ",", '"'):
+        if punctuation in low:
+            return False
+    if "." not in low:
+        return False
+    if "._domainkey" in low:
+        return True
+    for suffix in DKIM_SELECTOR_SUFFIXES:
+        if low.endswith(suffix):
             return True
     return False
 
@@ -155,6 +196,11 @@ def record_text(body, name):
     "unknown" and "could not resolve" are not "no record is published". Scoring them
     as an absence writes a real gap out of nothing, which is the same defect in the
     other direction as scoring a non-empty string as proof.
+
+    A string answer gets the same reading as the bool it is the string form of, in both
+    directions. "false" and "no" are already read as an absence; "true" and "yes" have
+    to be read as presence, or a probe that stringifies its booleans turns every yes
+    into a measured red while every no stays correct.
     """
     found, value = protocol_value(body, name)
     if not found or value is None:
@@ -170,6 +216,17 @@ def record_text(body, name):
             return "missing", ""
         if low in NOT_MEASURED:
             return "unknown", ""
+        if low in PRESENT_ONLY:
+            return "present", ""
+        # A DKIM CNAME target is a hostname built from the tenant and the domain name,
+        # so the customer's own words are in it: a tenant at errorlogic.com publishes
+        # selector1-errorlogic-com._domainkey.errorlogic.onmicrosoft.com, and the
+        # substring test below would read that domain name as our probe failing. A
+        # value that is already a selector hostname is a record, not an error. The
+        # exemption is scoped to DKIM, because DKIM is the only protocol whose evidence
+        # is legitimately a bare hostname.
+        if name == "dkim" and dkim_selector_target(text):
+            return "record", text
         if not opens_a_record(low) and probe_failure_text(low):
             return "unknown", ""
         return "record", text
@@ -323,38 +380,6 @@ def dmarc_verdict(body):
     if reasons:
         return False, reasons, detail
     return True, [], detail
-
-
-DKIM_SELECTOR_SUFFIXES = (".onmicrosoft.com", ".dkim.mail.microsoft", ".mimecast.com",
-                          ".dkim.amazonses.com", ".dkim.mailchannels.net")
-
-
-def dkim_selector_target(text):
-    """True when the text is the HOSTNAME a DKIM CNAME selector points at.
-
-    Microsoft 365, Mimecast and Amazon SES publish DKIM as a CNAME, so the probe sees a
-    target hostname and no v=DKIM1 tag. That is the only reason a value without the tag
-    may count as published. The test must be for a hostname, not for "not in the
-    stop-list": every error string the probe has not been taught to name would otherwise
-    read as a selector. A hostname is one token with a dot in it and no tag punctuation,
-    and it names the _domainkey subtree the selector lives in (RFC 6376 s3.6.1).
-    """
-    if not text:
-        return False
-    if len(text.split()) != 1:
-        return False
-    low = text.lower().strip(".")
-    for punctuation in ("=", ";", ":", "/", ",", '"'):
-        if punctuation in low:
-            return False
-    if "." not in low:
-        return False
-    if "._domainkey" in low:
-        return True
-    for suffix in DKIM_SELECTOR_SUFFIXES:
-        if low.endswith(suffix):
-            return True
-    return False
 
 
 def dkim_verdict(body):
