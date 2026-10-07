@@ -72,7 +72,10 @@ class DuoAuthenticationLogAccessTests(unittest.TestCase):
                 self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], [])
 
     def test_empty_successful_read_proves_access(self):
-        for payload in ({"stat": "OK", "response": []}, []):
+        for payload in ({"stat": "OK", "response": []}, json.dumps({"stat": "OK", "response": []}),
+                        {"apiResponse": {"stat": "OK", "response": []}},
+                        {"data": {"stat": "OK", "response": []},
+                         "validation": {"status": "valid", "errors": [], "warnings": []}}):
             with self.subTest(payload=payload):
                 response = self.run_transform(payload)
                 self.assertIs(response["transformedResponse"][KEY], True)
@@ -80,6 +83,24 @@ class DuoAuthenticationLogAccessTests(unittest.TestCase):
                 self.assertEqual(self.collection(response)["status"], "success")
                 self.assertIn("read OK with an empty window",
                               response["additionalInfo"]["evaluation"]["passReasons"][0])
+
+    def test_empty_list_without_proof_of_success_is_not_evaluated(self):
+        # an empty list is also what failed reads look like; without Duo's "stat": "OK" (or the v2
+        # returnSpec's authlogs + metadata) it proves nothing, and it must never be a pass
+        for payload in ([], {"response": []}, {"data": []}, {"authlogs": []},
+                        {"data": [], "validation": {"status": "failed", "errors": ["x"], "warnings": []}},
+                        {"data": {"stat": "OK", "response": []},
+                         "validation": {"status": "failed", "errors": ["x"], "warnings": []}},
+                        {"error": True, "statusCode": 401, "data": []},
+                        {"success": False, "error": "boom", "data": []},
+                        {"stat": "FAIL", "response": []},
+                        {"stat": "FAIL", "response": RECORDS},
+                        {"error": True, "errorMessage": "x", "authlogs": [], "metadata": {}}):
+            with self.subTest(payload=payload):
+                response = self.run_transform(payload)
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(self.collection(response)["status"], "error")
+                self.assertEqual(response["additionalInfo"]["evaluation"]["passReasons"], [])
 
     # --- 403 / 40301 Access forbidden: a measured FAIL ---------------------------
 
