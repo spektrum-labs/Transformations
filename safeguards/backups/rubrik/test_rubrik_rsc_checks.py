@@ -200,17 +200,39 @@ CASES = [
     ("isPolicyFailureNotificationConfigured", HOOKS, True,
      flip(HOOKS, lambda d: d["allWebhooksV2"][0]["subscriptionType"]["eventSubscription"].update(eventTypes=["ARCHIVE"])), False, "allWebhooksV2"),
 ]
-NUMERIC = {"backupSlaComplianceRatePercentage", "staleProtectionJobsCount", "unprotectedResourcesCount", "backupSuccessRatePercentage",
-           "failedBackupJobsCount", "clientAESEncryptionCoveragePercentage", "quorumReviewerRoleAssignedCount"}
 IDS = [c[0] for c in CASES]
 
 
-#: Booleans whose unknown answer is None (Not evaluated, with a dataCollection error) rather than False.
-NONE_WHEN_UNKNOWN = {"areBackupConsoleAdminsDedicated"}
-
-
 def unknown(key):
-    return None if key in NUMERIC or key in NONE_WHEN_UNKNOWN else False
+    """Every key, boolean or numeric, answers None when it could not read: Token-Service then records Not evaluated
+    because the dataCollection status is "error", where a False would be graded as a gap the body never showed."""
+    return None
+
+
+def status(key, body):
+    return run(key, body)["additionalInfo"]["dataCollection"]["status"]
+
+
+def assert_unmeasured(key, body):
+    out = run(key, body)
+    assert out["transformedResponse"][key] is None, body
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error", body
+    assert out["additionalInfo"]["dataCollection"]["errors"], body
+
+
+class Poisoned(dict):
+    """A non-empty object whose every read raises, to drive the transform's except path."""
+
+    def __init__(self):
+        super().__init__(poisoned=True)
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("poisoned read")
+
+    get = __getitem__ = __contains__ = keys = items = values = __iter__ = boom
+
+    def __len__(self):
+        return 1
 
 
 def test_every_rubrik_file_is_covered():
@@ -222,6 +244,9 @@ def test_every_rubrik_file_is_covered():
 def test_pass_and_flip(key, good, good_value, bad, bad_value, field):
     assert value(key, good) == good_value
     assert value(key, bad) == bad_value
+    # A measured answer is graded, so a measured False stays a finding; only a None is Not evaluated.
+    assert status(key, good) == "success"
+    assert status(key, bad) == ("error" if bad_value is None else "success")
 
 
 @pytest.mark.parametrize("key,good,good_value,bad,bad_value,field", CASES, ids=IDS)
@@ -246,10 +271,11 @@ ERROR_ENVELOPES = [
 
 @pytest.mark.parametrize("key,good,good_value,bad,bad_value,field", CASES, ids=IDS)
 def test_fails_closed_on_no_evidence(key, good, good_value, bad, bad_value, field):
-    for body in ERROR_ENVELOPES:
+    for body in ERROR_ENVELOPES + [[], {"status": "Not Available"}, Poisoned()]:
         out = run(key, body)
         assert out["transformedResponse"][key] == unknown(key), body
         assert out["additionalInfo"]["evaluation"]["failReasons"], body
+        assert_unmeasured(key, body)
 
 
 @pytest.mark.parametrize("key,good,good_value,bad,bad_value,field", CASES, ids=IDS)
@@ -257,6 +283,7 @@ def test_graphql_error_on_own_field_fails_but_other_field_does_not(key, good, go
     own = copy.deepcopy(good)
     own["errors"] = [{"message": "Missing permission", "path": [field], "extensions": {"code": 403}}]
     assert value(key, own) == unknown(key)
+    assert status(key, own) == "error"
     other = copy.deepcopy(good)
     other["errors"] = [{"message": "Missing permission", "path": ["someOtherField"], "extensions": {"code": 403}}]
     assert value(key, other) == good_value
@@ -266,7 +293,7 @@ def test_graphql_error_on_own_field_fails_but_other_field_does_not(key, good, go
 def test_missing_field_fails_closed(key, good, good_value, bad, bad_value, field):
     b = copy.deepcopy(good)
     b["data"][field] = None
-    assert value(key, b) == unknown(key)
+    assert_unmeasured(key, b)
 
 
 @pytest.mark.parametrize("key,conn,body", [
@@ -279,7 +306,7 @@ def test_missing_field_fails_closed(key, good, good_value, bad, bad_value, field
 def test_unread_next_page_fails_closed(key, conn, body):
     b = copy.deepcopy(body)
     b["data"][conn]["pageInfo"] = {"hasNextPage": True, "endCursor": "Y3Vyc29yOmludDoy"}
-    assert value(key, b) is False
+    assert_unmeasured(key, b)
 
 
 def test_truncated_user_pagination_is_not_a_count():
