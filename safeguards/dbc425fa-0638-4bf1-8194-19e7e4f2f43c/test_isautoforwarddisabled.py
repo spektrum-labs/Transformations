@@ -194,6 +194,13 @@ class AutoForwardTests(unittest.TestCase):
                         {"result": {"paginationStats": {"paginationTruncated": "True"}, "apiResponse": copy.deepcopy(inner)}},
                         {"iterateStats": {"complete": False}, "response": copy.deepcopy(inner)}]:
             self.assert_unevaluated(payload)
+        sibling = {"data": {"meta": "x"}, "response": copy.deepcopy(inner)}
+        sibling["response"]["nextPageToken"] = "synthetic-token"
+        self.assert_unevaluated(sibling)
+        sibling = {"data": {"note": "x"}, "result": {"apiResponse": copy.deepcopy(inner),
+                                                     "paginationStats": {"paginationTruncated": True}}}
+        self.assert_unevaluated(sibling)
+        self.assertIs(self.run_t({"data": {"note": "x"}, "response": copy.deepcopy(inner)})[0], True)
         clean = {"paginationStats": {"policies": {"paginationTruncated": False, "pages": 1}}, "result": copy.deepcopy(inner)}
         self.assertIs(self.run_t(clean)[0], True)
 
