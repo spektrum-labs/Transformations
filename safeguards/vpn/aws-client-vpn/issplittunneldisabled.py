@@ -119,8 +119,7 @@ def transform(input):
         if not aws_error:
             aws_error = as_dict(data.get("Error"))
         if aws_error or data.get("error") or data.get("errors") or data.get("errorMessage"):
-            code = as_text(aws_error.get("Code")) or as_text(data.get("error"))[:120] or "error"
-            return not_evaluated("AWS returned an error instead of the endpoint list: " + code[:200])
+            return not_evaluated("AWS returned an error instead of the endpoint list")
 
         if "DescribeClientVpnEndpointsResponse" in data:
             result = as_dict(data.get("DescribeClientVpnEndpointsResponse"))
@@ -158,6 +157,6 @@ def transform(input):
                 verdicts.append([endpoint_label(endpoint), "pass"])
             else:
                 verdicts.append([endpoint_label(endpoint), "fail"])
-        return decide(verdicts, "splitTunnelEndpoints", "Split tunnel is on on", "Split tunnel is off (full tunnel) on every active Client VPN endpoint", summary)
+        return decide(verdicts, "splitTunnelEndpoints", "Split tunnel is on for", "Split tunnel is off (full tunnel) on every active Client VPN endpoint", summary)
     except Exception as e:
         return not_evaluated("Could not evaluate the Client VPN endpoint list: the response has an unexpected shape")
