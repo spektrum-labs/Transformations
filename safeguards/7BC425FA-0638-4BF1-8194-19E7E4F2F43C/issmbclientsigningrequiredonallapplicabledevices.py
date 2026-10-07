@@ -1,9 +1,17 @@
 """
-Transformation: isNTLMv1Disabled
+Transformation: isSMBClientSigningRequiredOnAllApplicableDevices
 Vendor: Microsoft Defender for Endpoint (One-Click)  |  Category: Endpoint Security
-Claim (EP-007): NTLMv1 and LM are refused. True: every applicable device is compliant for
-"Set LAN Manager authentication level to 'Send NTLMv2 response only. Refuse LM & NTLM'"
-(scid-72, LmCompatibilityLevel 5). False: at least one applicable device is not.
+Check of the Windows Defender One-Click integration: Defender: SMB client signing required (scid-95) on all
+applicable devices.
+True: every applicable device is compliant for the Defender Vulnerability Management secure configuration
+scid-95, knowledge-base name "Enable 'Microsoft network client: Digitally sign communications (always)'".
+False: at least one applicable device is not. Every result's first reason states "N rated of M assessed".
+The id is pinned and its knowledge-base name must contain "microsoft network client" and "digitally sign
+communications (always)": scid-95 under another name, with no name (the knowledge base lacks it), or another id
+under that name reads Not evaluated, never passed.
+Client side only: Defender's knowledge base has no server-side "Microsoft network server: Digitally sign
+communications (always)" entry, so the server side is not measured here. This replaces isSMBSigningRequired,
+which needs a server-side reading and so could never pass.
 
 Source: a new One-Click method (an advanced-hunting query, POST /api/advancedqueries/run, the same API and
 application permission as the existing getTamperProtectionStatus method) over
@@ -26,15 +34,16 @@ row, or no applicable device.
 import json
 from datetime import datetime, timezone
 
-KEY = 'isNTLMv1Disabled'
-CLAIM = "the LAN Manager authentication level setting (scid-72, 'Send NTLMv2 response only. Refuse LM & NTLM')"
-WHAT = "the LAN Manager authentication level at 'Send NTLMv2 response only. Refuse LM & NTLM' (scid-72)"
-FIX = "Set 'Network security: LAN Manager authentication level' to 'Send NTLMv2 response only. Refuse LM & NTLM' (LmCompatibilityLevel 5) on the devices named, through Intune or Group Policy."
+KEY = 'isSMBClientSigningRequiredOnAllApplicableDevices'
+CLAIM = '"Enable \'Microsoft network client: Digitally sign communications (always)\'" (scid-95)'
+WHAT = 'SMB client signing required (scid-95)'
+FIX = "Enable 'Microsoft network client: Digitally sign communications (always)' (LanmanWorkstation RequireSecuritySignature = 1) on the devices named, through Intune or Group Policy."
 
 #: The parts of the claim: a row belongs to a part when its id is listed (or the list is empty)
 #: and every word appears in its lower-cased knowledge-base ConfigurationName.
 PARTS = (
-    {"part": 'LAN Manager authentication level', "ids": ('scid-72',), "words": ('lan manager authentication level', 'ntlmv2')},
+    {"part": 'SMB client signing', "ids": ('scid-95',),
+     "words": ('microsoft network client', 'digitally sign communications (always)')},
 )
 
 #: The criterion this file answers. None means "not measured", never "failed".
