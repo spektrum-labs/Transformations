@@ -1,9 +1,14 @@
-"""isAuditLoggingEnabled: recency of Duo administrator log events (GET /admin/v1/logs/administrator).
+"""isAuditLoggingEnabled: Duo's administrator audit log is readable (GET /admin/v1/logs/administrator).
 
-A non-empty list used to pass, and "most recent" was the FIRST entry. getAdminLogs sends mintime=1 and
-limit=1000, so a window cut at the limit may never have read the newest events. Now: newest = max
-timestamp; <= 30 days True; 30-90 days Unevaluated; > 90 days False on a complete read; a read at the
-1000 limit with newest > 30 days is Unevaluated; errors and unreadable input are Unevaluated, never False.
+getAdminLogs sends mintime = now - 30 days, so every event Duo returns is inside the last 30 days, and
+Duo v1 returns at most the EARLIEST 1000 events of that window (oldest first). Duo records administrator
+actions for every account with no setting to turn it off, so:
+
+  * a successful read passes, empty or not (an empty window is no administrator activity, not a gap);
+  * an error, a vendor error marker or an unreadable body is Not evaluated (value None, data-collection
+    error), never False;
+  * the evidence names the window, the oldest and newest event read, and readMayBeTruncated, and a read at
+    the 1000-event limit says the newest event read is not the newest in the window.
 """
 import importlib.util
 import json
@@ -15,11 +20,13 @@ from pathlib import Path
 TRANSFORMATION_PATH = Path(__file__).with_name("isAuditLoggingEnabled.py")
 KEY = "isAuditLoggingEnabled"
 NOW = datetime(2026, 10, 3, 12, 0, 0, tzinfo=timezone.utc)
-DAY = 86400
 
 FORBIDDEN_BODY = {"code": 40301, "message": "Access forbidden", "stat": "FAIL"}
 FORBIDDEN_MARKED = {"vendorErrorAsResponse": {
     "status": 403, "bodyContains": "Access forbidden", "body": FORBIDDEN_BODY}}
+# What Integration-Service hands a transform after a vendor HTTP error (format_error_response).
+IS_ERROR_ENVELOPE = {"integrationName": "Duo", "errorMessage": "Invalid signature in request credentials",
+                     "error": True, "status": "Error", "statusCode": 401, "vendorStatus": 401}
 
 
 def load_transformation():
@@ -45,7 +52,12 @@ def body(rows):
     return {"stat": "OK", "response": rows}
 
 
-class DuoAuditLoggingRecencyTests(unittest.TestCase):
+def returned(rows):
+    """The shape getAdminLogs' returnSpec hands the transform: {"response": [...]}."""
+    return {"response": rows}
+
+
+class DuoAuditLoggingReadableLogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.t = load_transformation()
@@ -59,157 +71,162 @@ class DuoAuditLoggingRecencyTests(unittest.TestCase):
     def value(self, payload):
         return self.run_transform(payload)["transformedResponse"][KEY]
 
+    def evaluation(self, response):
+        return response["additionalInfo"]["evaluation"]
+
+    def assert_pass(self, response):
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
+        self.assertEqual(self.evaluation(response)["failReasons"], [])
+
     def assert_unevaluated(self, response):
         self.assertIsNone(response["transformedResponse"][KEY])
         self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertTrue(response["additionalInfo"]["dataCollection"]["errors"])
 
-    # --- the three bands -------------------------------------------------------
+    # --- success, empty: a pass ----------------------------------------------------
 
-    def test_newest_two_days_old_passes(self):
-        response = self.run_transform(body([entry(2), entry(200)]))
-        self.assertIs(response["transformedResponse"][KEY], True)
-        self.assertEqual(response["transformedResponse"]["newestEventAgeDays"], 2)
-        self.assertTrue(response["additionalInfo"]["evaluation"]["passReasons"])
-
-    def test_newest_45_days_old_is_unevaluated(self):
-        response = self.run_transform(body([entry(45), entry(300)]))
-        self.assert_unevaluated(response)
-        reason = response["additionalInfo"]["evaluation"]["failReasons"][0]
-        self.assertIn("45 days old (more than 30)", reason)
-
-    def test_newest_120_days_old_complete_read_fails(self):
-        response = self.run_transform(body([entry(120), entry(400)]))
-        self.assertIs(response["transformedResponse"][KEY], False)
-        self.assertIn("no administrator log events in the last 90 days",
-                      response["additionalInfo"]["evaluation"]["failReasons"][0])
-
-    def test_empty_list_is_unevaluated_not_a_fail(self):
-        # getAdminLogs' returnSpec defaults an unreadable body to [], so an empty list may be a
-        # failed read; a Duo account also always logs its own administrator activity.
-        for payload in (body([]), []):
+    def test_success_empty_window_passes(self):
+        for payload in (returned([]), body([]), {"data": returned([]), "validation": {"status": "valid"}}):
             with self.subTest(payload=payload):
-                self.assertIsNone(self.value(payload))
+                response = self.run_transform(payload)
+                self.assert_pass(response)
+                out = response["transformedResponse"]
+                self.assertEqual(out["totalLogCount"], 0)
+                self.assertIs(out["logsPresent"], False)
+                self.assertIs(out["readMayBeTruncated"], False)
+                self.assertEqual(out["windowDays"], 30)
+                self.assertIsNone(out["mostRecentTimestamp"])
+                reason = self.evaluation(response)["passReasons"][0]
+                self.assertIn("no events", reason)
+                self.assertIn("last 30 days", reason)
+                self.assertIn("/admin/v1/logs/administrator", reason)
 
-    # --- truncation at the request limit --------------------------------------
+    # --- success, non-empty: a pass, with the latest event and the window ---------
 
-    def test_1000_entries_all_400_days_old_is_unevaluated(self):
-        rows = [entry(400, i) for i in range(1000)]
-        response = self.run_transform(body(rows))
-        self.assert_unevaluated(response)
-        self.assertIn("may not have been read", response["additionalInfo"]["evaluation"]["failReasons"][0])
-
-    def test_1000_entries_year_old_first_entry_but_nothing_recent_is_not_a_pass(self):
-        # The customer case: exactly 1000 entries, first timestamp a year old.
-        rows = [entry(365)] + [entry(366 + i % 30) for i in range(999)]
-        self.assertIsNone(self.value(body(rows)))
-
-    def test_1000_entries_newest_10_days_old_passes(self):
-        rows = [entry(10 + i % 300) for i in range(1000)]
-        self.assertIs(self.value(body(rows)), True)
-
-    def test_1000_entries_45_days_old_and_999_entries_120_days_old(self):
-        self.assertIsNone(self.value(body([entry(45 + i) for i in range(1000)])))
-        self.assertIs(self.value(body([entry(120 + i) for i in range(999)])), False)
-
-    # --- max(), not first -------------------------------------------------------
+    def test_success_non_empty_passes_and_reports_latest_event(self):
+        rows = [entry(20), entry(2), entry(9)]
+        response = self.run_transform(returned(rows))
+        self.assert_pass(response)
+        out = response["transformedResponse"]
+        self.assertEqual(out["totalLogCount"], 3)
+        self.assertEqual(out["mostRecentTimestamp"], (NOW - timedelta(days=2)).isoformat())
+        self.assertEqual(out["oldestTimestamp"], (NOW - timedelta(days=20)).isoformat())
+        self.assertEqual(out["newestEventAgeDays"], 2)
+        self.assertIs(out["readMayBeTruncated"], False)
+        reason = self.evaluation(response)["passReasons"][0]
+        self.assertIn("latest administrator event is " + out["mostRecentTimestamp"], reason)
+        self.assertIn("last 30 days", reason)
+        findings = self.evaluation(response)["additionalFindings"]
+        self.assertTrue(any(f.startswith("Window read: the last 30 days") for f in findings))
+        self.assertTrue(any(f.startswith("Latest administrator event: ") for f in findings))
 
     def test_ordering_does_not_matter(self):
-        rows = [entry(d) for d in (1, 40, 100, 200, 365)]
-        shuffled = list(rows)
-        random.Random(7).shuffle(shuffled)
-        for label, ordered in (("newest first", rows), ("newest last", rows[::-1]), ("shuffled", shuffled)):
-            with self.subTest(order=label):
-                self.assertIs(self.value(body(ordered)), True)
-        stale = [entry(d) for d in (120, 200, 365)]
-        for ordered in (stale, stale[::-1]):
-            self.assertIs(self.value(body(ordered)), False)
+        rows = [entry(d) for d in (29, 1, 15, 7, 22)]
+        expected = (NOW - timedelta(days=1)).isoformat()
+        for seed in range(5):
+            shuffled = list(rows)
+            random.Random(seed).shuffle(shuffled)
+            with self.subTest(seed=seed):
+                self.assertEqual(self.run_transform(returned(shuffled))["transformedResponse"]["mostRecentTimestamp"],
+                                 expected)
 
-    # --- timestamp forms -------------------------------------------------------
+    def test_isotimestamp_only_entries(self):
+        response = self.run_transform(returned([entry(3, iso_only=True), entry(12, iso_only=True)]))
+        self.assert_pass(response)
+        self.assertEqual(response["transformedResponse"]["newestEventAgeDays"], 3)
 
-    def test_mixed_timestamp_and_isotimestamp_entries(self):
-        rows = [entry(200), entry(3, iso_only=True), entry(100)]
-        self.assertIs(self.value(body(rows)), True)
-        rows = [entry(3, iso_only=False), entry(200, iso_only=True)]
-        self.assertIs(self.value(body(rows)), True)
-        rows = [entry(150, iso_only=True), entry(130)]
-        self.assertIs(self.value(body(rows)), False)
+    def test_events_older_than_the_window_still_pass(self):
+        # mintime keeps these out today; if it ever widens, a readable log is still a pass.
+        self.assert_pass(self.run_transform(returned([entry(120), entry(400)])))
 
-    def test_isotimestamp_variants(self):
-        row = {"username": "a", "action": "x", "isotimestamp": "2026-10-01T10:00:00.000000+00:00"}
-        self.assertIs(self.value(body([row])), True)
-        row = {"username": "a", "action": "x", "isotimestamp": "2026-10-01T10:00:00Z"}
-        self.assertIs(self.value(body([row])), True)
+    def test_never_false(self):
+        for rows in ([], [entry(1)], [entry(45)], [entry(400)], [entry(1)] * 1000):
+            with self.subTest(n=len(rows)):
+                self.assertIsNot(self.value(returned(rows)), False)
 
-    def test_entries_without_a_valid_timestamp_are_ignored(self):
-        junk = [{"username": "a", "action": "x"}, {"timestamp": "soon"}, {"timestamp": None, "isotimestamp": "bad"},
-                {"timestamp": True}, "text", None, 5, {"timestamp": -3}]
-        self.assertIs(self.value(body(junk + [entry(2)])), True)
-        self.assertIsNone(self.value(body(junk)))  # nothing usable: cannot judge, never False
+    # --- a read at Duo's 1000-event limit: honest about what was not read ---------
 
-    # --- boundaries ----------------------------------------------------------
+    def test_read_at_the_limit_flags_truncation_and_says_newer_events_were_not_read(self):
+        rows = [entry(29, seconds_extra=i) for i in range(999)] + [entry(18)]
+        response = self.run_transform(returned(rows))
+        self.assert_pass(response)
+        out = response["transformedResponse"]
+        self.assertIs(out["readMayBeTruncated"], True)
+        self.assertEqual(out["totalLogCount"], 1000)
+        self.assertEqual(out["mostRecentTimestamp"], (NOW - timedelta(days=18)).isoformat())
+        reason = self.evaluation(response)["passReasons"][0]
+        self.assertIn("earliest 1000 events", reason)
+        self.assertIn("newer events exist that were not read", reason)
+        findings = self.evaluation(response)["additionalFindings"]
+        self.assertTrue(any("not the newest in the window" in f for f in findings))
 
-    def test_exactly_30_days_is_a_pass_and_just_over_is_not(self):
-        self.assertIs(self.value(body([entry(30)])), True)
-        self.assertIsNone(self.value(body([entry(30, 1)])))
+    def test_999_entries_is_not_flagged_truncated(self):
+        out = self.run_transform(returned([entry(5)] * 999))["transformedResponse"]
+        self.assertIs(out["readMayBeTruncated"], False)
 
-    def test_exactly_90_days_is_unevaluated_and_just_over_fails(self):
-        self.assertIsNone(self.value(body([entry(90)])))
-        self.assertIs(self.value(body([entry(90, 1)])), False)
+    def test_read_may_be_truncated_reaches_the_evidence(self):
+        self.assertIn("readMayBeTruncated", self.t.RESULT_KEYS)
+        response = self.run_transform(returned([entry(5)] * 1000))
+        self.assertIn("readMayBeTruncated", response["additionalInfo"]["transformation"]["inputSummary"])
 
-    # --- future-dated entries --------------------------------------------------
+    # --- errors and unreadable bodies: Not evaluated -------------------------------
 
-    def test_future_entry_does_not_rescue_a_stale_list(self):
-        future = entry(-5)  # five days ahead
-        self.assertIs(self.value(body([entry(200), future])), False)
-        self.assertIsNone(self.value(body([entry(45), future])))
-        self.assertIsNone(self.value(body([future])))
+    def test_error_envelope_is_not_evaluated(self):
+        payloads = {
+            "IS error envelope": IS_ERROR_ENVELOPE,
+            "IS error envelope under apiResponse": {"apiResponse": IS_ERROR_ENVELOPE},
+            "marker 403": FORBIDDEN_MARKED,
+            "marker 500": {"vendorErrorAsResponse": {"status": 500, "body": "boom"}},
+            "wrapped marker": {"response": FORBIDDEN_MARKED},
+            "Duo error body": {"stat": "FAIL", "code": 40101, "message": "Invalid signature"},
+            "error key": {"error": "unauthorized"},
+            "status Error": {"status": "Error", "message": "rate limited"},
+        }
+        for label, payload in payloads.items():
+            with self.subTest(case=label):
+                response = self.run_transform(payload)
+                self.assert_unevaluated(response)
+                self.assertTrue(self.evaluation(response)["failReasons"])
 
-    def test_small_clock_skew_still_counts(self):
-        self.assertIs(self.value(body([entry(0, -3600)])), True)  # one hour ahead
-
-    # --- unreadable input is Unevaluated, never False ---------------------------
-
-    def test_unreadable_inputs_are_unevaluated(self):
+    def test_unreadable_inputs_are_not_evaluated(self):
         payloads = {
             "None": None,
             "non-list": {"stat": "OK", "response": "nope"},
             "number": 42,
             "string": "not json",
             "empty dict": {},
-            "marker 403": FORBIDDEN_MARKED,
-            "marker 500": {"vendorErrorAsResponse": {"status": 500, "body": "boom"}},
-            "error body": {"stat": "FAIL", "code": 40101, "message": "Invalid signature"},
-            "error key": {"error": "unauthorized"},
             "json null": "null",
-            "wrapped marker": {"response": FORBIDDEN_MARKED},
+            "entries without timestamps": returned([{"action": "x", "username": "y"}]),
+            "entries not objects": returned(["a", "b"]),
+            "only future timestamps": returned([entry(-5)]),
         }
         for label, payload in payloads.items():
             with self.subTest(case=label):
-                response = self.run_transform(payload)
-                self.assert_unevaluated(response)
-                self.assertTrue(response["additionalInfo"]["evaluation"]["failReasons"])
+                self.assert_unevaluated(self.run_transform(payload))
 
-    def test_validation_failure_is_unevaluated(self):
+    def test_validation_failure_is_not_evaluated(self):
         payload = {"data": [entry(1)], "validation": {"status": "failed", "errors": ["x"], "warnings": []}}
         self.assert_unevaluated(self.run_transform(payload))
 
-    def test_exception_is_unevaluated_not_false(self):
+    def test_exception_is_not_evaluated_not_false(self):
         def boom():
             raise RuntimeError("clock broke")
         self.t.now_utc = boom
-        response = self.run_transform(body([entry(1)]))
+        response = self.run_transform(returned([entry(1)]))
         self.assertIsNone(response["transformedResponse"][KEY])
         self.assertEqual(response["additionalInfo"]["transformation"]["status"], "error")
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
 
     def test_json_string_and_bytes_inputs(self):
-        payload = json.dumps(body([entry(2)]))
+        payload = json.dumps(returned([entry(2)]))
         self.assertIs(self.value(payload), True)
         self.assertIs(self.value(payload.encode("utf-8")), True)
 
-    def test_flip_stale_never_passes(self):
-        for days in (31, 60, 91, 400):
-            with self.subTest(days=days):
-                self.assertIsNot(self.value(body([entry(days)])), True)
+    def test_docstring_matches_the_live_mintime(self):
+        doc = self.t.__doc__
+        self.assertIn("{$utcNowS-30d}", doc)
+        self.assertNotIn("mintime=1", doc)
 
 
 if __name__ == "__main__":
