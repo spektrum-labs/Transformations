@@ -120,8 +120,6 @@ def transform(input):
             wan_network_data = parse_input(data['wanNetwork']) if 'wanNetwork' in data else data
             audit_data = parse_input(data['data']) if 'data' in data else data
 
-            is_firewall_enabled = True if data.get('isFirewallEnabled', False) else False
-
             if 'data' in firewall_data:
                 firewall_data = parse_input(firewall_data['data'])
                 if 'policy' in firewall_data:
