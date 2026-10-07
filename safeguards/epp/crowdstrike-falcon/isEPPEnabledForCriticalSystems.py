@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 
 
@@ -69,42 +70,99 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 CRITICAL_KEYWORDS = [
     "critical", "server", "domain controller", "domain-controller",
-    "dc", "tier0", "tier 0", "tier-0",
+    "tier0", "tier 0", "tier-0",
 ]
+# "dc" only as a whole word: as a substring it matched unrelated names.
+CRITICAL_WORDS = ["dc"]
 
 
 def is_critical_group_name(name):
     if not name:
         return False
-    lower_name = name.lower()
+    lower_name = str(name).lower()
     for kw in CRITICAL_KEYWORDS:
         if kw in lower_name:
+            return True
+    for word in re.findall(r"[a-z0-9]+", lower_name):
+        if word in CRITICAL_WORDS:
             return True
     return False
 
 
+def is_true(value):
+    """Stored CrowdStrike bodies carry booleans as the strings "True"/"False"; bool("False") is True."""
+    return value is True or str(value).strip().lower() == "true"
+
+
+def as_int(value):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def transform(input):
+    """
+    isEPPEnabledForCriticalSystems (CrowdStrike Falcon prevention policies,
+    GET /policy/combined/prevention/v1).
+
+    Rule: every prevention policy assigned to a critical host group (name matches CRITICAL_KEYWORDS,
+    or the word "dc") must be enabled, for every platform. Falcon Complete assigns one policy per
+    platform to the same group (MeasuredWin, MeasuredLin, MeasuredMac -> "Servers"); a disabled
+    Windows policy on "Servers" is not masked by the enabled Linux one. The previous version counted
+    a group as covered when ANY assigned policy was enabled, and read enabled with bool(), so the
+    stored string "False" counted as enabled.
+
+    Fails (false) when no critical host group is found. Not measured (dataCollection error, shown
+    Unevaluated) on an API error, a body that is not a policy list, or a truncated list
+    (meta.pagination.total larger than the policies returned).
+
+    Does not prove: that the prevention toggles inside an enabled policy are switched on, or that
+    every critical host is a member of a critical-named group.
+    """
+    if isinstance(input, bytes):
+        input = input.decode("utf-8")
+    if isinstance(input, str):
+        try:
+            input = json.loads(input) if input.strip() else None
+        except ValueError:
+            input = None
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
 
     api_errors = []
-    if data.get("error"):
-        err_msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
-        api_errors.append(f"CrowdStrike API returned an error: {err_msg}")
+    if data is None:
+        api_errors.append("No response body from the prevention policies call")
+    elif not isinstance(data, dict):
+        api_errors.append("Prevention policies response is not an object")
+    else:
+        if data.get("error") or str(data.get("status", "")).lower() == "error":
+            err_msg = data.get("errorMessage") or data.get("message") or "Unknown API error"
+            api_errors.append(f"CrowdStrike API returned an error: {err_msg}")
+        vendor_errors = data.get("errors")
+        if isinstance(vendor_errors, list) and vendor_errors and not data.get("resources"):
+            api_errors.append("CrowdStrike API returned errors: " + json.dumps(vendor_errors)[:300])
+        if not api_errors and not isinstance(data.get("resources"), list):
+            api_errors.append("Prevention policies response has no resources list")
 
-    policies = data.get("resources") or []
-    if not isinstance(policies, list):
-        policies = []
+    policies = []
+    if not api_errors:
+        policies = [p for p in data.get("resources") if isinstance(p, dict)]
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        pagination = meta.get("pagination") if isinstance(meta.get("pagination"), dict) else {}
+        total = as_int(pagination.get("total"))
+        if (total is not None and total > len(policies)) or is_true(pagination.get("truncated")):
+            api_errors.append(
+                f"Prevention policy list was truncated ({len(policies)} of {total} returned); an unread policy "
+                "could be a disabled one on a critical host group"
+            )
+            policies = []
 
-    critical_group_names = set()
-    covered_critical_group_names = set()
-    inspected_policies = []
-
+    # group name -> {platform -> [(policy name, enabled)]}
+    critical = {}
     for policy in policies:
-        if not isinstance(policy, dict):
-            continue
-        policy_enabled = bool(policy.get("enabled"))
+        policy_enabled = is_true(policy.get("enabled"))
         policy_name = policy.get("name") or policy.get("id") or "unnamed-policy"
+        platform = policy.get("platform_name") or "unknown-platform"
         groups = policy.get("groups") or []
         if not isinstance(groups, list):
             groups = []
@@ -112,24 +170,36 @@ def transform(input):
             if not isinstance(group, dict):
                 continue
             group_name = group.get("name") or group.get("id") or ""
-            if is_critical_group_name(group_name):
-                critical_group_names.add(group_name)
-                if policy_enabled:
-                    covered_critical_group_names.add(group_name)
-                    inspected_policies.append(f"{policy_name} (enabled) -> {group_name}")
+            if not is_critical_group_name(group_name):
+                continue
+            by_platform = critical.get(group_name) or {}
+            entries = by_platform.get(platform) or []
+            entries.append((policy_name, policy_enabled))
+            by_platform[platform] = entries
+            critical[group_name] = by_platform
 
-    total_critical = len(critical_group_names)
-    total_covered = len(covered_critical_group_names)
+    disabled = []
+    covered = []
+    uncovered_groups = set()
+    for group_name in sorted(critical):
+        for platform in sorted(critical[group_name]):
+            for policy_name, enabled in critical[group_name][platform]:
+                if enabled:
+                    covered.append(f"{policy_name} ({platform}, enabled) -> {group_name}")
+                else:
+                    disabled.append(f"{policy_name} ({platform}, disabled) -> {group_name}")
+                    uncovered_groups.add(group_name)
 
-    if total_critical > 0:
-        is_enabled_for_critical = total_covered == total_critical
-    else:
-        is_enabled_for_critical = False
+    total_critical = len(critical)
+    total_covered = total_critical - len(uncovered_groups)
+    is_enabled_for_critical = (not api_errors) and total_critical > 0 and not disabled
 
     input_summary = {
         "totalPolicies": len(policies),
         "criticalHostGroupsFound": total_critical,
         "criticalHostGroupsCovered": total_covered,
+        "criticalPolicyAssignments": len(covered) + len(disabled),
+        "disabledCriticalAssignments": len(disabled),
     }
 
     pass_reasons = []
@@ -137,11 +207,9 @@ def transform(input):
     recommendations = []
 
     if api_errors:
-        fail_reasons.append(
-            "The getCombinedPreventionPolicies API call returned an error; no prevention policy data was available to evaluate critical system coverage."
-        )
+        fail_reasons.append("Not measured: " + "; ".join(api_errors))
         recommendations.append(
-            "Verify CrowdStrike API credentials and connectivity, then re-run the scan to retrieve prevention policy assignments."
+            "Verify CrowdStrike API credentials (Prevention policies: Read) and connectivity, then re-run the scan."
         )
     elif total_critical == 0:
         fail_reasons.append(
@@ -153,19 +221,16 @@ def transform(input):
         )
     elif is_enabled_for_critical:
         pass_reasons.append(
-            f"All {total_critical} critical-tagged host group(s) ({', '.join(sorted(covered_critical_group_names))}) are assigned to a Prevention Policy with enabled=true."
+            f"Every prevention policy assigned to the {total_critical} critical host group(s) "
+            f"({', '.join(sorted(critical))}) is enabled, on every platform: " + "; ".join(covered[:10])
         )
-        if inspected_policies:
-            pass_reasons.append(
-                "Cross-referenced policy-to-group assignments: " + "; ".join(inspected_policies[:5])
-            )
     else:
-        uncovered = sorted(critical_group_names - covered_critical_group_names)
         fail_reasons.append(
-            f"{total_critical - total_covered} of {total_critical} critical host group(s) ({', '.join(uncovered)}) are not covered by any Prevention Policy with enabled=true."
+            f"{len(disabled)} prevention policy assignment(s) on critical host groups are disabled: " + "; ".join(disabled[:10])
         )
         recommendations.append(
-            f"Assign an enabled Prevention Policy to the following critical host groups: {', '.join(uncovered)}."
+            "Enable the listed prevention policies (or unassign them from the critical host groups) so every platform in "
+            f"{', '.join(sorted(uncovered_groups))} is protected."
         )
 
     result = {

@@ -35,6 +35,7 @@ class Poisoned(dict):
 
 CASES = [
     ('isSAMLEnforced', ('isSAMLEnforced',), 'empty_dict', lambda: {}),
+    ('isSAMLEnforced', ('isSAMLEnforced',), 'poisoned', lambda: Poisoned()),
 ]
 
 

@@ -27,10 +27,16 @@ WHAT IS MODELLED, and what deliberately is not. Only behaviour confirmed against
   * the `_parse_input` / `_listify` rewrite -- the executor source
     (fabric/utils/codeexecutor.py `_normalize_underscore_names`) does it, and production
     logs carry no `_parse_input` rejection although many transforms use that name.
-Runtime restrictions (the import allowlist, guarded builtins) are NOT modelled: they are
-not yet confirmed from production, and a mirror that guesses would either pass things
-production rejects or fail things it accepts. tools/restricted_sandbox.py is the place to
-grow that once it is measured.
+  * calls that compile but die at run time because CPython imports a module inside them
+    and the executor's `safe_import` refuses it: `datetime.strftime()` imports `time`,
+    `datetime.strptime()` imports `_strptime`. Measured 2026-09-29 by running each call
+    under Token-Service's real PyCodeExecutor, and in production: ThreatDown at Trebron
+    reported a blank `earliestExpiry` across 9 licences because its `strptime` died inside
+    an `except Exception`. The banned calls are not a hand-kept list -- PROBES runs each
+    candidate under tools/restricted_sandbox.py's import hook and bans only the ones it
+    refuses, so the rule moves with the mirror.
+Other runtime restrictions (guarded builtins) are NOT modelled: a mirror that guesses would
+either pass things production rejects or fail things it accepts.
 
 Usage:
     python tools/check_sandbox_compile.py              # judge the tree
@@ -39,6 +45,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import io
 import pathlib
@@ -56,6 +63,53 @@ WHITELIST = {"_parse_input": "parse_input", "_listify": "listify"}
 #: A collapsed walk prints "0 failures" in the same words a clean tree does. Measured
 #: 2026-09-24: 967 transforms. The floor catches a walk that stopped reading the tree.
 MIN_COMPILED = 400
+
+#: Candidate calls, run under the mirror's import hook. A method name is banned only when its
+#: probe raises "Import of ... is not allowed"; "fstring" stands for a `%` format spec in an
+#: f-string (`f"{dt:%Y}"`), which calls strftime. isoformat/fromisoformat are the controls.
+PROBES = {
+    "strftime": "datetime.datetime(2026, 1, 1).strftime('%Y')",
+    "strptime": "datetime.datetime.strptime('2026', '%Y')",
+    "today": "datetime.date.today()",
+    "timetuple": "datetime.datetime(2026, 1, 1).timetuple()",
+    "fstring": "f'{datetime.datetime(2026, 1, 1):%Y}'",
+    "isoformat": "datetime.datetime(2026, 1, 1).isoformat()",
+    "fromisoformat": "datetime.datetime.fromisoformat('2026-01-01')",
+    "now": "datetime.datetime.now()",
+}
+
+
+def refused_calls() -> dict[str, str]:
+    """Probe name -> the refusal, for every probe the production import hook refuses."""
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import restricted_sandbox
+    refused = {}
+    for name, expr in PROBES.items():
+        code = "import datetime\ndef transform(input):\n    return {'v': str(%s)}\n" % expr
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                restricted_sandbox.load(code)["transform"]({})
+        except ImportError as exc:
+            if "is not allowed" in str(exc):
+                refused[name] = str(exc)
+    return refused
+
+
+def runtime_refusals(code: str, refused: dict[str, str]) -> list[str]:
+    """Lines calling something the production import hook refuses at run time."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in refused:
+            out.append(f"Line {node.lineno}: .{node.func.attr}() fails at run time -- {refused[node.func.attr]}")
+        if "fstring" in refused and isinstance(node, ast.FormattedValue) and node.format_spec is not None:
+            spec = "".join(v.value for v in node.format_spec.values if isinstance(v, ast.Constant))
+            if "%" in spec:
+                out.append(f"Line {node.lineno}: f-string date format '{spec}' calls strftime -- {refused['fstring']}")
+    return out
 
 TEST_MODULE = re.compile(r"^(test_.*|conftest)\.py$")
 DEF_TRANSFORM = re.compile(r"^def\s+transform\s*\(", re.MULTILINE)
@@ -90,12 +144,13 @@ def compile_errors(code: str) -> list[str]:
 def census() -> dict:
     failures: dict[str, list[str]] = {}
     compiled = 0
+    refused = refused_calls()
     for path in transform_files():
         code = path.read_text(encoding="utf-8", errors="replace")
         if not DEF_TRANSFORM.search(code):
             continue
         compiled += 1
-        errs = compile_errors(code)
+        errs = compile_errors(code) + runtime_refusals(code, refused)
         if errs:
             failures[str(path.relative_to(ROOT))] = errs
     return {"compiled": compiled, "failures": failures}
@@ -124,7 +179,9 @@ def main() -> int:
     if failures:
         print("\n✗ these transforms pass every plain-Python gate and are dead on arrival in "
               "production. Rename underscore-prefixed names; replace `x[k] += v` with "
-              "`x[k] = x[k] + v`; replace `nonlocal` with a mutable container.")
+              "`x[k] = x[k] + v`; replace `nonlocal` with a mutable container; replace "
+              "strftime with isoformat, strptime with fromisoformat, date.today() with "
+              "datetime.now().date().")
         return 1
     print("\n✓ every transform compiles in the production sandbox")
     return 0
@@ -151,7 +208,28 @@ def self_test() -> int:
                            "def transform(input):\n    return {'isX': bool(_listify(_parse_input(input)))}\n", False),
         "clean.py": ("def transform(input):\n    c = {'n': 0}\n    c['n'] = c['n'] + 1\n"
                      "    return {'isX': False}\n", False),
+        "strftime_call.py": ("from datetime import datetime\ndef transform(input):\n"
+                             "    return {'isX': False, 'at': datetime.now().strftime('%Y')}\n", True),
+        "strptime_swallowed.py": ("from datetime import datetime\ndef transform(input):\n    try:\n"
+                                  "        d = datetime.strptime('2026-01-01', '%Y-%m-%d')\n"
+                                  "    except Exception:\n        d = None\n    return {'isX': d is not None}\n", True),
+        "date_today.py": ("from datetime import date\ndef transform(input):\n"
+                          "    return {'isX': date.today().year > 2000}\n", True),
+        "fstring_date.py": ("from datetime import datetime\ndef transform(input):\n"
+                            "    return {'isX': False, 'at': f'{datetime.now():%Y-%m-%d}'}\n", True),
+        "iso_dates.py": ("from datetime import datetime\ndef transform(input):\n"
+                         "    d = datetime.fromisoformat('2026-01-01T00:00:00')\n"
+                         "    return {'isX': d < datetime.now(), 'at': d.isoformat(), 'w': f'{3:>4}'}\n", False),
     }
+    # The rule is only as good as the probe: it must refuse what production refuses and
+    # allow the replacements. If the mirror's allowlist drifts, this fails loudly.
+    refused = refused_calls()
+    for name in ("strftime", "strptime", "today", "fstring"):
+        if name not in refused:
+            failures.append(f"probe {name} was not refused by the mirror's import hook")
+    for name in ("isoformat", "fromisoformat", "now"):
+        if name in refused:
+            failures.append(f"probe {name} was refused, but production allows it")
     with tempfile.TemporaryDirectory() as tmp:
         d = pathlib.Path(tmp)
         for name, (src, _) in plants.items():
