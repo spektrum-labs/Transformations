@@ -82,7 +82,9 @@ class DuoIAMLoggingShapesTests(unittest.TestCase):
 
     def test_raw_v2_body_and_wrappers(self):
         for payload in ({"stat": "OK", "response": V2_BODY}, {"apiResponse": V2_BODY}, json.dumps(V2_BODY),
-                        {"data": V2_BODY, "validation": {"status": "valid", "errors": [], "warnings": []}}):
+                        {"data": V2_BODY, "validation": {"status": "valid", "errors": [], "warnings": []}},
+                        {"data": {"stat": "OK", "response": V2_BODY},
+                         "validation": {"status": "valid", "errors": [], "warnings": []}}):
             with self.subTest(payload=str(payload)[:40]):
                 self.assertIs(self.t.transform(payload)["transformedResponse"][KEY], True)
 

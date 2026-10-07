@@ -169,6 +169,13 @@ class DuoAuthenticationLogShapesTests(unittest.TestCase):
         self.assertIs(response["transformedResponse"][KEY], True)
         self.assertEqual(self.summary(response)["endpoint"], "/admin/v2/logs/authentication")
 
+    def test_raw_v2_body_inside_enriched_data_passes(self):
+        enriched = {"data": {"stat": "OK", "response": V2_BODY},
+                    "validation": {"status": "valid", "errors": [], "warnings": []}}
+        response = self.t.transform(enriched)
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertEqual(self.summary(response)["endpoint"], "/admin/v2/logs/authentication")
+
     def test_v2_under_api_response_wrapper_passes(self):
         self.assertIs(self.t.transform({"apiResponse": V2_BODY})["transformedResponse"][KEY], True)
 

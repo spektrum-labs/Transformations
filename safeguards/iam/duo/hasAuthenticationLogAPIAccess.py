@@ -110,6 +110,9 @@ def duo_access_forbidden(data):
 
 def read_auth_logs(data):
     """(endpoint, records, metadata) for a v1 or v2 authentication log body; records [] when none."""
+    if isinstance(data, dict) and isinstance(data.get("response"), dict) \
+            and isinstance(data["response"].get("authlogs"), list):
+        data = data["response"]  # raw v2 body that no wrapper unwrapped (e.g. inside enriched "data")
     if isinstance(data, dict) and isinstance(data.get("authlogs"), list):
         metadata = data.get("metadata")
         return V2_ENDPOINT, data["authlogs"], metadata if isinstance(metadata, dict) else {}
