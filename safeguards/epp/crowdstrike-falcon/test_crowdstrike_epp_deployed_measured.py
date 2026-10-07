@@ -237,3 +237,13 @@ def test_the_threshold_uses_the_exact_ratio_not_the_rounded_one():
 def test_a_list_mixing_host_records_and_bare_ids_is_not_measured():
     records = [host(1, last_seen=ago(1))] + ["a" * 32 for _ in range(99)]
     assert_unevaluated(body(records))
+
+
+@pytest.mark.parametrize("filler", [None, {"foo": "bar"}, "not-a-falcon-device-id"],
+                         ids=["nulls", "non-host dicts", "non-hex strings"])
+def test_a_list_mixing_host_records_with_anything_else_is_not_measured(filler):
+    """Bare IDs were refused, but nulls, junk dicts and other strings still fell out of the share
+    while counting toward the page total, so 1 host beside 99 of them read as a 1-host fleet."""
+    records = [host(1, last_seen=ago(1))] + [filler for _ in range(99)]
+    info = assert_unevaluated(body(records), "99 item(s) that are not host records")
+    assert "nothing was measured" in info["dataCollection"]["errors"][0]

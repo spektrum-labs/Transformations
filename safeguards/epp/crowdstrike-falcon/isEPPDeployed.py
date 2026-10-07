@@ -380,15 +380,21 @@ def evaluate(input):
             device_ids = device_ids + 1
         elif isinstance(item, str):
             other_strings = other_strings + 1
-    # A list carrying BOTH host records and bare IDs is not a whole host-record read: the IDs
-    # would sit outside the share while counting toward the page total, so the partial-read test
-    # would not fire and a 1-host-plus-99-IDs body would be measured as a 1-host fleet. Falcon
-    # does not return mixed lists, but this is the only shape that could measure a subset
-    # without saying so.
+    # A list carrying host records AND anything else is not a whole host-record read: the other
+    # items sit outside the share while counting toward the page total, so the partial-read test
+    # does not fire and a 1-host-plus-99-others body is measured as a 1-host fleet. Falcon does
+    # not return mixed lists, but this is the only shape that could measure a subset without
+    # saying so. Bare device IDs keep their own wording because they are the one mixed shape a
+    # caller could plausibly build; nulls, non-hex strings and dicts that match no HOST_FIELDS
+    # fall to the general guard below.
     if host_records and device_ids > 0:
         return unevaluated("The response mixes " + str(len(host_records)) + " host record(s) with " +
                            str(device_ids) + " bare Falcon device ID(s), so it is not a whole host-record "
                            "read: nothing was measured", validation)
+    if host_records and len(host_records) != len(resources):
+        return unevaluated("The response mixes " + str(len(host_records)) + " host record(s) with " +
+                           str(len(resources) - len(host_records)) + " item(s) that are not host records, "
+                           "so it is not a whole host-record read: nothing was measured", validation)
     if not host_records and device_ids == 0 and other_strings > 0:
         return unevaluated("The response lists " + str(other_strings) + " ID(s) that are not Falcon device IDs "
                            "(32 hex characters) and no host records: this is not a host list (wrong method), so "
