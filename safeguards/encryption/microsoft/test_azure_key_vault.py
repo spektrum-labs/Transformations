@@ -346,12 +346,14 @@ def test_a_vault_body_with_vaultUri_and_no_tenantId_is_still_a_vault():
     assert run(native, "isPrivateLinkEnabled", body) == (False, "success")
 
 
+#: Keys with a reachable pass body. A key whose True verdict is unreachable by design has None
+#: in that slot; parametrising over those would skip, and a skipped test is not a passing test.
+KEYS_WITH_A_PASS_BODY = sorted(k for k in CASES if CASES[k][0] is not None)
+
+
 @pytest.mark.parametrize("loader", RUNNERS)
-@pytest.mark.parametrize("key", ALL_KEYS)
+@pytest.mark.parametrize("key", KEYS_WITH_A_PASS_BODY)
 def test_a_bare_data_wrapper_is_unwrapped(loader, key):
     """Every one of these files unwrapped {"data": {...}} on main, and nothing has confirmed
     which shape Integration-Service sends, because they have never run live."""
-    body = CASES[key][0] if key in CASES and CASES[key][0] is not None else None
-    if body is None:
-        pytest.skip("no reachable pass body for this key")
-    assert run(loader, key, {"data": body}) == (True, "success")
+    assert run(loader, key, {"data": CASES[key][0]}) == (True, "success")
