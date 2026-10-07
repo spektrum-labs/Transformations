@@ -87,7 +87,10 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 # real time span of the records read.
 #
 # Verdict: a successful read proves the credential has authentication log access, so it is
-# True, including an EMPTY list (a quiet window: v2 reads the last 30 days only). False only
+# True, including an EMPTY list (a quiet window: v2 reads the last 30 days only) -- but an empty
+# list passes only when the body proves success (success_proven: Duo's "stat": "OK" envelope or
+# the getAuthLogs returnSpec's authlogs + metadata). An empty list without that proof, an
+# error-marked body or a failed enriched validation is Not evaluated. False only
 # for Duo's 403 / 40301 refusal or records missing timestamp/factor/result/username. A body
 # with no log list at all (an error envelope, a bare error body, None, non-JSON) is Not
 # evaluated: value None with a data-collection error.
@@ -199,6 +202,54 @@ def span_text(oldest, newest):
     return "from " + str(oldest) + " to " + str(newest)
 
 
+def error_marked(body):
+    """True when a dict body says it is an error (an Integration-Service envelope, a Duo FAIL body)."""
+    if not isinstance(body, dict):
+        return False
+    stat = body.get("stat")
+    status = body.get("status")
+    return (body.get("error") not in (None, False) or "errorMessage" in body
+            or body.get("success") is False
+            or (isinstance(stat, str) and stat.upper() == "FAIL")
+            or (isinstance(status, str) and status.lower() == "error"))
+
+
+def success_proven(raw):
+    """True only when the body itself shows Duo answered a log read successfully.
+
+    An empty list is what several failed reads look like (a collection layer defaulting to [],
+    an error envelope carrying an empty data list), so an empty read counts as a pass only with
+    positive proof: Duo's own {"stat": "OK", "response": ...} envelope (v1, or raw v2), or the
+    getAuthLogs returnSpec output {"authlogs": [...], "metadata": {...}}, which Integration-Service
+    builds only for a non-error response. A failed enriched validation is never proof."""
+    body = raw
+    for _ in range(4):
+        if not isinstance(body, dict):
+            return False
+        if error_marked(body):
+            return False
+        if "data" in body and "validation" in body:
+            validation = body.get("validation")
+            if isinstance(validation, dict) and validation.get("status") == "failed":
+                return False
+            body = body.get("data")
+            continue
+        stat = body.get("stat")
+        if isinstance(stat, str) and stat.upper() == "OK" and isinstance(body.get("response"), (list, dict)):
+            return True
+        if isinstance(body.get("authlogs"), list) and isinstance(body.get("metadata"), dict):
+            return True
+        moved = False
+        for key in ("apiResponse", "api_response", "result", "response"):
+            if isinstance(body.get(key), dict):
+                body = body[key]
+                moved = True
+                break
+        if not moved:
+            return False
+    return False
+
+
 def transform(input):
     if isinstance(input, (str, bytes)):
         try:
@@ -206,6 +257,13 @@ def transform(input):
         except ValueError:
             input = {}
     data, validation = extract_input(input)
+    if validation.get("status") == "failed":
+        return create_response(
+            result={"hasAuthenticationLogAPIAccess": None, "totalRecords": None},
+            validation=validation,
+            api_errors=["Input validation failed; the authentication log body is not evidence"],
+            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
+        )
     if duo_access_forbidden(data):
         # A measured FAIL, not an error: Duo answered the question.
         return create_response(
@@ -234,6 +292,11 @@ def transform(input):
         )
 
     endpoint, records, log_metadata = read_auth_logs(data)
+    if endpoint is not None and (error_marked(data) or error_marked(input)
+                                 or (not records and not success_proven(input))):
+        # An error-marked body, or an empty list with nothing showing Duo answered successfully,
+        # is not a read: Not evaluated, never a pass from an empty default.
+        endpoint = None
     if endpoint is None:
         # No authentication log list at all (an Integration-Service error envelope, a bare Duo
         # error body, None, non-JSON): nothing was read, so nothing is judged.
