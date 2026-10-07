@@ -105,6 +105,14 @@ def test_a_connected_standby_is_not_counted():
     assert outcome(body, load_plain()) == (True, "success")
 
 
+def test_a_disconnected_primary_still_fails_when_the_standby_is_also_offline():
+    """The standby interpretation only matters where it could flip the verdict to a pass.
+    A counted firewall that is already offline fails the fleet however the standby reads."""
+    body = page([firewall(0, connected=False, cluster=("activePassive", "primary")),
+                 firewall(1, connected=False, cluster=("activePassive", "auxiliary"))])
+    assert outcome(body, load_plain()) == (False, "success")
+
+
 def test_a_disconnected_standby_is_not_evaluated_rather_than_excluded():
     """Excluding the standby is an interpretation; the docs do not say whether a standby
     reports itself connected. Excluding one that says DISCONNECTED would let that
