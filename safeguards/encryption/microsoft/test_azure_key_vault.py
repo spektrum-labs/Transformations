@@ -326,3 +326,32 @@ def test_managed_identity_reports_its_evidence():
     out = native("isManagedIdentityUsed")(edited(ROLE_ASSIGNMENTS, service_principal))
     assert out["transformedResponse"]["servicePrincipalAssignmentCount"] == 1
     assert out["transformedResponse"]["roleAssignmentCount"] == 3
+
+
+# --- review findings on #1066 -------------------------------------------------------------
+
+def test_a_deny_all_firewall_is_not_public_access_disabled():
+    """The vault keeps its public endpoint: bypass AzureServices still admits trusted Microsoft
+    services, and service-endpoint VNet rules still arrive over it. Microsoft's own built-in
+    policy tests publicNetworkAccess alone, and deny-all is what isFirewallEnabled measures."""
+    body = vault(publicNetworkAccess="Enabled", networkAcls=ACLS_DENY)
+    assert run(native, "isPublicNetworkAccessDisabled", body) == (False, "success")
+    assert run(native, "isFirewallEnabled", body) == (True, "success")
+
+
+def test_a_vault_body_with_vaultUri_and_no_tenantId_is_still_a_vault():
+    body = vault(publicNetworkAccess="Disabled")
+    body["properties"].pop("tenantId", None)
+    assert body["properties"].get("vaultUri")
+    assert run(native, "isPrivateLinkEnabled", body) == (False, "success")
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+@pytest.mark.parametrize("key", ALL_KEYS)
+def test_a_bare_data_wrapper_is_unwrapped(loader, key):
+    """Every one of these files unwrapped {"data": {...}} on main, and nothing has confirmed
+    which shape Integration-Service sends, because they have never run live."""
+    body = CASES[key][0] if key in CASES and CASES[key][0] is not None else None
+    if body is None:
+        pytest.skip("no reachable pass body for this key")
+    assert run(loader, key, {"data": body}) == (True, "success")
