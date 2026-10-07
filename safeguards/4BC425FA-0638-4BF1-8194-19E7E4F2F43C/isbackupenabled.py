@@ -12,6 +12,9 @@ Evaluates whether backups are enabled for AWS resources including:
 import json
 from datetime import datetime
 
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "isBackupEnabled"
+
 
 # ============================================================================
 # Response Helpers (inline for RestrictedPython compatibility)
@@ -62,12 +65,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if metadata:
         response_metadata.update(metadata)
 
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -93,6 +100,20 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 # ============================================================================
 # Transformation Logic
 # ============================================================================
+
+#: The getBackups workflow sections this check reads, each with the describe response it must carry.
+SECTIONS = (("dbBackups", "DescribeDBInstanceAutomatedBackupsResponse"),
+            ("dbManualSnapshots", "DescribeDBSnapshotsResponse"),
+            ("volumeSnapshots", "DescribeSnapshotsResponse"))
+
+
+def unread_sections(data, sections):
+    """The workflow sections that did not come back as a describe response: absent, null or an error
+    envelope. A reading that lacks one of them has not looked at that kind of backup."""
+    if not isinstance(data, dict):
+        return [name for name, response in sections]
+    return [name for name, response in sections
+            if not (isinstance(data.get(name), dict) and isinstance(data[name].get(response), dict))]
 
 def transform(input):
     """
@@ -123,11 +144,13 @@ def transform(input):
         # Early return if schema validation failed
         if validation.get("status") == "failed":
             return create_response(
-                result={"isBackupEnabled": False},
+                result={"isBackupEnabled": None},
                 validation=validation,
                 fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
                 recommendations=["Verify the AWS integration is configured correctly"]
             )
+
+        unread = unread_sections(data, SECTIONS)
 
         # Extract backup data with safe defaults (handle explicit None values)
         db_backups = data.get("dbBackups") or {}
@@ -230,6 +253,16 @@ def transform(input):
         total_backups = automated_backup_count + manual_snapshot_count + volume_snapshot_count
         is_backup_enabled = total_backups > 0
 
+        # A backup found in what was read is evidence; finding none only counts when every section was read.
+        if unread and not is_backup_enabled:
+            return create_response(
+                result={"isBackupEnabled": None},
+                validation=validation,
+                api_errors=[", ".join(unread) + " did not return a describe response, so those backups were not read"],
+                fail_reasons=["Not measured: " + ", ".join(unread) + " did not return a describe response, so those backups were not read"],
+                recommendations=["Confirm the AWS credential can call the describe APIs and that each returned a 2xx body."]
+            )
+
         if not is_backup_enabled:
             fail_reasons.append("No backups or snapshots found")
             recommendations.append("Implement a backup strategy for your AWS resources")
@@ -259,13 +292,13 @@ def transform(input):
 
     except json.JSONDecodeError as e:
         return create_response(
-            result={"isBackupEnabled": False},
+            result={"isBackupEnabled": None},
             validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
             fail_reasons=["Could not parse input as valid JSON"]
         )
     except Exception as e:
         return create_response(
-            result={"isBackupEnabled": False},
+            result={"isBackupEnabled": None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

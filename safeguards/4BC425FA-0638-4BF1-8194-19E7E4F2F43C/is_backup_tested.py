@@ -9,6 +9,9 @@ Checks whether any backups have been tested via restore operations.
 import json
 from datetime import datetime
 
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "isBackupTested"
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -44,12 +47,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     """
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -78,8 +85,30 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def vendor_error(data):
+    """The vendor's own error message when the body is an error envelope, else None."""
+    if data is None:
+        return "No response body"
+    if not isinstance(data, dict):
+        return None
+    for key in ["error", "errors", "Error", "ErrorResponse", "__type", "errorType", "errorCode"]:
+        value = data.get(key)
+        if value:
+            if isinstance(value, dict):
+                inner = value.get("Error") if isinstance(value.get("Error"), dict) else value
+                return str(inner.get("Message") or inner.get("message") or inner.get("Code") or value)
+            return "%s: %s" % (value, data.get("Message") or data.get("message") or "")
+    code = data.get("statusCode", data.get("status_code"))
+    try:
+        if code is not None and int(code) >= 400:
+            return "HTTP %s" % code
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def transform(input):
-    criteriaKey = "isBackupTested"
+    criteriaKey = CRITERIA_KEY
 
     try:
         if isinstance(input, str):
@@ -91,7 +120,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -103,8 +132,18 @@ def transform(input):
         # Navigate to event list. AWS CloudTrail returns events wrapped in
         # {Events: {member: [...]}}, where `member` may be a list (multiple
         # events) or a single dict (one event). Either shape is valid.
-        api_response = data.get("apiResponse", data) if isinstance(data, dict) else {}
-        lookup_response = api_response.get("LookupEventsResponse") or {}
+        api_response = data.get("apiResponse", data) if isinstance(data, dict) else data
+        error = vendor_error(api_response)
+        lookup_response = api_response.get("LookupEventsResponse") if isinstance(api_response, dict) else None
+        if error is None and not isinstance(lookup_response, dict):
+            error = "Response has no LookupEventsResponse; CloudTrail restore events were not read"
+        if error is not None:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=[error],
+                fail_reasons=["Not measured: " + error]
+            )
         lookup_result = lookup_response.get("LookupEventsResult") or {}
         events_container = lookup_result.get("Events") or {}
         event_members = events_container.get("member") if isinstance(events_container, dict) else events_container
@@ -208,7 +247,7 @@ def transform(input):
         # - validationErrors: Schema validation issues (from Pydantic)
         # - transformationErrors: Runtime execution errors in transformation logic
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

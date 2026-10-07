@@ -9,6 +9,9 @@ Checks whether logging is enabled for backup operations.
 import json
 from datetime import datetime
 
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "isBackupLoggingEnabled"
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -32,12 +35,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -66,8 +73,21 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+#: The getBackups workflow sections this check reads, each with the describe response it must carry.
+SECTIONS = (("dbBackups", "DescribeDBInstanceAutomatedBackupsResponse"),
+            ("dbManualSnapshots", "DescribeDBSnapshotsResponse"))
+
+
+def unread_sections(data, sections):
+    """The workflow sections that did not come back as a describe response: absent, null or an error
+    envelope. A reading that lacks one of them has not looked at that kind of backup."""
+    if not isinstance(data, dict):
+        return [name for name, response in sections]
+    return [name for name, response in sections
+            if not (isinstance(data.get(name), dict) and isinstance(data[name].get(response), dict))]
+
 def transform(input):
-    criteriaKey = "isBackupLoggingEnabled"
+    criteriaKey = CRITERIA_KEY
 
     try:
         if isinstance(input, str):
@@ -79,7 +99,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -88,8 +108,9 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        db_backups = data.get("dbBackups", {}) if isinstance(data, dict) else {}
-        db_manual_snapshots = data.get("dbManualSnapshots", {}) if isinstance(data, dict) else {}
+        unread = unread_sections(data, SECTIONS)
+        db_backups = (data.get("dbBackups") or {}) if isinstance(data, dict) else {}
+        db_manual_snapshots = (data.get("dbManualSnapshots") or {}) if isinstance(data, dict) else {}
 
         # Check for Automated DB Backups
         response = db_backups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
@@ -115,6 +136,16 @@ def transform(input):
         total_db_backups = total_auto_backups + total_manual_backups
         logging_enabled = total_db_backups > 0
 
+        # A backup record found in what was read is evidence; finding none only counts when every section was read.
+        if unread and not logging_enabled:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=[", ".join(unread) + " did not return a describe response, so those backups were not read"],
+                fail_reasons=["Not measured: " + ", ".join(unread) + " did not return a describe response, so those backups were not read"],
+                recommendations=["Confirm the AWS credential can call the describe APIs and that each returned a 2xx body."]
+            )
+
         if logging_enabled:
             pass_reasons.append(f"Backup logging is enabled ({total_db_backups} backup records found)")
         else:
@@ -136,7 +167,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
