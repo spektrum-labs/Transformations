@@ -73,6 +73,16 @@ def test_a_native_technician_fails_even_beside_an_unrecognised_auth_type():
     assert verdict([tech("NATIVE"), tech("SAML")]) == (False, "success")
 
 
+def test_an_active_technician_without_a_usable_auth_type_is_not_measured():
+    missing = tech("NATIVE")
+    del missing["authType"]
+    assert verdict([tech("SSO"), tech("NATIVE", authType=None)]) == (None, "error")
+    assert verdict([tech("SSO"), missing]) == (None, "error")
+    assert verdict([tech("SSO"), tech("NATIVE", authType=5)]) == (None, "error")
+    # an inactive record without authType does not block the pass
+    assert verdict([tech("SSO"), tech("NATIVE", enabled=False, authType=None)]) == (True, "success")
+
+
 def test_a_data_wrapped_technician_list_is_read():
     assert verdict({"data": [tech("SSO")]}) == (True, "success")
 
