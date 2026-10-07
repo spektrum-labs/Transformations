@@ -43,10 +43,26 @@ def extract_input(input_data):
     return data, validation
 
 
+#: The criterion key Token-Service extracts from this file's transformedResponse. Every
+#: result dict below is built with this same name, so the name that carries the answer and
+#: the name create_response reads to decide whether there WAS an answer cannot drift apart.
+#: That is the whole difference from a separate list of key names, which can be -- and has
+#: been -- left behind when a file gains a key.
+CRITERION = "isEncryptionKeyManaged"
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
+    # Value-keyed, never name-keyed. A criterion reported as None was not measured, and
+    # Token-Service grades an unmeasured criterion as FAILED unless dataCollection.status is
+    # "error" -- which only a non-empty api_errors produces. Deriving that from the criterion's
+    # own value covers the branches nobody thought about, transform()'s except included,
+    # because the branch never has to remember to say so.
+    if not api_errors and isinstance(result, dict) and result.get(CRITERION) is None:
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -121,21 +137,49 @@ REFUSAL_REASONS = {
 }
 
 
+# Anthropic's documented error body carries no HTTP status of its own: it is
+# {"error": {"type": ..., "message": ...}} and the status is on the response. The vendor's
+# guidance is "Match on the HTTP status code and error.type, not on the message string"
+# (compliance-errors.md), so the type is mapped back to the status REFUSAL_REASONS is keyed
+# on. Without this the tailored 403 paragraph -- the one that tells an administrator to swap
+# their key class -- never fires on the shape Anthropic actually sends.
+ERROR_TYPE_STATUS = {
+    "authentication_error": 401,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "rate_limit_error": 429,
+}
+
+
 def detect_refusal(data):
-    """Return (status, why, fix) when the payload is an error envelope, else None."""
+    """Return (status, why, fix) when the payload is an error envelope, else None.
+
+    Three shapes reach a transform: Anthropic's own ({"error": {"type", "message"}}), the
+    generic one (error / errorType / status == "Error" alongside statusCode), and
+    Integration-Service's vendor relay ({"errorMessage", "vendorStatus": 403, ...}), which is
+    what /integration/run returns when the vendor refuses.
+    """
     if not isinstance(data, dict):
         return None
-    if not (data.get("error") or data.get("errorType") or data.get("status") == "Error"):
+    err = data.get("error")
+    relay_status = data.get("vendorStatus")
+    is_relay = "errorMessage" in data or relay_status is not None
+    is_generic = bool(err or data.get("errorType") or data.get("status") == "Error")
+    if not (is_relay or is_generic):
         return None
-    status = data.get("statusCode") or data.get("status_code")
+    status = relay_status if relay_status is not None else (data.get("statusCode") or data.get("status_code"))
     try:
         status = int(status)
     except (TypeError, ValueError):
         status = None
+    if status is None and isinstance(err, dict):
+        status = ERROR_TYPE_STATUS.get(err.get("type"))
     why, fix = REFUSAL_REASONS.get(status, (
         "the vendor call did not succeed",
         "Inspect the integration method response for the underlying error."))
-    detail = data.get("message") or data.get("errorMessage") or ""
+    detail = data.get("errorMessage") or data.get("message") or ""
+    if not detail and isinstance(err, dict):
+        detail = err.get("message") or ""
     if detail:
         why = why + " (" + str(detail) + ")"
     return status, why, fix
@@ -184,7 +228,7 @@ def evaluate(input):
     if refusal:
         refusal_status, refusal_why, refusal_fix = refusal
         return create_response(
-            result={"isEncryptionKeyManaged": False, "endpointReachable": False, "httpStatus": refusal_status},
+            result={"isEncryptionKeyManaged": None, "endpointReachable": False, "httpStatus": refusal_status},
             validation=validation,
             fail_reasons=[
                 "The vendor call did not return data because " + refusal_why +
@@ -211,7 +255,7 @@ def evaluate(input):
 
     if not active:
         return create_response(
-            result={"isEncryptionKeyManaged": False, "activeWorkspaceCount": 0,
+            result={"isEncryptionKeyManaged": None, "activeWorkspaceCount": 0,
                     "workspacesWithoutCMEK": 0, "unprotectedWorkspaces": []},
             validation=validation,
             fail_reasons=[
@@ -220,6 +264,27 @@ def evaluate(input):
             ],
             recommendations=["Confirm the credential is an Admin API key for a Claude Console organization."],
             input_summary={"workspacesReturned": len(items), "activeWorkspaceCount": 0},
+            metadata=METADATA,
+        )
+
+    # external_key_id is write-once and absent until a CMEK is attached, so its absence on a
+    # single workspace is a real finding -- but its absence on EVERY workspace is equally what
+    # a response that carries no workspace detail at all looks like. Require at least one
+    # object to look like a workspace record before reading absences as findings.
+    described = [w for w in active if w.get("id") or w.get("name")]
+    if not described:
+        return create_response(
+            result={"isEncryptionKeyManaged": None, "activeWorkspaceCount": len(active),
+                    "workspacesWithoutCMEK": 0, "unprotectedWorkspaces": []},
+            validation=validation,
+            fail_reasons=[
+                "The " + str(len(active)) + " workspace object(s) returned carry neither an id "
+                "nor a name, so this is not a workspace list this transform can read and "
+                "encryption key management was not measured."
+            ],
+            recommendations=["Inspect the raw listWorkspaces response."],
+            input_summary={"workspacesReturned": len(items), "activeWorkspaceCount": len(active),
+                           "workspacesDescribed": 0},
             metadata=METADATA,
         )
 
@@ -278,7 +343,7 @@ def transform(input):
         return evaluate(input)
     except Exception as exc:  # never raise into the pipeline
         return create_response(
-            result={"isEncryptionKeyManaged": False},
+            result={"isEncryptionKeyManaged": None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
