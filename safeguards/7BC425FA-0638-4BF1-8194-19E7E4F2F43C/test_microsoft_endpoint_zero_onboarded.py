@@ -139,13 +139,13 @@ def test_empty_assessment_stays_not_evaluated_and_claims_nothing_about_devices()
 
 
 def test_assessment_with_no_applicable_device_names_the_count():
-    rows = [{"DeviceId": "d" + str(i), "DeviceName": "n", "ConfigurationId": "scid-2010",
+    rows = [{"DeviceId": "d" + str(i), "DeviceName": "n", "ConfigurationId": "scid-2003",
              "IsCompliant": None, "IsApplicable": 0} for i in range(3)]
     result = out(SCID, hunting(rows))
     assert result["transformedResponse"]["isTamperProtectionEnabled"] is None
     assert result["additionalInfo"]["dataCollection"]["errors"] == [
         "Defender for Endpoint's secure-configuration assessment lists 3 devices for tamper protection "
-        "(scid-2010) and none is applicable, so Defender for Endpoint does not measure tamper protection here"]
+        "(scid-2003) and none is applicable, so Defender for Endpoint does not measure tamper protection here"]
 
 
 # ---- tenants with onboarded machines keep their values
