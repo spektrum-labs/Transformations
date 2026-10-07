@@ -1,0 +1,2307 @@
+{
+ "_source": "Real customer tenant (anonymised) queryOffice365Events stored raw response, evaluation 2026-09-25; first page (100 of recordsNumber 10000). Scrubbed: addresses, labels, subjects, ids, IPs (192.0.2.1 is RFC 5737). Scalars keep the stored-raw string form (\"None\", \"2\").",
+ "responseEnvelope": {
+  "requestId": "00000000-0000-0000-0000-000000000000",
+  "responseCode": "200",
+  "responseText": "",
+  "additionalText": "",
+  "recordsNumber": "10000",
+  "scrollId": "scroll"
+ },
+ "responseData": [
+  {
+   "eventId": "evt000",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent000",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T01:03:40.844231+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T01:03:52.630089Z",
+     "relatedEntityId": "evt000"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt001",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent001",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T01:09:40.948232+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T01:09:42.405528Z",
+     "relatedEntityId": "evt001"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt002",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent002",
+   "state": "detected",
+   "type": "dlp",
+   "confidenceIndicator": "detected",
+   "eventCreated": "2026-08-26T01:46:42.114597+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_dlp\", \"disable_link\": true} has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_dlp\", \"disable_link\": true} leak in '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "send_email_to_admin_email_dlp",
+     "createTime": "2026-08-26T01:46:47.369940Z",
+     "relatedEntityId": "evt002"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt003",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent003",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T01:53:04.221666+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T01:53:05.352004Z",
+     "relatedEntityId": "evt003"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt004",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent004",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T02:08:18.928708+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T02:08:39.615773Z",
+     "relatedEntityId": "evt004"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt005",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent005",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T02:14:15.529694+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T02:14:16.350122Z",
+     "relatedEntityId": "evt005"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt006",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent006",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T02:49:59.066709+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T02:49:59.917013Z",
+     "relatedEntityId": "evt006"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt007",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent007",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T02:58:00.392526+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T02:58:00.798271Z",
+     "relatedEntityId": "evt007"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt008",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent008",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T03:51:13.676921+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T03:51:14.050844Z",
+     "relatedEntityId": "evt008"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt009",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent009",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T03:58:18.229197+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T03:58:42.159406Z",
+     "relatedEntityId": "evt009"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt010",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent010",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T03:59:18.915918+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T03:59:20.175356Z",
+     "relatedEntityId": "evt010"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt011",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent011",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T04:14:17.392654+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T04:14:18.569825Z",
+     "relatedEntityId": "evt011"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt012",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent012",
+   "state": "new",
+   "type": "anomaly",
+   "confidenceIndicator": "detected",
+   "eventCreated": "2026-08-26T04:17:48+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "#{\"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"label\": \"x\"} performed geo-suspicious events: #{\"entity_id\": \"e\", \"entity_type\": \"office365_mgmnt_event\", \"label\": \"x\"} from Australia (192.0.2.1) and after 5 hours, 21 minutes #{\"entity_id\": \"e\", \"entity_type\": \"office365_mgmnt_event\", \"label\": \"x\"} from United States (192.0.2.1)",
+   "availableEventActions": "None",
+   "actions": [],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt013",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent013",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T07:02:23.392611+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T07:02:24.722490Z",
+     "relatedEntityId": "evt013"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt014",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent014",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T07:04:27.313786+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T07:04:28.549943Z",
+     "relatedEntityId": "evt014"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt015",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent015",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T07:38:35.062357+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T07:38:36.616095Z",
+     "relatedEntityId": "evt015"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt016",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent016",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:00:30.978192+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:00:33.380134Z",
+     "relatedEntityId": "evt016"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt017",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent017",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:00:36.830234+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:00:38.068623Z",
+     "relatedEntityId": "evt017"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt018",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent018",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:00:42.053907+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:00:44.070971Z",
+     "relatedEntityId": "evt018"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt019",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent019",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:00:48.006685+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:00:50.032311Z",
+     "relatedEntityId": "evt019"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt020",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent020",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:00:50.263600+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:00:51.974385Z",
+     "relatedEntityId": "evt020"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt021",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent021",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:08:15.395355+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:08:16.457137Z",
+     "relatedEntityId": "evt021"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt022",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent022",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:12:10.316269+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:12:11.970752Z",
+     "relatedEntityId": "evt022"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt023",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent023",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:19:34.939387+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:19:35.717449Z",
+     "relatedEntityId": "evt023"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt024",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent024",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T08:20:12.550855+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T08:20:14.336117Z",
+     "relatedEntityId": "evt024"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt025",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent025",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T08:54:26.755416+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T08:56:29.941938Z",
+     "relatedEntityId": "evt025"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt026",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent026",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T08:54:26.757855+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T08:54:32.546600Z",
+     "relatedEntityId": "evt026"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt027",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent027",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T08:54:28.213062+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T08:54:47.851457Z",
+     "relatedEntityId": "evt027"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt028",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent028",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T09:15:11.753726+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T09:15:13.076681Z",
+     "relatedEntityId": "evt028"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt029",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent029",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T10:01:01.870384+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T10:01:03.309017Z",
+     "relatedEntityId": "evt029"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt030",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent030",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:01:23.260528+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:01:23.963184Z",
+     "relatedEntityId": "evt030"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt031",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent031",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T10:02:28.419280+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T10:02:30.852098Z",
+     "relatedEntityId": "evt031"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt032",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent032",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:03:28.721534+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:03:32.059673Z",
+     "relatedEntityId": "evt032"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt033",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent033",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:07:45.117463+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:07:46.822516Z",
+     "relatedEntityId": "evt033"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt034",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent034",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T10:33:27.668952+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T10:33:43.623444Z",
+     "relatedEntityId": "evt034"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt035",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent035",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:34:03.336091+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:34:04.465653Z",
+     "relatedEntityId": "evt035"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt036",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent036",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:35:48.738821+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:35:49.520851Z",
+     "relatedEntityId": "evt036"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt037",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent037",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:37:51.996110+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:37:52.795849Z",
+     "relatedEntityId": "evt037"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt038",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent038",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:40:53.469598+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:40:54.349757Z",
+     "relatedEntityId": "evt038"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt039",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent039",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T10:48:57.984726+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T10:49:00.521969Z",
+     "relatedEntityId": "evt039"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt040",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent040",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T10:52:27.458711+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T10:52:28.171756Z",
+     "relatedEntityId": "evt040"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt041",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent041",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:02:20.835551+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T11:02:36.531324Z",
+     "relatedEntityId": "evt041"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt042",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent042",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:02:20.836466+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T11:02:29.871359Z",
+     "relatedEntityId": "evt042"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt043",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent043",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:02:21.457066+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T11:02:29.566570Z",
+     "relatedEntityId": "evt043"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt044",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent044",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:06:12.614739+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:06:13.948470Z",
+     "relatedEntityId": "evt044"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt045",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent045",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:07:46.804258+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:07:49.136146Z",
+     "relatedEntityId": "evt045"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt046",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent046",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:09:43.049404+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:09:44.076848Z",
+     "relatedEntityId": "evt046"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt047",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent047",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:11:00.187236+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:11:01.107691Z",
+     "relatedEntityId": "evt047"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt048",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent048",
+   "state": "remediated",
+   "type": "phishing",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:19:17.763055+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T11:19:23.733571Z",
+     "relatedEntityId": "evt048"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt049",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent049",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:29:17.697349+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:29:18.513876Z",
+     "relatedEntityId": "evt049"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt050",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent050",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:33:58.399417+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:34:00.125586Z",
+     "relatedEntityId": "evt050"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt051",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent051",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:37:08.177102+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:37:09.315384Z",
+     "relatedEntityId": "evt051"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt052",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent052",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T11:38:39.318642+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T11:38:40.362946Z",
+     "relatedEntityId": "evt052"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt053",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent053",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:45:58.060345+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T11:45:59.205742Z",
+     "relatedEntityId": "evt053"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt054",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent054",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:46:25.761295+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T11:46:27.861963Z",
+     "relatedEntityId": "evt054"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt055",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent055",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:47:37.417865+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T11:47:38.196485Z",
+     "relatedEntityId": "evt055"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt056",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent056",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T11:48:56.990848+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T11:48:58.712838Z",
+     "relatedEntityId": "evt056"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt057",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent057",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:00:12.047339+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T12:00:13.965224Z",
+     "relatedEntityId": "evt057"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt058",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent058",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:01:58.293601+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:02:00.109755Z",
+     "relatedEntityId": "evt058"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt059",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent059",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:02:31.358688+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:02:33.992757Z",
+     "relatedEntityId": "evt059"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt060",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent060",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:03:32.841098+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:03:33.943572Z",
+     "relatedEntityId": "evt060"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt061",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent061",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:04:23.448205+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T12:08:06.124718Z",
+     "relatedEntityId": "evt061"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt062",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent062",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:04:25.107372+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T12:04:27.780230Z",
+     "relatedEntityId": "evt062"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt063",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent063",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:08:10.889146+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T12:08:32.582706Z",
+     "relatedEntityId": "evt063"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt064",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent064",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:08:45.699134+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:08:59.288458Z",
+     "relatedEntityId": "evt064"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt065",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent065",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:08:47.357136+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:08:49.141069Z",
+     "relatedEntityId": "evt065"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt066",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent066",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:08:55.475964+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:08:57.637801Z",
+     "relatedEntityId": "evt066"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt067",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent067",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:10:42.063201+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:10:43.602126Z",
+     "relatedEntityId": "evt067"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt068",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent068",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:12:25.682177+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:12:26.165995Z",
+     "relatedEntityId": "evt068"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt069",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent069",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:15:35.183031+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:15:35.839546Z",
+     "relatedEntityId": "evt069"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt070",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent070",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:16:52.119696+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T12:16:53.660389Z",
+     "relatedEntityId": "evt070"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt071",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent071",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:22:27.406703+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:22:27.916573Z",
+     "relatedEntityId": "evt071"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt072",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent072",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:24:46.623677+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:24:47.210208Z",
+     "relatedEntityId": "evt072"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt073",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent073",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:25:20.242819+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:25:21.650001Z",
+     "relatedEntityId": "evt073"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt074",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent074",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:26:12.786805+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:26:13.533925Z",
+     "relatedEntityId": "evt074"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt075",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent075",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:26:26.700277+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:26:27.194080Z",
+     "relatedEntityId": "evt075"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt076",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent076",
+   "state": "remediated",
+   "type": "phishing",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:26:40.754755+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T12:26:52.710097Z",
+     "relatedEntityId": "evt076"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt077",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent077",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:26:51.357077+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:26:52.174178Z",
+     "relatedEntityId": "evt077"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt078",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent078",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:27:30.600326+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:27:31.970865Z",
+     "relatedEntityId": "evt078"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt079",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent079",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:28:49.181308+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:28:49.817463Z",
+     "relatedEntityId": "evt079"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt080",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent080",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:37:27.979757+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:37:28.648203Z",
+     "relatedEntityId": "evt080"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt081",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent081",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:41:26.495368+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T12:41:26.901264Z",
+     "relatedEntityId": "evt081"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt082",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent082",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:45:24.847875+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:45:26.951218Z",
+     "relatedEntityId": "evt082"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt083",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent083",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:50:42.135797+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T12:50:43.703065Z",
+     "relatedEntityId": "evt083"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt084",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent084",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T12:52:33.457118+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T12:52:35.273682Z",
+     "relatedEntityId": "evt084"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt085",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent085",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T12:57:50.647096+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T12:57:52.378255Z",
+     "relatedEntityId": "evt085"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt086",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent086",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:00:48.533973+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:00:53.995635Z",
+     "relatedEntityId": "evt086"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt087",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent087",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:01:23.172465+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:01:25.062277Z",
+     "relatedEntityId": "evt087"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt088",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent088",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:01:23.858138+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:01:25.153729Z",
+     "relatedEntityId": "evt088"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt089",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent089",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:01:28.900500+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:01:30.071615Z",
+     "relatedEntityId": "evt089"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt090",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent090",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:01:35.678284+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:01:37.165005Z",
+     "relatedEntityId": "evt090"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt091",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent091",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T13:01:56.880715+00:00",
+   "severity": "3",
+   "description": "<redacted>",
+   "data": "Microsoft has detected #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"ms_defender_scan\"} in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "quarantine_email",
+     "createTime": "2026-08-26T13:02:16.568977Z",
+     "relatedEntityId": "evt091"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt092",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent092",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T13:02:30.081605+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T13:02:39.536752Z",
+     "relatedEntityId": "evt092"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt093",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent093",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:02:38.838191+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:02:40.283888Z",
+     "relatedEntityId": "evt093"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt094",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent094",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:02:57.101179+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:02:58.449256Z",
+     "relatedEntityId": "evt094"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt095",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent095",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T13:03:03.071376+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T13:03:06.194690Z",
+     "relatedEntityId": "evt095"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt096",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent096",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T13:03:15.315952+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T13:03:18.157360Z",
+     "relatedEntityId": "evt096"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt097",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent097",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:03:18.306898+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:03:19.891805Z",
+     "relatedEntityId": "evt097"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt098",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent098",
+   "state": "remediated",
+   "type": "graymail",
+   "confidenceIndicator": "graymail",
+   "eventCreated": "2026-08-26T13:03:19.967587+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_graymail_header",
+     "createTime": "2026-08-26T13:03:21.512598Z",
+     "relatedEntityId": "evt098"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  },
+  {
+   "eventId": "evt099",
+   "customerId": "example",
+   "saas": "office365_emails",
+   "entityId": "ent099",
+   "state": "remediated",
+   "type": "spam",
+   "confidenceIndicator": "malicious",
+   "eventCreated": "2026-08-26T13:03:20.244620+00:00",
+   "severity": "2",
+   "description": "<redacted>",
+   "data": "#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"avanan_ap_scan\"} attempt detected in an email from #{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\", \"disable_link\": true} - '#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_email\"}' (#{\"label\": \"x\", \"entity_id\": \"e\", \"entity_type\": \"office365_emails_user\"}'s mailbox)",
+   "availableEventActions": "None",
+   "actions": [
+    {
+     "actionType": "add_spam_header",
+     "createTime": "2026-08-26T13:03:27.938509Z",
+     "relatedEntityId": "evt099"
+    }
+   ],
+   "senderAddress": "<redacted>",
+   "entityLink": "<redacted>"
+  }
+ ]
+}
