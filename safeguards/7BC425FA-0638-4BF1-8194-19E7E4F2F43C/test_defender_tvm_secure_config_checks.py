@@ -1,5 +1,6 @@
 """Defender Vulnerability Management secure-configuration checks (EP-005 / EP-007):
-smbV1EnabledDeviceCount, isWDigestDisabled, isNTLMv1Disabled, isSMBSigningRequired.
+smbV1EnabledDeviceCount, isWDigestDisabled, isNTLMv1Disabled, isSMBSigningRequired,
+isScreenLockWithin15MinutesEnforced.
 
 Fixtures follow the advanced-hunting response shape ({"Schema": [...], "Results": [...]}) of the query each
 new One-Click method runs (DeviceTvmSecureConfigurationAssessment joined with its KB table). Every check is
@@ -19,6 +20,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 NAMES = {
     "scid-53": "Disable SMBv1 client driver",
     "scid-54": "Disable SMBv1 server",
+    "scid-28": "Set 'Interactive logon: Machine inactivity limit' to '900 or fewer second(s), but not 0'",
     "scid-57": "Disable 'WDigest Authentication'",
     "scid-72": "Set LAN Manager authentication level to 'Send NTLMv2 response only. Refuse LM & NTLM'",
     "scid-95": "Enable 'Microsoft network client: Digitally sign communications (always)'",
@@ -30,10 +32,11 @@ CHECKS = {
     "iswdigestdisabled": ("isWDigestDisabled", ("scid-57",)),
     "isntlmv1disabled": ("isNTLMv1Disabled", ("scid-72",)),
     "issmbsigningrequired": ("isSMBSigningRequired", ("scid-95", "scid-9999")),
+    "isscreenlockwithin15minutesenforced": ("isScreenLockWithin15MinutesEnforced", ("scid-28",)),
 }
 
 SAFE = {"smbV1EnabledDeviceCount": 0, "isWDigestDisabled": True, "isNTLMv1Disabled": True,
-        "isSMBSigningRequired": True}
+        "isSMBSigningRequired": True, "isScreenLockWithin15MinutesEnforced": True}
 
 
 def load_plain(name):
@@ -244,7 +247,7 @@ def test_module_declares_none_means_not_evaluated(name):
 
 
 def test_keys_are_new_and_no_existing_transform_emits_them():
-    """Additive only: no transform outside these four files names these keys, so wiring them cannot change any
+    """Additive only: no transform outside these files names these keys, so wiring them cannot change any
     existing check's output."""
     keys = [CHECKS[n][0] for n in CHECKS]
     ours = set(os.path.join(HERE, n + ".py") for n in CHECKS)
@@ -305,3 +308,29 @@ def test_a_name_only_part_needs_a_well_formed_id(bad_id):
     rows = [row("ws-01", "scid-95"),
             row("ws-01", bad_id, name="Enable 'Microsoft network server: Digitally sign communications (always)'")]
     assert value("issmbsigningrequired", result(rows))[0] is None
+
+
+def test_screen_lock_reads_only_the_pinned_id_under_its_knowledge_base_name():
+    """scid-28 counts only while its KB name says "machine inactivity limit"; another id carrying that name, or
+    scid-28 under another name (or none: the tenant's KB lacks it), is Not evaluated, never passed."""
+    name = "isscreenlockwithin15minutesenforced"
+    good = [row(d, "scid-28") for d in ("ws-01", "ws-02")]
+    assert value(name, result(good))[0] is True
+    other_id = [row("ws-01", "scid-9998", name=NAMES["scid-28"])]
+    assert value(name, result(other_id))[0] is None
+    for kb_name in ("Turn on screen saver", "Enable 'Require password on wake'", None, ""):
+        bad = row("ws-01", "scid-28")
+        bad["ConfigurationName"] = kb_name
+        got, out = value(name, result([bad]))
+        assert got is None
+        assert "scid-28" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_screen_lock_names_the_device_over_the_limit():
+    rows = [row("ws-01", "scid-28"), row("ws-02", "scid-28", 1, 0), row("kiosk-01", "scid-28", 0, 0)]
+    got, out = value("isscreenlockwithin15minutesenforced", result(rows))
+    assert got is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "1 of 2 applicable" in reason and "ws-02.example.test" in reason
+    assert "900 seconds or less" in reason
+    assert "Machine inactivity limit" in out["additionalInfo"]["evaluation"]["recommendations"][0]
