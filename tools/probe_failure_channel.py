@@ -20,6 +20,15 @@ Usage:
     probe_failure_channel.py <transform.py> [<criteriaKey> ...]   # keys optional
     probe_failure_channel.py --all <dir>                          # walk a tree
     probe_failure_channel.py --self-test                          # prove it catches a defect
+    probe_failure_channel.py <transform.py> --expect-key isFoo    # assert the RTA's key
+
+Without --expect-key this reports what a file ANSWERS, reading the keys off its own
+returned transformedResponse. With it, it also asserts the file answers what it was WIRED
+to answer: Token-Service extracts transformedResponse[criteriaKey] by exact, case-sensitive
+match, so a right value under a wrong name is a miss, not a pass -- extraction falls through
+and the comparison proceeds against the wrong shape. Pass the key from the integration's
+retrievalTransformationArray row, not from the filename (see the note below on why the
+filename cannot be trusted).
 
 Exits 1 when any file is graded at runtime, so it can gate CI unchanged.
 
@@ -105,21 +114,31 @@ def probe(path):
 DECORATIVE = {"error", "reason", "httpStatus", "endpointReachable", "evaluatedAt"}
 
 
-def report(path, wanted):
-    """Print one line per file. Returns (graded_at_runtime, inconclusive)."""
+def report(path, wanted, expect=()):
+    """Print one line per file. Returns (graded_at_runtime, inconclusive, key_missing).
+
+    `wanted` only selects which keys to display. `expect` is stronger: these are the keys the
+    RTA row CLAIMS this file answers, i.e. the exact names Token-Service will extract. A file
+    that returns the right value under a different name is a miss, not a pass -- extraction
+    falls through and the comparison proceeds against the wrong shape.
+    """
     status, dc, tx, vals = probe(path)
     name = os.path.relpath(path)
     if status != "OK":
         # Not a self-reported failure, and not graded either -- Token-Service's own
         # envelope catches a raise. Report it, do not count it as this defect.
         print(f"  ??   {name:<60} {status}")
-        return 0, 1
-    keys = [k for k in (wanted or vals) if k in vals] or sorted(set(vals) - DECORATIVE)
+        return 0, 1, 0
+    absent = [k for k in expect if k not in vals]
+    keys = [k for k in (wanted or expect or vals) if k in vals] or sorted(set(vals) - DECORATIVE)
     shown = ", ".join(f"{k}={vals[k]!r}" for k in keys[:3]) or "(no criterion key returned)"
     graded = str(dc).lower() != "error"
     print(f"  {'FAIL' if graded else 'ok  '} {name:<60} "
           f"dataCollection={dc!r:<10} transformation={tx!r:<10} {shown}")
-    return (1 if graded else 0), 0
+    if absent:
+        print(f"  KEY! {name:<60} expected but not returned: {', '.join(absent)}"
+              f"  (returned: {', '.join(sorted(set(vals) - DECORATIVE)) or 'nothing'})")
+    return (1 if graded else 0), 0, len(absent)
 
 
 SELF_TEST_GRADED = '''
@@ -175,24 +194,35 @@ def main():
         raise SystemExit(__doc__)
     if args[0] == "--self-test":
         self_test()
-    graded = inconclusive = 0
+    # --expect-key K: the key the RTA row claims this file answers. Repeatable. With --all,
+    # applies to every file, so it is normally used with a single path.
+    expect = []
+    while "--expect-key" in args:
+        i = args.index("--expect-key")
+        expect.append(args[i + 1])
+        del args[i:i + 2]
+    graded = inconclusive = keymiss = 0
     if args[0] == "--all":
         for dirpath, dirnames, names in os.walk(args[1]):
             dirnames[:] = [d for d in dirnames if d != "schemas"]   # helper modules, not transforms
             for n in sorted(names):
                 if not n.endswith(".py") or n.startswith("test_") or n == "__init__.py":
                     continue
-                g, i = report(os.path.join(dirpath, n), None)
+                g, i, k = report(os.path.join(dirpath, n), None, expect)
                 graded += g
                 inconclusive += i
+                keymiss += k
     else:
-        graded, inconclusive = report(args[0], args[1:] or None)
+        graded, inconclusive, keymiss = report(args[0], args[1:] or None, expect)
     print(f"\n{graded} file(s) report a crash through a channel evaluate.py never reads, "
           f"and are graded at runtime.")
+    if keymiss:
+        print(f"{keymiss} expected criteria key(s) were not returned at all -- Token-Service's "
+              f"extraction falls through and compares the wrong shape.")
     if inconclusive:
         print(f"{inconclusive} inconclusive (raised, or returned no criterion key) "
               f"-- these need a look, not a verdict.")
-    sys.exit(1 if graded else 0)
+    sys.exit(1 if (graded or keymiss) else 0)
 
 
 if __name__ == "__main__":
