@@ -29,7 +29,13 @@ from datetime import datetime, timezone
 KEY = "isFirewallEnabled"
 
 #: keys the definition routes to this file that its body cannot answer; None on the not-measured path
-ROUTED_HERE = ("isFirewallEnabled", "isFirewallLoggingEnabled", "isFirewallUpdated")
+#: The definition currently routes three criteria to this file. It can answer exactly one.
+#: isFirewallLoggingEnabled would need firewall traffic logging (the wired method reads the
+#: ADMIN audit log, which is a different thing) and isFirewallUpdated needs upgrade packages,
+#: so this file emits NEITHER rather than a None that would be compared as an answer. A row
+#: whose key is absent reads Not evaluated once Token-Service #981 lands; until then those two
+#: rows must be removed or re-pointed, which is tracked in the PR.
+ROUTED_HERE = ("isFirewallEnabled",)
 
 WRAPPERS = ("apiResponse", "api_response", "rawResponse", "response", "result", "Output")
 
@@ -93,7 +99,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def not_measured(validation, reason, summary=None, transformation_errors=None):
-    """Every routed key None: reads Not evaluated, never True or False."""
+    """The answered key as None: reads Not evaluated, never True or False. Every path returns
+    the same key set, so a criterion's shape never depends on whether the body parsed."""
     result = {}
     for k in ROUTED_HERE:
         result[k] = None

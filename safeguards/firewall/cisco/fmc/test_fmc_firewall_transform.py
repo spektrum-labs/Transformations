@@ -15,7 +15,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 FILE = os.path.join(HERE, "firewall_transform.py")
 KEY = "isFirewallEnabled"
-ROUTED_HERE = ("isFirewallEnabled", "isFirewallLoggingEnabled", "isFirewallUpdated")
+# The file answers exactly one criterion. The other two rows the definition points here must be
+# removed or re-pointed; emitting them as None would have them compared as an answer.
+ROUTED_HERE = ("isFirewallEnabled",)
 
 DOC_ASSIGNMENT = {"type": "PolicyAssignment", "id": "policyassignmentUUID",
                   "policy": {"type": "AccessPolicy", "name": "Policy1", "id": "00505691-AED0-0ed3-0000-004294990861"},
