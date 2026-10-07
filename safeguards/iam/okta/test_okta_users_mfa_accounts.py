@@ -316,7 +316,8 @@ def test_json_text_input(run):
 
 def test_transformation_error_branch_is_untouched(run):
     res = run(b"\xff")
-    assert res["transformedResponse"] == {KEY: False, "isMFAEnabled": False}
+    assert res["transformedResponse"] == {KEY: None, "isMFAEnabled": None}
+    assert res["additionalInfo"]["dataCollection"]["status"] == "error"
     assert account_line(res) is None
 
 
