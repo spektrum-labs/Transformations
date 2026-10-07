@@ -380,6 +380,15 @@ def evaluate(input):
             device_ids = device_ids + 1
         elif isinstance(item, str):
             other_strings = other_strings + 1
+    # A list carrying BOTH host records and bare IDs is not a whole host-record read: the IDs
+    # would sit outside the share while counting toward the page total, so the partial-read test
+    # would not fire and a 1-host-plus-99-IDs body would be measured as a 1-host fleet. Falcon
+    # does not return mixed lists, but this is the only shape that could measure a subset
+    # without saying so.
+    if host_records and device_ids > 0:
+        return unevaluated("The response mixes " + str(len(host_records)) + " host record(s) with " +
+                           str(device_ids) + " bare Falcon device ID(s), so it is not a whole host-record "
+                           "read: nothing was measured", validation)
     if not host_records and device_ids == 0 and other_strings > 0:
         return unevaluated("The response lists " + str(other_strings) + " ID(s) that are not Falcon device IDs "
                            "(32 hex characters) and no host records: this is not a host list (wrong method), so "
@@ -443,8 +452,10 @@ def evaluate(input):
         return unevaluated("Every host record read is a mobile host, which this check does not measure: "
                            "nothing was measured", validation, input_summary=input_summary)
 
+    # Compare the exact ratio, then round only for display. Rounding first passed a fleet at
+    # 94.996% (18,999 of 20,000 rounds to 95.0), which matters at tenant scale.
+    deployed = reporting * 100.0 >= DEPLOYED_THRESHOLD * hosts
     percentage = round(reporting * 100.0 / hosts, 2)
-    deployed = percentage >= DEPLOYED_THRESHOLD
     if not deployed and unknown_rfm > 0 and (reporting + unknown_rfm) * 100.0 / hosts >= DEPLOYED_THRESHOLD:
         # False needs every host decided: these hosts would carry the share over the bar unless in RFM.
         return unevaluated(str(unknown_rfm) + " reporting host(s) carry a reduced_functionality_mode value that "

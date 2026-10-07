@@ -222,3 +222,18 @@ def test_compiles_and_discriminates_in_the_restricted_sandbox():
     assert (passing["transformedResponse"]["isEPPDeployed"], passing["additionalInfo"]["dataCollection"]["status"]) == (True, "success")
     assert (failing["transformedResponse"]["isEPPDeployed"], failing["additionalInfo"]["dataCollection"]["status"]) == (False, "success")
     assert (nothing["transformedResponse"]["isEPPDeployed"], nothing["additionalInfo"]["dataCollection"]["status"]) == (None, "error")
+
+
+
+# --- review findings on #1070 ----------------------------------------------------------------
+
+def test_the_threshold_uses_the_exact_ratio_not_the_rounded_one():
+    """18,999 of 20,000 is 94.995%, which rounds to 95.0. It must not pass."""
+    records = [host(i, last_seen=ago(1)) for i in range(18999)]
+    records += [host(20000 + i, last_seen=ago(90)) for i in range(1001)]
+    assert_measured(body(records), False)
+
+
+def test_a_list_mixing_host_records_and_bare_ids_is_not_measured():
+    records = [host(1, last_seen=ago(1))] + ["a" * 32 for _ in range(99)]
+    assert_unevaluated(body(records))
