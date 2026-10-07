@@ -45,14 +45,27 @@ def extract_input(raw):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    additional_findings=None):
+                    additional_findings=None, api_errors=None):
+    """Build the 5-section response, deriving "was this measured?" from the criterion's value.
+
+    dataCollection.status used to be the literal "success" here, which is the only thing
+    Token-Service reads when it decides whether a criterion was evaluated. A refused call, an
+    unreadable body or a crash therefore reached the customer as a measured FAILED and wrote a
+    real gap. The status is now derived from api_errors, and api_errors is derived from the
+    value under KEY -- so the branch that could not measure does not have to remember to say
+    so, which is the branch that gets this wrong every time.
+    """
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    if not api_errors and isinstance(result, dict) and result.get(KEY) is None:
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
+    api_err_list = api_errors or []
     errors = transformation_errors or []
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "error" if api_err_list else "success", "errors": api_err_list},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -146,8 +159,14 @@ def now_ts():
     return datetime.now(timezone.utc).timestamp()
 
 
-def fail(validation, reason, recommendation=None, summary=None, extra=None):
-    result = {KEY: False}
+def respond(value, validation, reason, recommendation=None, summary=None, extra=None):
+    """One exit for both answers. value is False for a measured failure, None for no evidence.
+
+    Keeping them in one function is deliberate: the caller chooses a value, not a status, and
+    create_response derives the status from the value. There is no way to set one and forget
+    the other.
+    """
+    result = {KEY: value}
     if extra:
         result.update(extra)
     return create_response(result=result, validation=validation, fail_reasons=[reason],
@@ -155,14 +174,30 @@ def fail(validation, reason, recommendation=None, summary=None, extra=None):
                            input_summary=summary or {})
 
 
+def fail(validation, reason, recommendation=None, summary=None, extra=None):
+    """The control was measured and it is not in place."""
+    return respond(False, validation, reason, recommendation, summary, extra)
+
+
+def not_measured(validation, reason, recommendation=None, summary=None, extra=None):
+    """Nothing was measured: a refusal, an unreadable body, a partial read, a crash.
+
+    Returns None rather than False so the criterion fails closed under every comparator --
+    greaterThan and lessThan coerce False to 0 and pass -- and so create_response sets
+    dataCollection.status to "error", which is what Token-Service reads to record the
+    criterion as not evaluated instead of writing a gap.
+    """
+    return respond(None, validation, reason, recommendation, summary, extra)
+
+
 def refused_or_unrecognised(data, validation, what):
     why = detect_refusal(data)
     if why:
-        return fail(validation, "The OpenAI call did not return data - " + why +
-                    " This is a credential or reachability result, not a finding; the control's state is unknown.",
-                    "Reconnect the OpenAI integration with an Admin API key.", {"endpointReachable": False})
-    return fail(validation, what + " response not recognised - no OpenAI list or object in the payload.",
-                "Inspect the raw integration response.", {"endpointReachable": None})
+        return not_measured(validation, "The OpenAI call did not return data - " + why +
+                            " This is a credential or reachability result, not a finding; the control's state is unknown.",
+                            "Reconnect the OpenAI integration with an Admin API key.", {"endpointReachable": False})
+    return not_measured(validation, what + " response not recognised - no OpenAI list or object in the payload.",
+                        "Inspect the raw integration response.", {"endpointReachable": None})
 
 
 def transform(input):
@@ -171,8 +206,12 @@ def transform(input):
             return evaluate({"data": input.get("data"), "validation": input.get("validation")})
         return evaluate(input)
     except Exception as exc:
+        # None, not False: a crash measured nothing. create_response reads the value and sets
+        # dataCollection.status to "error", the only channel evaluate.py consults. The
+        # transformation channel this used to report down is read by vacuous_output.py, which
+        # is not on the grading path at all.
         return create_response(
-            result={KEY: False},
+            result={KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
@@ -191,7 +230,7 @@ def evaluate(input):
         return fail(validation, "The organization hard spend limit is not enforcing (status " + str(status) + ").",
                     "Set a hard spend limit in Organization settings > Limits.", summary, {"enforcementStatus": status})
     if amount is None or amount <= 0:
-        return fail(validation, "The spend limit reports enforcing but no positive threshold_amount.", None, summary)
+        return not_measured(validation, "The spend limit reports enforcing but no positive threshold_amount.", None, summary)
     dollars = round(amount / 100.0, 2)
     return create_response(result={KEY: True, "thresholdAmount": dollars, "currency": data.get("currency")},
                            validation=validation,
