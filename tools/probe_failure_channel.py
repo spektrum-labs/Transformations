@@ -16,10 +16,19 @@ raises. The other two no-evidence routes, a vendor refusal envelope and an empty
 body, are separate replays and a file can pass one while failing another. Do not read a
 clean run here as "this transform handles no evidence correctly".
 
+THE RATCHET. Known instances live in contracts/failure-channel-allowlist.json and MAY ONLY
+SHRINK, exactly as in check_fail_closed.py and check_none_not_evaluated.py. A listed file is
+reported and does not fail the run; an unlisted one does; a listed entry that no longer
+reproduces is reported STALE so the list keeps moving. That is what lets this run blocking
+from the day it merges while 31 known files are still being fixed -- the alternative, leaving
+it unwired until the last fix lands, leaves nothing stopping a 32nd file in the meantime.
+
 Usage:
-    probe_failure_channel.py <transform.py> [<criteriaKey> ...]   # keys optional
-    probe_failure_channel.py --all <dir>                          # walk a tree
+    probe_failure_channel.py                                      # judge the tree (CI mode)
+    probe_failure_channel.py --emit-allowlist                     # regenerate from the tree
     probe_failure_channel.py --self-test                          # prove it catches a defect
+    probe_failure_channel.py <transform.py> [<criteriaKey> ...]   # one file
+    probe_failure_channel.py --all <dir>                          # walk a subtree
     probe_failure_channel.py <transform.py> --expect-key isFoo    # assert the RTA's key
 
 Without --expect-key this reports what a file ANSWERS, reading the keys off its own
@@ -38,9 +47,31 @@ otherwise point TX_REPO at a checkout.
 """
 from __future__ import annotations
 
+import json
 import os
+import pathlib
 import re
 import sys
+
+
+def _repo_root():
+    """The Transformations checkout this is judging.
+
+    When the file sits in tools/, that is its own parent. TX_REPO overrides, which is how
+    the 2026-10-06 QC ran it against a pinned worktree from outside the repo.
+    """
+    if os.environ.get("TX_REPO"):
+        return pathlib.Path(os.environ["TX_REPO"]).resolve()
+    return pathlib.Path(__file__).resolve().parents[1]
+
+
+ROOT = _repo_root()
+SAFEGUARDS = ROOT / "safeguards"
+ALLOWLIST = ROOT / "contracts" / "failure-channel-allowlist.json"
+
+# A clean tree and a tree this checker has stopped reading both print zero findings.
+# Same floor and same reasoning as check_fail_closed.MIN_JUDGED_TRANSFORMS.
+MIN_JUDGED_TRANSFORMS = 400
 
 
 def _find_sandbox():
@@ -188,10 +219,110 @@ def self_test():
     sys.exit(0 if ok else 1)
 
 
+TEST_MODULE = re.compile(r"^(test_|conftest)")
+
+
+def transform_files(root=None):
+    """Every transform under safeguards/, excluding tests and helper packages."""
+    base = pathlib.Path(root) if root else SAFEGUARDS
+    out = []
+    for p in sorted(base.rglob("*.py")):
+        if TEST_MODULE.match(p.name) or p.name == "__init__.py":
+            continue
+        if "schemas" in p.parts:            # helper modules, not transforms
+            continue
+        out.append(p)
+    return out
+
+
+def census(root=None):
+    """Judge the tree. Returns {graded: [rel], judged: n, examined: n, inconclusive: {rel: why}}."""
+    graded, inconclusive, judged = [], {}, 0
+    files = transform_files(root)
+    for p in files:
+        rel = str(p.relative_to(ROOT)) if str(p).startswith(str(ROOT)) else str(p)
+        status, dc, _tx, _vals = probe(str(p))
+        if status != "OK":
+            inconclusive[rel] = status
+            continue
+        judged += 1
+        if str(dc).lower() != "error":
+            graded.append(rel)
+    return {"graded": sorted(graded), "inconclusive": inconclusive,
+            "judged": judged, "examined": len(files)}
+
+
+def load_allowlist():
+    if not ALLOWLIST.is_file():
+        return {"instances": []}
+    return json.loads(ALLOWLIST.read_text())
+
+
+def emit_allowlist():
+    result = census()
+    instances = result["graded"]
+    out = {
+        "contract": "failure-channel",
+        "why": "a transform that catches its own exception must report it under "
+               "additionalInfo.dataCollection.status \"error\", which is the only channel "
+               "Token-Service's evaluator reads; reporting it under "
+               "additionalInfo.transformation.status alone leaves the criterion graded at "
+               "runtime; this list may only shrink",
+        "generated_by": "tools/probe_failure_channel.py --emit-allowlist",
+        "count": len(instances),
+        "instances": instances,
+    }
+    ALLOWLIST.parent.mkdir(parents=True, exist_ok=True)
+    ALLOWLIST.write_text(json.dumps(out, indent=2) + "\n")
+    return out
+
+
+def judge_tree():
+    """CI mode: census against the ratchet. Returns an exit code."""
+    result = census()
+    if result["judged"] < MIN_JUDGED_TRANSFORMS:
+        print(f"✗ REFUSING TO REPORT: only {result['judged']} file(s) with a callable transform "
+              f"were found, below the floor of {MIN_JUDGED_TRANSFORMS}. A clean tree and a tree "
+              "this checker has stopped reading both print zero findings.")
+        return 1
+    allowed = set(load_allowlist().get("instances", []))
+    graded = set(result["graded"])
+    new = sorted(graded - allowed)
+    stale = sorted(allowed - graded)
+    print(f"{result['examined']} transform file(s) examined, {result['judged']} judged; "
+          f"{len(graded)} report a crash through a channel evaluate.py never reads "
+          f"({len(new)} outside the allowlist)")
+    if result["inconclusive"]:
+        print(f"\nNOT JUDGED ({len(result['inconclusive'])}) -- the transform raised rather than "
+              f"returning, which Token-Service's own envelope catches as not evaluated:")
+        for rel, why in sorted(result["inconclusive"].items()):
+            print(f"  {rel}: {why}")
+    if stale:
+        print(f"\nSTALE allowlist entries ({len(stale)}) -- no longer reproduce; remove to let "
+              f"the ratchet shrink:")
+        for rel in stale:
+            print(f"  {rel}")
+    if new:
+        print(f"\n✗ {len(new)} transform(s) not on the allowlist catch their own exception and "
+              "report it under additionalInfo.transformation only, leaving the criterion graded "
+              "at runtime (derive dataCollection.status from the same errors argument -- see "
+              "safeguards/cloudsecurity/awssecurityhub/compliancepercentage.py:43-54):")
+        for rel in new:
+            print(f"  {rel}")
+        return 1
+    print("\n✓ every unallowlisted transform reports its own failure on the channel the "
+          "evaluator reads")
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     if not args:
-        raise SystemExit(__doc__)
+        sys.exit(judge_tree())
+    if args[0] == "--emit-allowlist":
+        out = emit_allowlist()
+        print(f"wrote {ALLOWLIST.relative_to(ROOT)}: {out['count']} instance(s)")
+        sys.exit(0)
     if args[0] == "--self-test":
         self_test()
     # --expect-key K: the key the RTA row claims this file answers. Repeatable. With --all,
