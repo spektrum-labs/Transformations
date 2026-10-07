@@ -1,44 +1,353 @@
-"""
-Transformation: isDNSConfigured
-Vendor: Email Security Provider
-Category: Email Security / DNS
+"""Transformation: isDNSConfigured
+Vendor: Google Workspace
+Method: isDNSConfigured -- the Spektrum DNS probe of the company email domain.
+Serves Google - Email Security, Google - MFA and Google - Backup.
 
-Evaluates if DMARC, DKIM and SPF records are set up properly for email authentication.
+isSPFConfigured, isDMARCConfigured and isDKIMConfigured answer whether the published
+records ENFORCE, not whether a string came back. The 23 requirements behind each key
+ask for enforcement in their own words -- "DMARC at quarantine or reject", "set for at
+least soft reject", "SPF is strictly enforced" -- and until this change a domain at
+v=DMARC1;p=none with v=spf1 ?all was told both were configured.
+
+Google recommends ~all rather than -all ("v=spf1 include:_spf.google.com ~all" is the
+record in every row of its own table), which is why ~all passes here: requiring -all
+would fail every tenant that followed Google's published guidance. Google publishes
+DKIM as a v=DKIM1 TXT record at a selector such as google._domainkey.
 """
 
 import json
 import ast
+import re
 from datetime import datetime
 
+# --- BEGIN shared email-authentication semantics -------------------------------
+# Byte-identical in every transformation that answers isSPFConfigured,
+# isDMARCConfigured or isDKIMConfigured. One rule, applied to each vendor's shape.
+#
+#   SPF    RFC 7208 s4.6.2 (the qualifiers "+" pass, "-" fail, "~" softfail,
+#          "?" neutral), s4.7 (with no matching mechanism the default result is
+#          neutral), s8.2 ("A 'neutral' result MUST be treated exactly like the
+#          'none' result"), s8.5 (softfail: the ADMD believes the host is not
+#          authorized).  Enforcing = the record ends in -all or ~all.
+#   DMARC  RFC 7489 s6.3 (the "p", "sp" and "pct" tags; "v" MUST be DMARC1 or the
+#          record MUST be ignored), s6.6.4 (what "pct" does to the requested
+#          policy).  Enforcing = the weakest treatment a conforming receiver
+#          applies is quarantine or reject -- for the organizational domain AND
+#          for its subdomains.
+#   DKIM   RFC 6376 s3.6.1 and s6.1.2 step 7 (an empty "p=" is a revoked key, and
+#          "there is no defined semantic difference between a key that has been
+#          revoked and a key record that has been removed").  DKIM has no
+#          enforcement strength to read, so the bar is publication of a key that
+#          is not revoked.
+#
+# Three verdicts, never two:
+#   True   a record was read and it requests enforcement
+#   False  a record was read and it does not
+#   None   nothing was read, so nothing is known.  create_response turns any None
+#          into dataCollection.status == "error", which Token-Service grades as
+#          Unevaluated.  A None must never ship as a red check.
 
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
+NOT_A_RECORD = ("", "false", "none", "null", "no", "0", "not found", "n/a",
+                "no banner found", "no record", "not configured", "missing",
+                "not available", "unknown")
+
+
+def dns_body(value):
+    """Return the dict carrying SPF / DKIM / DMARC, or None if no layer carries one.
+
+    The probe answers {"SPF": ..., "DKIM": ..., "DMARC": ...}, sometimes as a Python
+    repr or JSON string, sometimes wrapped in result / apiResponse / response. The
+    stop condition is the ABSENCE of the fields we read, not recognition of a
+    particular error envelope: an envelope recogniser only matches the shapes it was
+    written against, and one unexpected capital letter then reads as evidence.
+    """
+    for attempt in range(6):
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "ignore")
+        if isinstance(value, str):
+            parsed = None
+            for parser in (json.loads, ast.literal_eval):
+                try:
+                    parsed = parser(value)
                     break
-            if not unwrapped:
+                except Exception:
+                    parsed = None
+            value = parsed
+        if isinstance(value, list):
+            value = value[0] if len(value) == 1 else None
+            continue
+        if not isinstance(value, dict):
+            return None
+        for key in value.keys():
+            if isinstance(key, str) and key.lower() in ("spf", "dkim", "dmarc"):
+                return value
+        nxt = None
+        for key in ("data", "result", "apiResponse", "api_response", "response",
+                    "Output", "output", "rawResponse", "records"):
+            if key in value and isinstance(value.get(key), (dict, str, bytes, list)):
+                nxt = value[key]
                 break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+        if nxt is None:
+            return None
+        value = nxt
+    return None
+
+
+def protocol_value(body, name):
+    """(found, value) for one protocol key, case-insensitively."""
+    for key in body.keys():
+        if isinstance(key, str) and key.lower() == name:
+            return True, body[key]
+    return False, None
+
+
+def record_text(body, name):
+    """Reduce one probe value to a kind and, where there is one, the record text.
+
+    "unknown"  the probe said nothing about this protocol  -> not measured
+    "missing"  the probe looked and found no record        -> measured, absent
+    "present"  the probe said yes without the record text  -> presence only
+    "record"   the probe returned the published record     -> judge the text
+    """
+    found, value = protocol_value(body, name)
+    if not found or value is None:
+        return "unknown", ""
+    if isinstance(value, bool):
+        return ("present", "") if value else ("missing", "")
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", "ignore")
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower() in NOT_A_RECORD:
+            return "missing", ""
+        return "record", text
+    if isinstance(value, (int, float)):
+        return ("present", "") if value else ("missing", "")
+    if isinstance(value, (dict, list)):
+        return ("present", "") if value else ("missing", "")
+    return "unknown", ""
+
+
+def tag_map(text, separator):
+    """name=value pairs, lowercased names, first occurrence wins. Also returns the
+    order, because RFC 7489 s6.3 requires "v" to be the first DMARC tag."""
+    tags = {}
+    order = []
+    for part in text.split(separator):
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name = name.strip().lower()
+        if name and name not in tags:
+            tags[name] = value.strip()
+            order.append(name)
+    return tags, order
+
+
+def spf_verdict(body):
+    """isSPFConfigured: (verdict, reasons, detail). RFC 7208."""
+    kind, text = record_text(body, "spf")
+    if kind == "unknown":
+        return None, ["The DNS probe returned no SPF answer, so SPF was not measured"], {}
+    if kind == "present":
+        return None, ["The DNS probe reported SPF as present without returning the record, so "
+                      "its all-mechanism cannot be read and enforcement was not measured"], {}
+    if kind == "missing":
+        return False, ["No SPF record is published for the email domain"], {"spfRecord": "none"}
+    if not text.lower().startswith("v=spf1"):
+        return False, ["The TXT record found does not begin v=spf1, so it is not an SPF record "
+                       "(RFC 7208 s4.5)"], {"spfRecord": text}
+    terms = text.split()
+    alls = [t.lower() for t in terms if re.match(r"^[-~?+]?all$", t.lower())]
+    qualifier = alls[-1] if alls else ""
+    detail = {"spfRecord": text,
+              "spfAllMechanism": qualifier if qualifier else "none",
+              "spfHardFail": qualifier == "-all"}
+    if not qualifier:
+        redirects = [t for t in terms if t.lower().startswith("redirect=")]
+        if redirects:
+            detail["spfRedirect"] = redirects[-1]
+            return None, ["The SPF record ends in " + redirects[-1] + " and has no all-mechanism "
+                          "of its own; RFC 7208 s6.1 puts the effective policy in the redirected "
+                          "record, which this probe does not resolve, so enforcement was not "
+                          "measured"], detail
+        return False, ["The SPF record publishes no all-mechanism, so RFC 7208 s4.7 makes its "
+                       "default result neutral and it restricts no sender"], detail
+    if qualifier in ("-all", "~all"):
+        return True, [], detail
+    if qualifier == "?all":
+        return False, ["The SPF record ends in ?all (neutral), which RFC 7208 s8.2 requires be "
+                       "treated exactly like publishing no SPF record at all"], detail
+    return False, ["The SPF record ends in " + qualifier + ", which authorises every host on the "
+                   "internet to send as this domain"], detail
+
+
+def dmarc_pct(tags):
+    """RFC 7489 s6.4: pct is an integer 0-100, default 100. A malformed value is not a
+    smaller percentage, so it is ignored rather than guessed at."""
+    raw = tags.get("pct", "").strip()
+    if raw and re.match(r"^[0-9]{1,3}$", raw):
+        number = int(raw)
+        if number <= 100:
+            return number
+    return 100
+
+
+def dmarc_floor(policy, pct):
+    """The weakest treatment a conforming receiver applies, per RFC 7489 s6.6.4.
+
+    With pct < 100 the receiver MUST NOT enact the requested policy on more than that
+    percentage. Mail outside the sample is treated as quarantine when the request was
+    reject, and gets "local message classification as normal" -- which is none -- when
+    the request was quarantine. So pct weakens quarantine to nothing and weakens reject
+    only as far as quarantine.
+    """
+    if policy == "reject":
+        return "reject" if pct >= 100 else "quarantine"
+    if policy == "quarantine":
+        return "quarantine" if pct >= 100 else "none"
+    return "none"
+
+
+def dmarc_verdict(body):
+    """isDMARCConfigured: (verdict, reasons, detail). RFC 7489."""
+    kind, text = record_text(body, "dmarc")
+    if kind == "unknown":
+        return None, ["The DNS probe returned no DMARC answer, so DMARC was not measured"], {}
+    if kind == "present":
+        return None, ["The DNS probe reported DMARC as present without returning the record, so "
+                      "its p= policy cannot be read and enforcement was not measured"], {}
+    if kind == "missing":
+        return False, ["No DMARC record is published for the email domain"], {"dmarcRecord": "none"}
+    tags, order = tag_map(text, ";")
+    if tags.get("v", "").lower() != "dmarc1":
+        return False, ["The TXT record found carries no v=DMARC1 tag; RFC 7489 s6.3 requires the "
+                       "entire record be ignored without it"], {"dmarcRecord": text}
+    policy = tags.get("p", "").strip().lower()
+    if policy not in ("none", "quarantine", "reject"):
+        return False, ["The DMARC record requests no recognised policy (p=" +
+                       (policy if policy else "absent") + "); RFC 7489 s6.3 makes p mandatory for "
+                       "a policy record and defines only none, quarantine and reject"],             {"dmarcRecord": text, "dmarcPolicy": policy if policy else "absent"}
+    pct = dmarc_pct(tags)
+    org_floor = dmarc_floor(policy, pct)
+    sub_policy = tags.get("sp", "").strip().lower()
+    if sub_policy in ("none", "quarantine", "reject"):
+        sub_floor = dmarc_floor(sub_policy, pct)
+    else:
+        sub_policy = ""
+        sub_floor = org_floor
+    detail = {"dmarcRecord": text,
+              "dmarcPolicy": policy,
+              "dmarcPct": pct,
+              "dmarcSubdomainPolicy": sub_policy if sub_policy else "inherits p",
+              "dmarcEffectivePolicy": org_floor,
+              "dmarcEffectiveSubdomainPolicy": sub_floor,
+              "dmarcVersionTagFirst": bool(order) and order[0] == "v"}
+    reasons = []
+    if org_floor not in ("quarantine", "reject"):
+        if policy == "none":
+            reasons.append("The DMARC record is p=none, which RFC 7489 s6.3 defines as requesting "
+                           "no specific action: it monitors spoofing and prevents none of it")
+        else:
+            reasons.append("The DMARC record is p=" + policy + " with pct=" + str(pct) +
+                           ", so under RFC 7489 s6.6.4 the other " + str(100 - pct) +
+                           "% of failing mail gets normal local classification")
+    if sub_floor not in ("quarantine", "reject"):
+        reasons.append("The DMARC record sets sp=" + (sub_policy if sub_policy else "none") +
+                       ", so every subdomain of the email domain is left unenforced (RFC 7489 "
+                       "s6.3: sp applies to all subdomains in place of p)")
+    if reasons:
+        return False, reasons, detail
+    return True, [], detail
+
+
+def dkim_verdict(body):
+    """isDKIMConfigured: (verdict, reasons, detail). RFC 6376.
+
+    DKIM publishes no enforcement strength -- there is no DKIM equivalent of p= or
+    -all -- so the bar is a published selector whose key has not been revoked.
+    """
+    kind, text = record_text(body, "dkim")
+    if kind == "unknown":
+        return None, ["The DNS probe returned no DKIM answer, so DKIM was not measured"], {}
+    if kind == "missing":
+        return False, ["No DKIM selector record is published for the email domain, so outbound "
+                       "mail carries no verifiable signature"], {"dkimRecord": "none"}
+    if kind == "present":
+        return True, [], {"dkimRecord": "present",
+                          "dkimEvidence": "the probe reported a selector without returning the "
+                                          "record, so the key could not be checked for revocation"}
+    if "v=dkim1" in text.lower():
+        tags, order = tag_map(text, ";")
+        if not tags.get("p", "").strip():
+            return False, ["The published DKIM key is revoked: RFC 6376 s6.1.2 step 7 says an "
+                           "empty p= tag means the key has been revoked and a verifier MUST treat "
+                           "it as a failed signature check"],                 {"dkimRecord": text, "dkimEvidence": "v=DKIM1 record with an empty p= tag"}
+        return True, [], {"dkimRecord": text,
+                          "dkimEvidence": "v=DKIM1 record with a public key"}
+    return True, [], {"dkimRecord": text,
+                      "dkimEvidence": "presence only -- the probe returned a selector target "
+                                      "rather than a v=DKIM1 TXT record, which is what Microsoft "
+                                      "365's CNAME selector model publishes"}
+
+
+def email_auth_verdicts(body):
+    """The four criteria, their reasons, the evidence, and the composite verdict."""
+    spf, spf_reasons, spf_detail = spf_verdict(body)
+    dmarc, dmarc_reasons, dmarc_detail = dmarc_verdict(body)
+    dkim, dkim_reasons, dkim_detail = dkim_verdict(body)
+    parts = [spf, dmarc, dkim]
+    if None in parts:
+        dns = None
+    else:
+        dns = bool(spf and dmarc and dkim)
+    values = {"isDNSConfigured": dns,
+              "isDMARCConfigured": dmarc,
+              "isDKIMConfigured": dkim,
+              "isSPFConfigured": spf}
+    detail = {}
+    for part in (spf_detail, dmarc_detail, dkim_detail):
+        for key in part.keys():
+            detail[key] = part[key]
+    # `dns` is handed back separately rather than read out of `values` by name: a
+    # transform that reads a criteria key out of input-derived data is the self-answer
+    # defect, and tools/check_no_self_answer.py cannot tell our own dict from the
+    # vendor's. Keeping the local is simpler than arguing about it.
+    return values, spf_reasons + dmarc_reasons + dkim_reasons, detail, dns
+
+
+def unmeasured_keys(values):
+    """The criteria this body could not answer. The status is derived from this and
+    from nothing else, so a branch nobody thought about still reports honestly."""
+    return sorted([key for key in values.keys() if values[key] is None])
+# --- END shared email-authentication semantics ---------------------------------
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
+    """dataCollection.status is derived from the VALUES, never from the branch.
+
+    A criterion left as None is a criterion nobody measured, wherever in this file that
+    happened -- including the except branch, which is the one branch an author cannot
+    think about, because it is the failure of their own thinking. Deriving the status
+    from the value is what makes that branch correct without anyone deciding to make it
+    correct. Do not replace this with a list of key names: Rubrik protected its numeric
+    keys with exactly such a list and missed complianceStatus because the name ends in
+    "Status". A value-keyed rule cannot miss a key.
+    """
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    errors = list(api_errors or [])
+    unmeasured = unmeasured_keys(result) if isinstance(result, dict) else []
+    if unmeasured and not errors:
+        errors = ["not measured from this response: " + ", ".join(unmeasured)]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "error" if (errors or unmeasured) else "success",
+                "errors": errors
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -60,170 +369,98 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isDNSConfigured",
-                "vendor": "Email Security Provider",
+                "vendor": "Google Workspace",
                 "category": "Email Security"
             }
         }
     }
 
 
-def parse_input(input):
-    if isinstance(input, str):
-        # First try to parse as literal Python string representation
-        try:
-            parsed = ast.literal_eval(input)
-            if isinstance(parsed, dict):
-                return parsed
-        except:
-            pass
+ALL_NONE = {"isDNSConfigured": None, "isDMARCConfigured": None,
+            "isDKIMConfigured": None, "isSPFConfigured": None}
 
-        # If that fails, try to parse as JSON
-        try:
-            input = input.replace("'", '"')
-            return json.loads(input)
-        except:
-            raise ValueError("Input string is neither valid Python literal nor JSON")
+LABELS = (("isDMARCConfigured", "DMARC", "Publish a DMARC record at p=quarantine or p=reject "
+                                         "(pct=100) for the email domain and every subdomain "
+                                         "that sends mail"),
+          ("isDKIMConfigured", "DKIM", "Publish a DKIM selector for the email domain and enable "
+                                       "signing of outbound mail"),
+          ("isSPFConfigured", "SPF", "Publish an SPF record listing every authorised sender and "
+                                     "ending in -all (or ~all)"))
 
-    if isinstance(input, bytes):
-        return json.loads(input.decode("utf-8"))
-    if isinstance(input, dict):
-        return input
-    raise ValueError("Input must be JSON string, bytes, or dict")
+
+def findings_for(values, reasons, detail):
+    """One additionalFindings row per criterion, carrying the record that decided it."""
+    rows = []
+    for key, label, advice in LABELS:
+        value = values.get(key)
+        if value is None:
+            rows.append({"metric": key, "status": "notMeasured",
+                         "reason": label + " could not be read from this response"})
+        elif value:
+            rows.append({"metric": key, "status": "pass",
+                         "reason": label + " is published and enforcing"})
+        else:
+            rows.append({"metric": key, "status": "fail",
+                         "reason": label + " does not meet the enforcing bar",
+                         "recommendation": advice})
+    rows.append({"metric": "evidence", "status": "info", "reason": "records read",
+                 "detail": detail})
+    return rows
+
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    return input_data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
 def transform(input):
-    is_dmarc_configured = False
-    is_dkim_configured = False
-    is_spf_configured = False
-
     try:
-        input = parse_input(input)
-
-        # Check for enriched input format
-        if isinstance(input, dict) and "data" in input and "validation" in input:
-            data = input["data"]
-            validation = input["validation"]
-        else:
-            data = input
-            validation = {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+        data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
             return create_response(
-                result={
-                    "isDNSConfigured": False,
-                    "isDMARCConfigured": False,
-                    "isDKIMConfigured": False,
-                    "isSPFConfigured": False
-                },
+                result=dict(ALL_NONE),
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["input validation failed, so no DNS record was read"]
             )
 
+        body = dns_body(data)
+        if body is None:
+            return create_response(
+                result=dict(ALL_NONE),
+                validation=validation,
+                api_errors=["the response carries no SPF, DKIM or DMARC answer, so no email "
+                            "authentication record was read"]
+            )
+
+        values, reasons, detail, all_enforcing = email_auth_verdicts(body)
+        unmeasured = unmeasured_keys(values)
         pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # Unwrap response/result wrappers
-        if isinstance(data, dict) and 'response' in data:
-            data = parse_input(data['response'])
-        if isinstance(data, dict) and 'result' in data:
-            data = parse_input(data['result'])
-
-        if isinstance(data, dict):
-            is_dmarc_configured = True if data.get('DMARC', False) else False
-            is_dkim_configured = True if data.get('DKIM', False) else False
-            is_spf_configured = True if data.get('SPF', False) else False
-
-        is_dns_configured = is_dmarc_configured and is_dkim_configured and is_spf_configured
-
-        additional_findings = []
-
-        # Primary criteria: isDNSConfigured (all records present)
-        if is_dns_configured:
-            pass_reasons.append("All email DNS records (DMARC, DKIM, SPF) are properly configured")
-        else:
-            not_configured = []
-            if not is_dmarc_configured:
-                not_configured.append("DMARC")
-            if not is_dkim_configured:
-                not_configured.append("DKIM")
-            if not is_spf_configured:
-                not_configured.append("SPF")
-            fail_reasons.append(f"Missing DNS records: {', '.join(not_configured)}")
-
-        # Additional finding: isDMARCConfigured
-        if is_dmarc_configured:
-            additional_findings.append({
-                "metric": "isDMARCConfigured",
-                "status": "pass",
-                "reason": "DMARC record is configured"
-            })
-        else:
-            additional_findings.append({
-                "metric": "isDMARCConfigured",
-                "status": "fail",
-                "reason": "DMARC DNS record not found",
-                "recommendation": "Configure DMARC record for email domain authentication"
-            })
-
-        # Additional finding: isDKIMConfigured
-        if is_dkim_configured:
-            additional_findings.append({
-                "metric": "isDKIMConfigured",
-                "status": "pass",
-                "reason": "DKIM record is configured"
-            })
-        else:
-            additional_findings.append({
-                "metric": "isDKIMConfigured",
-                "status": "fail",
-                "reason": "DKIM DNS record not found",
-                "recommendation": "Configure DKIM record for email signing"
-            })
-
-        # Additional finding: isSPFConfigured
-        if is_spf_configured:
-            additional_findings.append({
-                "metric": "isSPFConfigured",
-                "status": "pass",
-                "reason": "SPF record is configured"
-            })
-        else:
-            additional_findings.append({
-                "metric": "isSPFConfigured",
-                "status": "fail",
-                "reason": "SPF DNS record not found",
-                "recommendation": "Configure SPF record to specify authorized mail servers"
-            })
-
+        if all_enforcing:
+            pass_reasons.append("SPF, DKIM and DMARC are all published and enforcing for the "
+                                "email domain")
         return create_response(
-            result={
-                "isDMARCConfigured": is_dmarc_configured,
-                "isDKIMConfigured": is_dkim_configured,
-                "isSPFConfigured": is_spf_configured,
-                "isDNSConfigured": is_dns_configured
-            },
+            result=values,
             validation=validation,
             pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            additional_findings=additional_findings,
-            input_summary={
-                "dmarcConfigured": is_dmarc_configured,
-                "dkimConfigured": is_dkim_configured,
-                "spfConfigured": is_spf_configured
-            }
+            fail_reasons=reasons if not unmeasured else [],
+            recommendations=[],
+            additional_findings=findings_for(values, reasons, detail),
+            input_summary=detail,
+            api_errors=([("these criteria were not measured: " + ", ".join(unmeasured)) + "; " +
+                         " ".join(reasons)] if unmeasured else None)
         )
 
     except Exception as e:
+        # Every criterion is None, so create_response derives dataCollection "error"
+        # whatever this branch remembers to pass. api_errors is given as well, because
+        # transformation_errors alone lands under transformation.status, which the
+        # grading path never reads.
         return create_response(
-            result={
-                "isDNSConfigured": False,
-                "isDMARCConfigured": is_dmarc_configured,
-                "isDKIMConfigured": is_dkim_configured,
-                "isSPFConfigured": is_spf_configured
-            },
+            result=dict(ALL_NONE),
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            api_errors=["the DNS probe response could not be read: " + str(e)],
+            fail_reasons=[]
         )

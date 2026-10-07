@@ -9,7 +9,11 @@ True when the domain's published SPF record (1) includes a Check Point sending h
 include in Check Point's Cloud SMTP Relay guide) and (2) ends in a restrictive all-mechanism (-all or
 ~all). Without the include, mail Check Point relays for the domain fails SPF; with +all, ?all or no
 all-mechanism, SPF does not restrict anything. No SPF record reads false.
-Fails closed: an empty, error or unrecognised body proves nothing.
+
+Three verdicts, never two. An empty, error or unrecognised body -- and a probe that reports
+SPF as present without returning the record -- yields None with dataCollection "error", which
+Token-Service grades as Unevaluated. Returning False there would have told the customer their
+SPF is wrong on the strength of a response nobody could read.
 """
 
 import json
@@ -23,11 +27,19 @@ def transform(input):
 
     def create_response(value, pass_reasons=None, fail_reasons=None, input_summary=None,
                         api_errors=None, transformation_errors=None):
+        # The status is derived from the VALUE, not from the branch that produced it.
+        # None means nobody measured this, wherever in this file that happened --
+        # including the except branch below, which is the one branch an author cannot
+        # think about, because it is the failure of their own thinking. Setting it from
+        # the value makes that branch correct without anyone deciding to make it so.
+        errors = list(api_errors or [])
+        if value is None and not errors:
+            errors = ["isSPFEnforced was not measured from this response"]
         return {
             "transformedResponse": {criteriaKey: value},
             "additionalInfo": {
-                "dataCollection": {"status": "error" if api_errors else "success",
-                                   "errors": api_errors or []},
+                "dataCollection": {"status": "error" if (errors or value is None) else "success",
+                                   "errors": errors},
                 "validation": {"status": "unknown", "errors": [], "warnings": []},
                 "transformation": {"status": "error" if transformation_errors else "success",
                                    "errors": transformation_errors or [],
@@ -82,12 +94,21 @@ def transform(input):
     try:
         body = dns_body(input)
         if body is None:
-            return create_response(False, fail_reasons=["No DNS probe result (SPF) in the input; nothing is proven"],
-                                   api_errors=["Unrecognised or error response"])
+            return create_response(None, fail_reasons=[],
+                                   api_errors=["No DNS probe result (SPF) in the input, so SPF "
+                                               "enforcement was not measured"])
         spf = None
         for k, v in body.items():
             if isinstance(k, str) and k.lower() == "spf":
                 spf = v
+        if spf is None or (not isinstance(spf, str) and spf):
+            # The probe either said nothing about SPF, or said "yes" without returning the
+            # record. Either way the all-mechanism and the includes cannot be read, so the
+            # honest answer is that nothing was measured -- not that nothing is published.
+            return create_response(None, fail_reasons=[],
+                                   api_errors=["The DNS probe returned no SPF record text, so "
+                                               "SPF enforcement was not measured"],
+                                   input_summary={"spfRecord": str(spf)})
         record = spf.strip() if isinstance(spf, str) else ""
         if not record.lower().startswith("v=spf1"):
             return create_response(False, fail_reasons=["No SPF record is published for the email domain"],
@@ -112,4 +133,8 @@ def transform(input):
                            ", which does not restrict unlisted senders")
         return create_response(False, fail_reasons=reasons, input_summary=summary)
     except Exception as e:
-        return create_response(False, fail_reasons=["Transformation error"], transformation_errors=[str(e)])
+        # api_errors as well as transformation_errors: the grading path reads
+        # dataCollection.status and never transformation.status, so transformation_errors
+        # alone would have shipped this crash to the customer as a measured red.
+        return create_response(None, fail_reasons=[], transformation_errors=[str(e)],
+                               api_errors=["The DNS probe response could not be read: " + str(e)])

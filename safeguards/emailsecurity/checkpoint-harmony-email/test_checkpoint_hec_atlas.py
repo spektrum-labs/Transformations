@@ -133,10 +133,63 @@ def spf(record):
     (spf("v=spf1 include:checkpoint-spf.com.evil.example ~all"), False),
     (spf(False), False),
     (spf("None"), False),
-    ({}, False), (None, False), ("not json", False), ({"error": "timeout"}, False),
+    # A body nobody could read is not a measurement. These four used to return False with
+    # dataCollection "error", which graded as Unevaluated by accident of the status rather
+    # than of the value; they now return None, so the value and the status agree and no
+    # later edit can separate them. See test_spf_enforced_unreadable_is_not_measured.
+    ({}, None), (None, None), ("not json", None), ({"error": "timeout"}, None),
 ])
 def test_spf_enforced(body, expected):
     assert verdict("isspfenforced", body) is expected
+
+
+@pytest.mark.parametrize("body", [{}, None, "not json", {"error": "timeout"},
+                                  spf(True), {"statusCode": 403, "error": "Forbidden"}])
+def test_spf_enforced_unreadable_is_not_measured(body):
+    """None must arrive with dataCollection "error", or Token-Service grades it FAILED.
+
+    spf(True) is included because a probe that reports SPF as present without returning the
+    record cannot evidence the all-mechanism or the Check Point include: that is "I did not
+    find it off", not a measurement of anything.
+    """
+    out = load("isspfenforced").transform(body)
+    assert out["transformedResponse"]["isSPFEnforced"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert out["additionalInfo"]["dataCollection"]["errors"]
+
+
+def test_spf_enforced_poisoned_body_is_not_measured():
+    """The except branch. transformation_errors alone lands under transformation.status,
+    which the grading path never reads, so the status has to come from the value."""
+
+    class Poisoned(dict):
+        def __bool__(self):
+            return True
+
+        def __len__(self):
+            return 1
+
+        def keys(self):
+            raise RuntimeError("poisoned")
+
+        def items(self):
+            raise RuntimeError("poisoned")
+
+        def get(self, *args, **kwargs):
+            raise RuntimeError("poisoned")
+
+        def __getitem__(self, key):
+            raise RuntimeError("poisoned")
+
+        def __contains__(self, key):
+            raise RuntimeError("poisoned")
+
+        def __iter__(self):
+            raise RuntimeError("poisoned")
+
+    out = load("isspfenforced").transform(Poisoned())
+    assert out["transformedResponse"]["isSPFEnforced"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 # Entity search (HEC API reference 4.1/4.2 response sample). No live payload yet.
@@ -208,22 +261,42 @@ def test_open_quarantined_messages_count(body, expected):
 DNS_FILE = HERE.parent / "mimecast" / "isdnsconfigured.py"
 
 
-def dns(body):
+def dns_out(body):
     spec = importlib.util.spec_from_file_location("cphec_dns", DNS_FILE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.transform(body)["transformedResponse"]
+    return module.transform(body)
+
+
+def dns(body):
+    return dns_out(body)["transformedResponse"]
 
 
 @pytest.mark.parametrize("key,proto", [("isSPFConfigured", "SPF"), ("isDKIMConfigured", "DKIM"),
                                        ("isDMARCConfigured", "DMARC")])
 def test_dns_configured_keys(key, proto):
+    # SPF_REAL is enforcing on all three: ~all, p=reject, and a DKIM key with a non-empty
+    # p= tag. Before 2026-10-07 these keys passed on any non-empty string, so p=none and
+    # ?all passed too; mimecast/test_mimecast_dns_enforcement.py pins the new bar.
     assert dns(SPF_REAL)[key] is True
     assert dns({"result": SPF_REAL})[key] is True
     assert dns(dict(SPF_REAL, **{proto: False}))[key] is False
     assert dns(dict(SPF_REAL, **{proto: "None"}))[key] is False
-    for body in ({}, None, "not json", {"error": "timeout"}):
-        assert dns(body)[key] is False, body
+
+
+@pytest.mark.parametrize("key", ["isSPFConfigured", "isDKIMConfigured", "isDMARCConfigured"])
+@pytest.mark.parametrize("body", [{}, None, "not json", {"error": "timeout"}])
+def test_dns_configured_keys_unreadable_is_not_measured(key, body):
+    """An unreadable body is not evidence that the records are missing.
+
+    These four used to return False with dataCollection "success", which Token-Service
+    grades as a real gap: "we could not read DNS" reached the customer as "DNS is not
+    configured". The value and the status are now asserted together, because a None
+    under "success" is still compared and still writes that gap.
+    """
+    out = dns_out(body)
+    assert out["transformedResponse"][key] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 # isClickTimeURLRewriteEnabled: entity search for emails with links (HEC API reference 4.2). No live payload yet.
