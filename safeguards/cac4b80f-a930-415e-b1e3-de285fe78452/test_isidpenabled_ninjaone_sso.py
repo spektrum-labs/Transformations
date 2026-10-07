@@ -56,6 +56,20 @@ def test_only_native_technicians_fail():
     assert verdict([tech("NATIVE"), tech("NATIVE")]) == (False, "success")
 
 
+def test_an_unrecognised_auth_type_is_not_measured_rather_than_false():
+    """The enum spelling comes from the spec, not a captured body. If NinjaOne sends a value
+    this check does not know, "no SSO found" is not a measurement."""
+    assert verdict([tech("NATIVE"), tech("SAML")]) == (None, "error")
+
+
+def test_an_unrecognised_auth_type_beside_a_real_sso_still_passes():
+    assert verdict([tech("SSO"), tech("SAML")]) == (True, "success")
+
+
+def test_a_data_wrapped_technician_list_is_read():
+    assert verdict({"data": [tech("SSO")]}) == (True, "success")
+
+
 def test_disabled_and_unregistered_sso_technicians_do_not_count():
     body = [tech("NATIVE"), tech("SSO", enabled=False), tech("SSO", invitation="PENDING")]
     assert verdict(body) == (False, "success")
