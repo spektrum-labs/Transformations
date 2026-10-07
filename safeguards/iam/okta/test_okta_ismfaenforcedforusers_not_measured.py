@@ -168,16 +168,67 @@ def test_unread_verification_method_alone_is_not_evaluated(mode):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_unread_method_beside_a_two_factor_rule_withholds_both_keys(mode):
+    """isMFAEnabled was True here while the status said error. Token-Service grades on that status alone, so
+    the value was discarded anyway -- it only read as a measurement to anything else looking at
+    transformedResponse. Both keys are None, and the sound half is stated in dataCollection.errors."""
     out = load(mode)(identity_engine(access_rule("Employees"),
                                      access_rule("Chained", method_type="AUTH_METHOD_CHAIN", factor_mode="")))
-    assert pair(out) == (None, True, "error")
+    assert pair(out) == (None, None, "error")
+    assert any("isMFAEnabled is True on the rules that could be read" in e
+               for e in out["additionalInfo"]["dataCollection"]["errors"])
 
 
 @pytest.mark.parametrize("mode", MODES)
 def test_a_single_factor_rule_still_fails_beside_an_unread_one(mode):
+    """Unchanged, and the reason the mirror case below needs the system rule replaced: the Catch-all rule
+    requires two factors, so both keys are measured here and nothing is withheld."""
     out = load(mode)(identity_engine(access_rule("Kiosk", factor_mode="1FA"),
                                      access_rule("Chained", method_type="AUTH_METHOD_CHAIN", factor_mode="")))
+    assert pair(out) == (False, True, "success")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_single_factor_rule_beside_an_unread_one_withholds_both_keys(mode):
+    """The mirror case, with no two-factor rule anywhere: isMFAEnforcedForUsers was False beside a None under
+    the same discarding status. The single-factor path stays in the reasons and in dataCollection.errors,
+    where it is not mistaken for a verdict the evaluator will ever read."""
+    body = identity_engine(access_rule("Kiosk", factor_mode="1FA"),
+                           access_rule("Chained", method_type="AUTH_METHOD_CHAIN", factor_mode=""))
+    body["result"]["accessRules"][0] = [access_rule("Catch-all Rule", method_type="AUTH_METHOD_CHAIN",
+                                                    factor_mode="", system=True)]
+    out = load(mode)(body)
+    assert pair(out) == (None, None, "error")
+    assert any("isMFAEnforcedForUsers is False on the rules that could be read" in e
+               for e in out["additionalInfo"]["dataCollection"]["errors"])
+    assert any("App policy / Kiosk (factorMode 1FA)" in r
+               for r in out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("build", [
+    lambda: identity_engine(access_rule("Employees"),
+                            access_rule("Chained", method_type="AUTH_METHOD_CHAIN", factor_mode="")),
+    lambda: {"errorCode": "E0000006",
+             "errorSummary": "You do not have permission to perform the requested action"},
+    lambda: {},
+    Poisoned,
+], ids=["mixed-unread", "error-body", "empty-object", "poisoned"])
+def test_a_not_measured_output_recommends_nothing(mode, build):
+    """`all(result.values())` was False for a None as well as for a False, so a read that measured nothing
+    still told the customer to require two factors on every rule."""
+    out = load(mode)(build())
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["evaluation"]["recommendations"] == []
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_measured_false_still_recommends_the_fix(mode):
+    """The other half: suppressing the recommendation must not suppress it where it is earned."""
+    out = load(mode)(identity_engine(access_rule("Employees"), access_rule("Kiosk", factor_mode="1FA")))
     assert out["transformedResponse"][KEY] is False
+    assert out["additionalInfo"]["evaluation"]["recommendations"] == [
+        "Require two factors (factorMode 2FA) on every rule that allows access in every Okta "
+        "authentication policy"]
 
 
 @pytest.mark.parametrize("mode", MODES)

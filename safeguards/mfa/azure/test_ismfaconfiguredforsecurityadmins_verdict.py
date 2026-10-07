@@ -190,3 +190,55 @@ def test_poisoned_body_is_not_evaluated(mode):
     out = load(mode)(Poisoned())
     assert pair(out) == (None, "error")
     assert out["additionalInfo"]["dataCollection"]["errors"][0].startswith("Transformation error")
+
+
+AZURE_MANAGEMENT = "797f4846-ba00-4fd7-ba43-dac1f8f63013"
+LOB_APP = "00000003-0000-0000-c000-000000000000"
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("excluded", [["MicrosoftAdminPortals"], [AZURE_MANAGEMENT],
+                                      [LOB_APP, "microsoftadminportals"], ["All"]],
+                         ids=["admin-portals", "azure-management", "mixed-lowercase", "all"])
+def test_a_policy_that_exempts_the_administrative_surface_does_not_count(mode, excluded):
+    """CA001 with the admin portals (or the Azure control plane) in excludeApplications asks for nothing on
+    admin sign-ins. includeApplications "All" was the only thing read, so such a tenant passed."""
+    out = load(mode)(graph(edited(CA001, conditions__applications__excludeApplications=excluded)))
+    assert pair(out) == (False, "success")
+    assert out["additionalInfo"]["evaluation"]["failReasons"][0].startswith("0 of 6")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_an_exclusion_that_leaves_the_admin_surface_alone_still_counts(mode):
+    """The other half of the rule: rejecting every exclusion would fail a tenant whose admin policy is
+    correct and merely carves out one line-of-business app."""
+    out = load(mode)(graph(edited(CA001, conditions__applications__excludeApplications=[LOB_APP]), CA008))
+    assert pair(out) == (True, "success")
+    assert "1 excluded application(s)" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("change,expected", [
+    ({"conditions__clientAppTypes": ["exchangeActiveSync"]}, "client app types exchangeactivesync"),
+    ({"conditions__platforms": {"includePlatforms": ["iOS"], "excludePlatforms": []}}, "platforms ios"),
+    ({"conditions__locations": {"includeLocations": ["4cf7f419-2b1f-4b94-8e9c-f0b2a6ebc33f"],
+                                "excludeLocations": []}}, "named locations only"),
+    ({"conditions__users__excludeUsers": ["breakglass-1", "breakglass-2"]}, "2 excluded user(s)"),
+], ids=["client-app-types", "platforms", "locations", "exclude-users"])
+def test_a_narrowing_condition_is_reported_and_does_not_change_the_verdict(mode, change, expected):
+    """A policy limited to one client app type, platform or named location asks for MFA on only part of admin
+    sign-ins. The defaults carry the same shape and excluding the break-glass accounts is Microsoft's own
+    advice, so these are named rather than judged."""
+    out = load(mode)(graph(edited(CA001, **change)))
+    assert pair(out) == (True, "success")
+    findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
+    assert expected in findings
+    assert "may reach only part of admin sign-ins" in findings
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_microsoft_example_reports_its_own_group_exclusion(mode):
+    """CA001 as Microsoft publishes it excludes one group, so the finding is there on the passing path too."""
+    out = load(mode)(graph(CA001, CA008))
+    assert pair(out) == (True, "success")
+    assert "1 excluded group(s)" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])

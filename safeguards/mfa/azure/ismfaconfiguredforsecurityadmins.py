@@ -4,11 +4,18 @@ Vendor: Microsoft Entra ID  |  Category: Multifactor Authentication
 Evaluates: Whether MFA is required for security admin roles via Conditional Access
 
 A role is covered by a policy that is enabled, requires MFA (via builtInControls
-or authenticationStrength), applies to every cloud app or the Microsoft Admin
-Portals, is not limited to risky sign-ins, and targets the role ("All" users,
-"All" roles, or the role id) without excluding it. The check passes only when
-every one of the six security admin roles is covered: a policy for one role
-says nothing about the other five.
+or authenticationStrength), reaches the administrative surface (includeApplications
+"All" or "MicrosoftAdminPortals", with neither the Microsoft Admin Portals nor the
+Microsoft Azure Management app excluded), is not limited to risky sign-ins, and
+targets the role ("All" users, "All" roles, or the role id) without excluding it.
+The check passes only when every one of the six security admin roles is covered:
+a policy for one role says nothing about the other five.
+
+Reaching the administrative surface is not the same as reaching every admin
+sign-in. Conditions that narrow a counted policy without exempting the admin
+portals -- clientAppTypes, platforms, named locations, excluded applications,
+users or groups -- are named in additionalFindings and do not change the verdict;
+narrowing_conditions says why.
 
 API: GET /v1.0/identity/conditionalAccess/policies
 
@@ -242,6 +249,17 @@ def policy_requires_mfa(policy):
 # scores the sign-in or user as risky.
 ADMIN_APPS = ["All", "MicrosoftAdminPortals"]
 
+# An exclusion that removes the administrative surface from an otherwise all-apps policy exempts exactly the
+# sign-ins this check is about, so the policy no longer counts. "MicrosoftAdminPortals" is the resource grouping
+# Microsoft's own "Require MFA for administrators" policy targets (Azure portal, Entra admin center, Microsoft
+# 365 admin center, Exchange and Defender portals); 797f4846-ba00-4fd7-ba43-dac1f8f63013 is Microsoft Azure
+# Management, the control plane behind the Azure portal, Azure CLI and Azure PowerShell.
+# Docs: https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-cloud-apps
+# Any other exclusion (a line-of-business app, a break-glass service principal) leaves the admin surface
+# covered, so it is reported as a narrowing condition rather than read as a bypass -- see narrowing_conditions.
+# Rejecting every exclusion would fail tenants whose admin policy is correct.
+ADMIN_SURFACE_EXCLUSIONS = ["all", "microsoftadminportals", "797f4846-ba00-4fd7-ba43-dac1f8f63013"]
+
 
 def listed(block, name):
     if not isinstance(block, dict):
@@ -250,13 +268,54 @@ def listed(block, name):
     return value if isinstance(value, list) else []
 
 
+def folded(values):
+    return [str(v).strip().lower() for v in values]
+
+
+def narrowing_conditions(policy):
+    """Conditions on a counted policy that keep it from reaching every admin sign-in.
+
+    None of these change the verdict. The defaults a correctly scoped policy carries -- clientAppTypes ["all"],
+    no platforms condition, includeLocations ["All"] -- are indistinguishable in shape from a deliberate
+    narrowing, and excluding the break-glass accounts from an admin MFA policy is Microsoft's own documented
+    advice, so rejecting a policy for carrying any of them would fail tenants configured the way Microsoft
+    recommends. They are named in additionalFindings instead, so a policy that asks for MFA on only part of
+    admin sign-ins is visible rather than silent.
+    """
+    conditions = policy.get("conditions")
+    if not isinstance(conditions, dict):
+        return []
+    found = []
+    client_apps = folded(listed(conditions, "clientAppTypes"))
+    if client_apps and "all" not in client_apps:
+        found.append("client app types " + ", ".join(client_apps))
+    platforms = folded(listed(conditions.get("platforms"), "includePlatforms"))
+    if platforms and "all" not in platforms:
+        found.append("platforms " + ", ".join(platforms))
+    locations = conditions.get("locations")
+    include_locations = folded(listed(locations, "includeLocations"))
+    if include_locations and "all" not in include_locations:
+        found.append("named locations only")
+    for block, name, label in [(locations, "excludeLocations", "location"),
+                               (conditions.get("applications"), "excludeApplications", "application"),
+                               (conditions.get("users"), "excludeUsers", "user"),
+                               (conditions.get("users"), "excludeGroups", "group")]:
+        count = len(listed(block, name))
+        if count:
+            found.append(str(count) + " excluded " + label + "(s)")
+    return found
+
+
 def policy_covers_admin_roles(policy):
     """The SECURITY_ADMIN_ROLES ids this policy targets, or [] when it does not apply to every admin sign-in."""
     conditions = policy.get("conditions")
     if not isinstance(conditions, dict):
         return []
-    apps = listed(conditions.get("applications"), "includeApplications")
+    applications = conditions.get("applications")
+    apps = listed(applications, "includeApplications")
     if len([a for a in apps if a in ADMIN_APPS]) == 0:
+        return []
+    if [a for a in folded(listed(applications, "excludeApplications")) if a in ADMIN_SURFACE_EXCLUSIONS]:
         return []
     if listed(conditions, "userRiskLevels") or listed(conditions, "signInRiskLevels"):
         return []
@@ -282,7 +341,8 @@ def not_measured(reason, validation=None):
 def transform(input):
     """True only when every one of the six SECURITY_ADMIN_ROLES is covered by an enabled Conditional Access
     policy that requires MFA (builtInControls "mfa" or an authenticationStrength) for every cloud app or the
-    Microsoft Admin Portals, without excluding the role and without being limited to risky sign-ins. All six
+    Microsoft Admin Portals, with neither the admin portals nor the Microsoft Azure Management app in
+    excludeApplications, without excluding the role and without being limited to risky sign-ins. All six
     are on Microsoft's minimum list for that policy. False names the roles left uncovered. None, with
     dataCollection.status "error": the policy list was not read, a partial page (@odata.nextLink) leaves a
     role uncovered, or the transformation failed.
@@ -324,6 +384,7 @@ def transform(input):
 
         matching_policies = []
         report_only_policies = []
+        narrowed_policies = []
         covered_ids = []
 
         for policy in policies:
@@ -342,6 +403,9 @@ def transform(input):
 
             if state == "enabled":
                 matching_policies.append(name)
+                narrowing = narrowing_conditions(policy)
+                if narrowing:
+                    narrowed_policies.append(name + " (" + "; ".join(narrowing) + ")")
                 for role_id in covered_roles:
                     if role_id not in covered_ids:
                         covered_ids.append(role_id)
@@ -378,11 +442,17 @@ def transform(input):
             additional_findings.append(
                 "Report-only (not enforced) MFA policies targeting admins: " + ", ".join(report_only_policies)
             )
+        if narrowed_policies:
+            additional_findings.append(
+                "Counted policies that carry a condition this check does not judge, so they may reach only part "
+                "of admin sign-ins: " + "; ".join(narrowed_policies)
+            )
 
         input_summary = {
             "totalPolicies": len(policies),
             "enabledMfaAdminPolicies": len(matching_policies),
             "reportOnlyMfaAdminPolicies": len(report_only_policies),
+            "narrowedMfaAdminPolicies": narrowed_policies,
             "coveredRoleCount": len(all_covered_roles),
             "uncoveredRoles": uncovered,
         }
