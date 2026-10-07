@@ -1,14 +1,20 @@
 """
-Transformation: isNTLMv1Disabled
+Transformation: isScreenLockWithin15MinutesOnAllApplicableDevices
 Vendor: Microsoft Defender for Endpoint (One-Click)  |  Category: Endpoint Security
-Claim (EP-007): NTLMv1 and LM are refused. True: every applicable device is compliant for
-"Set LAN Manager authentication level to 'Send NTLMv2 response only. Refuse LM & NTLM'"
-(scid-72, LmCompatibilityLevel 5). False: at least one applicable device is not.
+Check of the Windows Defender One-Click integration: Defender: screen lock within 15 minutes on all applicable
+devices (scid-28).
+True: every applicable device is compliant for the Defender Vulnerability Management secure configuration
+scid-28, knowledge-base name "Set 'Interactive logon: Machine inactivity limit' to '1-900 seconds'".
+False: at least one applicable device is not.
+The id is pinned and its knowledge-base name must contain "machine inactivity limit": scid-28 under another
+name, with no name (the knowledge base lacks it), or another id under that name reads Not evaluated, never
+passed. Defender reports compliance with the 1-900 second baseline, not the minutes set, so this is a
+yes/no key at the same bar as a 15-minute limit. Journeys that ask for a screen-lock limit may consume it.
 
-Source: a new One-Click method (an advanced-hunting query, POST /api/advancedqueries/run, the same API and
-application permission as the existing getTamperProtectionStatus method) over
-DeviceTvmSecureConfigurationAssessment, joined with DeviceTvmSecureConfigurationAssessmentKB so each row
-carries its ConfigurationName:
+Source: a One-Click method of the Windows Defender One-Click integration (an advanced-hunting query,
+POST /api/advancedqueries/run, the same API and application permission as the existing
+getTamperProtectionStatus method) over DeviceTvmSecureConfigurationAssessment, joined with
+DeviceTvmSecureConfigurationAssessmentKB so each row carries its ConfigurationName:
     {"Schema": [...], "Results": [{"DeviceId", "DeviceName", "OSPlatform", "ConfigurationId",
                                    "ConfigurationName", "IsApplicable", "IsCompliant"}, ...]}
 IsApplicable / IsCompliant arrive as SByte (1/0), booleans, or their strings.
@@ -18,7 +24,8 @@ id means; any other row makes the read Not evaluated rather than being guessed a
 no reading for one part of the claim is not shown to comply, and a part no device reads as applicable was not
 measured: with no failure elsewhere, either makes the read Not evaluated.
 Scope: devices onboarded to Defender for Endpoint and assessed by Defender Vulnerability Management. Devices
-that are not onboarded are not seen; device coverage is reported by the coverage checks.
+that are not onboarded are not seen; device coverage is reported by the coverage checks. A tenant without
+Defender Vulnerability Management (no TVM tables) returns no rows, which reads Not evaluated.
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body, a result at the
 100,000-row advanced-hunting limit, a row this file cannot identify, a part of the claim with no assessment
 row, or no applicable device.
@@ -26,15 +33,15 @@ row, or no applicable device.
 import json
 from datetime import datetime, timezone
 
-KEY = 'isNTLMv1Disabled'
-CLAIM = "the LAN Manager authentication level setting (scid-72, 'Send NTLMv2 response only. Refuse LM & NTLM')"
-WHAT = "the LAN Manager authentication level at 'Send NTLMv2 response only. Refuse LM & NTLM' (scid-72)"
-FIX = "Set 'Network security: LAN Manager authentication level' to 'Send NTLMv2 response only. Refuse LM & NTLM' (LmCompatibilityLevel 5) on the devices named, through Intune or Group Policy."
+KEY = 'isScreenLockWithin15MinutesOnAllApplicableDevices'
+CLAIM = '"Set \'Interactive logon: Machine inactivity limit\' to \'1-900 seconds\'" (scid-28)'
+WHAT = 'a machine inactivity limit of 1-900 seconds (scid-28)'
+FIX = "Set 'Interactive logon: Machine inactivity limit' to 900 seconds or less (not 0) on the devices named, through Intune (Local Policies Security Options: Interactive Logon Machine Inactivity Limit) or Group Policy."
 
 #: The parts of the claim: a row belongs to a part when its id is listed (or the list is empty)
 #: and every word appears in its lower-cased knowledge-base ConfigurationName.
 PARTS = (
-    {"part": 'LAN Manager authentication level', "ids": ('scid-72',), "words": ('lan manager authentication level', 'ntlmv2')},
+    {"part": 'Machine inactivity limit', "ids": ('scid-28',), "words": ('machine inactivity limit',)},
 )
 
 #: The criterion this file answers. None means "not measured", never "failed".
