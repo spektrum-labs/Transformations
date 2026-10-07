@@ -22,7 +22,8 @@ counts as not protected and is named separately in the reasons.
 Verdict:
   True   at least one active endpoint, and every active endpoint reports it on.
   False  at least one active endpoint reports it off (or unsupported).
-  None   (Not evaluated) the response is missing, an error, has no endpoints, or no active
+  None   (Not evaluated) the response is missing, an error, shows unread pages
+         (pages.nextKey still set), has no endpoints, or no active
          endpoint carries the field; also when some carry it (all on) and others do not,
          because "every endpoint" cannot then be shown.
 The requirement token compares isEquals true.
@@ -77,6 +78,26 @@ def endpoint_items(data):
         items = data.get("items")
         if isinstance(items, list):
             return items
+    return None
+
+
+def unread_pages(data, item_count):
+    """Why the list may be incomplete, or None when it is shown complete. The platform follows
+    pages.nextKey and merges items; a nextKey still set means pages were left unread."""
+    if not isinstance(data, dict):
+        return None
+    pages = data.get("pages")
+    if not isinstance(pages, dict):
+        return None
+    if pages.get("nextKey"):
+        return "the endpoints list has further pages (pages.nextKey is set) that were not read"
+    total = pages.get("total")
+    size = pages.get("size")
+    if isinstance(total, int) and not isinstance(total, bool) and total > 1 and \
+            isinstance(size, int) and not isinstance(size, bool) and item_count <= size:
+        return "the endpoints list reports " + str(total) + " pages but only one page of endpoints is present"
+    if "nextKey" not in pages and isinstance(size, int) and not isinstance(size, bool) and size > 0 and item_count >= size:
+        return "the first page of endpoints is full and the response does not show whether more pages exist"
     return None
 
 
@@ -159,6 +180,11 @@ def transform(input):
         items = endpoint_items(data)
         if error or items is None:
             return not_evaluated(error or "Endpoints response not recognised - no items list present", validation)
+
+        partial = unread_pages(data, len(items))
+        if partial:
+            return not_evaluated("Not every endpoint was read: " + partial, validation,
+                                 recommendation="Read every page of /endpoint/v1/endpoints before judging tamper protection")
 
         active, stale = active_endpoints(items)
         on = []
