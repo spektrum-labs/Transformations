@@ -1,18 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git status:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git show:*)",
-      "Bash(git fetch:*)",
+      "Bash(git status)",
+      "Bash(git diff)",
+      "Bash(git diff --stat)",
+      "Bash(git log --oneline)",
+      "Bash(git fetch origin)",
       "Bash(gh pr view:*)",
       "Bash(gh pr checks:*)",
       "Bash(gh pr diff:*)",
       "Bash(gh pr list:*)",
-      "Bash(python -m pytest:*)",
-      "Bash(pytest:*)",
-      "Bash(python local_tester.py:*)",
       "Bash(python tools/check_fail_closed.py:*)",
       "Bash(python tools/check_discriminates.py:*)",
       "Bash(python tools/check_none_not_evaluated.py:*)",

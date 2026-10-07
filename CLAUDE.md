@@ -72,6 +72,11 @@ def _parse_input(input):
 - Try a transform on a sample: `python local_tester.py <transform.py> <sample.json>`.
 - Transforms run under RestrictedPython in production: no `re.compile` or `getattr`-style escapes, standard library only. Fail closed: a criterion is only `True` from a body that shows it is satisfied.
 
+### Shared Claude Code settings
+
+- `.claude/settings.json` pre-approves a short list of commands as a convenience, not a security boundary: the `tools/check_*.py` entries run reviewed repo scripts; `local_tester.py` and `pytest` are deliberately not pre-approved because they execute code fetched from a URL or from untracked files, so extra care is needed on untrusted branches or fork PRs. Git entries are exact forms on purpose; do not widen them to prefix rules (`git diff:*` also matches `--output=<path>`, `git fetch:*` accepts any URL).
+- It enables the `spektrum-harness` plugin from the `spektrum-labs/spektrum-skills` marketplace, which is not pinned to a ref. Plugins can ship hooks and MCP servers that run commands on each contributor's machine, so push access to that repo is code execution here. Keep its default branch protected with required reviews.
+
 ### Release rules
 
 - Open PRs against `develop`. `main` is live on merge, so staging -> main merges are release PRs; merge them in order once green with 0 critical/high review findings.
