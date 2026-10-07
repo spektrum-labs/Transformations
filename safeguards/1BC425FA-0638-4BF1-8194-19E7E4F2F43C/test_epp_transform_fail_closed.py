@@ -87,25 +87,39 @@ def test_critical_systems_reads_servers():
 
 
 def test_critical_systems_without_servers_is_not_answered():
-    """KNOWN GAP, pinned deliberately rather than silently.
+    """Absent, not None.
 
-    None beside dataCollection "success" does NOT reach the evaluator as "not evaluated".
-    Token-Service has one not-evaluated channel and it covers the whole response
-    (evaluate.py _data_collection_failure_message); within a successful read,
-    extract_measured_value returns the whole response both for a key whose value is None and for a
-    key that is absent, so compare_values grades either as a measured failure. Omitting the key
-    therefore changes nothing -- verified against that function. A workstation-only MDR tenant is
-    red on this criterion until Token-Service grows a per-key channel or the RTA row is scoped to
-    tenants that have servers. The alternative, a vacuous True on an estate with no server in the
-    list, would be a measured pass nobody measured, which is worse.
+    Token-Service #981 (merged to main 2026-10-07) records a criterion whose key is ABSENT from
+    transformedResponse as isEvaluated False: evaluate._criterion_key_missing, called at
+    evaluate.py:2552 before compare_values. It tests presence, not value, and its docstring says a
+    key present with a None value is deliberately not covered -- that one still reaches
+    compare_values and is graded a measured failure. So for a workstation-only tenant the key has
+    to be left out, and None would be a false red. A vacuous True is not an option either: no
+    server in the list is not evidence that the servers are protected.
     """
     tr, status = run({"items": [endpoint("computer", FULL)]})
     assert status == "success"
-    assert tr["isEPPEnabledForCriticalSystems"] is None
+    assert "isEPPEnabledForCriticalSystems" not in tr
+    # The whole read was measured, so the response is not an error: only this key is unanswered.
+    assert tr["isEPPDeployed"] is True
+    findings = EPP.transform({"items": [endpoint("computer", FULL)]})["additionalInfo"]["evaluation"]["additionalFindings"]
+    assert any("isEPPEnabledForCriticalSystems" in str(finding) for finding in findings)
+
+
+def test_no_unanswered_key_is_reported_as_a_failure():
+    """An unanswered key is not evaluated, so it must not also be argued as a reason it failed."""
+    out = EPP.transform({"items": [endpoint("computer", FULL)]})
+    reasons = out["additionalInfo"]["evaluation"]["failReasons"]
+    assert not any("isEPPLoggingEnabled" in str(r) or "isEPPEnabledForCriticalSystems" in str(r)
+                   for r in reasons)
 
 
 def test_logging_key_is_not_emitted():
-    """GET /endpoints reports no logging or telemetry setting, so the file does not answer the key."""
+    """GET /endpoints reports no logging or telemetry setting, so the file does not answer the key.
+
+    Leaving the key out is what records it not evaluated (#981, evaluate._criterion_key_missing);
+    emitting None would have it compared and graded.
+    """
     tr, status = run(PASS_BODY)
     assert status == "success"
     assert "isEPPLoggingEnabled" not in tr

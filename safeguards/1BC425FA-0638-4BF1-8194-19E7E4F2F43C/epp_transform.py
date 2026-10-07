@@ -16,13 +16,19 @@ complete Sophos endpoint list -- no body, an error envelope, no endpoint records
 items this file cannot read, a list the connector stopped paging before the end, or a list with no
 active computer or server in it -- is Unevaluated for every key.
 
-Known gap (2026-10-07 review of PR #1067): Token-Service has one not-evaluated channel for the
-whole response, additionalInfo.dataCollection.status. Within a successful read there is no way
-to say "this one key was not measured": evaluate.extract_measured_value returns the whole
-response for a key whose value is None AND for a key that is absent, and compare_values then
-grades either as a measured failure. So isEPPEnabledForCriticalSystems is still a false red in a
-tenant whose endpoint list holds no server. Keys this method cannot answer at all are therefore
-not emitted, and their requirements are document-only.
+Per-key "not measured" (Token-Service #981, merged to main 2026-10-07): a criterion whose key is
+ABSENT from transformedResponse is recorded isEvaluated False -- evaluate._criterion_key_missing,
+called at evaluate.py:2552 before compare_values. The gate tests PRESENCE, not value, and says so:
+a key that is present with a None value is explicitly not covered, falls through to compare_values
+and is graded a measured failure. So within a successful read, OMITTING a key is how this file says
+"I did not measure this", and returning None is how it would ship a false red. Two keys use it:
+isEPPLoggingEnabled, which this method can never answer, and isEPPEnabledForCriticalSystems in a
+tenant whose endpoint list holds no server. A read that measured nothing at all still goes through
+unevaluated() and the whole-response dataCollection error, which is the older and broader channel.
+
+That gate is merged, not necessarily released. Against a deployed Token-Service older than #981 an
+absent key grades exactly as None did -- a measured failure -- so the deploy is a named condition on
+this transformation's blast radius, recorded in PR #1067.
 """
 
 import json
@@ -181,6 +187,11 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        # Keys this read does not answer. They are left out of transformedResponse, which is what
+        # records them as not evaluated (#981); this is the human-readable half of that.
+        unmeasured = [
+            "isEPPLoggingEnabled is not answered from this method: GET /endpoint/v1/endpoints "
+            "reports no logging, telemetry or data-upload setting"]
 
         # Token-Service preprocessing may deliver the endpoints as a bare list
         # (when the API response's `data` field is itself a list) or as a dict
@@ -366,19 +377,22 @@ def transform(input):
 
         # isEPPEnabledForCriticalSystems: every active server has endpointProtection installed. It was
         # computed from the computers-only count, so no server could ever affect it. With no active
-        # server in the list there is nothing to judge (a server without the Sophos agent is not in
-        # the list either), so it is None, never True.
-        if total_servers == 0:
-            coverage_scores["isEPPEnabledForCriticalSystems"] = None
-        else:
-            coverage_scores["isEPPEnabledForCriticalSystems"] = server_protection_count == total_servers
+        # server in the list there is nothing to judge -- a server without the Sophos agent is not in
+        # the list either -- so the key is left out of the answer entirely. Not None: None is graded,
+        # an absent key is recorded not evaluated (#981). Never True, which would be a pass nobody
+        # measured.
+        # Held in a local as well: reading it back by name out of a dict is the shape
+        # tools/check_no_self_answer.py forbids, and that rule is syntactic by design.
+        critical_systems = None
+        if total_servers > 0:
+            critical_systems = server_protection_count == total_servers
+            coverage_scores["isEPPEnabledForCriticalSystems"] = critical_systems
 
         # isEPPLoggingEnabled is not emitted at all. The endpoint list carries nothing about logging,
-        # telemetry or data upload, so this file cannot answer it -- and returning None would not say
-        # so: Token-Service reads an absent key and a None key identically (evaluate.py
-        # extract_measured_value), and grades both as a measured failure. A question this method
-        # cannot answer is left unanswered here and the requirement becomes document-only; the
-        # integration's RTA row for this key has to go. The reason is recorded in additionalFindings.
+        # telemetry or data upload, so this file cannot answer it, and leaving the key out is how it
+        # says so: evaluate._criterion_key_missing records an absent key as not evaluated, while a
+        # None value would be compared and graded (#981). The requirement is document-only until some
+        # method evidences it; the reason is recorded in additionalFindings.
 
         # Endpoint Security. The counter above stays per-type; the boolean reads the same
         # computers-plus-servers population as isEPPEnabled, for the same reason.
@@ -424,14 +438,17 @@ def transform(input):
                 f"and servers ({coverage_scores['edrDeployedPercentage']}%, threshold {EDR_DEPLOYED_THRESHOLD}%)"]
             recommendations = recommendations + ["Assign Intercept X Advanced with XDR to every computer and server"]
 
-        if coverage_scores["isEPPEnabledForCriticalSystems"] is True:
+        if critical_systems is True:
             pass_reasons = pass_reasons + [f"Server protection installed on all {total_servers} active servers"]
-        elif coverage_scores["isEPPEnabledForCriticalSystems"] is False:
+        elif critical_systems is False:
             fail_reasons = fail_reasons + [
                 f"Server protection installed on {server_protection_count} of {total_servers} active servers"]
             recommendations = recommendations + ["Install Sophos server protection on every server"]
         else:
-            fail_reasons = fail_reasons + ["isEPPEnabledForCriticalSystems not measured: no active server in the list"]
+            # Not a fail reason: the key is absent, so the criterion is not evaluated, not failed.
+            unmeasured = unmeasured + [
+                "isEPPEnabledForCriticalSystems is not answered for this tenant: the endpoint list "
+                "holds no active server to judge"]
 
         mdr_coverage = coverage_scores.get("MDR", 0)
         if coverage_scores["isMDREnabled"]:
@@ -443,9 +460,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            additional_findings=[
-                "isEPPLoggingEnabled is not answered from this method: GET /endpoint/v1/endpoints "
-                "reports no logging, telemetry or data-upload setting"],
+            additional_findings=unmeasured,
             input_summary={
                 "totalEndpoints": total_endpoints,
                 "staleEndpoints": stale_endpoints,
