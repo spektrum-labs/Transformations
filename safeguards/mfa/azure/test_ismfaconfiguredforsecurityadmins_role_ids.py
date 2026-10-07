@@ -55,13 +55,39 @@ def body(include_users=None, include_roles=None, exclude_roles=None):
                                                 "excludeRoles": exclude_roles or []}}}]}
 
 
+GLOBAL_ADMIN = "62e90394-69f5-4237-9190-012177145e10"
+SECURITY_ADMIN = "194ae4cb-b126-40b2-bd5b-6091b380977d"
+PRIV_ROLE_ADMIN = "e8611ab8-c189-46e8-94e1-60213ab1f814"
+AUTH_ADMIN = "c4e39bd9-1100-46d3-8c65-fb160da0071f"
+SIX = [GLOBAL_ADMIN, SECURITY_ADMIN, CA_ADMIN, PRIV_ROLE_ADMIN, AUTH_ADMIN, PRIV_AUTH_ADMIN]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_six_real_role_ids_pass(mode):
+    out = load(mode)(body(include_roles=SIX))
+    assert out["transformedResponse"][KEY] is True
+    assert len(out["transformedResponse"]["coveredRoles"]) == 6
+
+
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("role,name", [(CA_ADMIN, "Conditional Access Administrator"),
                                        (PRIV_AUTH_ADMIN, "Privileged Authentication Administrator")])
-def test_real_role_ids_are_covered(mode, role, name):
+def test_real_role_ids_are_counted_and_one_role_is_not_enough(mode, role, name):
     out = load(mode)(body(include_roles=[role]))
-    assert out["transformedResponse"][KEY] is True
     assert out["transformedResponse"]["coveredRoles"] == [name]
+    assert out["transformedResponse"][KEY] is False
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("old", [SHAREPOINT_ADMIN, CLOUD_DEVICE_ADMIN])
+def test_old_ids_do_not_stand_in_for_the_real_roles(mode, old):
+    roles = [r for r in SIX if r not in (CA_ADMIN, PRIV_AUTH_ADMIN)] + [old]
+    out = load(mode)(body(include_roles=roles))
+    assert out["transformedResponse"][KEY] is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "Conditional Access Administrator" in reason
+    assert "Privileged Authentication Administrator" in reason
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -73,9 +99,9 @@ def test_non_security_roles_do_not_count(mode, role):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_all_users_minus_excluded_real_roles(mode):
+def test_all_users_minus_excluded_real_roles_fails(mode):
     out = load(mode)(body(include_users=["All"], exclude_roles=[CA_ADMIN, PRIV_AUTH_ADMIN]))
-    assert out["transformedResponse"][KEY] is True
+    assert out["transformedResponse"][KEY] is False
     covered = out["transformedResponse"]["coveredRoles"]
     assert "Conditional Access Administrator" not in covered
     assert "Privileged Authentication Administrator" not in covered
@@ -86,3 +112,4 @@ def test_all_users_minus_excluded_real_roles(mode):
 def test_excluding_old_ids_no_longer_drops_security_roles(mode):
     out = load(mode)(body(include_users=["All"], exclude_roles=[SHAREPOINT_ADMIN, CLOUD_DEVICE_ADMIN]))
     assert len(out["transformedResponse"]["coveredRoles"]) == 6
+    assert out["transformedResponse"][KEY] is True
