@@ -13,9 +13,10 @@ Data source: Cloud Identity Policy API, one paginated GET (IS method getGmailPol
 Docs: https://cloud.google.com/identity/docs/concepts/supported-policy-api-settings
   Setting settings/gmail.auto_forwarding, field enable_auto_forwarding (boolean), Admin console caption
   "Allow users to automatically forward incoming email to another address".
-  Default (Policy API concepts, default field values): enable_auto_forwarding = true. Google does not return
-  a SYSTEM policy for this setting, so a complete Gmail policy list without one means the default applies:
-  automatic forwarding is ALLOWED.
+  Default (Policy API concepts, default field values): enable_auto_forwarding = true. Google usually returns
+  a SYSTEM policy for this setting, but not on every tenant. A complete Gmail list without any
+  auto_forwarding policy therefore cannot be told apart from a read that left the setting out, and is not
+  evaluated (no default is assumed in either direction).
 The Gmail setting covers every forwarding address, internal and external; turned off, it blocks external
 forwarding too, so it is a stricter control than "external only" and proves the criterion.
 
@@ -27,19 +28,19 @@ without their own policy inherit from their parent. Integration-Service hands sc
 
 Org unit overrides:
   * An allowing policy on any org unit or group is in force unless a policy on the same target with a higher
-    sortOrder turns forwarding off and has the plain target query (no licence or other condition).
-  * The top-level org unit must itself have a disabling policy in force; otherwise Google's default (allowed)
-    applies there and to every child org unit that does not override it. The top-level org unit is the org
+    sortOrder turns forwarding off and has the plain target query (no licence or other condition) naming
+    that same org unit (and group). A conditional later "off" leaves the allowing policy in force for every
+    user outside its condition, so the target still allows forwarding.
+  * The top-level org unit must itself have a plain disabling policy in force. The top-level org unit is the org
     unit that carries Google's SYSTEM policies in the same list (Google attaches defaults to the root).
 
 Verdict:
   True   the list is complete, the top-level org unit has a plain disabling policy in force, and no org unit
          or group has an allowing policy in force.
-  False  an org unit or group allows automatic forwarding and nothing on that target overrides it; or the
-         complete Gmail list holds no disabling policy for the top-level org unit, so Google's default
-         (allowed) applies.
+  False  an org unit or group allows automatic forwarding and nothing on that target overrides it.
   None   (Unevaluated, dataCollection error) error or scope body, None, {}, empty or unrelated JSON, a partial
-         list (nextPageToken left or the read marked truncated), records that are not Policy API records, a
+         list (nextPageToken or a truncation marker on any wrapper level, or in paginationStats), records
+         that are not Policy API records, a complete Gmail list with no auto_forwarding policy at all, a
          list with no Gmail setting at all (the read cannot be shown to cover Gmail), a top-level org unit
          that cannot be identified, or an auto-forwarding policy whose org unit, value or precedence cannot be
          read where it decides the verdict.
@@ -56,14 +57,61 @@ SETTING = "gmail.auto_forwarding"
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/cloud-identity.policies.readonly"
 META = {"transformationId": KEY, "vendor": "Google Workspace", "category": "Email Security"}
 # Plain pattern strings, not re.compile: the Token-Service sandbox refuses any call named compile.
-OU_ONLY = (r"^entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('[A-Za-z0-9_-]+'\)\)$")
-GROUP_AND_OU = (r"^entity\.groups\.exists\(group, group\.group_id == groupId\('[A-Za-z0-9_-]+'\)\) && "
-                r"entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('[A-Za-z0-9_-]+'\)\)$")
+OU_ONLY = (r"^entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('([A-Za-z0-9_-]+)'\)\)$")
+GROUP_AND_OU = (r"^entity\.groups\.exists\(group, group\.group_id == groupId\('([A-Za-z0-9_-]+)'\)\) && "
+                r"entity\.org_units\.exists\(org_unit, org_unit\.org_unit_id == orgUnitId\('([A-Za-z0-9_-]+)'\)\)$")
+MARKER_KEYS = ["paginationStats", "iterateStats"]
 SCOPE_HINTS = ["insufficient authentication scopes", "access_token_scope_insufficient", "unauthorized_client",
                "scope_not_granted", "access_denied", "request had insufficient authentication"]
 RECOMMENDATION = ("In the Google Admin console, Apps > Google Workspace > Gmail > End User Access, turn off "
                   "'Allow users to automatically forward incoming email to another address' for the top-level "
                   "org unit and remove every org unit or group override that turns it back on")
+
+
+def truthy(value):
+    return value is True or text(value).lower() == "true"
+
+
+def stats_truncated(stats, depth):
+    """paginationStats / iterateStats: True when any level reports a truncated or incomplete read."""
+    if depth > 4 or not isinstance(stats, dict):
+        return False
+    if truthy(stats.get("paginationTruncated")) or truthy(stats.get("truncated")) or truthy(stats.get("isTruncated")):
+        return True
+    if text(stats.get("nextPageToken")) or stats.get("complete") is False or text(stats.get("complete")).lower() == "false":
+        return True
+    for value in stats.values():
+        if stats_truncated(value, depth + 1):
+            return True
+    return False
+
+
+def level_truncated(level):
+    """A partial-read marker on this wrapper level (nextPageToken, paginationTruncated, stats blocks)."""
+    if not isinstance(level, dict):
+        return False
+    if truthy(level.get("paginationTruncated")) or text(level.get("nextPageToken")):
+        return True
+    for key in MARKER_KEYS:
+        if stats_truncated(level.get(key), 0):
+            return True
+    return False
+
+
+def any_level_truncated(input_data):
+    level = input_data
+    for attempt in range(6):
+        if not isinstance(level, dict):
+            return False
+        if level_truncated(level):
+            return True
+        nxt = None
+        for key in ["data", "api_response", "response", "result", "apiResponse", "Output", "_response_data"]:
+            if isinstance(level.get(key), dict):
+                nxt = level[key]
+                break
+        level = nxt
+    return False
 
 
 def extract_input(input_data):
@@ -193,11 +241,9 @@ def read_policies(data):
     """(policies, problem): the complete Policy API list, or the reason it is not one."""
     if not isinstance(data, dict):
         return None, "The response is not a Cloud Identity Policy API list; nothing to evaluate."
-    if data.get("paginationTruncated") is True or text(data.get("paginationTruncated")).lower() == "true":
-        return None, "The policy read was truncated; a partial list is not evaluated."
-    if text(data.get("nextPageToken")):
-        return None, ("Google returned more pages (nextPageToken) that were not read; org unit coverage of the "
-                      "automatic forwarding setting cannot be confirmed.")
+    if level_truncated(data):
+        return None, ("The policy read was partial (nextPageToken or a truncation marker); org unit coverage of "
+                      "the automatic forwarding setting cannot be confirmed.")
     policies = data.get("policies")
     if not isinstance(policies, list):
         return None, "No policies list in the response: the Gmail settings read cannot be shown to have run."
@@ -222,12 +268,20 @@ def target_of(policy):
     return org_unit + "|" + text(query.get("group"))
 
 
+def last_part(name):
+    return text(name).split("/")[-1]
+
+
 def plain_target_query(policy):
+    """True when the CEL query is the bare target clause AND names the same org unit (and group)."""
     query = query_of(policy)
     q = text(query.get("query"))
     if text(query.get("group")):
-        return bool(re.match(GROUP_AND_OU, q))
-    return bool(re.match(OU_ONLY, q))
+        found = re.match(GROUP_AND_OU, q)
+        return bool(found) and found.group(1) == last_part(query.get("group")) \
+            and found.group(2) == last_part(query.get("orgUnit"))
+    found = re.match(OU_ONLY, q)
+    return bool(found) and found.group(1) == last_part(query.get("orgUnit"))
 
 
 def label(target):
@@ -281,8 +335,9 @@ def evaluate(policies, root):
         if covered:
             overridden = overridden + 1
             continue
-        unclear = [p for p in later_off if p["order"] is None or entry["order"] is None
-                   or (p["order"] > entry["order"] and not p["plain"])]
+        # A conditional later "off" only covers users inside its condition; the allowing policy stays in force
+        # for everyone else, so it is not unclear. Only a missing sortOrder leaves precedence unknown.
+        unclear = [p for p in later_off if p["order"] is None or entry["order"] is None]
         if unclear or entry["target"] in unreadable_targets:
             uncertain.append(entry["target"])
         else:
@@ -318,6 +373,9 @@ def transform(input):
         problem = error_in(data)
         if problem:
             return unevaluated(explain_error(problem), validation)
+        if any_level_truncated(input):
+            return unevaluated("The policy read was partial (nextPageToken or a truncation marker on a wrapper "
+                               "level); org unit coverage cannot be confirmed.", validation)
         policies, problem = read_policies(data)
         if problem:
             return unevaluated(problem, validation)
@@ -361,13 +419,14 @@ def transform(input):
                                "value, or a conditional top-level setting; organisation-wide coverage cannot be "
                                "confirmed.", validation, summary)
         if state["root"] == "default":
-            result[KEY] = False
-            return create_response(
-                result=result, validation=validation, input_summary=summary,
-                fail_reasons=["No setting turns automatic forwarding off for the top-level org unit in a complete "
-                              "list of " + str(len(gmail)) + " Gmail policies: Google's documented default applies "
-                              "(automatic forwarding allowed)"],
-                recommendations=[RECOMMENDATION])
+            if not entries:
+                return unevaluated("No gmail.auto_forwarding policy in a complete list of " + str(len(gmail))
+                                   + " Gmail policies: the setting was not returned, so whether automatic "
+                                   "forwarding is allowed cannot be read. Setting it explicitly in the Admin "
+                                   "console makes Google return it.", validation, summary)
+            return unevaluated("No automatic forwarding policy applies to the top-level org unit ("
+                               + str(len(entries)) + " policies on other targets): organisation-wide coverage "
+                               "cannot be confirmed.", validation, summary)
         result[KEY] = True
         return create_response(
             result=result, validation=validation, input_summary=summary,
