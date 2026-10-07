@@ -84,6 +84,12 @@ class DuoAuthenticationLogAccessTests(unittest.TestCase):
                 self.assertIn("read OK with an empty window",
                               response["additionalInfo"]["evaluation"]["passReasons"][0])
 
+    def test_non_dict_validation_does_not_raise(self):
+        for validation in (None, "valid", 3):
+            with self.subTest(validation=validation):
+                response = self.run_transform({"data": {"stat": "OK", "response": RECORDS}, "validation": validation})
+                self.assertIs(response["transformedResponse"][KEY], True)
+
     def test_empty_list_without_proof_of_success_is_not_evaluated(self):
         # an empty list is also what failed reads look like; without Duo's "stat": "OK" (or the v2
         # returnSpec's authlogs + metadata) it proves nothing, and it must never be a pass
