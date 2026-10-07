@@ -106,7 +106,7 @@ def technician_records(data):
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for name in ("technicians", "items", "results", "value"):
+        for name in ("technicians", "items", "results", "value", "data"):
             if isinstance(data.get(name), list):
                 return data[name]
     return None
@@ -162,7 +162,16 @@ def measure(data):
     if not active:
         return None, summary, ("No enabled, registered technician in the list: nothing about "
                                "sign-in was measured")
-    return sso > 0, summary, None
+    if sso:
+        return True, summary, None
+    # No technician classified as SSO. If any carried an authType this code does not recognise,
+    # "no SSO" is not a measurement: the enum spelling comes from the spec and has never been
+    # checked against a captured body, so an unseen value (a new IdP type, a different case or
+    # spelling) would put every SSO technician in `other` and return a confident false.
+    if other:
+        return None, summary, (str(other) + " active technician(s) carry an authType this check does "
+                               "not recognise, so sign-in was not measured")
+    return False, summary, None
 
 
 def transform(input):
