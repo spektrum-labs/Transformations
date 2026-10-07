@@ -153,13 +153,26 @@ class NotMeasuredIsNotGraded(unittest.TestCase):
             self.assertTrue(MEASURED.get(name), name)
 
 
+SAFEGUARDS = os.path.dirname(HERE)
+AZURE = os.path.join(SAFEGUARDS, "backups", "azure")
+
+# Every Azure Resource Graph reader in the tree, both the 729 set and its drifted copies
+# under backups/azure. The census is asserted complete by
+# test_no_resource_graph_reader_is_missing_from_this_list below, so a new one cannot be
+# added outside the rule without this file failing.
 ARG_ROWS_READERS = [
-    ("isbackupenabled", "isBackupEnabled", os.path.join(HERE, "isbackupenabled.py")),
-    ("is_backup_types_scheduled", "isBackupTypesScheduled",
-     os.path.join(HERE, "is_backup_types_scheduled.py")),
-    ("is_backup_tested", "isBackupTested", os.path.join(HERE, "is_backup_tested.py")),
-    ("backupfrequency", "backupFrequency",
-     os.path.join(HERE, os.pardir, "backups", "azure", "backupfrequency.py")),
+    ("729/confirmedlicensepurchased", "confirmedLicensePurchased", os.path.join(HERE, "confirmedlicensepurchased.py")),
+    ("729/is_backup_encrypted", "isBackupEncrypted", os.path.join(HERE, "is_backup_encrypted.py")),
+    ("729/is_backup_immutable", "isBackupImmutable", os.path.join(HERE, "is_backup_immutable.py")),
+    ("729/is_backup_tested", "isBackupTested", os.path.join(HERE, "is_backup_tested.py")),
+    ("729/is_backup_types_scheduled", "isBackupTypesScheduled", os.path.join(HERE, "is_backup_types_scheduled.py")),
+    ("729/isbackupenabled", "isBackupEnabled", os.path.join(HERE, "isbackupenabled.py")),
+    ("azure/backupfrequency", "backupFrequency", os.path.join(AZURE, "backupfrequency.py")),
+    ("azure/is_backup_encrypted", "isBackupEncrypted", os.path.join(AZURE, "is_backup_encrypted.py")),
+    ("azure/is_backup_immutable", "isBackupImmutable", os.path.join(AZURE, "is_backup_immutable.py")),
+    ("azure/is_backup_tested", "isBackupTested", os.path.join(AZURE, "is_backup_tested.py")),
+    ("azure/is_backup_types_scheduled", "isBackupTypesScheduled", os.path.join(AZURE, "is_backup_types_scheduled.py")),
+    ("azure/isbackupenabled", "isBackupEnabled", os.path.join(AZURE, "isbackupenabled.py")),
 ]
 
 
@@ -207,6 +220,36 @@ class ZeroResourceGraphRowsIsNotMeasured(unittest.TestCase):
         out = module.transform({"data": {"value": []}, "validation": self.VALIDATION})
         self.assertIs(out["transformedResponse"]["isBackupTested"], False)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_no_resource_graph_reader_is_missing_from_this_list(self):
+        """The rule is only as good as the census, so the census is asserted, not sampled.
+
+        A transform is a Resource Graph reader when it names Resource Graph AND reads a
+        "rows" key. That pair is what distinguishes the Azure files from Datto BCDR, whose
+        own envelope also carries data.rows, and from the EPP checks, which merely list
+        "rows" among candidate container keys. Any new one must be added here, which forces
+        whoever adds it to decide what it does with zero rows.
+        """
+        listed = set()
+        for _, _, path in ARG_ROWS_READERS:
+            listed.add(os.path.realpath(path))
+        found = set()
+        for folder, _, names in os.walk(SAFEGUARDS):
+            for name in names:
+                if not name.endswith(".py") or name.startswith("test_") or name == "__init__.py":
+                    continue
+                if os.path.basename(folder) == "schemas":
+                    continue
+                path = os.path.join(folder, name)
+                with open(path, encoding="utf-8") as handle:
+                    source = handle.read()
+                if '"rows"' in source and "esource Graph" in source:
+                    found.add(os.path.realpath(path))
+        missing = sorted(os.path.relpath(p, SAFEGUARDS) for p in found - listed)
+        self.assertEqual(missing, [], "Resource Graph readers not covered by the zero-rows rule: "
+                                      + ", ".join(missing))
+        stale = sorted(os.path.relpath(p, SAFEGUARDS) for p in listed - found)
+        self.assertEqual(stale, [], "listed but no longer a Resource Graph reader: " + ", ".join(stale))
 
     def test_a_row_that_came_back_still_answers(self):
         """Only the EMPTY rows array is ambiguous; a row that was read is evidence."""

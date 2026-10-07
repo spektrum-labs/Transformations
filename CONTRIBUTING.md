@@ -159,13 +159,31 @@ scope the caller cannot read, so its empty list *is* a proven empty set and stay
 measured `False`. Do not propagate this exception to ARM readers; the two are
 distinguished by which API produced the body, not by the body looking empty.
 
-One consequence is deliberate and worth stating. A criterion whose only negative signal
-was "zero rows" -- `isBackupEnabled` in
-`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/` is the one in this repository -- can
-now answer only `True` or not-measured. That is a real loss of a red, accepted because
-the red it replaced was indistinguishable from a permissions artefact. The way to earn
-that red back is to make the workflow send an explicit `subscriptions` list and compare
-it with what came back, which is a workflow change, not a transformation change.
+**The census is enforced, not sampled.** A transform counts as a Resource Graph reader
+when it names Resource Graph *and* reads a `"rows"` key -- the pair is what separates the
+twelve Azure files from Datto BCDR, whose own envelope also carries `data.rows`, and from
+the EPP checks, which merely list `"rows"` among candidate container keys.
+`test_no_resource_graph_reader_is_missing_from_this_list`, in
+`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/test_not_measured_backups_azure_729.py`,
+walks the tree and fails if a reader exists that the rule's test table does not drive. Add
+a reader and that test makes you decide what it does with zero rows.
+
+Two consequences are deliberate and worth stating.
+
+A criterion whose only negative signal was "zero rows" can now answer only `True` or
+not-measured. `isBackupEnabled` is that criterion, in both its copies
+(`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/` and `safeguards/backups/azure/`).
+That is a real loss of a red, accepted because the red it replaced was indistinguishable
+from a permissions artefact. The way to earn it back is to make the workflow send an
+explicit `subscriptions` list and compare it with what came back, which is a workflow
+change, not a transformation change.
+
+`safeguards/backups/azure/is_backup_encrypted.py` also lost a `totalRecords` fallback that
+stood where the zero-rows guard now is. `totalRecords` is Resource Graph's own count of
+matched records, so zero there carries exactly the ambiguity above; and the other branch
+asserted `isBackupEncrypted` `True` from `totalRecords > 0` alone, which is a count of
+vaults, not a reading of any vault's encryption. Both branches are gone rather than left
+reachable.
 
 ### Two exceptions, both narrow
 

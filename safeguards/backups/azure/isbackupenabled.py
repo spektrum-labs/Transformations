@@ -36,12 +36,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupEnabled") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupEnabled could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -92,15 +97,36 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        inner_data = data.get("data", data)
-        is_enabled = False
-        row_count = 0
+        inner_data = data.get("data", data) if isinstance(data, dict) else None
+        rows = inner_data.get("rows") if isinstance(inner_data, dict) else None
+        if not isinstance(rows, list):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupEnabled not evaluated: no Resource Graph 'rows' array in the response"],
+                recommendations=["Confirm the principal has at least Reader on every subscription "
+                                 "holding a Recovery Services or Backup vault, then re-run the query."]
+            )
 
-        if 'rows' in inner_data:
-            rows = inner_data.get("rows", [])
-            row_count = len(rows)
-            if row_count > 0:
-                is_enabled = True
+        # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+        # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+        # answers 200 with only the readable subset and, in Microsoft's words, "without any
+        # indication that the result might be partial". So zero rows is equally "there are
+        # none" and "the vaults are in a subscription this principal cannot read", and the
+        # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+        # Resource Graph: zero rows is not a proven empty set".        # This criterion's only negative signal WAS zero rows, so it can now answer only
+        # True or not-measured, exactly as its counterpart in safeguards/729cebc6-.../.
+        if not rows:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupEnabled not evaluated: the Resource Graph query returned zero rows, which is also what a subscription this principal cannot read returns"],
+                recommendations=["Confirm the principal has at least Reader on every subscription "
+                                 "holding a Recovery Services or Backup vault, then re-run the query."]
+            )
+
+        is_enabled = True
+        row_count = len(rows)
 
         if is_enabled:
             pass_reasons.append(f"Backup is enabled with {row_count} backup configurations found")
