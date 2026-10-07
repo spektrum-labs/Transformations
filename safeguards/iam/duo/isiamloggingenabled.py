@@ -96,6 +96,9 @@ def load(input):
 
 def log_events(data):
     """(endpoint, list) holding the authentication log events in a v1 or v2 body, else (None, None)."""
+    if isinstance(data, dict) and isinstance(data.get("response"), dict) \
+            and isinstance(data["response"].get("authlogs"), list):
+        data = data["response"]  # raw v2 body that no wrapper unwrapped (e.g. inside enriched "data")
     if isinstance(data, dict) and isinstance(data.get("authlogs"), list):
         return V2_ENDPOINT, data["authlogs"]
     if isinstance(data, list):
