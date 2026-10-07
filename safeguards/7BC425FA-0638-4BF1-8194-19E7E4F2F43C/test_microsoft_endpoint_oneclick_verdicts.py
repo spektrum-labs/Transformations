@@ -76,22 +76,22 @@ def hunting(rows):
 
 
 def test_tamper_protection_needs_every_applicable_device():
-    assert value(SCID, hunting([row("scid-2010", "1"), row("scid-2010", "1"), row("scid-2010", "None", "0")]),
+    assert value(SCID, hunting([row("scid-2003", "1"), row("scid-2003", "1"), row("scid-2003", "None", "0")]),
                  "isTamperProtectionEnabled") is True
-    out = SCID.transform(hunting([row("scid-2010", "1"), row("scid-2010", "0")]))["transformedResponse"]
+    out = SCID.transform(hunting([row("scid-2003", "1"), row("scid-2003", "0")]))["transformedResponse"]
     assert out["isTamperProtectionEnabled"] is False
     assert out["tamperProtectionCompliancePercentage"] == 50
 
 
 def test_real_time_protection_reads_its_own_scid():
-    out = SCID.transform(hunting([row("scid-2011", True), row("scid-2011", False)]))["transformedResponse"]
+    out = SCID.transform(hunting([row("scid-2012", True), row("scid-2012", False)]))["transformedResponse"]
     assert out["isRealTimeProtectionEnabled"] is False
     assert out["realTimeProtectionCompliancePercentage"] == 50
     assert out["isTamperProtectionEnabled"] is None
 
 
 def test_no_applicable_device_is_not_evaluated():
-    for body in (hunting([]), hunting([row("scid-2010", "None", "0")])):
+    for body in (hunting([]), hunting([row("scid-2003", "None", "0")])):
         assert value(SCID, body, "isTamperProtectionEnabled") is None
         assert collection_errors(SCID, body)
 
