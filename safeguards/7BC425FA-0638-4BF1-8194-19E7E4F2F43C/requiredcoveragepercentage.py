@@ -3,11 +3,28 @@ Transformation: requiredCoveragePercentage
 Vendor: Microsoft Defender / Endpoint Protection
 Category: Endpoint Security
 
-Evaluates percentage of endpoint protection coverage for eligible machines.
+Evaluates percentage of endpoint protection coverage for eligible machines, from
+GET /api/machines (Microsoft Defender for Endpoint, Machine resource type).
+
+Eligible: not excluded, and onboardingStatus not Unsupported or InsufficientInfo.
+Protected: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_WINDOW_DAYS of now.
+Not measured (None, dataCollection error): an error body, a list with pages left unread
+(@odata.nextLink), records that carry no onboardingStatus, or no eligible machine at all.
 """
 
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
+
+
+# Microsoft documents lastSeen as "the last received full device report. A device typically sends a
+# full report every 24 hours", and counts a device that sends no signal for more than seven days as
+# Inactive. An onboarded machine with no full report in 15 days is not evidenced as protected; it stays
+# in the denominator, so a dark machine lowers coverage rather than leaving it. 15 days matches the
+# endpoint window the CrowdStrike, SentinelOne and Sophos checks already apply. The clock is the wall
+# clock, so a fleet that has been dark for months scores what it is, not what it was.
+ACTIVE_WINDOW_DAYS = 15
+INELIGIBLE_STATUSES = ("unsupported", "insufficientinfo")
 
 
 def extract_input(input_data):
@@ -66,8 +83,58 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def parse_time(value):
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Microsoft sends seven fractional digits and Z. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
+        return None
+    try:
+        when = datetime.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
+
+
+def status_of(machine):
+    return str(machine.get("onboardingStatus") or "").strip().lower()
+
+
+def read_machines(data):
+    """The machine list, or the reason it cannot be measured from."""
+    if isinstance(data, list):
+        data = {"value": data}
+    if not isinstance(data, dict) or "error" in data or "PSError" in data:
+        return None, "Microsoft Defender did not return a machine list (error or unreadable body)"
+    machines = data.get("value")
+    if not isinstance(machines, list):
+        return None, "Microsoft Defender response carries no value[] machine list"
+    if any(not isinstance(machine, dict) for machine in machines):
+        return None, "Microsoft Defender machine list contains a record that is not a machine"
+    next_link = data.get("@odata.nextLink")
+    if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
+        return None, ("The machine list has more pages than were read (@odata.nextLink present); "
+                      "coverage is not computed over a sample")
+    if machines and not any("onboardingStatus" in machine for machine in machines):
+        return None, "No machine record carries onboardingStatus, so onboarding cannot be read"
+    return machines, None
+
+
 def transform(input):
     criteriaKey = "requiredCoveragePercentage"
+    value = None
+    reason = None
+    extra = {}
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+    validation = {"status": "unknown", "errors": [], "warnings": []}
 
     try:
         if isinstance(input, str):
@@ -78,81 +145,54 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # Get machine data from value array
-        machine_data = []
-        if isinstance(data, dict) and 'value' in data:
-            machine_data = data['value']
-        elif isinstance(data, list):
-            machine_data = data
-
-        # Exclude devices marked as excluded
-        non_excluded = [m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true"]
-
-        # Eligible = devices that can run endpoint protection (exclude Unsupported and InsufficientInfo)
-        ineligible_statuses = {"Unsupported", "InsufficientInfo"}
-        eligibleMachines = [m for m in non_excluded if m.get("onboardingStatus") not in ineligible_statuses]
-
-        # Protected = onboarded devices (Active or Inactive — Inactive just means powered off)
-        protectedMachines = [m for m in eligibleMachines if m.get("onboardingStatus") == "Onboarded"]
-
-        allDevices = len(machine_data)
-        eligibleDevices = len(eligibleMachines)
-        protectedDevices = len(protectedMachines)
-
-        allDevicesPercentage = round((protectedDevices / allDevices) * 100) if allDevices > 0 else 0
-        eligibleDevicesPercentage = round((protectedDevices / eligibleDevices) * 100) if eligibleDevices > 0 else 0
-
-        criteriaValue = eligibleDevicesPercentage if eligibleDevices > 0 else 100
-
-        if criteriaValue >= 100:
-            pass_reasons.append(f"All eligible devices are protected: {protectedDevices}/{eligibleDevices} (100%)")
+            reason = "Input validation failed"
         else:
-            fail_reasons.append(f"Not all eligible devices are protected: {protectedDevices}/{eligibleDevices} ({eligibleDevicesPercentage}%)")
-            recommendations.append("Onboard remaining eligible devices to endpoint protection")
-
-        if eligibleDevices == 0:
-            fail_reasons.append("No eligible devices found")
-            recommendations.append("Ensure devices are properly enrolled and not excluded")
-
-        pass_reasons.append(f"Overall coverage: {protectedDevices}/{allDevices} total devices ({allDevicesPercentage}%)")
-        if allDevices != eligibleDevices:
-            ineligible = allDevices - eligibleDevices
-            pass_reasons.append(f"{ineligible} device(s) excluded from eligibility (Unsupported/InsufficientInfo)")
-
-        return create_response(
-            result={
-                criteriaKey: criteriaValue,
-                "allDevicesPercentageofCoverage": allDevicesPercentage,
-                "eligibleDevicesPercentageofCoverage": eligibleDevicesPercentage,
-                "allDevices": allDevices,
-                "eligibleDevices": eligibleDevices,
-                "protectedDevices": protectedDevices
-            },
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={
-                "allDevices": allDevices,
-                "eligibleDevices": eligibleDevices,
-                "protectedDevices": protectedDevices
-            }
-        )
-
+            machines, reason = read_machines(data)
+            if machines is not None:
+                now = datetime.utcnow()
+                cutoff = now - timedelta(days=ACTIVE_WINDOW_DAYS)
+                non_excluded = [m for m in machines if str(m.get("isExcluded", "false")).lower() != "true"]
+                eligible = [m for m in non_excluded if status_of(m) not in INELIGIBLE_STATUSES]
+                onboarded = [m for m in eligible if status_of(m) == "onboarded"]
+                reporting = [m for m in onboarded
+                             if parse_time(m.get("lastSeen")) is not None and parse_time(m.get("lastSeen")) >= cutoff]
+                extra = {
+                    "allDevices": len(machines),
+                    "eligibleDevices": len(eligible),
+                    "onboardedDevices": len(onboarded),
+                    "protectedDevices": len(reporting),
+                    "staleOnboardedDevices": len(onboarded) - len(reporting),
+                }
+                if not eligible:
+                    reason = ("No eligible machine in the Defender inventory (" + str(len(machines))
+                              + " returned, none onboardable); coverage has no denominator")
+                else:
+                    value = round(100 * len(reporting) / len(eligible))
+                    line = (str(len(reporting)) + " of " + str(len(eligible)) + " eligible machines are onboarded "
+                            "and sent a full device report within " + str(ACTIVE_WINDOW_DAYS) + " days ("
+                            + str(value) + "%)")
+                    if extra["staleOnboardedDevices"]:
+                        line = line + "; " + str(extra["staleOnboardedDevices"]) + " onboarded machines have not reported"
+                    if value >= 100:
+                        pass_reasons.append(line)
+                    else:
+                        fail_reasons.append(line)
+                        recommendations.append("Onboard the remaining eligible devices to Defender for Endpoint and "
+                                               "investigate onboarded devices that have stopped reporting")
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        value = None
+        reason = "Transformation error: " + str(e)
+
+    # Measured is decided by the value, never by the branch: anything that left it None is not measured.
+    measured = value is not None
+    result = {criteriaKey: value}
+    result.update(extra)
+    return create_response(
+        result=result,
+        validation=validation,
+        pass_reasons=pass_reasons,
+        fail_reasons=fail_reasons if measured else [reason or "Coverage could not be measured"],
+        recommendations=recommendations,
+        input_summary=extra,
+        api_errors=[] if measured else [reason or "Coverage could not be measured"],
+    )
