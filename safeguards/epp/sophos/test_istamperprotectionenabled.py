@@ -74,13 +74,36 @@ def test_one_endpoint_off_fails_and_names_it():
     assert tr["tamperProtectedPercentage"] == 50
 
 
-def test_unsupported_endpoint_fails_separately():
+def test_unsupported_endpoint_is_excluded_and_named():
     value, out = run(body(endpoint(1), endpoint(2, enabled=False, supported=False)))
+    assert value is True
+    tr = out["transformedResponse"]
+    assert tr["unsupportedEndpointsExcluded"] == 1
+    assert tr["endpointsWithoutTamperSupport"] == ["host-02"]
+    assert tr["judgedEndpoints"] == 1
+    assert any("host-02" in f for f in out["additionalInfo"]["evaluation"]["additionalFindings"])
+
+
+def test_unsupported_reporting_enabled_is_not_counted_as_protected():
+    # Linux servers report enabled true together with supported false.
+    value, out = run(body(endpoint(1, enabled=False), endpoint(2, enabled=True, supported=False)))
     assert value is False
     tr = out["transformedResponse"]
-    assert tr["tamperProtectionUnsupportedEndpoints"] == 1
-    assert tr["tamperProtectionOffEndpoints"] == 0
-    assert any("do not support" in r for r in out["additionalInfo"]["evaluation"]["failReasons"])
+    assert tr["tamperProtectedEndpoints"] == 0
+    assert tr["unsupportedEndpointsExcluded"] == 1
+
+
+def test_supported_off_still_fails_beside_unsupported():
+    value, out = run(body(endpoint(1, enabled=False), endpoint(2, enabled=False, supported=False)))
+    assert value is False
+    assert out["transformedResponse"]["endpointsWithTamperProtectionOff"] == ["host-01"]
+
+
+def test_every_active_endpoint_unsupported_is_not_evaluated():
+    value, out = run(body(endpoint(1, enabled=True, supported=False), endpoint(2, enabled=False, supported=False)))
+    assert value is None
+    assert collection_status(out) == "error"
+    assert out["transformedResponse"]["unsupportedEndpointsExcluded"] == 2
 
 
 def test_stale_endpoint_off_is_excluded():
@@ -160,6 +183,15 @@ def test_full_first_page_without_cursor_is_not_evaluated():
     payload = body(*[endpoint(n) for n in range(1, 4)])
     payload["pages"] = {"size": 3, "maxSize": 500}
     assert run(payload)[0] is None
+
+
+@pytest.mark.parametrize("flag_value", [True, "true"])
+def test_truncated_list_is_not_evaluated(flag_value):
+    payload = body(endpoint(1), endpoint(2))
+    payload["pages"]["truncated"] = flag_value
+    value, out = run(payload)
+    assert value is None
+    assert collection_status(out) == "error"
 
 
 def test_merged_list_with_null_cursor_passes():

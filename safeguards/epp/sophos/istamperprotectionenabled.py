@@ -15,17 +15,22 @@ Only endpoints seen within 15 days of the newest lastSeenAt in the response are 
 because the flag is only as current as the endpoint's last check-in. Stale endpoints are
 counted and returned, not silently dropped.
 
-An endpoint counts as tamper protected only when tamperProtectionEnabled is literally true.
-An endpoint that reports tamperProtectionSupported false cannot be tamper protected, so it
-counts as not protected and is named separately in the reasons.
+Support is read BEFORE the enabled flag. Endpoints that report tamperProtectionSupported
+false (for example Linux servers) can still report tamperProtectionEnabled true, which is
+not protection. They are EXCLUDED from the verdict and NAMED in the evidence: a "no" for
+them could never be fixed in Sophos, and an L4 "no" must be fixable in the tool.
+
+An endpoint counts as tamper protected only when it is supported (or does not say) and
+tamperProtectionEnabled is literally true.
 
 Verdict:
-  True   at least one active endpoint, and every active endpoint reports it on.
-  False  at least one active endpoint reports it off (or unsupported).
+  True   at least one active supported endpoint, and every one of them reports it on.
+  False  at least one active supported endpoint reports it off.
   None   (Not evaluated) the response is missing, an error, shows unread pages
-         (pages.nextKey still set), has no endpoints, or no active
-         endpoint carries the field; also when some carry it (all on) and others do not,
-         because "every endpoint" cannot then be shown.
+         (pages.nextKey still set, or pages.truncated true), has no endpoints, no active
+         endpoint, every active endpoint is unsupported, or no active endpoint carries the
+         field; also when some carry it (all on) and others do not, because "every
+         endpoint" cannot then be shown.
 The requirement token compares isEquals true.
 """
 import json
@@ -89,6 +94,9 @@ def unread_pages(data, item_count):
     pages = data.get("pages")
     if not isinstance(pages, dict):
         return None
+    truncated = pages.get("truncated")
+    if truncated is True or (isinstance(truncated, str) and truncated.strip().lower() == "true"):
+        return "the platform marked the endpoints list truncated (pages.truncated is true)"
     if pages.get("nextKey"):
         return "the endpoints list has further pages (pages.nextKey is set) that were not read"
     total = pages.get("total")
@@ -194,22 +202,23 @@ def transform(input):
         for endpoint in active:
             enabled = flag(endpoint.get("tamperProtectionEnabled"))
             supported = flag(endpoint.get("tamperProtectionSupported"))
-            if enabled is True:
-                on.append(endpoint)
-            elif supported is False:
+            if supported is False:
                 unsupported.append(endpoint)
+            elif enabled is True:
+                on.append(endpoint)
             elif enabled is False:
                 off.append(endpoint)
             else:
                 unknown.append(endpoint)
 
-        judged = len(on) + len(off) + len(unsupported)
+        judged = len(on) + len(off)
         pct = round((len(on) / judged) * 100) if judged else 0
         summary = {
             "activeEndpoints": len(active),
+            "judgedEndpoints": len(active) - len(unsupported),
             "tamperProtectedEndpoints": len(on),
             "tamperProtectionOffEndpoints": len(off),
-            "tamperProtectionUnsupportedEndpoints": len(unsupported),
+            "unsupportedEndpointsExcluded": len(unsupported),
             "endpointsWithoutTamperData": len(unknown),
             "tamperProtectedPercentage": pct,
             "endpointsWithTamperProtectionOff": [label(e) for e in off][:NAME_LIMIT],
@@ -223,29 +232,39 @@ def transform(input):
                 validation, summary,
                 "Confirm Sophos endpoints are checking in to Sophos Central")
 
-        if off or unsupported:
-            fail_reasons = []
-            recommendations = []
-            if off:
-                fail_reasons.append(str(len(off)) + " of " + str(len(active)) + " active endpoint(s) report tamper protection off")
-                recommendations.append("Turn on tamper protection in Sophos Central for: " + ", ".join(summary["endpointsWithTamperProtectionOff"]))
-            if unsupported:
-                fail_reasons.append(str(len(unsupported)) + " of " + str(len(active)) + " active endpoint(s) report that they do not support tamper protection")
-                recommendations.append("Update or replace the Sophos agent on endpoints that cannot run tamper protection: " + ", ".join(summary["endpointsWithoutTamperSupport"]))
+        findings = []
+        if unsupported:
+            findings.append(str(len(unsupported)) + " active endpoint(s) report that Sophos does not support tamper protection on them and are excluded: "
+                            + ", ".join(summary["endpointsWithoutTamperSupport"]))
+
+        if len(unsupported) == len(active):
+            return create_response(
+                result={criteriaKey: None, **summary}, validation=validation,
+                api_errors=["Every active endpoint reports that tamper protection is not supported, so there is nothing to judge"],
+                fail_reasons=["Every active endpoint reports that tamper protection is not supported, so there is nothing to judge"],
+                additional_findings=findings,
+                input_summary={criteriaKey: None, **summary})
+
+        judged_count = len(active) - len(unsupported)
+        if off:
+            fail_reasons = [str(len(off)) + " of " + str(judged_count) + " active supported endpoint(s) report tamper protection off"]
+            recommendations = ["Turn on tamper protection in Sophos Central for: " + ", ".join(summary["endpointsWithTamperProtectionOff"])]
             if unknown:
                 fail_reasons.append(str(len(unknown)) + " active endpoint(s) did not report tamper protection")
             return create_response(result={criteriaKey: False, **summary}, validation=validation,
                                    fail_reasons=fail_reasons, recommendations=recommendations,
+                                   additional_findings=findings,
                                    input_summary={criteriaKey: False, **summary})
 
         if unknown:
             return not_evaluated(
-                str(len(unknown)) + " of " + str(len(active)) + " active endpoint(s) did not report tamperProtectionEnabled, so tamper protection on every endpoint cannot be shown",
+                str(len(unknown)) + " of " + str(judged_count) + " active supported endpoint(s) did not report tamperProtectionEnabled, so tamper protection on every endpoint cannot be shown",
                 validation, summary,
                 "Read the endpoints list with view=full so every endpoint carries tamperProtectionEnabled")
 
         return create_response(result={criteriaKey: True, **summary}, validation=validation,
-                               pass_reasons=["Tamper protection is on for all " + str(len(on)) + " active endpoint(s)"],
+                               pass_reasons=["Tamper protection is on for all " + str(len(on)) + " active supported endpoint(s)"],
+                               additional_findings=findings,
                                input_summary={criteriaKey: True, **summary})
     except Exception as e:
         reason = "Transformation error: " + str(e)
