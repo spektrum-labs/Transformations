@@ -145,14 +145,18 @@ def measure(data):
         return None, {}, ("No record carries authType, so this is not a technician list (a device "
                           "list cannot evidence SSO): nothing was measured")
     active = []
-    for record in described:
-        if is_active(record):
+    # The `described` check above only guards "is this a technician list at all". Every active
+    # record counts toward "all on SSO", including one whose authType is missing, null or not a
+    # string: it cannot be confirmed as SSO, so it lands in `other` (not measured), never skipped.
+    for record in records:
+        if isinstance(record, dict) and is_active(record):
             active.append(record)
     sso = 0
     native = 0
     other = 0
     for record in active:
-        auth_type = record.get("authType").strip().upper()
+        raw = record.get("authType")
+        auth_type = raw.strip().upper() if isinstance(raw, str) else ""
         if auth_type == "SSO":
             sso = sso + 1
         elif auth_type == "NATIVE":
