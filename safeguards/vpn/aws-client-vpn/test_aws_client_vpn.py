@@ -296,3 +296,18 @@ def test_fail_reasons_read_cleanly(module):
     bad = good_endpoint("cvpn-endpoint-0000000000000000b", **FAILS[module])
     reason = verdict(module, xml_body(bad))[1]["additionalInfo"]["evaluation"]["failReasons"][0]
     assert "::" not in reason and " on on " not in reason
+
+
+@pytest.mark.parametrize("module", sorted(KEYS))
+@pytest.mark.parametrize("wrappers", [["result", "response"], ["response", "data"], ["data", "apiResponse", "result"]])
+def test_nested_wrappers_unwrap_in_any_order(module, wrappers):
+    body = xml_body(good_endpoint())
+    for wrapper in reversed(wrappers):
+        body = {wrapper: body}
+    assert verdict(module, body)[0] is True
+
+
+def test_idp_counter_names_saml_federation_not_identity_provider():
+    out = verdict("isidentityproviderrequiredforremoteaccess",
+                  xml_body(good_endpoint(authenticationOptions={"item": AD})))[1]["transformedResponse"]
+    assert out["endpointsWithoutSamlFederation"] == 1 and "endpointsWithoutIdentityProvider" not in out

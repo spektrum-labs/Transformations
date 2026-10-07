@@ -101,7 +101,7 @@ def transform(input):
         if failed:
             return respond(False, extra, [], [fail_text + ": " + ", ".join(failed[:20])], summary, [])
         if unknown:
-            return not_evaluated("Not reported, so not judged, on: " + ", ".join(unknown[:20]), extra, summary)
+            return not_evaluated("Not judged on: " + ", ".join(unknown[:20]), extra, summary)
         return respond(True, extra, [pass_text + " (" + str(len(verdicts)) + ")"], [], summary, [])
 
     try:
@@ -110,10 +110,16 @@ def transform(input):
             data = data.decode("utf-8")
         if isinstance(data, str):
             data = json.loads(data) if data.strip() else None
-        for wrapper in ["data", "response", "result", "apiResponse", "_response_data"]:
-            if isinstance(data, dict) and wrapper in data \
-                    and "DescribeClientVpnEndpointsResponse" not in data and "ClientVpnEndpoints" not in data:
-                data = data[wrapper]
+        for depth in range(6):
+            unwrapped = False
+            for wrapper in ["data", "response", "result", "apiResponse", "_response_data"]:
+                if isinstance(data, dict) and wrapper in data \
+                        and "DescribeClientVpnEndpointsResponse" not in data and "ClientVpnEndpoints" not in data:
+                    data = data[wrapper]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
         if not isinstance(data, dict):
             return not_evaluated("Response is not an EC2 DescribeClientVpnEndpoints result")
 
