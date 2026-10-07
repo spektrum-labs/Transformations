@@ -1,14 +1,16 @@
 """
-Transformation: isScreenLockWithin15MinutesEnforced
+Transformation: isLAPSEnabledOnAllDevices
 Vendor: Microsoft Defender for Endpoint (One-Click)  |  Category: Endpoint Security
-Check of the Windows Defender One-Click integration: idle devices lock within 15 minutes (scid-28).
+Check of the Windows Defender One-Click integration: Defender: LAPS enabled on every endpoint and server
+(scid-113).
 True: every applicable device is compliant for the Defender Vulnerability Management secure configuration
-scid-28, knowledge-base name "Set 'Interactive logon: Machine inactivity limit' to '1-900 seconds'".
-False: at least one applicable device is not.
-The id is pinned and its knowledge-base name must contain "machine inactivity limit": scid-28 under another
-name, with no name (the knowledge base lacks it), or another id under that name reads Not evaluated, never
-passed. Defender reports compliance with the 1-900 second baseline, not the minutes set, so this is a
-yes/no key at the same bar as a 15-minute limit. Journeys that ask for a screen-lock limit may consume it.
+scid-113, knowledge-base name "Ensure LAPS is enabled on every endpoint and server". False: at least one
+applicable device is not.
+The id is pinned and its knowledge-base name must contain "laps" and "enabled": scid-113 under another name,
+with no name (the knowledge base lacks it), or another id under that name reads Not evaluated, never passed.
+What it proves: the LAPS policy is on for each assessed device. It does not prove the age of the current
+password or that every local administrator account is covered. Journeys that ask whether local administrator
+passwords are managed may consume it.
 
 Source: a One-Click method of the Windows Defender One-Click integration (an advanced-hunting query,
 POST /api/advancedqueries/run, the same API and application permission as the existing
@@ -32,15 +34,15 @@ row, or no applicable device.
 import json
 from datetime import datetime, timezone
 
-KEY = 'isScreenLockWithin15MinutesEnforced'
-CLAIM = '"Set \'Interactive logon: Machine inactivity limit\' to \'1-900 seconds\'" (scid-28)'
-WHAT = 'a machine inactivity limit of 1-900 seconds (scid-28)'
-FIX = "Set 'Interactive logon: Machine inactivity limit' to 900 seconds or less (not 0) on the devices named, through Intune (Local Policies Security Options: Interactive Logon Machine Inactivity Limit) or Group Policy."
+KEY = 'isLAPSEnabledOnAllDevices'
+CLAIM = '"Ensure LAPS is enabled on every endpoint and server" (scid-113)'
+WHAT = 'LAPS enabled (scid-113)'
+FIX = "Enable Windows LAPS (Intune Account Protection: Local admin password solution, or Group Policy: LAPS 'Configure password backup directory') on the devices named."
 
 #: The parts of the claim: a row belongs to a part when its id is listed (or the list is empty)
 #: and every word appears in its lower-cased knowledge-base ConfigurationName.
 PARTS = (
-    {"part": 'Machine inactivity limit', "ids": ('scid-28',), "words": ('machine inactivity limit',)},
+    {"part": 'LAPS enabled', "ids": ('scid-113',), "words": ('laps', 'enabled')},
 )
 
 #: The criterion this file answers. None means "not measured", never "failed".
