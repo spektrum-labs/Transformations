@@ -18,13 +18,14 @@ to fix in Duo and an empty window is never a finding.
 Rules:
   log list read, empty or not                                  -> True
   Duo error body, vendorErrorAsResponse marker, an Integration-Service error envelope,
-  a body with no log list, a non-empty list in which no event carries a usable timestamp,
+  a body with no log list, a non-empty list in which no event carries a usable timestamp
+  or no entry has the administrator log fields (action, username, timestamp),
   None, non-JSON, any exception                                -> Not evaluated (value None)
   never False.
 
 Evidence: the window (last 30 days), the number of events read, the oldest and newest event
 times read, and readMayBeTruncated. When the read hit the 1000-event limit, the newest event
-read is NOT the newest administrator event in the window, and the evidence says so.
+read may not be the newest administrator event in the window, and the evidence says so.
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -210,6 +211,11 @@ def evaluate(data, now=None):
         return dict(summary, state="unevaluated", readError=True,
                     reason="None of the " + str(total) + " administrator log entries carries a usable "
                            "timestamp, so the response cannot be read as an administrator log")
+    if well_formed == 0:
+        return dict(summary, state="unevaluated", readError=True,
+                    reason="None of the " + str(total) + " entries has the administrator log fields "
+                           "(action, username, timestamp), so the response cannot be read as an "
+                           "administrator log")
     age_seconds = now_epoch - newest
     age_days = int(age_seconds // 86400) if age_seconds > 0 else 0
     summary["mostRecentTimestamp"] = iso_of(newest)
@@ -257,7 +263,7 @@ def transform(input):
                                 + " entries contain the administrator log fields (action, timestamp, username)")
             if outcome["readMayBeTruncated"]:
                 findings.append("Newest event read: " + str(outcome["mostRecentTimestamp"])
-                                + " (not the newest in the window: the read stopped at Duo's "
+                                + " (may not be the newest in the window: the read stopped at Duo's "
                                 + str(REQUEST_LIMIT) + "-event limit)")
             else:
                 findings.append("Latest administrator event: " + str(outcome["mostRecentTimestamp"]))

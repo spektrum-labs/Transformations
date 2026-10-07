@@ -8,7 +8,7 @@ actions for every account with no setting to turn it off, so:
   * an error, a vendor error marker or an unreadable body is Not evaluated (value None, data-collection
     error), never False;
   * the evidence names the window, the oldest and newest event read, and readMayBeTruncated, and a read at
-    the 1000-event limit says the newest event read is not the newest in the window.
+    the 1000-event limit says the newest event read may not be the newest in the window.
 """
 import importlib.util
 import json
@@ -159,7 +159,8 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assertIn("earliest 1000 events", reason)
         self.assertIn("newer events may exist that were not read", reason)
         findings = self.evaluation(response)["additionalFindings"]
-        self.assertTrue(any("not the newest in the window" in f for f in findings))
+        self.assertTrue(any("(may not be the newest in the window: the read stopped at Duo's 1000-event limit)"
+                            in f for f in findings))
 
     def test_999_entries_is_not_flagged_truncated(self):
         out = self.run_transform(returned([entry(5)] * 999))["transformedResponse"]
@@ -204,6 +205,7 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
             "json null": "null",
             "entries without timestamps": returned([{"action": "x", "username": "y"}]),
             "entries not objects": returned(["a", "b"]),
+            "timestamps but no log fields": returned([{"timestamp": int(NOW.timestamp()) - 3600}]),
             "only future timestamps": returned([entry(-5)]),
         }
         for label, payload in payloads.items():
