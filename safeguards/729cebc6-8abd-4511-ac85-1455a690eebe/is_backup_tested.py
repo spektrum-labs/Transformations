@@ -54,12 +54,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupTested") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupTested could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -134,6 +139,32 @@ def collect_restore_jobs(node, found, depth):
                 collect_restore_jobs(node[key], found, depth + 1)
 
 
+def job_collection_seen(node, depth):
+    """True when the payload carries a restore-job collection at all (even an empty one).
+
+    An empty collection is a measured "no restore jobs"; a payload with no collection
+    (empty body, refusal, status stub) measured nothing.
+    """
+    if depth > MAX_WALK_DEPTH:
+        return False
+    if isinstance(node, list):
+        for item in node:
+            if job_collection_seen(item, depth + 1):
+                return True
+        return False
+    if not isinstance(node, dict):
+        return False
+    for key in ["restoreJobResults", "restoreJobs", "value"]:
+        if isinstance(node.get(key), list):
+            return True
+    if isinstance(node.get("columns"), list) and isinstance(node.get("rows"), list):
+        return True
+    for key in ["apiResponse", "data"]:
+        if key in node and job_collection_seen(node[key], depth + 1):
+            return True
+    return False
+
+
 def rows_from_arg_table(data):
     """Fallback for the legacy Resource Graph payload, so this transform is
     safe to ship before the definition is repointed to the ARM endpoint."""
@@ -200,7 +231,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -210,6 +241,13 @@ def transform(input):
         jobs = list(found.values())
         if not jobs:
             jobs = rows_from_arg_table(data)
+
+        if not jobs and not job_collection_seen(data, 0):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=["isBackupTested not evaluated: no restore job list in the response"]
+            )
 
         now = datetime.utcnow()
         cutoff = now - timedelta(days=RECENCY_DAYS)
@@ -299,7 +337,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: " + str(e)]
