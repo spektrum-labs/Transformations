@@ -116,6 +116,22 @@ jobs:
       - name: Install sandbox dependency
         run: pip install "RestrictedPython>=8.0,<9.0"
 
+      # The fifth contract, and the one the other four structurally cannot see. A transform
+      # that answers criterion X by reading a field named X out of the vendor body has asked
+      # the question of the answer. check_fail_closed clears it because it answers the UNSAFE
+      # answer from an empty body; check_discriminates clears it because a synthetic body
+      # containing the invented field makes it look perfectly discriminating. That is the
+      # general trap: a checker that builds its own input cannot catch a transform reading a
+      # field no vendor sends, because the checker invents exactly the field the transform
+      # invented. Measured on main: 34 files, four of them answering isFirewallEnabled with
+      # `data.get('isFirewallEnabled', False)` -- unconditionally false for every Fortinet,
+      # Cloudflare and Cisco FMC customer.
+      - name: Self-answer checker self-test
+        run: python tools/check_no_self_answer.py --self-test
+
+      - name: No criterion may be read out of the body it judges
+        run: python tools/check_no_self_answer.py
+
       - name: Sandbox-compile checker self-test
         run: python tools/check_sandbox_compile.py --self-test
 
