@@ -2,7 +2,8 @@
 
 Fixture shape mirrors a stored Workspace Gmail policy read, with every id, customer and group replaced by
 synthetic values: Integration-Service stringifies scalars ("False", "201.00183"); Google's SYSTEM defaults
-sit on the top-level org unit; Google returns no SYSTEM policy for gmail.auto_forwarding (default: allowed).
+sit on the top-level org unit. Most tenants also get a SYSTEM gmail.auto_forwarding policy (allowed) there;
+some get none, and that list is not evaluated.
 """
 import ast
 import copy
@@ -61,6 +62,9 @@ def body(*extra):
     return {"policies": copy.deepcopy(BASE) + [copy.deepcopy(p) for p in extra]}
 
 
+SYSTEM_ALLOW = forwarding("True", ptype="SYSTEM", order="101.00125")
+
+
 def ts_is_equals_true(value):
     """Token-Service isEquals true: only a real True passes."""
     return value is True
@@ -83,11 +87,14 @@ class AutoForwardTests(unittest.TestCase):
         self.assertFalse(ts_is_equals_true(value))
         return out
 
-    # default: no auto_forwarding policy in a complete Gmail list
-    def test_no_forwarding_policy_is_google_default_allowed_false(self):
-        value, out = self.run_t(body())
+    # no auto_forwarding policy in a complete Gmail list: no default is assumed
+    def test_no_forwarding_policy_is_unevaluated(self):
+        out = self.assert_unevaluated(body())
+        self.assertIn("No gmail.auto_forwarding policy", out["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_system_default_allow_alone_is_false(self):
+        value, out = self.run_t(body(SYSTEM_ALLOW))
         self.assertIs(value, False)
-        self.assertIn("documented default", out["additionalInfo"]["evaluation"]["failReasons"][0])
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
     # pass
@@ -134,8 +141,28 @@ class AutoForwardTests(unittest.TestCase):
         self.assertIs(value, False)
         self.assertIn("group " + GROUP, out["additionalInfo"]["evaluation"]["failReasons"][0])
 
-    def test_child_off_only_leaves_root_default_false(self):
-        self.assertIs(self.run_t(body(forwarding("False", ou=CHILD, order="203")))[0], False)
+    def test_child_off_only_with_system_root_allow_is_false(self):
+        self.assertIs(self.run_t(body(SYSTEM_ALLOW, forwarding("False", ou=CHILD, order="203")))[0], False)
+
+    def test_child_off_only_without_root_policy_is_unevaluated(self):
+        self.assert_unevaluated(body(forwarding("False", ou=CHILD, order="203")))
+
+    def test_conditional_later_off_leaves_allow_in_force_false(self):
+        licensed = ou_query(ROOT) + " && entity.licenses.exists(license, license in ['/product/P/sku/1'])"
+        value, out = self.run_t(body(SYSTEM_ALLOW, forwarding("False", query=licensed)))
+        self.assertIs(value, False)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_query_naming_another_org_unit_is_not_a_plain_root_off(self):
+        mismatched = forwarding("False", query=ou_query(CHILD))
+        self.assertIs(self.run_t(body(SYSTEM_ALLOW, mismatched))[0], False)
+        self.assert_unevaluated(body(mismatched))
+        wrong_group = forwarding("False", group=GROUP, order="400")
+        wrong_group["policyQuery"]["group"] = "groups/0000group0002"
+        allow = forwarding("True", group="groups/0000group0002", order="300")
+        self.assertIs(self.run_t(body(forwarding("False"), allow, wrong_group))[0], False)
+        right_group = forwarding("False", group="groups/0000group0002", order="400")
+        self.assertIs(self.run_t(body(forwarding("False"), allow, right_group))[0], True)
 
     def test_lower_order_off_does_not_override_allow(self):
         payload = body(forwarding("False", order="150"), forwarding("True", order="201.00243"))
@@ -157,6 +184,18 @@ class AutoForwardTests(unittest.TestCase):
         for payload in [{"statusCode": 401, "error": "Unauthorized"}, {"status": "Error", "message": "x"},
                         {"error": True, "errorType": "pagination_incomplete", "statusCode": 502}]:
             self.assert_unevaluated(payload)
+
+    def test_wrapper_level_truncation_markers_are_unevaluated(self):
+        inner = body(SYSTEM_ALLOW, forwarding("False"))
+        self.assertIs(self.run_t(copy.deepcopy(inner))[0], True)
+        for payload in [{"response": copy.deepcopy(inner), "paginationTruncated": True},
+                        {"result": {"apiResponse": copy.deepcopy(inner), "nextPageToken": "synthetic-token"}},
+                        {"paginationStats": {"policies": {"paginationTruncated": True}}, "result": copy.deepcopy(inner)},
+                        {"result": {"paginationStats": {"paginationTruncated": "True"}, "apiResponse": copy.deepcopy(inner)}},
+                        {"iterateStats": {"complete": False}, "response": copy.deepcopy(inner)}]:
+            self.assert_unevaluated(payload)
+        clean = {"paginationStats": {"policies": {"paginationTruncated": False, "pages": 1}}, "result": copy.deepcopy(inner)}
+        self.assertIs(self.run_t(clean)[0], True)
 
     def test_partial_reads_are_unevaluated(self):
         payload = body(forwarding("False"))
