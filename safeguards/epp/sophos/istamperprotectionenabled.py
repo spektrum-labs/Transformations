@@ -86,6 +86,24 @@ def endpoint_items(data):
     return None
 
 
+def page_cursor(value):
+    """A pagination cursor, or None. Stored replays stringify null as "None" or "null"."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return None if text.lower() in ("", "none", "null") else text
+
+
+def page_int(value):
+    """An integer page field, or None. Stored replays stringify numbers."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
 def unread_pages(data, item_count):
     """Why the list may be incomplete, or None when it is shown complete. The platform follows
     pages.nextKey and merges items; a nextKey still set means pages were left unread."""
@@ -97,14 +115,13 @@ def unread_pages(data, item_count):
     truncated = pages.get("truncated")
     if truncated is True or (isinstance(truncated, str) and truncated.strip().lower() == "true"):
         return "the platform marked the endpoints list truncated (pages.truncated is true)"
-    if pages.get("nextKey"):
+    if page_cursor(pages.get("nextKey")):
         return "the endpoints list has further pages (pages.nextKey is set) that were not read"
-    total = pages.get("total")
-    size = pages.get("size")
-    if isinstance(total, int) and not isinstance(total, bool) and total > 1 and \
-            isinstance(size, int) and not isinstance(size, bool) and item_count <= size:
+    total = page_int(pages.get("total"))
+    size = page_int(pages.get("size"))
+    if total is not None and total > 1 and size is not None and item_count <= size:
         return "the endpoints list reports " + str(total) + " pages but only one page of endpoints is present"
-    if "nextKey" not in pages and isinstance(size, int) and not isinstance(size, bool) and size > 0 and item_count >= size:
+    if "nextKey" not in pages and size is not None and size > 0 and item_count >= size:
         return "the first page of endpoints is full and the response does not show whether more pages exist"
     return None
 

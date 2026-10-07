@@ -194,6 +194,18 @@ def test_truncated_list_is_not_evaluated(flag_value):
     assert collection_status(out) == "error"
 
 
+def test_stored_replay_pages_are_read_as_complete():
+    payload = body(endpoint(1))
+    payload["pages"] = {"size": "500", "maxSize": "500", "nextKey": "None"}
+    assert run(payload)[0] is True
+
+
+def test_stored_replay_string_page_total_is_not_evaluated():
+    payload = body(endpoint(1))
+    payload["pages"] = {"current": "1", "size": "50", "total": "3", "nextKey": "None"}
+    assert run(payload)[0] is None
+
+
 def test_merged_list_with_null_cursor_passes():
     payload = body(*[endpoint(n) for n in range(1, 4)])
     payload["pages"] = {"size": 3, "maxSize": 500, "nextKey": None}
