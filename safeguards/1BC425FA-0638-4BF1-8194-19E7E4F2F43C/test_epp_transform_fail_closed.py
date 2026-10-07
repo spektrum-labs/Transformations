@@ -4,6 +4,10 @@ isEDRDeployed, isEPPLoggingEnabled and isEPPEnabledForCriticalSystems all read "
 and the critical-systems count was computers-only, so no server could move it. An empty or unreadable read
 came back as measured False with dataCollection "success". Synthetic bodies only, in the shape of the
 Sophos Endpoint API v1 GET /endpoints reference (field names and enum values verbatim from it).
+
+Extended after the 2026-10-07 review of PR #1067: a servers-only estate, a dark fleet, a list with no
+computer or server in it, the envelope truncation marker that is the only one a bare-list delivery
+carries, and xdr no longer counting as a managed service.
 """
 import importlib.util
 import json
@@ -27,8 +31,8 @@ def load():
 EPP = load()
 
 
-def endpoint(kind, products, installed=True, **extra):
-    record = {"id": "e-" + kind, "type": kind, "hostname": "synthetic-" + kind, "lastSeenAt": SEEN,
+def endpoint(kind, products, installed=True, seen=SEEN, **extra):
+    record = {"id": "e-" + kind, "type": kind, "hostname": "synthetic-" + kind, "lastSeenAt": seen,
               "health": {"overall": "good", "services": {"status": "good", "serviceDetails": []}},
               "assignedProducts": [{"code": c, "version": "1", "status": "installed" if installed else "notInstalled"}
                                    for c in products]}
@@ -53,7 +57,8 @@ def test_pass_body_measures_each_key_on_its_own():
     assert tr["isEDRDeployed"] is True
     assert tr["edrDeployedPercentage"] == 100.0
     assert tr["isEPPEnabledForCriticalSystems"] is True
-    assert tr["isEPPLoggingEnabled"] is None
+    # Not answered from this method, so not emitted at all: see test_logging_key_is_not_emitted.
+    assert "isEPPLoggingEnabled" not in tr
 
 
 def test_edr_is_not_an_alias_of_epp():
@@ -82,9 +87,105 @@ def test_critical_systems_reads_servers():
 
 
 def test_critical_systems_without_servers_is_not_answered():
+    """KNOWN GAP, pinned deliberately rather than silently.
+
+    None beside dataCollection "success" does NOT reach the evaluator as "not evaluated".
+    Token-Service has one not-evaluated channel and it covers the whole response
+    (evaluate.py _data_collection_failure_message); within a successful read,
+    extract_measured_value returns the whole response both for a key whose value is None and for a
+    key that is absent, so compare_values grades either as a measured failure. Omitting the key
+    therefore changes nothing -- verified against that function. A workstation-only MDR tenant is
+    red on this criterion until Token-Service grows a per-key channel or the RTA row is scoped to
+    tenants that have servers. The alternative, a vacuous True on an estate with no server in the
+    list, would be a measured pass nobody measured, which is worse.
+    """
     tr, status = run({"items": [endpoint("computer", FULL)]})
     assert status == "success"
     assert tr["isEPPEnabledForCriticalSystems"] is None
+
+
+def test_logging_key_is_not_emitted():
+    """GET /endpoints reports no logging or telemetry setting, so the file does not answer the key."""
+    tr, status = run(PASS_BODY)
+    assert status == "success"
+    assert "isEPPLoggingEnabled" not in tr
+    findings = EPP.transform(PASS_BODY)["additionalInfo"]["evaluation"]["additionalFindings"]
+    assert any("isEPPLoggingEnabled" in str(finding) for finding in findings)
+
+
+def test_servers_only_estate_is_measured_not_graded_red():
+    """An estate of protected servers is protected. "Endpoint Protection" counts computers only and
+    percentage(0, 0) is 0, so this read used to come back isEPPEnabled False, isEPPConfigured False,
+    isEPPMisconfigured True and requiredCoveragePercentage 0 -- measured red for a fully covered estate."""
+    tr, status = run({"items": [endpoint("server", FULL), endpoint("server", FULL)]})
+    assert status == "success"
+    assert tr["isEPPEnabled"] is True
+    assert tr["isEPPDeployed"] is True
+    assert tr["isEndpointSecurityEnabled"] is True
+    assert tr["isEPPConfigured"] is True
+    assert tr["isEPPMisconfigured"] is False
+    assert tr["requiredCoveragePercentage"] == 100
+    assert tr["requiredConfigurationPercentage"] == 100
+    assert tr["isEPPEnabledForCriticalSystems"] is True
+
+
+def test_half_covered_mixed_estate_counts_computers_and_servers():
+    body = {"items": [endpoint("computer", FULL), endpoint("server", ["coreAgent"])]}
+    tr, status = run(body)
+    assert status == "success"
+    assert tr["requiredCoveragePercentage"] == 50
+    assert tr["isEPPEnabled"] is True
+    assert tr["isEPPEnabledForCriticalSystems"] is False
+
+
+def test_dark_fleet_is_unevaluated():
+    """Newest check-in older than the active window: every endpoint is stale, so every denominator is
+    zero and every coverage read 0% with dataCollection "success"."""
+    old = "2026-01-01T00:00:00.000Z"
+    tr, status = run({"items": [endpoint("computer", FULL, seen=old), endpoint("server", FULL, seen=old)]})
+    assert status == "error"
+    # The stale count is the reason the read proves nothing, so it is reported (endpoint rules,
+    # 2026-09-29). Every verdict is still not evaluated, because dataCollection is an error.
+    assert tr["staleEndpointCount"] == 2
+    assert all(value is None for key, value in tr.items() if key != "staleEndpointCount")
+
+
+def test_estate_with_no_computer_or_server_is_unevaluated():
+    tr, status = run({"items": [endpoint("mobile", ["mobileProtection"])]})
+    assert status == "error"
+    assert all(value is None for key, value in tr.items() if key != "staleEndpointCount")
+
+
+def test_envelope_truncation_marker_is_seen_on_a_bare_list():
+    """A bare-array delivery has no body for Integration-Service to write pages.truncated into, so the
+    envelope flag paginationTruncated is the only marker it carries."""
+    body = {"data": [endpoint("computer", FULL)],
+            "validation": {"status": "success", "errors": [], "warnings": []},
+            "paginationTruncated": True}
+    tr, status = run(body)
+    assert status == "error"
+    assert all(value is None for value in tr.values())
+
+
+def test_envelope_truncation_marker_is_seen_on_a_dict_body():
+    for body in ({"items": [endpoint("computer", FULL)], "paginationTruncated": True},
+                 {"items": [endpoint("computer", FULL)], "pages": {"paginationTruncated": "true"}},
+                 {"api_response": {"items": [endpoint("computer", FULL)], "paginationTruncated": True}}):
+        tr, status = run(body)
+        assert status == "error"
+        assert all(value is None for value in tr.values())
+
+
+def test_xdr_alone_is_not_managed_detection_and_response():
+    """xdr is Intercept X Advanced with XDR, which the customer runs; mtr is the managed service."""
+    tr, status = run({"items": [endpoint("computer", ["coreAgent", "endpointProtection", "xdr"])]})
+    assert status == "success"
+    assert tr["MDR"] == 0
+    assert tr["isMDREnabled"] is False
+    assert tr["isEDRDeployed"] is True
+    tr, _ = run({"items": [endpoint("computer", ["coreAgent", "endpointProtection", "mtr"])]})
+    assert tr["MDR"] == 100
+    assert tr["isMDREnabled"] is True
 
 
 def test_not_installed_product_protects_nothing():
