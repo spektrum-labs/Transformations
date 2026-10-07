@@ -46,10 +46,56 @@ from datetime import datetime
 #   None   nothing was read, so nothing is known.  create_response turns any None
 #          into dataCollection.status == "error", which Token-Service grades as
 #          Unevaluated.  A None must never ship as a red check.
+#
+# The status is per RESPONSE, not per key: Token-Service reads
+# additionalInfo.dataCollection.status once (_data_collection_failure_message in
+# src/utils/evaluate/evaluate.py) and records every criterion in the response as not
+# evaluated.  So one unreadable protocol withholds the grade from the other two even
+# when they were measured and failing.  That is the accepted trade-off -- the other
+# arrangement grades the None, which is how an unreadable probe reaches a customer as a
+# measured gap, and it is the defect tools/check_none_not_evaluated.py exists to stop.
+# The measured failures are not lost from the RESPONSE, only from the grade: they keep
+# their evaluation.failReasons and their own additionalFindings rows.  The remedy for a
+# probe that drops a protocol is to fix the probe, not to grade what it did not return.
 
-NOT_A_RECORD = ("", "false", "none", "null", "no", "0", "not found", "n/a",
+# A probe value that NAMES AN ABSENCE is a measured absence.  A probe value that names
+# a resolver failure, or says it does not know, measured nothing.  RFC 7208 s4.4 draws
+# the same line: "Name Error" (RCODE 3 / NXDOMAIN) returns "none" -- the domain
+# publishes no record -- while a server failure, any other RCODE, or a timeout
+# terminates with "temperror", which asserts nothing about what is published.
+NOT_A_RECORD = ("", "false", "none", "null", "no", "0", "not found",
                 "no banner found", "no record", "not configured", "missing",
-                "not available", "unknown")
+                "nxdomain", "name error", "no such domain", "does not exist")
+
+NOT_MEASURED = ("unknown", "n/a", "na", "not available", "unavailable",
+                "not applicable", "not checked", "not measured", "no answer",
+                "not queried", "pending", "error", "timeout", "timed out",
+                "servfail", "refused")
+
+# Substrings that mark the probe describing its own failure rather than quoting a
+# record.  Tested only on values that do not open a version section, so an SPF record
+# that includes a host named "mail-error.example.com" is still read as a record.
+PROBE_FAILURE = ("error", "exception", "traceback", "timeout", "timed out",
+                 "servfail", "refused", "failed", "failure", "could not",
+                 "cannot ", "can not ", "unable to", "no answer", "try again")
+
+RECORD_PREFIXES = ("v=spf1", "v=dmarc1", "v=dkim1")
+
+
+def opens_a_record(low):
+    """True when the lowercased text opens one of the three version sections."""
+    for prefix in RECORD_PREFIXES:
+        if low.startswith(prefix):
+            return True
+    return False
+
+
+def probe_failure_text(low):
+    """True when the lowercased text reads as the probe's own error, not a record."""
+    for marker in PROBE_FAILURE:
+        if marker in low:
+            return True
+    return False
 
 
 def dns_body(value):
@@ -104,10 +150,14 @@ def protocol_value(body, name):
 def record_text(body, name):
     """Reduce one probe value to a kind and, where there is one, the record text.
 
-    "unknown"  the probe said nothing about this protocol  -> not measured
+    "unknown"  the probe said nothing, or said it could not tell -> not measured
     "missing"  the probe looked and found no record        -> measured, absent
     "present"  the probe said yes without the record text  -> presence only
     "record"   the probe returned the published record     -> judge the text
+
+    "unknown" and "could not resolve" are not "no record is published". Scoring them
+    as an absence writes a real gap out of nothing, which is the same defect in the
+    other direction as scoring a non-empty string as proof.
     """
     found, value = protocol_value(body, name)
     if not found or value is None:
@@ -118,8 +168,13 @@ def record_text(body, name):
         value = value.decode("utf-8", "ignore")
     if isinstance(value, str):
         text = value.strip()
-        if text.lower() in NOT_A_RECORD:
+        low = text.lower()
+        if low in NOT_A_RECORD:
             return "missing", ""
+        if low in NOT_MEASURED:
+            return "unknown", ""
+        if not opens_a_record(low) and probe_failure_text(low):
+            return "unknown", ""
         return "record", text
     if isinstance(value, (int, float)):
         return ("present", "") if value else ("missing", "")
@@ -154,20 +209,31 @@ def spf_verdict(body):
                       "its all-mechanism cannot be read and enforcement was not measured"], {}
     if kind == "missing":
         return False, ["No SPF record is published for the email domain"], {"spfRecord": "none"}
-    if not text.lower().startswith("v=spf1"):
-        return False, ["The TXT record found does not begin v=spf1, so it is not an SPF record "
-                       "(RFC 7208 s4.5)"], {"spfRecord": text}
+    # RFC 7208 s4.5: the version section is "v=spf1" terminated by a space or the end of
+    # the record, and a record whose version section is "v=spf10" "does not match and is
+    # discarded". startswith("v=spf1") accepts v=spf10, which the RFC names as the
+    # example of what must not be accepted.
     terms = text.split()
+    if not terms or terms[0].lower() != "v=spf1":
+        return False, ["The TXT record found does not begin with a version section of exactly "
+                       "v=spf1, so RFC 7208 s4.5 discards it and the domain publishes no SPF "
+                       "record"], {"spfRecord": text}
+    # RFC 7208 s4.6.2: mechanisms are evaluated left to right and "if it matches,
+    # processing ends and the qualifier value is returned". "all" always matches, so the
+    # FIRST all-term decides and every term after it is unreachable. Reading the last one
+    # passes "v=spf1 +all -all", where a receiver applies +all.
     alls = [t.lower() for t in terms if re.match(r"^[-~?+]?all$", t.lower())]
-    qualifier = alls[-1] if alls else ""
+    qualifier = alls[0] if alls else ""
     detail = {"spfRecord": text,
               "spfAllMechanism": qualifier if qualifier else "none",
               "spfHardFail": qualifier == "-all"}
+    if len(alls) > 1:
+        detail["spfUnreachableAllTerms"] = alls[1:]
     if not qualifier:
         redirects = [t for t in terms if t.lower().startswith("redirect=")]
         if redirects:
-            detail["spfRedirect"] = redirects[-1]
-            return None, ["The SPF record ends in " + redirects[-1] + " and has no all-mechanism "
+            detail["spfRedirect"] = redirects[0]
+            return None, ["The SPF record carries " + redirects[0] + " and has no all-mechanism "
                           "of its own; RFC 7208 s6.1 puts the effective policy in the redirected "
                           "record, which this probe does not resolve, so enforcement was not "
                           "measured"], detail
@@ -176,10 +242,11 @@ def spf_verdict(body):
     if qualifier in ("-all", "~all"):
         return True, [], detail
     if qualifier == "?all":
-        return False, ["The SPF record ends in ?all (neutral), which RFC 7208 s8.2 requires be "
-                       "treated exactly like publishing no SPF record at all"], detail
-    return False, ["The SPF record ends in " + qualifier + ", which authorises every host on the "
-                   "internet to send as this domain"], detail
+        return False, ["The first all-mechanism in the SPF record is ?all (neutral), which RFC "
+                       "7208 s8.2 requires be treated exactly like publishing no SPF record at "
+                       "all"], detail
+    return False, ["The first all-mechanism in the SPF record is " + qualifier + ", which "
+                   "authorises every host on the internet to send as this domain"], detail
 
 
 def dmarc_pct(tags):
@@ -261,6 +328,38 @@ def dmarc_verdict(body):
     return True, [], detail
 
 
+DKIM_SELECTOR_SUFFIXES = (".onmicrosoft.com", ".dkim.mail.microsoft", ".mimecast.com",
+                          ".dkim.amazonses.com", ".dkim.mailchannels.net")
+
+
+def dkim_selector_target(text):
+    """True when the text is the HOSTNAME a DKIM CNAME selector points at.
+
+    Microsoft 365, Mimecast and Amazon SES publish DKIM as a CNAME, so the probe sees a
+    target hostname and no v=DKIM1 tag. That is the only reason a value without the tag
+    may count as published. The test must be for a hostname, not for "not in the
+    stop-list": every error string the probe has not been taught to name would otherwise
+    read as a selector. A hostname is one token with a dot in it and no tag punctuation,
+    and it names the _domainkey subtree the selector lives in (RFC 6376 s3.6.1).
+    """
+    if not text:
+        return False
+    if len(text.split()) != 1:
+        return False
+    low = text.lower().strip(".")
+    for punctuation in ("=", ";", ":", "/", ",", '"'):
+        if punctuation in low:
+            return False
+    if "." not in low:
+        return False
+    if "._domainkey" in low:
+        return True
+    for suffix in DKIM_SELECTOR_SUFFIXES:
+        if low.endswith(suffix):
+            return True
+    return False
+
+
 def dkim_verdict(body):
     """isDKIMConfigured: (verdict, reasons, detail). RFC 6376.
 
@@ -285,14 +384,27 @@ def dkim_verdict(body):
                            "it as a failed signature check"],                 {"dkimRecord": text, "dkimEvidence": "v=DKIM1 record with an empty p= tag"}
         return True, [], {"dkimRecord": text,
                           "dkimEvidence": "v=DKIM1 record with a public key"}
-    return True, [], {"dkimRecord": text,
-                      "dkimEvidence": "presence only -- the probe returned a selector target "
-                                      "rather than a v=DKIM1 TXT record, which is what Microsoft "
-                                      "365's CNAME selector model publishes"}
+    if dkim_selector_target(text):
+        return True, [], {"dkimRecord": text,
+                          "dkimEvidence": "presence only -- the probe returned a selector target "
+                                          "rather than a v=DKIM1 TXT record, which is what "
+                                          "Microsoft 365's CNAME selector model publishes"}
+    return None, ["The DKIM answer is neither a v=DKIM1 record nor a selector hostname, so it "
+                  "carries no evidence either way and DKIM was not measured"],         {"dkimRecord": text,
+         "dkimEvidence": "unreadable -- not a v=DKIM1 record and not a _domainkey target"}
 
 
 def email_auth_verdicts(body):
-    """The four criteria, their reasons, the evidence, and the composite verdict."""
+    """The four criteria, their reasons, the evidence, and the composite verdict.
+
+    The reasons come back in two lists, because they answer two different questions. A
+    reason belonging to a criterion that was MEASURED and failed is a finding and keeps
+    its place in evaluation.failReasons even when a sibling protocol was unreadable --
+    an unreadable DKIM withholds the grade (see the note on the status above) but must
+    not also erase the sentence explaining why SPF failed. A reason belonging to a
+    criterion that was NOT measured is not a finding; it goes to dataCollection.errors,
+    which is where "we could not read this" belongs.
+    """
     spf, spf_reasons, spf_detail = spf_verdict(body)
     dmarc, dmarc_reasons, dmarc_detail = dmarc_verdict(body)
     dkim, dkim_reasons, dkim_detail = dkim_verdict(body)
@@ -309,11 +421,18 @@ def email_auth_verdicts(body):
     for part in (spf_detail, dmarc_detail, dkim_detail):
         for key in part.keys():
             detail[key] = part[key]
+    fail_reasons = []
+    unmeasured_reasons = []
+    for verdict, reasons in ((spf, spf_reasons), (dmarc, dmarc_reasons), (dkim, dkim_reasons)):
+        if verdict is None:
+            unmeasured_reasons = unmeasured_reasons + reasons
+        elif not verdict:
+            fail_reasons = fail_reasons + reasons
     # `dns` is handed back separately rather than read out of `values` by name: a
     # transform that reads a criteria key out of input-derived data is the self-answer
     # defect, and tools/check_no_self_answer.py cannot tell our own dict from the
     # vendor's. Keeping the local is simpler than arguing about it.
-    return values, spf_reasons + dmarc_reasons + dkim_reasons, detail, dns
+    return values, fail_reasons, unmeasured_reasons, detail, dns
 
 
 def unmeasured_keys(values):
@@ -434,22 +553,27 @@ def transform(input):
                             "authentication record was read"]
             )
 
-        values, reasons, detail, all_enforcing = email_auth_verdicts(body)
+        values, fail_reasons, unmeasured_reasons, detail, all_enforcing = \
+            email_auth_verdicts(body)
         unmeasured = unmeasured_keys(values)
         pass_reasons = []
         if all_enforcing:
             pass_reasons.append("SPF, DKIM and DMARC are all published and enforcing for the "
                                 "email domain")
+        # fail_reasons is NOT emptied when a sibling protocol is unreadable. The grade is
+        # withheld for the whole response either way, because the status is per response;
+        # dropping the sentences as well would throw away the only record of which
+        # protocol failed and why, in exactly the response a human has to read to find out.
         return create_response(
             result=values,
             validation=validation,
             pass_reasons=pass_reasons,
-            fail_reasons=reasons if not unmeasured else [],
+            fail_reasons=fail_reasons,
             recommendations=[],
-            additional_findings=findings_for(values, reasons, detail),
+            additional_findings=findings_for(values, fail_reasons, detail),
             input_summary=detail,
             api_errors=([("these criteria were not measured: " + ", ".join(unmeasured)) + "; " +
-                         " ".join(reasons)] if unmeasured else None)
+                         " ".join(unmeasured_reasons)] if unmeasured else None)
         )
 
     except Exception as e:

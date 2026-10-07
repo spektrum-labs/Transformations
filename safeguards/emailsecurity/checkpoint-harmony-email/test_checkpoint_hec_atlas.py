@@ -131,6 +131,15 @@ def spf(record):
     (spf("v=spf1 include:abc.spf.checkpoint-spf.com ?all"), False),
     (spf("v=spf1 include:abc.spf.checkpoint-spf.com"), False),
     (spf("v=spf1 include:checkpoint-spf.com.evil.example ~all"), False),
+    # RFC 7208 s4.6.2: mechanisms are evaluated left to right and the first match ends
+    # processing. "all" always matches, so the FIRST all-term decides; a receiver seeing
+    # "+all -all" applies +all and never reaches the -all. Reading the last one passed
+    # both of these.
+    (spf("v=spf1 include:abc.spf.checkpoint-spf.com +all -all"), False),
+    (spf("v=spf1 include:abc.spf.checkpoint-spf.com ?all ~all"), False),
+    # RFC 7208 s4.5 names this case: "a record with a version section of 'v=spf10' does
+    # not match and is discarded". startswith("v=spf1") accepted it.
+    (spf("v=spf10 include:abc.spf.checkpoint-spf.com -all"), False),
     (spf(False), False),
     (spf("None"), False),
     # A body nobody could read is not a measurement. These four used to return False with

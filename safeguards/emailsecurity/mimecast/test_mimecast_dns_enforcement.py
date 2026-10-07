@@ -163,6 +163,25 @@ class MimecastDnsEnforcementTests(unittest.TestCase):
               "DMARC": "v=DMARC1; p=reject"})
         self.assert_measured(response, isSPFConfigured=False)
 
+    def test_the_first_all_mechanism_decides_not_the_last(self):
+        # RFC 7208 s4.6.2: mechanisms are evaluated left to right and "if it matches,
+        # processing ends and the qualifier value is returned". "all" always matches, so
+        # a receiver seeing "v=spf1 +all -all" applies +all and the -all is unreachable.
+        for record in ("v=spf1 +all -all", "v=spf1 ?all -all", "v=spf1 all ~all"):
+            response = self.run_transform(
+                {"SPF": record, "DKIM": DKIM_TXT, "DMARC": "v=DMARC1; p=reject"})
+            self.assert_measured(response, isSPFConfigured=False, isDNSConfigured=False)
+            summary = response["additionalInfo"]["transformation"]["inputSummary"]
+            self.assertEqual(summary["spfUnreachableAllTerms"], ["-all"] if "-all" in record
+                             else ["~all"], record)
+
+    def test_a_version_section_of_v_spf10_is_discarded(self):
+        # RFC 7208 s4.5 names this exact case: "a record with a version section of
+        # 'v=spf10' does not match and is discarded". startswith("v=spf1") accepted it.
+        response = self.run_transform(
+            {"SPF": "v=spf10 -all", "DKIM": DKIM_TXT, "DMARC": "v=DMARC1; p=reject"})
+        self.assert_measured(response, isSPFConfigured=False, isDNSConfigured=False)
+
     def test_dmarc_record_without_v_tag_is_ignored(self):
         # RFC 7489 s6.3: without v=DMARC1 "the entire retrieved record MUST be ignored".
         response = self.run_transform(
@@ -222,11 +241,89 @@ class MimecastDnsEnforcementTests(unittest.TestCase):
                              isDKIMConfigured=False, isDNSConfigured=False)
 
     def test_negative_sentinel_strings_are_a_measured_fail(self):
-        response = self.run_transform({"SPF": "not found", "DKIM": "None", "DMARC": "N/A"})
+        # Each of these NAMES AN ABSENCE, so each is a measured absence. "N/A" is not
+        # here any more: it says the probe has no answer, which is a different thing.
+        response = self.run_transform({"SPF": "not found", "DKIM": "None", "DMARC": "no record"})
         self.assert_measured(response, isSPFConfigured=False, isDMARCConfigured=False,
                              isDKIMConfigured=False)
 
+    def test_nxdomain_is_a_measured_absence(self):
+        # RFC 7208 s4.4: "Name Error" (RCODE 3 / NXDOMAIN) returns "none" -- the name
+        # does not exist, so no record is published. That is a measurement.
+        response = self.run_transform({"SPF": "NXDOMAIN", "DKIM": "NXDOMAIN", "DMARC": "NXDOMAIN"})
+        self.assert_measured(response, isSPFConfigured=False, isDMARCConfigured=False,
+                             isDKIMConfigured=False, isDNSConfigured=False)
+
     # -- not measured -----------------------------------------------------------
+
+    def test_unknown_and_not_available_are_not_measured(self):
+        # "unknown" is not "no record is published". Scoring it as an absence writes a
+        # real gap out of nothing -- the same defect as scoring a string as proof, in
+        # the other direction.
+        response = self.run_transform(
+            {"SPF": "unknown", "DMARC": "not available", "DKIM": "n/a"})
+        self.assert_not_measured(response, SPF, DMARC, DKIM, DNS)
+
+    def test_a_resolver_failure_is_not_measured(self):
+        # RFC 7208 s4.4: a server failure, any RCODE other than 0 or 3, or a timeout is
+        # "temperror", which asserts nothing about what the domain publishes.
+        response = self.run_transform(
+            {"SPF": "timeout", "DMARC": "SERVFAIL", "DKIM": "Error: query refused"})
+        self.assert_not_measured(response, SPF, DMARC, DKIM, DNS)
+
+    def test_a_record_naming_a_host_called_error_is_still_a_record(self):
+        # The probe-failure heuristic is tested only on values that do not open a
+        # version section, so a legitimate record is never mistaken for an error.
+        response = self.run_transform(
+            {"SPF": "v=spf1 include:mail-error.example.com -all", "DMARC": "v=DMARC1; p=reject",
+             "DKIM": DKIM_TXT})
+        self.assert_measured(response, isSPFConfigured=True, isDMARCConfigured=True,
+                             isDKIMConfigured=True, isDNSConfigured=True)
+
+    def test_a_dkim_answer_that_is_neither_a_record_nor_a_selector_is_not_measured(self):
+        # Until this change, any non-empty DKIM string outside the stop-list returned
+        # True on the Microsoft CNAME branch, so a probe error came out as a measured
+        # green -- the one place this file still said "non-empty string = configured".
+        for junk in ("Error: SERVFAIL querying selector1._domainkey",
+                     "timed out",
+                     "lookup produced no usable answer",
+                     "selector1"):
+            response = self.run_transform(
+                {"SPF": MS_SPF, "DMARC": "v=DMARC1; p=reject", "DKIM": junk})
+            self.assert_not_measured(response, DKIM, DNS)
+            self.assertIs(self.values(response)[SPF], True, junk)
+
+    def test_a_dkim_cname_target_is_still_presence_only_proof(self):
+        # The presence-only branch exists for the CNAME selector model and must survive.
+        for target in (DKIM_CNAME,
+                       "selector1-example-com._domainkey.example.onmicrosoft.com",
+                       "abc123._domainkey.example-com.dkim.mimecast.com"):
+            response = self.run_transform(
+                {"SPF": MS_SPF, "DMARC": "v=DMARC1; p=reject", "DKIM": target})
+            self.assert_measured(response, isDKIMConfigured=True, isDNSConfigured=True)
+
+    def test_measured_failures_keep_their_reasons_when_a_sibling_is_unreadable(self):
+        # dataCollection.status is per RESPONSE, so an unreadable DKIM withholds the
+        # grade from SPF and DMARC too -- that is the accepted trade-off, because the
+        # other arrangement grades a None and ships an unmeasured control as a gap.
+        # What must NOT also happen is the response losing the sentences that say which
+        # protocol failed and why.
+        response = self.run_transform({"SPF": "v=spf1 +all", "DMARC": "v=DMARC1; p=none"})
+        self.assert_not_measured(response, DKIM, DNS)
+        self.assertIs(self.values(response)[SPF], False)
+        self.assertIs(self.values(response)[DMARC], False)
+        reasons = response["additionalInfo"]["evaluation"]["failReasons"]
+        self.assertTrue(reasons, "the measured failures lost their reasons")
+        self.assertTrue(any("all-mechanism" in r for r in reasons))
+        self.assertTrue(any("p=none" in r for r in reasons))
+        # and no "we could not read it" sentence is filed as a finding
+        self.assertFalse(any("not measured" in r for r in reasons))
+        rows = {row["metric"]: row["status"]
+                for row in response["additionalInfo"]["evaluation"]["additionalFindings"]
+                if "metric" in row}
+        self.assertEqual(rows[SPF], "fail")
+        self.assertEqual(rows[DMARC], "fail")
+        self.assertEqual(rows[DKIM], "notMeasured")
 
     def test_presence_without_the_record_is_not_measured_for_spf_and_dmarc(self):
         # A bare True is "I did not find it off", not "I measured the control".

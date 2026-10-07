@@ -110,27 +110,37 @@ def transform(input):
                                                "SPF enforcement was not measured"],
                                    input_summary={"spfRecord": str(spf)})
         record = spf.strip() if isinstance(spf, str) else ""
-        if not record.lower().startswith("v=spf1"):
+        terms = record.split()
+        # RFC 7208 s4.5: the version section is exactly "v=spf1", terminated by a space or
+        # the end of the record; the RFC's own example of what must be discarded is a
+        # record whose version section is "v=spf10", which startswith("v=spf1") accepts.
+        if not terms or terms[0].lower() != "v=spf1":
             return create_response(False, fail_reasons=["No SPF record is published for the email domain"],
                                    input_summary={"spfRecord": str(spf)})
-        terms = record.split()
         includes = [t.split(":", 1)[1].lower() for t in terms if t.lower().startswith("include:") and ":" in t]
         cp = [d for d in includes if is_domain_or_subdomain(d, "checkpoint-spf.com") or
               is_domain_or_subdomain(d, "cpmails.com")]
+        # RFC 7208 s4.6.2: mechanisms are evaluated left to right and "if it matches,
+        # processing ends and the qualifier value is returned". "all" always matches, so
+        # the FIRST all-term decides and anything after it is unreachable. Reading the
+        # last one passes "v=spf1 +all -all", where a receiver applies +all.
         alls = [t.lower() for t in terms if re.match(r"^[-~?+]?all$", t.lower())]
-        qualifier = alls[-1] if alls else ""
+        qualifier = alls[0] if alls else ""
         restrictive = qualifier in ("-all", "~all")
         summary = {"spfRecord": record, "checkPointIncludes": cp, "allMechanism": qualifier or "none"}
+        if len(alls) > 1:
+            summary["unreachableAllTerms"] = alls[1:]
         if cp and restrictive:
             return create_response(True, pass_reasons=["The SPF record includes Check Point's sending hosts (" +
-                                   ", ".join(cp) + ") and ends in " + qualifier], input_summary=summary)
+                                   ", ".join(cp) + ") and its first all-mechanism is " + qualifier],
+                                   input_summary=summary)
         reasons = []
         if not cp:
             reasons.append("The SPF record has no Check Point include (checkpoint-spf.com or cpmails.com), so mail "
                            "Check Point sends for the domain fails SPF")
         if not restrictive:
-            reasons.append("The SPF record ends in " + (qualifier or "no all-mechanism") +
-                           ", which does not restrict unlisted senders")
+            reasons.append("The first all-mechanism in the SPF record is " +
+                           (qualifier or "absent") + ", which does not restrict unlisted senders")
         return create_response(False, fail_reasons=reasons, input_summary=summary)
     except Exception as e:
         # api_errors as well as transformation_errors: the grading path reads
