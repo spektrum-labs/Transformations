@@ -1,6 +1,7 @@
 """hasAuthenticationLogAPIAccess: Duo v1 and v2 authentication logs, and Duo's 403 / 40301 refusal.
 
-Both log shapes are read: v1 getAuthenticationLogs {"stat": "OK", "response": [...]} and v2 getAuthLogs
+A successful read proves access, including an empty one (a quiet window); a body with no log list is
+Not evaluated. Both log shapes are read: v1 getAuthenticationLogs {"stat": "OK", "response": [...]} and v2 getAuthLogs
 {"authlogs": [...], "metadata": {...}} (v2 names the user under user.name). The evidence names the
 endpoint the records came from and the real time span of the records read.
 
@@ -59,10 +60,26 @@ class DuoAuthenticationLogAccessTests(unittest.TestCase):
         self.assertIs(response["transformedResponse"][KEY], False)
         self.assertTrue(response["additionalInfo"]["evaluation"]["failReasons"])
 
-    def test_empty_and_none_fail_closed(self):
-        for payload in (None, {}, [], "{}", "null", "not json", {"stat": "OK", "response": []}):
+    def test_no_log_list_is_not_evaluated(self):
+        # nothing was read: value None with a data-collection error, never a measured False
+        for payload in (None, {}, "{}", "null", "not json",
+                        {"integrationName": "Duo", "errorMessage": "x", "error": True, "statusCode": 401}):
             with self.subTest(payload=payload):
-                self.assertIs(self.run_transform(payload)["transformedResponse"][KEY], False)
+                response = self.run_transform(payload)
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(self.collection(response)["status"], "error")
+                self.assertTrue(self.collection(response)["errors"])
+                self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], [])
+
+    def test_empty_successful_read_proves_access(self):
+        for payload in ({"stat": "OK", "response": []}, []):
+            with self.subTest(payload=payload):
+                response = self.run_transform(payload)
+                self.assertIs(response["transformedResponse"][KEY], True)
+                self.assertEqual(response["transformedResponse"]["totalRecords"], 0)
+                self.assertEqual(self.collection(response)["status"], "success")
+                self.assertIn("read OK with an empty window",
+                              response["additionalInfo"]["evaluation"]["passReasons"][0])
 
     # --- 403 / 40301 Access forbidden: a measured FAIL ---------------------------
 
@@ -115,9 +132,11 @@ class DuoAuthenticationLogAccessTests(unittest.TestCase):
         self.assert_data_collection_error(self.run_transform(bad))
 
     def test_bare_body_without_marker_is_not_treated_as_forbidden(self):
-        # Only Integration-Service's marked shape counts; a bare body is zero records.
+        # Only Integration-Service's marked shape counts; a bare error body holds no log list,
+        # so it is Not evaluated, not a measured False.
         response = self.run_transform(FORBIDDEN_BODY)
-        self.assertIs(response["transformedResponse"][KEY], False)
+        self.assertIsNone(response["transformedResponse"][KEY])
+        self.assertEqual(self.collection(response)["status"], "error")
         self.assertNotIn("vendorStatus", response["additionalInfo"]["transformation"]["inputSummary"])
 
 
@@ -191,10 +210,15 @@ class DuoAuthenticationLogShapesTests(unittest.TestCase):
         self.assertIs(response["transformedResponse"][KEY], False)
         self.assertIn("/admin/v2/logs/authentication", self.evaluation(response)["failReasons"][0])
 
-    def test_v2_empty_window_is_zero_records(self):
-        response = self.t.transform({"authlogs": [], "metadata": {}})
-        self.assertIs(response["transformedResponse"][KEY], False)
-        self.assertIn("/admin/v2/logs/authentication", self.evaluation(response)["failReasons"][0])
+    def test_v2_empty_window_passes_as_a_successful_read(self):
+        for payload in ({"authlogs": [], "metadata": {}}, {"stat": "OK", "response": {"authlogs": [], "metadata": {}}}):
+            with self.subTest(payload=payload):
+                response = self.t.transform(payload)
+                self.assertIs(response["transformedResponse"][KEY], True)
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
+                reason = self.evaluation(response)["passReasons"][0]
+                self.assertIn("/admin/v2/logs/authentication", reason)
+                self.assertIn("read OK with an empty window", reason)
 
     def test_forbidden_marker_is_the_same_fail_for_either_method(self):
         response = self.t.transform(FORBIDDEN_MARKED)

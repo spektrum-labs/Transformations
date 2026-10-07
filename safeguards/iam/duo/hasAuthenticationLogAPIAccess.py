@@ -85,6 +85,12 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 #       (the raw v2 body nests the same under "response"; extract_input unwraps it)
 # Both are read the same way; the evidence names the endpoint the data came from and the
 # real time span of the records read.
+#
+# Verdict: a successful read proves the credential has authentication log access, so it is
+# True, including an EMPTY list (a quiet window: v2 reads the last 30 days only). False only
+# for Duo's 403 / 40301 refusal or records missing timestamp/factor/result/username. A body
+# with no log list at all (an error envelope, a bare error body, None, non-JSON) is Not
+# evaluated: value None with a data-collection error.
 ACCESS_FORBIDDEN_CODE = 40301
 V1_ENDPOINT = "/admin/v1/logs/authentication"
 V2_ENDPOINT = "/admin/v2/logs/authentication"
@@ -228,7 +234,17 @@ def transform(input):
         )
 
     endpoint, records, log_metadata = read_auth_logs(data)
-    endpoint_text = endpoint or "the authentication logs endpoint"
+    if endpoint is None:
+        # No authentication log list at all (an Integration-Service error envelope, a bare Duo
+        # error body, None, non-JSON): nothing was read, so nothing is judged.
+        return create_response(
+            result={"hasAuthenticationLogAPIAccess": None, "totalRecords": None},
+            validation=validation,
+            api_errors=["The response holds no authentication log list (expected the v1 \"response\" "
+                        "list or the v2 \"authlogs\" list): %s" % str(data)[:300]],
+            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
+        )
+    endpoint_text = endpoint
     total_records = len(records)
 
     required_fields = ["timestamp", "factor", "result", "username"]
@@ -253,7 +269,10 @@ def transform(input):
         if len(sample_events) < 3:
             sample_events.append(values)
 
-    has_access = total_records > 0 and all(
+    # A successful read proves the credential can read the authentication log. An empty list
+    # (v2 reads the last 30 days only) is a quiet window, not a refusal: Duo refuses with 403/40301.
+    empty_window = total_records == 0
+    has_access = empty_window or all(
         fields_present_counts.get(f, 0) == total_records for f in required_fields
     )
     oldest, newest = time_span(records)
@@ -278,7 +297,15 @@ def transform(input):
         findings.append("Duo v2 reported more records after this page (newest first); the span covers "
                         "the records read.")
 
-    if has_access:
+    if has_access and empty_window:
+        pass_reasons = [
+            f"Duo Admin API {endpoint_text} read OK with an empty window: the credential can read "
+            "authentication logs, and Duo returned no authentication events for the requested range "
+            "(a refusal would be HTTP 403, code 40301)."
+        ]
+        fail_reasons = []
+        recommendations = []
+    elif has_access:
         pass_reasons = [
             f"Duo Admin API {endpoint_text} returned {total_records} authentication event records "
             f"{span_text(oldest, newest)}, each containing timestamp, factor, result, and username "
@@ -289,25 +316,15 @@ def transform(input):
         recommendations = []
     else:
         pass_reasons = []
-        if total_records == 0:
-            fail_reasons = [
-                f"The authentication logs endpoint ({endpoint_text}) returned zero records, "
-                "so no centralized authentication event trail could be confirmed."
-            ]
-            recommendations = [
-                "Verify the API credential has permission to read authentication logs and that the tenant "
-                "has authentication activity in the queried window."
-            ]
-        else:
-            fail_reasons = [
-                f"The authentication logs endpoint ({endpoint_text}) returned {total_records} records "
-                f"{span_text(oldest, newest)}, but not all records carried the expected fields "
-                f"(timestamp, factor, result, username). Field presence counts: {fields_present_counts}."
-            ]
-            recommendations = [
-                "Investigate why some authentication log records are missing required fields; confirm the API "
-                "version and endpoint are the documented logs/authentication route."
-            ]
+        fail_reasons = [
+            f"The authentication logs endpoint ({endpoint_text}) returned {total_records} records "
+            f"{span_text(oldest, newest)}, but not all records carried the expected fields "
+            f"(timestamp, factor, result, username). Field presence counts: {fields_present_counts}."
+        ]
+        recommendations = [
+            "Investigate why some authentication log records are missing required fields; confirm the API "
+            "version and endpoint are the documented logs/authentication route."
+        ]
 
     result = {
         "hasAuthenticationLogAPIAccess": has_access,
