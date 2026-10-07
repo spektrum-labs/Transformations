@@ -2,8 +2,6 @@
   "contract": "none-not-evaluated",
   "why": "a criterion returned as None must carry additionalInfo.dataCollection.status \"error\" so the evaluator records it as not evaluated rather than failed; this list may only shrink",
   "generated_by": "tools/check_none_not_evaluated.py --emit-allowlist",
-  "count": 1,
-  "instances": [
-    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py"
-  ]
+  "count": 0,
+  "instances": []
 }
