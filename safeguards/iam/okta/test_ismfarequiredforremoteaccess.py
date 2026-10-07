@@ -268,6 +268,28 @@ class RemoteAccessMfaTests(unittest.TestCase):
         flipped["result"]["accessRules"][1] = {"apiResponse": REAL["result"]["accessRules"][1], "truncated": True}
         self.assert_not_evaluated(flipped)
 
+    def test_marker_on_applications_wrapper_is_not_evaluated(self):
+        for extra in [{"paginationTruncated": True}, {"_links": {"next": {"href": "https://example.okta.com/api/v1/apps?after=x"}}},
+                      {"truncated": True}]:
+            flipped = copy.deepcopy(REAL)
+            wrapper = {"response": flipped["result"]["applications"]}
+            wrapper.update(extra)
+            flipped["result"]["applications"] = wrapper
+            with self.subTest(extra=extra):
+                self.assert_not_evaluated(flipped)
+
+    def test_next_link_on_nested_rule_list_wrapper_is_not_evaluated(self):
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["accessRules"][1] = {"response": {"data": flipped["result"]["accessRules"][1],
+                                                            "_links": {"next": {"href": BASE + "rstVPN/rules?after=x"}}}}
+        self.assert_not_evaluated(flipped)
+
+    def test_clean_nested_wrappers_still_pass(self):
+        flipped = copy.deepcopy(REAL)
+        flipped["result"]["applications"] = {"response": flipped["result"]["applications"]}
+        flipped["result"]["accessRules"][1] = {"response": {"data": flipped["result"]["accessRules"][1]}}
+        self.assertIs(self.out(flipped)[KEY], True)
+
     def test_missing_catch_all_rule_is_not_evaluated(self):
         # The permissive system rule is the one most likely to sit on an unread page.
         flipped = copy.deepcopy(REAL)

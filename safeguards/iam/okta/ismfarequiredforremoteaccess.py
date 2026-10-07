@@ -18,7 +18,8 @@
 # Completeness. A cut-off read must never be judged, because the missing app or rule may be the weak
 # one. Not evaluated when any envelope level (before or after unwrapping) carries paginationTruncated,
 # iterateTruncated, paginationStats.<key>.paginationTruncated or iterateStats.<key> truncation or item
-# errors; when a single rule list's wrapper still has _links.next.href or truncated: true; when a
+# errors; when any wrapper around the app, policy or rule lists (at any depth) carries those markers,
+# _links.next.href or truncated: true; when a
 # policy id is returned twice; and when a remote-access app's policy rules do not include the policy's
 # system Catch-all Rule (Okta always lists it last, and it is often the permissive one).
 #
@@ -108,6 +109,8 @@ def transform(input):
 
     def unwrap_list(value):
         while isinstance(value, dict):
+            if truncated(value) or page_left(value):
+                raise ValueError("a list wrapper reports pages or items that were not read")
             inner = None
             for wrapper in ["apiResponse", "response", "result", "data"]:
                 if wrapper in value:
@@ -204,8 +207,6 @@ def transform(input):
 
         rules_by_policy = {}
         for rule_list in rule_lists:
-            if page_left(rule_list):
-                return not_evaluated("A policy rule list has more pages that were not read")
             rule_list = unwrap_list(rule_list)
             if not isinstance(rule_list, list):
                 return not_evaluated("A policy rule list is unreadable")
