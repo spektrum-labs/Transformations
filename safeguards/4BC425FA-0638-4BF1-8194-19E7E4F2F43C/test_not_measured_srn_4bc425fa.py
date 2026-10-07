@@ -164,6 +164,15 @@ class NotMeasuredIsNotEvaluated(unittest.TestCase):
         # <DBSnapshots/> parses to None; reading .get on it used to raise into a False
         self.assert_measured("is_backup_enabled_for_critical_systems", "isBackupEnabledForCriticalSystems", backups(no_manual), True)
 
+    def test_a_failed_restore_is_not_a_tested_backup(self):
+        only_failed = lookup([restore_event("InvalidParameterCombination")])
+        self.assert_measured("is_backup_tested", "isBackupTested", only_failed, False)
+        self.assert_measured("recoverytestcompleted", "recoveryTestCompleted", only_failed, False)
+        succeeded = lookup([restore_event(), restore_event("InvalidParameterCombination")])
+        self.assert_measured("is_backup_tested", "isBackupTested", succeeded, True)
+        self.assert_measured("recoverytestcompleted", "recoveryTestCompleted", succeeded, True)
+        self.assert_measured("is_backup_tested", "isBackupTested", lookup([]), False)
+
     def test_license_status(self):
         self.assert_measured("confirmedlicensepurchased", "confirmedLicensePurchased", {"result": {"licensePurchased": True}}, True)
         self.assert_measured("confirmedlicensepurchased", "confirmedLicensePurchased", {"result": {"licensePurchased": False}}, False)
@@ -177,6 +186,9 @@ class NotMeasuredIsNotEvaluated(unittest.TestCase):
         # an account with no provider returns an empty <SAMLProviderList/>: a measured "none"
         none = {"ListSAMLProvidersResponse": {"ListSAMLProvidersResult": {"SAMLProviderList": None}}}
         self.assert_measured("issamlenforced", "isSAMLEnforced", none, False)
+
+    def test_recovery_window_matches_cloudtrail_retention(self):
+        self.assertEqual(load("recoverytestcompleted").WINDOW_DAYS, 90)
 
 
 if __name__ == "__main__":

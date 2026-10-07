@@ -4,6 +4,12 @@ Vendor: AWS
 Category: Backups / Compliance
 
 Checks whether any backups have been tested via restore operations.
+
+Rule (fail closed, the same rule recoverytestcompleted.py applies to the same body): true when at
+least one RestoreDBInstanceFromDBSnapshot event against a DB instance completed WITHOUT an errorCode
+in its CloudTrailEvent. AWS records failed API calls as events too, so an errored restore is evidence
+that someone tried, not that the backup restores. CloudTrail LookupEvents holds 90 days, which bounds
+the window. A vendor error or unreadable body is reported as not measured, never as a finding.
 """
 
 import json
@@ -155,9 +161,8 @@ def transform(input):
             event_members = []
 
         # For each event, check if any of its Resources is a DBInstance.
-        # Track successful vs errored events separately so the result output
-        # can surface the breakdown to reviewers, even though both count
-        # toward isBackupTested=true (see boolean comment below).
+        # Track successful vs errored events separately; only a successful
+        # restore counts toward isBackupTested=true (see boolean comment below).
         successful_restores = []
         failed_restores = []
         for event in event_members:
@@ -209,18 +214,25 @@ def transform(input):
             else:
                 successful_restores.append(entry)
 
-        # Boolean: any DBInstance restore event (successful or errored) counts
-        # as evidence of backup-test activity. The output still surfaces the
-        # success/failure breakdown so reviewers can interpret it.
+        # Boolean: only a DBInstance restore that completed without an errorCode
+        # shows the backup restores. An errored restore is an attempt, and is
+        # still surfaced in the breakdown so reviewers can see it.
         total_restore_events = len(successful_restores) + len(failed_restores)
-        is_backup_tested = total_restore_events > 0
+        is_backup_tested = len(successful_restores) > 0
 
         if is_backup_tested:
-            most_recent = successful_restores[0] if successful_restores else failed_restores[0]
+            most_recent = successful_restores[0]
             pass_reasons.append(
-                f"Found {total_restore_events} DB restore event(s) in CloudTrail "
-                f"({len(successful_restores)} successful, {len(failed_restores)} errored). "
+                f"Found {len(successful_restores)} successful DB restore event(s) in CloudTrail "
+                f"({len(failed_restores)} errored). "
                 f"Most recent: {most_recent['eventName']} at {most_recent['eventTime']} by {most_recent['user']}."
+            )
+        elif failed_restores:
+            fail_reasons.append(
+                f"All {len(failed_restores)} DB restore event(s) in CloudTrail carry an errorCode; no restore completed."
+            )
+            recommendations.append(
+                "Investigate the failed restores and complete a successful restore test from a backup snapshot."
             )
         else:
             fail_reasons.append("No backup restore events (DBInstance restores) found in CloudTrail logs.")

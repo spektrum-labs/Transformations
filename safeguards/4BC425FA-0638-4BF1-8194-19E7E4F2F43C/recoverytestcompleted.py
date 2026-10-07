@@ -21,7 +21,10 @@ import json
 from datetime import datetime, timezone, timedelta
 
 CRITERIA_KEY = "recoveryTestCompleted"
-WINDOW_DAYS = 365
+# CloudTrail LookupEvents "can look up events that occurred in a Region within the last 90 days"
+# (docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_LookupEvents.html), so a longer window
+# would only claim a reach the API does not have.
+WINDOW_DAYS = 90
 
 
 def extract_input(input_data):
