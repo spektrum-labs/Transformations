@@ -257,7 +257,9 @@ def transform(input):
         except ValueError:
             input = {}
     data, validation = extract_input(input)
-    if validation.get("status") == "failed":
+    if not isinstance(validation, dict):
+        validation = None  # create_response substitutes its default
+    if isinstance(validation, dict) and validation.get("status") == "failed":
         return create_response(
             result={"hasAuthenticationLogAPIAccess": None, "totalRecords": None},
             validation=validation,
