@@ -20,7 +20,7 @@ def load(name):
 
 
 KEYS = {
-    "ismfarequiredforremoteaccess": "isMFARequiredForRemoteAccess",
+    "isidentityproviderrequiredforremoteaccess": "isIdentityProviderRequiredForRemoteAccess",
     "isconnectionloggingenabled": "isConnectionLoggingEnabled",
     "issplittunneldisabled": "isSplitTunnelDisabled",
     "isdisconnectonsessiontimeoutenabled": "isDisconnectOnSessionTimeoutEnabled",
@@ -131,7 +131,7 @@ def test_partial_page_is_not_evaluated(module):
 
 
 FAILS = {
-    "ismfarequiredforremoteaccess": {"authenticationOptions": {"item": CERT}},
+    "isidentityproviderrequiredforremoteaccess": {"authenticationOptions": {"item": CERT}},
     "isconnectionloggingenabled": {"connectionLogOptions": {"enabled": "false"}},
     "issplittunneldisabled": {"splitTunnel": "true"},
     "isdisconnectonsessiontimeoutenabled": {"disconnectOnSessionTimeout": "false"},
@@ -153,7 +153,7 @@ def test_one_bad_endpoint_fails_the_whole_estate(module):
 
 
 UNREPORTED = {
-    "ismfarequiredforremoteaccess": ["authenticationOptions"],
+    "isidentityproviderrequiredforremoteaccess": ["authenticationOptions"],
     "isfederatedauthenticationconfigured": ["authenticationOptions"],
     "isclientcertificateauthrequired": ["authenticationOptions"],
     "isconnectionloggingenabled": ["connectionLogOptions"],
@@ -187,36 +187,38 @@ def test_a_reported_failure_still_wins_over_an_unreported_endpoint(module):
     assert verdict(module, xml_body(unreported, bad))[0] is False
 
 
-@pytest.mark.parametrize("module", ["ismfarequiredforremoteaccess", "isfederatedauthenticationconfigured",
+@pytest.mark.parametrize("module", ["isidentityproviderrequiredforremoteaccess", "isfederatedauthenticationconfigured",
                                     "isclientcertificateauthrequired"])
 @pytest.mark.parametrize("options", [{"item": {"type": "something-new"}}, {"item": {"type": ""}}, {"item": []}, None])
 def test_an_unrecognised_or_empty_auth_option_is_not_evaluated(module, options):
     assert verdict(module, xml_body(good_endpoint(authenticationOptions=options)))[0] is None
 
 
-def test_mfa_directory_sign_in_is_not_evaluated_because_radius_mfa_is_not_visible():
-    value, out = verdict("ismfarequiredforremoteaccess", xml_body(
+def test_idp_directory_sign_in_is_not_evaluated():
+    value, out = verdict("isidentityproviderrequiredforremoteaccess", xml_body(
         good_endpoint("cvpn-endpoint-1", authenticationOptions={"item": SAML}),
         good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT, AD]}),
     ))
     assert value is None
     body = out["transformedResponse"]
     assert body["federatedEndpoints"] == 1 and body["directoryEndpoints"] == 1
-    assert "RADIUS" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "directory sign-in" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
-def test_mfa_federated_everywhere_passes_and_says_the_idp_proves_the_mfa():
-    value, out = verdict("ismfarequiredforremoteaccess", xml_body(
+def test_idp_federated_everywhere_passes_and_never_claims_mfa():
+    value, out = verdict("isidentityproviderrequiredforremoteaccess", xml_body(
         good_endpoint("cvpn-endpoint-1", authenticationOptions={"item": SAML}),
         good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT, SAML]}),
     ))
     assert value is True
     assert out["transformedResponse"]["federatedEndpoints"] == 2
-    assert "proves the MFA" in out["additionalInfo"]["evaluation"]["passReasons"][0]
+    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
+    assert "SAML federation" in reason and "MFA" not in reason
+    assert "isMFARequiredForRemoteAccess" not in out["transformedResponse"]
 
 
-def test_mfa_certificate_only_fails_and_counts():
-    value, out = verdict("ismfarequiredforremoteaccess", xml_body(
+def test_idp_certificate_only_fails_and_counts():
+    value, out = verdict("isidentityproviderrequiredforremoteaccess", xml_body(
         good_endpoint("cvpn-endpoint-1"),
         good_endpoint("cvpn-endpoint-2", authenticationOptions={"item": [CERT]}),
         good_endpoint("cvpn-endpoint-3", authenticationOptions={"item": [AD]}),
@@ -246,3 +248,30 @@ def test_connect_handler_reported_off_fails():
     value, _ = verdict("isendpointanalysispolicybound",
                        xml_body(good_endpoint(clientConnectOptions={"enabled": "false"})))
     assert value is False
+
+
+@pytest.mark.parametrize("module", ["isidentityproviderrequiredforremoteaccess", "isfederatedauthenticationconfigured"])
+def test_federated_option_without_saml_provider_arn_is_a_mismatch_not_evidence(module):
+    value, out = verdict(module, xml_body(
+        good_endpoint("a"),
+        good_endpoint("b", authenticationOptions={"item": [CERT, {"type": "federated-authentication"}]})))
+    assert value is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+@pytest.mark.parametrize("module", sorted(KEYS))
+def test_vendor_error_text_never_reaches_the_reasons(module):
+    body = {"Response": {"Errors": {"Error": {"Code": "UnauthorizedOperation",
+                                              "Message": "<script>x</script> arn:aws:iam::000000000000:role/r"}}}}
+    value, out = verdict(module, body)
+    reasons = json.dumps(out["additionalInfo"])
+    assert value is None and "script" not in reasons and "UnauthorizedOperation" not in reasons
+    value, out = verdict(module, {"error": "free text from somewhere <b>"})
+    assert value is None and "free text" not in json.dumps(out["additionalInfo"])
+
+
+@pytest.mark.parametrize("module", sorted(KEYS))
+def test_fail_reasons_read_cleanly(module):
+    bad = good_endpoint("cvpn-endpoint-0000000000000000b", **FAILS[module])
+    reason = verdict(module, xml_body(bad))[1]["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "::" not in reason and " on on " not in reason
