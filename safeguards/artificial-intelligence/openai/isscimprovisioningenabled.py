@@ -324,6 +324,14 @@ def evaluate(input):
                             "evidence that SCIM is unused; SCIM state is reported unconditionally on groups.",
                             "Wire this criterion to GET /v1/organization/groups, which reports is_scim_managed on "
                             "every group.", summary)
+    # Same rule as the group path above: "none of the members on the pages we read" is a
+    # sample, not an estate. Finding one SCIM-managed member settles the True whatever went
+    # unread, which is why the check above this one needs no completeness test; finding none
+    # settles nothing, because the members not read may be exactly the SCIM-managed ones.
+    if not scim and not complete:
+        return not_measured(validation, "No SCIM-managed member was found, but the user list was not read to the end "
+                            "(has_more is not false), so members that were not read may be SCIM-managed.",
+                            "Check the listOrganizationUsers pagination settings.", summary)
     if not scim:
         return fail(validation, "None of the " + str(len(reported)) + " human members that reported is_scim_managed is "
                     "SCIM-managed: membership is not provisioned from an identity provider.",

@@ -244,6 +244,36 @@ def test_user_list_that_does_report_the_field_is_still_measured():
     assert scim_transform(lst([user("u1", "owner", scim=False)]))["transformedResponse"][SCIM] is False
 
 
+def test_partial_user_list_with_no_scim_member_is_not_measured():
+    """The user path must hold the same line as the group path: page one is a sample.
+
+    With has_more not false, the members that were not read may be exactly the SCIM-managed
+    ones, so "none of the ones we saw" cannot be reported as a measured False.
+    """
+    assert_not_measured(scim_transform(lst([user("u1", "owner", scim=False),
+                                            user("u2", scim=False)], has_more=True)), SCIM)
+
+
+def test_a_user_list_with_no_has_more_at_all_is_not_measured():
+    """complete is True only when has_more is literally false; a bare list is not an estate."""
+    body = {"object": "list", "data": [user("u1", "owner", scim=False)]}
+    assert_not_measured(scim_transform(body), SCIM)
+
+
+def test_partial_user_list_with_a_scim_member_still_passes():
+    """One SCIM-managed member settles the True; the unread pages cannot withdraw it."""
+    out = scim_transform(lst([user("u1", "owner", scim=False), user("u2", scim=True)], has_more=True))
+    assert out["transformedResponse"][SCIM] is True
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_a_complete_user_list_with_no_scim_member_is_still_a_red():
+    """The fix must not cost the real finding: a list read to the end still fails."""
+    out = scim_transform(lst([user("u1", "owner", scim=False), user("u2", scim=False)], has_more=False))
+    assert out["transformedResponse"][SCIM] is False
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
 def test_group_list_that_reports_no_scim_field_is_not_measured():
     """is_scim_managed is required on GroupResponse, so a group without it is an unknown shape."""
     assert_not_measured(scim_transform(lst([{"id": "g1", "name": "g1", "group_type": "group"}])), SCIM)
