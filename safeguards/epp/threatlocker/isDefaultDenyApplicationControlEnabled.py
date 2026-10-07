@@ -14,7 +14,8 @@ rules 2026-09-29); the rest are reported as staleComputerCount and neither pass 
 
 Not evaluated (value None, dataCollection "error"): an error body, no computer list, an empty list, a row
 without a numeric totalRows or a computerId, a partial read (fewer distinct computers than totalRows, e.g. one
-500-row page of a larger organisation), no computer inside the window, or a judged computer with no mode.
+500-row page of a larger organisation), no dated computer inside the window (computers without a readable
+lastCheckin are never judged on their own), or a judged computer with no mode.
 """
 import json
 from datetime import datetime, timedelta
@@ -119,7 +120,9 @@ def complete_read(input):
 def judged_computers(computers):
     """(judged, stale count): not deleted, and lastCheckin within 15 days of the newest check-in (endpoint rules
     2026-09-29). When the newest check-in is itself older than 15 days, every dated computer is stale. A computer
-    without a readable lastCheckin is judged, not dropped."""
+    without a readable lastCheckin is judged beside current dated computers, not dropped; but when no dated computer
+    is inside the window, the estate has no current evidence and nothing is judged (undated rows alone never
+    decide the result)."""
     live = [c for c in computers if not flag(c.get("isDeleted"))]
     seen = [parse_when(c.get("lastCheckin")) for c in live]
     known = [s for s in seen if s is not None]
@@ -131,11 +134,17 @@ def judged_computers(computers):
         cutoff = wall
     judged = []
     stale = 0
+    current = 0
     for c, when in zip(live, seen):
-        if when is not None and when < cutoff:
+        if when is None:
+            judged.append(c)
+        elif when < cutoff:
             stale = stale + 1
         else:
             judged.append(c)
+            current = current + 1
+    if current == 0:
+        return [], stale
     return judged, stale
 
 
@@ -179,7 +188,9 @@ def prepared(input):
     judged, stale = judged_computers(computers)
     if not judged:
         return None, None, None, unevaluated("No ThreatLocker computer checked in within " + str(ACTIVE_WINDOW_DAYS) +
-                                             " days; nothing current to judge.", {"staleComputerCount": stale})
+                                             " days (" + str(stale) + " stale); computers without a check-in date "
+                                             "are not judged on their own, so nothing current to judge.",
+                                             {"staleComputerCount": stale})
     return judged, stale, len(computers), None
 
 
