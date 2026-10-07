@@ -35,7 +35,12 @@ def extract_input(input_data):
         return input_data["data"], input_data["validation"]
     data = input_data
     if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse"]
+        # "data" last: the {"data": ..., "validation": ...} pair is handled above, so this only
+        # catches a bare {"data": {...}} wrapper. Every one of these files unwrapped that on main
+        # and nothing has confirmed which shape Integration-Service actually sends, because these
+        # checks have never run live. Dropping it would silently turn a verdict into Not evaluated.
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse",
+                        "data"]
         for i in range(3):
             unwrapped = False
             for key in wrapper_keys:

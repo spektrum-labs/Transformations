@@ -34,7 +34,12 @@ def extract_input(input_data):
         return input_data["data"], input_data["validation"]
     data = input_data
     if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse"]
+        # "data" last: the {"data": ..., "validation": ...} pair is handled above, so this only
+        # catches a bare {"data": {...}} wrapper. Every one of these files unwrapped that on main
+        # and nothing has confirmed which shape Integration-Service actually sends, because these
+        # checks have never run live. Dropping it would silently turn a verdict into Not evaluated.
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse",
+                        "data"]
         for i in range(3):
             unwrapped = False
             for key in wrapper_keys:
@@ -137,8 +142,12 @@ def evaluate(data, validation):
              "ipRuleCount": len(ip_rules)}
     if isinstance(public_access, str) and public_access.lower() == "disabled":
         return respond(True, "publicNetworkAccess is Disabled", validation, extra)
-    if acls.get("defaultAction") == "Deny" and len(ip_rules) == 0:
-        return respond(True, "networkAcls.defaultAction is Deny with no public IP rules", validation, extra)
+    # A firewall set to deny-all is NOT public access disabled. The vault keeps its public
+    # endpoint ("selected networks"): bypass AzureServices still admits trusted Microsoft
+    # services, and service-endpoint VNet rules still arrive over it. Microsoft's own built-in
+    # policy "Azure Key Vault should disable public network access" tests publicNetworkAccess
+    # alone, and the deny-all case is what isFirewallEnabled already measures. So this key means
+    # exactly what its name says.
     return respond(False, "The vault accepts public traffic: publicNetworkAccess is " + str(public_access)
                    + " and the firewall admits " + ("all networks" if acls.get("defaultAction") != "Deny"
                                                     else str(len(ip_rules)) + " public IP rule(s)"),
