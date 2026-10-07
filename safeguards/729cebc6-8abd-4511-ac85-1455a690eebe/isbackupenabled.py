@@ -104,13 +104,34 @@ def transform(input):
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,
+                api_errors=["isBackupEnabled not evaluated: no Resource Graph 'rows' in the response"],
                 fail_reasons=["isBackupEnabled not evaluated: no Resource Graph 'rows' in the response"]
             )
 
-        is_enabled = False
         row_count = len(rows)
-        if row_count > 0:
-            is_enabled = True
+        if row_count == 0:
+            # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+            # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+            # answers 200 with only the readable subset and, in Microsoft's words, "without any
+            # indication that the result might be partial". So zero rows is equally "there are
+            # none" and "the vaults are in a subscription this principal cannot read", and the
+            # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+            # Resource Graph: zero rows is not a proven empty set".
+            # This criterion's only negative signal WAS zero rows, so it can now answer
+            # only True or not-measured. That is deliberate: the red it used to report was
+            # indistinguishable from a permissions artefact.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupEnabled not evaluated: the Resource Graph query returned zero rows, "
+                            "which is also what a subscription this principal cannot read returns, so it "
+                            "is not evidence that no backup is configured"],
+                recommendations=["Confirm the principal has at least Reader on every subscription holding "
+                                 "a Recovery Services or Backup vault, then re-run the query."],
+                input_summary={"backupConfigurations": 0}
+            )
+
+        is_enabled = True
 
         if is_enabled:
             pass_reasons.append(f"Backup is enabled with {row_count} backup configurations found")

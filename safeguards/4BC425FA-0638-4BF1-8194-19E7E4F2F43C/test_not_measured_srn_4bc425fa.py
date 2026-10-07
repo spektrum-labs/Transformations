@@ -191,5 +191,78 @@ class NotMeasuredIsNotEvaluated(unittest.TestCase):
         self.assertEqual(load("recoverytestcompleted").WINDOW_DAYS, 90)
 
 
+class PartialReadDoesNotAnswerForWhatItDidNotRead(unittest.TestCase):
+    """is_backup_encrypted: a section that was never read has no answer, and a section that
+    was read and holds an unencrypted item settles the top-level fail whatever else is missing.
+
+    The three sub-flags are initialised True and are only ever LOWERED by finding an
+    unencrypted item, so a section nothing scanned leaves its flag True -- True from missing
+    data. The guard above the final response only fires when everything read was encrypted,
+    so a real red elsewhere in the body used to carry the untouched flags out with it.
+    """
+
+    VALIDATION = {"status": "passed", "errors": [], "warnings": []}
+
+    UNENCRYPTED_RDS = {"DescribeDBInstanceAutomatedBackupsResponse": {
+        "DescribeDBInstanceAutomatedBackupsResult": {"DBInstanceAutomatedBackups": {
+            "DBInstanceAutomatedBackup": [{"DBInstanceIdentifier": "prod-db", "Encrypted": "false"}]}}}}
+
+    def run_it(self, data):
+        return load("is_backup_encrypted").transform({"data": data, "validation": self.VALIDATION})
+
+    def test_unread_section_does_not_report_encrypted(self):
+        """An error envelope for volumeSnapshots must not yield isEbsBackupEncrypted True."""
+        out = self.run_it({"dbBackups": self.UNENCRYPTED_RDS,
+                           "volumeSnapshots": {"error": "AccessDenied"}})
+        result = out["transformedResponse"]
+        # what WAS read settles the fail
+        self.assertIs(result["isBackupEncrypted"], False)
+        self.assertIs(result["isAutoBackupEncrypted"], False)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        # what was NOT read has no answer
+        self.assertIsNone(result["isEbsBackupEncrypted"])
+        self.assertIsNone(result["isManualBackupEncrypted"])
+
+    def test_a_null_section_does_not_erase_a_red_it_never_touched(self):
+        """"volumeSnapshots": null must not raise into the except branch and void the finding."""
+        out = self.run_it({"dbBackups": self.UNENCRYPTED_RDS, "volumeSnapshots": None})
+        result = out["transformedResponse"]
+        self.assertIs(result["isBackupEncrypted"], False)
+        self.assertIs(result["isAutoBackupEncrypted"], False)
+        self.assertIsNone(result["isEbsBackupEncrypted"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        self.assertFalse(out["additionalInfo"]["transformation"]["errors"])
+
+    def test_a_non_dict_section_is_treated_as_unread_not_as_an_error(self):
+        out = self.run_it({"dbBackups": self.UNENCRYPTED_RDS, "volumeSnapshots": []})
+        result = out["transformedResponse"]
+        self.assertIs(result["isBackupEncrypted"], False)
+        self.assertIsNone(result["isEbsBackupEncrypted"])
+        self.assertFalse(out["additionalInfo"]["transformation"]["errors"])
+
+    def test_all_sections_read_and_encrypted_still_passes_every_key(self):
+        out = self.run_it({
+            "dbBackups": {"DescribeDBInstanceAutomatedBackupsResponse": {
+                "DescribeDBInstanceAutomatedBackupsResult": {"DBInstanceAutomatedBackups": {
+                    "DBInstanceAutomatedBackup": [{"DBInstanceIdentifier": "db1", "Encrypted": "true"}]}}}},
+            "dbManualSnapshots": {"DescribeDBSnapshotsResponse": {
+                "DescribeDBSnapshotsResult": {"DBSnapshots": {"DBSnapshot": []}}}},
+            "volumeSnapshots": {"DescribeSnapshotsResponse": {"snapshotSet": {"item": []}}}})
+        result = out["transformedResponse"]
+        self.assertIs(result["isBackupEncrypted"], True)
+        self.assertIs(result["isAutoBackupEncrypted"], True)
+        self.assertIs(result["isManualBackupEncrypted"], True)
+        self.assertIs(result["isEbsBackupEncrypted"], True)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_everything_read_was_encrypted_but_a_section_is_missing_is_not_measured(self):
+        """The existing guard must survive: all-encrypted over a partial read answers nothing."""
+        out = self.run_it({"dbBackups": {"DescribeDBInstanceAutomatedBackupsResponse": {
+            "DescribeDBInstanceAutomatedBackupsResult": {"DBInstanceAutomatedBackups": {
+                "DBInstanceAutomatedBackup": [{"DBInstanceIdentifier": "db1", "Encrypted": "true"}]}}}}})
+        self.assertIsNone(out["transformedResponse"]["isBackupEncrypted"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()

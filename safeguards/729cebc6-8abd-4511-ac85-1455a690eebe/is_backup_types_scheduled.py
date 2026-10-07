@@ -101,11 +101,32 @@ def transform(input):
         backupschedules = inner_data.get("rows") if isinstance(inner_data, dict) else None
         if not isinstance(backupschedules, list):
             # No Resource Graph rows array (empty body, refusal, status stub): nothing measured.
-            # A present, empty rows array is a measured "no schedules" and stays False below.
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,
+                api_errors=["isBackupTypesScheduled not evaluated: no Resource Graph 'rows' in the response"],
                 fail_reasons=["isBackupTypesScheduled not evaluated: no Resource Graph 'rows' in the response"]
+            )
+
+        # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+        # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+        # answers 200 with only the readable subset and, in Microsoft's words, "without any
+        # indication that the result might be partial". So zero rows is equally "there are
+        # none" and "the vaults are in a subscription this principal cannot read", and the
+        # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+        # Resource Graph: zero rows is not a proven empty set".
+        # A row that came back and reports protectedItemsCount 0 is still a measured False
+        # below: that vault WAS read and it schedules nothing.
+        if not backupschedules:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupTypesScheduled not evaluated: the Resource Graph query returned zero "
+                            "rows, which is also what a subscription this principal cannot read returns, "
+                            "so it is not evidence that no backup schedule exists"],
+                recommendations=["Confirm the principal has at least Reader on every subscription holding "
+                                 "a Recovery Services or Backup vault, then re-run the query."],
+                input_summary={"protectedItemsCount": 0}
             )
 
         scheduled = False

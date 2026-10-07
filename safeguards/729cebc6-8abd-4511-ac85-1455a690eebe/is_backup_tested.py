@@ -140,10 +140,17 @@ def collect_restore_jobs(node, found, depth):
 
 
 def job_collection_seen(node, depth):
-    """True when the payload carries a restore-job collection at all (even an empty one).
+    """True when the payload carries a restore-job collection whose emptiness is PROVEN.
 
-    An empty collection is a measured "no restore jobs"; a payload with no collection
-    (empty body, refusal, status stub) measured nothing.
+    An ARM list -- restoreJobResults, restoreJobs, value -- answers 403 on a scope the
+    caller cannot read, so an empty one is a measured "no restore jobs". A Resource Graph
+    table is NOT such a collection when its rows are empty: Resource Graph is RBAC-scoped
+    and a partially readable scope answers 200 with only the readable subset and, in
+    Microsoft's words, "without any indication that the result might be partial", so zero
+    rows is equally "no restore job ran" and "the vaults are in a subscription this
+    principal cannot read". A Resource Graph table therefore counts here only when it
+    carries at least one row. See CONTRIBUTING.md, "Azure Resource Graph: zero rows is not
+    a proven empty set".
     """
     if depth > MAX_WALK_DEPTH:
         return False
@@ -157,7 +164,7 @@ def job_collection_seen(node, depth):
     for key in ["restoreJobResults", "restoreJobs", "value"]:
         if isinstance(node.get(key), list):
             return True
-    if isinstance(node.get("columns"), list) and isinstance(node.get("rows"), list):
+    if isinstance(node.get("columns"), list) and node.get("rows"):
         return True
     for key in ["apiResponse", "data"]:
         if key in node and job_collection_seen(node[key], depth + 1):
@@ -246,6 +253,11 @@ def transform(input):
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,
+                api_errors=["isBackupTested not evaluated: no restore job list in the response, or a "
+                            "Resource Graph table with zero rows, which is also what a subscription this "
+                            "principal cannot read returns"],
+                recommendations=["Confirm the principal has at least Reader on every subscription holding "
+                                 "a Recovery Services or Backup vault, then re-run the query."],
                 fail_reasons=["isBackupTested not evaluated: no restore job list in the response"]
             )
 

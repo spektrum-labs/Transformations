@@ -111,9 +111,18 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        db_backups = data.get("dbBackups", {})
-        db_manual_snapshots = data.get("dbManualSnapshots", {})
-        volume_snapshots = data.get("volumeSnapshots", {})
+        # A SECTION THAT IS PRESENT BUT NULL, OR PRESENT BUT NOT A DICT, MUST NOT RAISE.
+        # data.get(name, {}) returns None for "volumeSnapshots": null, because the key IS
+        # present, and the first volume_snapshots.get(...) below then raised AttributeError
+        # into the except branch -- turning an account with a readable unencrypted RDS
+        # backup into Not evaluated instead of the red it had earned. Coerce here so such a
+        # section flows to unread_sections, which already classifies it as unread.
+        db_backups = data.get("dbBackups")
+        db_manual_snapshots = data.get("dbManualSnapshots")
+        volume_snapshots = data.get("volumeSnapshots")
+        db_backups = db_backups if isinstance(db_backups, dict) else {}
+        db_manual_snapshots = db_manual_snapshots if isinstance(db_manual_snapshots, dict) else {}
+        volume_snapshots = volume_snapshots if isinstance(volume_snapshots, dict) else {}
 
         # A BODY CARRYING NONE OF THE THREE SECTIONS WAS SCANNED ZERO TIMES. Unlike a null
         # body -- which raises and is handled below -- {} and an error envelope parse
@@ -268,12 +277,20 @@ def transform(input):
                     "recommendation": "Enable encryption for EBS snapshots"
                 })
 
+        # EACH SUB-CRITERION ANSWERS ONLY FOR ITS OWN SECTION. auto_enc, man_enc and ebs_enc
+        # are initialised True and are lowered only by finding an unencrypted item, so a
+        # section that was never read leaves its flag True -- True from missing data, the
+        # same defect the except branch below warns about. Reaching here with anything in
+        # `unread` means the guard above did not fire, i.e. SOMETHING read was unencrypted:
+        # the top-level False is a real finding (one unencrypted item settles the fail
+        # whatever else went unread), but a sub-key whose section was never read has no
+        # answer. `measured` is keyed on isBackupEncrypted alone, so that False stays graded.
         return create_response(
             result={
                 "isBackupEncrypted": all_enc,
-                "isAutoBackupEncrypted": auto_enc,
-                "isManualBackupEncrypted": man_enc,
-                "isEbsBackupEncrypted": ebs_enc
+                "isAutoBackupEncrypted": None if "dbBackups" in unread else auto_enc,
+                "isManualBackupEncrypted": None if "dbManualSnapshots" in unread else man_enc,
+                "isEbsBackupEncrypted": None if "volumeSnapshots" in unread else ebs_enc
             },
             validation=validation,
             pass_reasons=pass_reasons,

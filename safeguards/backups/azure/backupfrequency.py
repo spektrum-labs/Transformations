@@ -80,8 +80,11 @@ def evaluate(data):
             schedule = props.get('schedulePolicy') if isinstance(props, dict) else None
             freq_mins = schedule.get('scheduleFrequencyInMins') if isinstance(schedule, dict) else None
             if not isinstance(freq_mins, (int, float)) or isinstance(freq_mins, bool):
-                # No policy rows and no schedulePolicy: nothing was measured. Resource Graph also
-                # returns zero rows for resources the caller cannot read, so empty is not "none".
+                # No policy rows and no schedulePolicy: nothing was measured. Resource Graph is
+                # RBAC-scoped -- a partially readable scope answers 200 with only the readable
+                # subset and, in Microsoft's words, "without any indication that the result might
+                # be partial" -- so zero rows is not "none". See CONTRIBUTING.md, "Azure Resource
+                # Graph: zero rows is not a proven empty set".
                 return {"backupFrequency": None, "error": "No backup policy rows or schedulePolicy in the response"}
             meets_daily = freq_mins > 0 and freq_mins <= 1440
             return {"backupFrequency": meets_daily, "frequencyMinutes": freq_mins}

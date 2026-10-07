@@ -68,8 +68,13 @@ FILES = [
 ]
 
 EXTRA_UNMEASURED = {
-    "isbackupenabled": [("data_without_rows", lambda: {"data": {"columns": []}})],
-    "is_backup_types_scheduled": [("data_without_rows", lambda: {"data": {"columns": []}})],
+    # arg_rows_empty: zero Resource Graph rows is RBAC-ambiguous and is not measured.
+    # See CONTRIBUTING.md, "Azure Resource Graph: zero rows is not a proven empty set".
+    "isbackupenabled": [("data_without_rows", lambda: {"data": {"columns": []}}),
+                        ("arg_rows_empty", lambda: {"data": {"rows": []}})],
+    "is_backup_types_scheduled": [("data_without_rows", lambda: {"data": {"columns": []}}),
+                                  ("arg_rows_empty", lambda: {"data": {"rows": []}})],
+    "is_backup_tested": [("arg_rows_empty", lambda: {"data": {"columns": [{"name": "name"}], "rows": []}})],
     "is_backup_logging_enabled": [("diagnostic_settings_stub", lambda: {"diagnosticSettings": [{"status": "Not Available"}]})],
 }
 
@@ -90,7 +95,6 @@ def restore(status):
 
 MEASURED = {
     "isbackupenabled": [
-        ("rows_empty", lambda: {"data": {"rows": []}}, False),
         ("rows_present", lambda: {"data": {"rows": [["vault-1"]]}}, True),
     ],
     "is_backup_enabled_for_critical_systems": [
@@ -108,7 +112,8 @@ MEASURED = {
         ("successful_restore", lambda: restore("Completed"), True),
     ],
     "is_backup_types_scheduled": [
-        ("rows_empty", lambda: {"data": {"rows": []}}, False),
+        # A row that CAME BACK and reports zero protected items is a measured False: that
+        # vault was read. Only the empty rows array is ambiguous.
         ("zero_protected_items", lambda: {"data": {"rows": [{"properties": {"protectedItemsCount": 0}}]}}, False),
         ("protected_items", lambda: {"data": {"rows": [{"properties": {"protectedItemsCount": 3}}]}}, True),
     ],
@@ -146,6 +151,70 @@ class NotMeasuredIsNotGraded(unittest.TestCase):
     def test_every_file_has_a_measured_case(self):
         for name, _key in FILES:
             self.assertTrue(MEASURED.get(name), name)
+
+
+ARG_ROWS_READERS = [
+    ("isbackupenabled", "isBackupEnabled", os.path.join(HERE, "isbackupenabled.py")),
+    ("is_backup_types_scheduled", "isBackupTypesScheduled",
+     os.path.join(HERE, "is_backup_types_scheduled.py")),
+    ("is_backup_tested", "isBackupTested", os.path.join(HERE, "is_backup_tested.py")),
+    ("backupfrequency", "backupFrequency",
+     os.path.join(HERE, os.pardir, "backups", "azure", "backupfrequency.py")),
+]
+
+
+def load_path(label, path):
+    spec = importlib.util.spec_from_file_location("arg_rows_" + label, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ZeroResourceGraphRowsIsNotMeasured(unittest.TestCase):
+    """One rule for every Resource Graph reader here, so the next reader cannot differ.
+
+    Resource Graph is RBAC-scoped. A wholly unreadable scope answers 403, but a PARTIALLY
+    readable one answers 200 carrying only the readable subset and, in Microsoft's words,
+    "without any indication that the result might be partial"
+    (learn.microsoft.com/azure/governance/resource-graph/overview#permissions-in-azure-resource-graph).
+    Zero rows is therefore equally "there are none" and "the vaults are in a subscription
+    this principal cannot read", so it may not be reported as a measured answer.
+    """
+
+    VALIDATION = {"status": "passed", "errors": [], "warnings": []}
+
+    EMPTY_ROWS = [
+        ("flat", {"columns": [{"name": "result"}], "rows": [], "totalRecords": 0}),
+        ("nested", {"data": {"columns": [{"name": "result"}], "rows": [], "totalRecords": 0}}),
+        ("rows_only", {"data": {"rows": []}}),
+    ]
+
+    def test_every_resource_graph_reader_treats_zero_rows_alike(self):
+        for label, key, path in ARG_ROWS_READERS:
+            module = load_path(label, path)
+            for shape, body in self.EMPTY_ROWS:
+                with self.subTest(transform=label, shape=shape):
+                    out = module.transform({"data": body, "validation": self.VALIDATION})
+                    collection = out["additionalInfo"]["dataCollection"]
+                    self.assertIsNone(out["transformedResponse"][key],
+                                      label + " reported a measured answer from zero Resource Graph rows")
+                    self.assertEqual(collection["status"], "error")
+                    self.assertTrue(collection["errors"])
+
+    def test_the_rule_does_not_leak_to_arm_list_endpoints(self):
+        """An ARM list 403s on an unreadable scope, so ITS empty list is a proven empty set."""
+        module = load_path("is_backup_tested", os.path.join(HERE, "is_backup_tested.py"))
+        out = module.transform({"data": {"value": []}, "validation": self.VALIDATION})
+        self.assertIs(out["transformedResponse"]["isBackupTested"], False)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_a_row_that_came_back_still_answers(self):
+        """Only the EMPTY rows array is ambiguous; a row that was read is evidence."""
+        module = load_path("is_backup_types_scheduled", os.path.join(HERE, "is_backup_types_scheduled.py"))
+        out = module.transform({"data": {"data": {"rows": [{"properties": {"protectedItemsCount": 0}}]}},
+                                "validation": self.VALIDATION})
+        self.assertIs(out["transformedResponse"]["isBackupTypesScheduled"], False)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
 
 if __name__ == "__main__":
