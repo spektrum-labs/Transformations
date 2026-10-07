@@ -142,6 +142,32 @@ def test_platform_wrappers_and_json_string():
     assert run(body(endpoint(1))["items"])[0] is True
 
 
+def test_unread_next_page_is_not_evaluated():
+    payload = body(endpoint(1), endpoint(2))
+    payload["pages"]["nextKey"] = "eyJwYWdlIjoyfQ"
+    value, out = run(payload)
+    assert value is None
+    assert collection_status(out) == "error"
+
+
+def test_page_total_above_one_with_one_page_is_not_evaluated():
+    payload = body(endpoint(1))
+    payload["pages"] = {"current": 1, "size": 50, "total": 3, "maxSize": 500}
+    assert run(payload)[0] is None
+
+
+def test_full_first_page_without_cursor_is_not_evaluated():
+    payload = body(*[endpoint(n) for n in range(1, 4)])
+    payload["pages"] = {"size": 3, "maxSize": 500}
+    assert run(payload)[0] is None
+
+
+def test_merged_list_with_null_cursor_passes():
+    payload = body(*[endpoint(n) for n in range(1, 4)])
+    payload["pages"] = {"size": 3, "maxSize": 500, "nextKey": None}
+    assert run(payload)[0] is True
+
+
 def test_exception_path_is_not_evaluated():
     value, out = run(b"\xff not json")
     assert value is None
