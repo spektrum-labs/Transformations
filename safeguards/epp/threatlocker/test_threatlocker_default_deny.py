@@ -197,3 +197,29 @@ def test_duplicate_rows_do_not_complete_a_partial_read(mode):
     rows = fleet(4)[:2]
     rows = rows + copy.deepcopy(rows)
     assert run(rows, mode)[:2] == (None, "error")
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("undated", [None, "", "not a date"])
+def test_undated_computer_alone_is_not_judged_when_every_dated_computer_is_stale(mode, shape, undated):
+    # 200 stale Learning-mode computers plus 1 undated Secure-mode computer: nothing dated is current, so the
+    # undated row must not decide the estate (it used to return True).
+    rows = fleet(201, mode="Application Control Learning Mode", days=40)
+    rows[200].update(mode="Secure", lastCheckin=undated, appControlLearningModeActive=False)
+    v, dc, out = run(shape(rows), mode)
+    assert (v, dc) == (None, "error")
+    assert out["transformedResponse"]["staleComputerCount"] == 200
+    assert "15 days" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_undated_computer_is_still_judged_beside_a_current_dated_computer(mode):
+    rows = fleet(3)
+    rows[0].update(lastCheckin=iso(40))
+    rows[2].update(mode="Application Control Learning Mode", lastCheckin=None)
+    v, dc, out = run(rows, mode)
+    assert (v, dc) == (False, "success")
+    assert out["transformedResponse"]["judgedComputers"] == 2
+    assert out["transformedResponse"]["staleComputerCount"] == 1
+    assert "HOST2" in out["additionalInfo"]["evaluation"]["failReasons"][0]
