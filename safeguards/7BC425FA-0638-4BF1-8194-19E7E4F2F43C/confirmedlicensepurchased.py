@@ -23,31 +23,21 @@ from datetime import datetime
 
 
 DEFENDER_SERVICE_PLANS = {
-    # Defender for Endpoint
+    # Defender for Endpoint only. This transformation proves the Endpoint Security
+    # safeguard, whose checks call the Defender for Endpoint API. Defender for
+    # Office 365 (ATP_ENTERPRISE, THREAT_INTELLIGENCE), Identity (ATA), Cloud Apps
+    # (ADALLOM_*) and TVM add-ons do not provision an MDE tenant: Carlex and
+    # Twin Rivers passed this check on those plans while every MDE call returned
+    # 403 "Account mode is inactive" (2026-09-24).
     "WINDEFATP",
     "MDE_LITE",
     "MDE_SMB",
     "MICROSOFT_DEFENDER_FOR_ENDPOINT_PLAN_1",
     "MICROSOFT_DEFENDER_FOR_ENDPOINT_PLAN_2",
     "MDATP_XPLAT",
-    # Defender for Office 365
-    "ATP_ENTERPRISE",
-    "THREAT_INTELLIGENCE",
-    # Defender for Identity
-    "ATA",
-    # Defender for Cloud Apps
-    "ADALLOM_S_STANDALONE",
-    "ADALLOM_FOR_AATP",
-    # Defender for IoT
-    "DEFENDER_FOR_IOT_ENTERPRISE",
-    # Vulnerability Management (Defender TVM)
-    "TVM_PREMIUM_1",
-    "TVM_PREMIUM_2",
-    # Common Defender platform
-    "COMMON_DEFENDER_PLATFORM_FOR_OFFICE",
 }
 
-DEFENDER_KEYWORDS = ("DEFENDER", "WINDEFATP", "MDATP", "MDE_", "ATP_")
+DEFENDER_KEYWORDS = ("WINDEFATP", "MDATP", "MDE_", "DEFENDER_FOR_ENDPOINT")
 
 
 def is_defender_plan(plan_name):
@@ -203,9 +193,9 @@ def transform(input):
         else:
             fail_reasons.append(
                 "No active SKU with a Defender service plan found "
-                "(checked servicePlans for WINDEFATP, ATP_ENTERPRISE, MDE, TVM_PREMIUM, etc.)"
+                "(checked servicePlans for WINDEFATP, MDE_LITE, MDE_SMB and other Defender for Endpoint plans)"
             )
-            recommendations.append("Purchase Microsoft Defender for Endpoint, M365 E5, or an equivalent Defender-bearing license")
+            recommendations.append("Purchase Microsoft Defender for Endpoint (P1/P2), Defender for Business, or M365 E5 / E5 Security")
 
         return create_response(
             result={criteriaKey: criteriaValue},

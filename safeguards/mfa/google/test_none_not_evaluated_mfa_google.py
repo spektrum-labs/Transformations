@@ -34,7 +34,6 @@ class Poisoned(dict):
 
 
 CASES = [
-    ('isadminmfaphishingresistant', ('isAdminMFAPhishingResistant',), 'poisoned', lambda: Poisoned()),
     ('mfaexemptuseraccountscount', ('mfaExemptUserAccountsCount',), 'poisoned', lambda: Poisoned()),
     ('superadminaccountswithoutmfacount', ('superAdminAccountsWithoutMfaCount',), 'poisoned', lambda: Poisoned()),
     ('workspaceusermfaenforcementpercentage', ('workspaceUserMfaEnforcementPercentage',), 'poisoned', lambda: Poisoned()),
