@@ -10,6 +10,10 @@ Eligible: not excluded, and onboardingStatus not Unsupported or InsufficientInfo
 Protected: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_WINDOW_DAYS of now.
 Not measured (None, dataCollection error): an error body, a list with pages left unread
 (@odata.nextLink), records that carry no onboardingStatus, or no eligible machine at all.
+
+The verdict is decided on the counts and the reported share is floored, never rounded: a rounded
+share read 199 of 200 and 999 of 1000 as 100% and passed both, hiding a machine that was dark or
+never onboarded.
 """
 
 import json
@@ -167,13 +171,19 @@ def transform(input):
                     reason = ("No eligible machine in the Defender inventory (" + str(len(machines))
                               + " returned, none onboardable); coverage has no denominator")
                 else:
-                    value = round(100 * len(reporting) / len(eligible))
+                    # The verdict comes from the counts and the score is floored, never rounded.
+                    # round() turned 199 of 200 (99.5) and 999 of 1000 (99.9) into 100 and passed
+                    # both, so a dark machine disappeared into the rounding and the line said
+                    # "199 of 200 ... (100%)". A floored share never reads higher than it is, so
+                    # the number reported to the platform cannot reach the bar on its own either.
+                    covered = len(reporting) == len(eligible)
+                    value = (100 * len(reporting)) // len(eligible)
                     line = (str(len(reporting)) + " of " + str(len(eligible)) + " eligible machines are onboarded "
                             "and sent a full device report within " + str(ACTIVE_WINDOW_DAYS) + " days ("
                             + str(value) + "%)")
                     if extra["staleOnboardedDevices"]:
                         line = line + "; " + str(extra["staleOnboardedDevices"]) + " onboarded machines have not reported"
-                    if value >= 100:
+                    if covered:
                         pass_reasons.append(line)
                     else:
                         fail_reasons.append(line)

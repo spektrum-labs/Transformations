@@ -22,9 +22,15 @@ Reporting: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_
   isEPPLoggingEnabled -- at least one machine is reporting, and every reporting machine's
       healthStatus is Active (its sensor is sending data).
 Not measured: an error body, records with no onboardingStatus (the alert list is one), a page with
-@odata.nextLink still set, or no eligible machine at all. dataCollection.status is one flag for the
-whole response, so if any key cannot be decided none is reported -- a key left None under a
-"success" status would be graded as a failure nobody measured.
+@odata.nextLink still set, no eligible machine at all, or a reporting machine that carries no
+healthStatus (one missing field used to read as a logging failure). dataCollection.status is one
+flag for the whole response, so if any key cannot be decided none is reported -- a key left None
+under a "success" status would be graded as a failure nobody measured.
+
+A pass on the three deployment keys says the sensor is deployed somewhere, not that it covers the
+fleet: one reporting machine out of a thousand passes all three, the same reading as One-Click's
+microsoft_endpoint_edrdeployed.py. requiredCoveragePercentage is the control that grades coverage,
+and additionalFindings carries the reporting/eligible gap beside the verdict.
 """
 
 import json
@@ -164,7 +170,11 @@ def measure(machines, partial):
         values[key] = None
     if partial or not eligible:
         return values, counts
-    if reporting and not any("healthStatus" in m for m in reporting):
+    # EVERY reporting machine has to carry healthStatus, not just one of them. A machine without
+    # the field got "" here, fell out of healthy, and read isEPPLoggingEnabled False -- a fail
+    # nobody measured, which is the failure this file exists to remove. dataCollection.status is
+    # one flag for the whole response, so an unreadable sensor health leaves every key None.
+    if reporting and not all("healthStatus" in m for m in reporting):
         return values, counts
     for key in ("isEPPEnabled", "isEPPDeployed", "isEDRDeployed"):
         values[key] = len(reporting) > 0
@@ -182,6 +192,7 @@ def transform(input):
     pass_reasons = []
     fail_reasons = []
     recommendations = []
+    additional_findings = []
 
     try:
         if isinstance(input, str):
@@ -204,12 +215,23 @@ def transform(input):
                     reason = ("The machine list has more pages than were read (@odata.nextLink present); "
                               "not judged on a sample")
                 elif values["isEPPDeployed"] is None:
-                    reason = "No reporting machine carries healthStatus, so sensor health cannot be read"
+                    reason = ("Not every reporting machine carries healthStatus, so sensor health cannot be "
+                              "read for the whole inventory")
                 line = (str(counts["reportingDevices"]) + " of " + str(counts["eligibleDevices"])
                         + " eligible machines are onboarded to Defender for Endpoint and sent a full device report "
                         "within " + str(ACTIVE_WINDOW_DAYS) + " days; " + str(counts["activeSensorDevices"])
                         + " of those report an Active sensor")
                 if values["isEPPDeployed"] is not None:
+                    # These three keys read "at least one machine is reporting", so a pass says
+                    # nothing about how much of the fleet is covered. Put the gap beside the
+                    # verdict so a reviewer sees it without opening the transformed response;
+                    # requiredCoveragePercentage is the control that grades it.
+                    if counts["reportingDevices"] < counts["eligibleDevices"]:
+                        additional_findings.append(
+                            str(counts["eligibleDevices"] - counts["reportingDevices"]) + " of "
+                            + str(counts["eligibleDevices"]) + " eligible machines are not reporting to Defender "
+                            "for Endpoint. These keys read whether the sensor is deployed at all, not how much "
+                            "of the fleet it covers; requiredCoveragePercentage grades the coverage")
                     if values["isEPPDeployed"]:
                         pass_reasons.append(line)
                     if values["isEPPDeployed"] is False or values["isEPPLoggingEnabled"] is False:
@@ -240,4 +262,5 @@ def transform(input):
         recommendations=recommendations,
         input_summary=counts,
         api_errors=[] if measured else [unmeasured_reason],
+        additional_findings=additional_findings if measured else [],
     )

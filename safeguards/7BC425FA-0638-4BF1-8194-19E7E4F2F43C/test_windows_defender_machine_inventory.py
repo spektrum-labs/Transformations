@@ -107,7 +107,9 @@ def test_coverage_counts_documented_lowercase_and_capitalised_onboarded_alike(lo
     transform = loader("requiredcoveragepercentage")
     for status in ("onboarded", "Onboarded"):
         out = transform(machines(machine(status), machine(status, os_platform="WindowsServer2022"), machine("CanBeOnboarded")))
-        assert out["transformedResponse"][COVERAGE] == 67
+        # 2 of 3 is 66.67%, floored. The share is floored rather than rounded so it can never read
+        # higher than it is; see test_coverage_does_not_round_up_to_a_pass.
+        assert out["transformedResponse"][COVERAGE] == 66
         assert collected(out) == "success"
 
 
@@ -208,3 +210,61 @@ def test_unevidenced_controls_are_never_answered(loader, name, keys, body):
     for key in keys:
         assert out["transformedResponse"][key] is None, key
     assert collected(out) == "error"
+
+
+# ---- review findings on #1071
+
+@pytest.mark.parametrize("loader", RUNNERS)
+@pytest.mark.parametrize("fleet,dark", [(200, 1), (1000, 1)], ids=["199-of-200", "999-of-1000"])
+def test_coverage_does_not_round_up_to_a_pass(loader, fleet, dark):
+    """round() read 199 of 200 (99.5) and 999 of 1000 (99.9) as 100 and passed both, so a machine
+    that was dark disappeared into the rounding and the line still said 100%."""
+    records = [machine() for _ in range(fleet - dark)] + [machine(days_ago=180) for _ in range(dark)]
+    out = loader("requiredcoveragepercentage")(machines(*records))
+    assert out["transformedResponse"][COVERAGE] == 99
+    assert collected(out) == "success"
+    evaluation = out["additionalInfo"]["evaluation"]
+    assert evaluation["passReasons"] == []
+    assert "(99%)" in evaluation["failReasons"][0]
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_a_full_fleet_still_passes_at_100(loader):
+    out = loader("requiredcoveragepercentage")(machines(*[machine() for _ in range(200)]))
+    assert out["transformedResponse"][COVERAGE] == 100
+    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+    assert collected(out) == "success"
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_one_reporting_machine_without_healthStatus_is_not_measured(loader):
+    """The guard only fired when NO reporting machine carried healthStatus. With a mixed inventory
+    the record without it fell out of healthy and read isEPPLoggingEnabled False: a fail nobody
+    measured."""
+    blind = machine()
+    del blind["healthStatus"]
+    out = loader("epp_transform")(machines(machine(), machine(), blind))
+    assert collected(out) == "error"
+    for key in EPP_KEYS:
+        assert out["transformedResponse"][key] is None, key
+    assert "healthStatus" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_a_pass_on_a_sliver_of_the_fleet_reports_the_gap(loader):
+    """One reporting machine passes the three deployment keys by design (the One-Click reading).
+    The gap has to be visible beside the verdict, not only in the transformed response."""
+    records = [machine()] + [machine("CanBeOnboarded") for _ in range(999)]
+    out = loader("epp_transform")(machines(*records))
+    assert out["transformedResponse"]["isEPPDeployed"] is True
+    assert collected(out) == "success"
+    findings = out["additionalInfo"]["evaluation"]["additionalFindings"]
+    assert findings and "999 of 1000 eligible machines are not reporting" in findings[0]
+    assert "requiredCoveragePercentage" in findings[0]
+
+
+@pytest.mark.parametrize("loader", RUNNERS)
+def test_a_fully_reporting_fleet_reports_no_gap(loader):
+    out = loader("epp_transform")(machines(machine(), machine()))
+    assert out["transformedResponse"]["isEPPDeployed"] is True
+    assert out["additionalInfo"]["evaluation"]["additionalFindings"] == []
