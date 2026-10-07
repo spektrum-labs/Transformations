@@ -1,6 +1,6 @@
 """Defender Vulnerability Management secure-configuration checks (EP-005 / EP-007):
 smbV1EnabledDeviceCount, isWDigestDisabled, isNTLMv1Disabled, isSMBSigningRequired,
-isScreenLockWithin15MinutesEnforced.
+isScreenLockWithin15MinutesEnforced, isLAPSEnabledOnAllDevices.
 
 Fixtures follow the advanced-hunting response shape ({"Schema": [...], "Results": [...]}) of the query each
 new One-Click method runs (DeviceTvmSecureConfigurationAssessment joined with its KB table). Every check is
@@ -20,7 +20,8 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 NAMES = {
     "scid-53": "Disable SMBv1 client driver",
     "scid-54": "Disable SMBv1 server",
-    "scid-28": "Set 'Interactive logon: Machine inactivity limit' to '900 or fewer second(s), but not 0'",
+    "scid-28": "Set 'Interactive logon: Machine inactivity limit' to '1-900 seconds'",
+    "scid-113": "Ensure LAPS is enabled on every endpoint and server",
     "scid-57": "Disable 'WDigest Authentication'",
     "scid-72": "Set LAN Manager authentication level to 'Send NTLMv2 response only. Refuse LM & NTLM'",
     "scid-95": "Enable 'Microsoft network client: Digitally sign communications (always)'",
@@ -33,10 +34,12 @@ CHECKS = {
     "isntlmv1disabled": ("isNTLMv1Disabled", ("scid-72",)),
     "issmbsigningrequired": ("isSMBSigningRequired", ("scid-95", "scid-9999")),
     "isscreenlockwithin15minutesenforced": ("isScreenLockWithin15MinutesEnforced", ("scid-28",)),
+    "islapsenabledonalldevices": ("isLAPSEnabledOnAllDevices", ("scid-113",)),
 }
 
 SAFE = {"smbV1EnabledDeviceCount": 0, "isWDigestDisabled": True, "isNTLMv1Disabled": True,
-        "isSMBSigningRequired": True, "isScreenLockWithin15MinutesEnforced": True}
+        "isSMBSigningRequired": True, "isScreenLockWithin15MinutesEnforced": True,
+        "isLAPSEnabledOnAllDevices": True}
 
 
 def load_plain(name):
@@ -332,5 +335,37 @@ def test_screen_lock_names_the_device_over_the_limit():
     assert got is False
     reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
     assert "1 of 2 applicable" in reason and "ws-02.example.test" in reason
-    assert "900 seconds or less" in reason
+    assert "1-900 seconds" in reason
     assert "Machine inactivity limit" in out["additionalInfo"]["evaluation"]["recommendations"][0]
+
+
+def test_laps_reads_only_the_pinned_id_under_its_knowledge_base_name():
+    """scid-113 counts only while its KB name says LAPS is enabled; another id under that name, or scid-113 under
+    another name (or none: the tenant's KB lacks it), is Not evaluated, never passed."""
+    name = "islapsenabledonalldevices"
+    good = [row(d, "scid-113") for d in ("ws-01", "srv-01")]
+    assert value(name, result(good))[0] is True
+    assert value(name, result([row("ws-01", "scid-9997", name=NAMES["scid-113"])]))[0] is None
+    for kb_name in ("Set 'Interactive logon: Machine inactivity limit' to '1-900 seconds'",
+                    "Disable 'WDigest Authentication'", None, ""):
+        bad = row("ws-01", "scid-113")
+        bad["ConfigurationName"] = kb_name
+        got, out = value(name, result([bad]))
+        assert got is None
+        assert "scid-113" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_laps_names_the_server_without_it():
+    rows = [row("ws-01", "scid-113"), row("srv-01", "scid-113", 1, 0), row("kiosk-01", "scid-113", 0, 0)]
+    got, out = value("islapsenabledonalldevices", result(rows))
+    assert got is False
+    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert "1 of 2 applicable" in reason and "srv-01.example.test" in reason and "LAPS enabled" in reason
+
+
+def test_a_tenant_without_vulnerability_management_tables_is_not_evaluated():
+    """No TVM tables (licence): the fuzzy unions return an empty result, which never passes or fails."""
+    for name in ("isscreenlockwithin15minutesenforced", "islapsenabledonalldevices"):
+        got, out = value(name, ts_wrap(result([])))
+        assert got is None
+        assert out["additionalInfo"]["dataCollection"]["status"] == "error"
