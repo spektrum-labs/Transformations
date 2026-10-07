@@ -588,7 +588,6 @@
     "safeguards/firewall/sonicwall/isbuiltinadministratormfabound.py",
     "safeguards/firewall/sonicwall/ismfaenforcedforadministratoraccounts.py",
     "safeguards/firewall/sonicwall/ismfaenforcedforlocalaccounts.py",
-    "safeguards/firewall/sophos/isfirewallenabled.py",
     "safeguards/firewall/sophos/isfirewallloggingenabled.py",
     "safeguards/firewalls/cisco-meraki-mx/isFirewallEnabled.py",
     "safeguards/firewalls/cisco-meraki-mx/isFirewallLoggingEnabled.py",
