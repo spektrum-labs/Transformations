@@ -157,7 +157,7 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assertEqual(out["mostRecentTimestamp"], (NOW - timedelta(days=18)).isoformat())
         reason = self.evaluation(response)["passReasons"][0]
         self.assertIn("earliest 1000 events", reason)
-        self.assertIn("newer events exist that were not read", reason)
+        self.assertIn("newer events may exist that were not read", reason)
         findings = self.evaluation(response)["additionalFindings"]
         self.assertTrue(any("not the newest in the window" in f for f in findings))
 
@@ -188,6 +188,11 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
                 response = self.run_transform(payload)
                 self.assert_unevaluated(response)
                 self.assertTrue(self.evaluation(response)["failReasons"])
+
+    def test_an_explicit_false_or_null_error_key_is_not_an_error(self):
+        for flag in (False, None):
+            with self.subTest(error=flag):
+                self.assert_pass(self.run_transform({"error": flag, "response": [entry(3)]}))
 
     def test_unreadable_inputs_are_not_evaluated(self):
         payloads = {

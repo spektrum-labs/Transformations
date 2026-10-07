@@ -7,7 +7,7 @@ Source: GET /admin/v1/logs/administrator (method getAdminLogs). The method sends
 mintime = now - 30 days, in epoch seconds ({$utcNowS-30d}), so Duo returns administrator
 events from the last 30 days only. Duo v1 returns this log OLDEST first, at most 1000 events
 per call, and pages it by mintime rather than by an offset. A read that comes back with 1000
-events therefore holds the earliest 1000 events of the window, and newer events exist that
+events therefore holds the earliest 1000 events of the window, and newer events may exist that
 were not read.
 
 Why a readable log is a pass, empty or not. Duo records administrator actions for every
@@ -138,7 +138,7 @@ def error_reason(data):
                 data.get("vendorErrorAsResponse"))[:300]
         stat = data.get("stat")
         status = data.get("status")
-        if (isinstance(stat, str) and stat.upper() == "FAIL") or "error" in data or (
+        if (isinstance(stat, str) and stat.upper() == "FAIL") or data.get("error") not in (None, False) or (
                 "errorMessage" in data) or (isinstance(status, str) and status.lower() == "error") or (
                 "code" in data and "message" in data):
             return "Duo returned an error body instead of administrator log data: " + str(data)[:300]
@@ -222,8 +222,8 @@ def evaluate(data, now=None):
                            + ") for " + window_text + ", from " + summary["oldestTimestamp"] + " to "
                            + summary["mostRecentTimestamp"] + ". That is Duo's per-call limit, and Duo "
                            "returns this log oldest first, so these are the earliest " + str(total)
-                           + " events of the window: newer events exist that were not read, and the "
-                           "latest administrator event is more recent than " + summary["mostRecentTimestamp"])
+                           + " events of the window: newer events may exist that were not read, and the "
+                           "latest administrator event may be more recent than " + summary["mostRecentTimestamp"])
     return dict(summary, state="pass",
                 reason="Duo returned " + str(total) + " administrator log events (" + ENDPOINT + ") for "
                        + window_text + ", from " + summary["oldestTimestamp"] + " to "
