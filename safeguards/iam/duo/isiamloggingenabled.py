@@ -1,13 +1,19 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 # isIAMLoggingEnabled -- is Duo authentication activity logged and retrievable for
 # monitoring?
 #
-# Source: GET /admin/v1/logs/authentication (method getAuthenticationLogs). The method opts
-# in to vendorErrorAsResponse for Duo's 403 / 40301 "Access forbidden", which Duo returns
-# when the Admin API application lacks "Grant read log"; Integration-Service hands it over
-# nested as {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": ...}}.
+# Source: either authentication log method; both opt in to vendorErrorAsResponse for Duo's
+# 403 / 40301 "Access forbidden", which Duo returns when the Admin API application lacks
+# "Grant read log"; Integration-Service hands it over nested as
+# {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": ...}}.
+#   v1 getAuthenticationLogs  GET /admin/v1/logs/authentication
+#       {"stat": "OK", "response": [{"txid", "timestamp", "username", "result", ...}]}
+#   v2 getAuthLogs            GET /admin/v2/logs/authentication (mintime now-30d, sort ts:desc)
+#       {"authlogs": [{"txid", "timestamp", "user": {"name"}, "result", ...}], "metadata": {...}}
+# Both shapes are read the same way (v2 names the user under user.name); the evidence names
+# the endpoint the events came from and the real time span of the events read.
 #
 # Verdict: true when the log API returns authentication events carrying timestamp,
 # username and result. The 40301 refusal is a measured false (the log cannot be pulled for
@@ -16,6 +22,8 @@ from datetime import datetime
 
 KEY = "isIAMLoggingEnabled"
 ACCESS_FORBIDDEN_CODE = 40301
+V1_ENDPOINT = "/admin/v1/logs/authentication"
+V2_ENDPOINT = "/admin/v2/logs/authentication"
 
 
 def extract_input(input_data):
@@ -86,17 +94,53 @@ def load(input):
     return extract_input(input)
 
 
-def objects_with(data, id_field):
-    """The list of vendor objects carrying id_field; None when the body holds no such object."""
-    items = data
+def log_events(data):
+    """(endpoint, list) holding the authentication log events in a v1 or v2 body, else (None, None)."""
+    if isinstance(data, dict) and isinstance(data.get("authlogs"), list):
+        return V2_ENDPOINT, data["authlogs"]
+    if isinstance(data, list):
+        return V1_ENDPOINT, data
     if isinstance(data, dict):
         items = data.get("response")
         if items is None:
             items = data.get("data")
+        if isinstance(items, list):
+            return V1_ENDPOINT, items
+    return None, None
+
+
+def objects_with(items, id_field):
+    """The vendor objects in items carrying id_field; None when there is no such object."""
     if not isinstance(items, list):
         return None
     found = [x for x in items if isinstance(x, dict) and x.get(id_field) not in (None, "")]
     return found if found else None
+
+
+def event_username(e):
+    """v1 carries "username"; v2 carries "user": {"name": ...}."""
+    name = e.get("username")
+    if name in (None, ""):
+        user = e.get("user")
+        if isinstance(user, dict):
+            name = user.get("name")
+    return name
+
+
+def event_epoch(e):
+    ts = e.get("timestamp")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0:
+        return float(ts)
+    if isinstance(ts, str) and ts.strip().isdigit():
+        return float(ts.strip())
+    return None
+
+
+def iso_of(epoch_seconds):
+    try:
+        return datetime.fromtimestamp(epoch_seconds, timezone.utc).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def pct(part, whole):
@@ -139,41 +183,64 @@ def transform(input):
                         % str(data.get("vendorErrorAsResponse"))[:300]],
         )
 
-    events = objects_with(data, "txid")
+    endpoint, items = log_events(data)
+    events = objects_with(items, "txid")
     if events is None:
-        events = objects_with(data, "timestamp")
+        events = objects_with(items, "timestamp")
     if events is None:
         return create_response(
             result={KEY: False, "authLogEventCount": 0},
             validation=validation,
-            api_errors=["No Duo authentication log events in the getAuthenticationLogs response."],
+            api_errors=["No Duo authentication log events in the response from %s."
+                        % (endpoint or "the authentication log endpoint")],
         )
 
     complete = 0
     users = []
+    oldest = None
+    newest = None
     for e in events:
+        name = event_username(e)
         if e.get("timestamp") not in (None, "") and e.get("result") not in (None, "") \
-                and e.get("username") not in (None, ""):
+                and name not in (None, ""):
             complete = complete + 1
-            if e.get("username") not in users:
-                users.append(e.get("username"))
+            if name not in users:
+                users.append(name)
+        ts = event_epoch(e)
+        if ts is not None:
+            if oldest is None or ts < oldest:
+                oldest = ts
+            if newest is None or ts > newest:
+                newest = ts
 
+    oldest_iso = iso_of(oldest) if oldest is not None else None
+    newest_iso = iso_of(newest) if newest is not None else None
+    if oldest_iso is None:
+        span = "with no readable timestamp"
+    elif oldest_iso == newest_iso:
+        span = "all at %s" % newest_iso
+    else:
+        span = "from %s to %s" % (oldest_iso, newest_iso)
     summary = {
         "authLogEventCount": len(events),
         "completeEventCount": complete,
         "completeEventPercentage": pct(complete, len(events)),
         "loggedUserCount": len(users),
+        "endpoint": endpoint,
+        "oldestEventTimestamp": oldest_iso,
+        "newestEventTimestamp": newest_iso,
     }
     result = {KEY: complete > 0}
-    result.update(summary)
+    for k in ("authLogEventCount", "completeEventCount", "completeEventPercentage", "loggedUserCount"):
+        result[k] = summary[k]
     if result[KEY]:
         return create_response(
             result=result, validation=validation, input_summary=summary,
-            pass_reasons=["Duo authentication logs returned %d events (%d with timestamp, username and result) "
-                          "covering %d users." % (len(events), complete, len(users))],
+            pass_reasons=["Duo authentication logs (%s) returned %d events %s (%d with timestamp, username "
+                          "and result) covering %d users." % (endpoint, len(events), span, complete, len(users))],
         )
     return create_response(
         result=result, validation=validation, input_summary=summary,
-        fail_reasons=["Duo returned %d authentication log events but none carries timestamp, username and "
-                      "result, so activity cannot be attributed." % len(events)],
+        fail_reasons=["Duo authentication logs (%s) returned %d events %s but none carries timestamp, username "
+                      "and result, so activity cannot be attributed." % (endpoint, len(events), span)],
     )
