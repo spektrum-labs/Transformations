@@ -18,9 +18,9 @@
 def transform(input):
     """
     isSplitTunnelDisabled - True only when there is at least one active Client VPN endpoint and
-    every active endpoint has SplitTunnel = false (full tunnel: all client traffic goes through the
-    VPN and its security controls). False when any active endpoint has split tunnel on or does not
-    report the setting.
+    every active endpoint reports SplitTunnel = false (full tunnel: all client traffic goes through
+    the VPN and its security controls). False when any active endpoint reports split tunnel on.
+    Not evaluated (None) when none is on but one or more do not report the setting.
     """
     import json
     from datetime import datetime, timezone
@@ -90,6 +90,18 @@ def transform(input):
         label = as_text(field(endpoint, "clientVpnEndpointId", "ClientVpnEndpointId"))
         return label or "an endpoint with no id"
 
+    def decide(verdicts, extra_name, fail_text, pass_text, summary, more=None):
+        failed = [v[0] for v in verdicts if v[1] == "fail"]
+        unknown = [v[0] for v in verdicts if v[1] == "unknown"]
+        extra = {"clientVpnEndpoints": len(verdicts), extra_name: len(failed)}
+        for name in (more or {}):
+            extra[name] = more[name]
+        if failed:
+            return respond(False, extra, [], [fail_text + ": " + ", ".join(failed[:20])], summary, [])
+        if unknown:
+            return not_evaluated("Not reported, so not judged, on: " + ", ".join(unknown[:20]), extra, summary)
+        return respond(True, extra, [pass_text + " (" + str(len(verdicts)) + ")"], [], summary, [])
+
     try:
         data = input
         if isinstance(data, bytes):
@@ -137,15 +149,15 @@ def transform(input):
             return not_evaluated("No active AWS Client VPN endpoint in this Region: AWS Client VPN does not "
                                  "provide remote access here, so it has no answer", {"clientVpnEndpoints": 0}, summary)
 
-        split = []
+        verdicts = []
         for endpoint in endpoints:
-            if as_bool(field(endpoint, "splitTunnel", "SplitTunnel")) is not False:
-                split.append(endpoint_label(endpoint))
-        extra = {"clientVpnEndpoints": len(endpoints), "splitTunnelEndpoints": len(split)}
-        if split:
-            return respond(False, extra, [], ["Split tunnel is on or not reported on: " + ", ".join(split[:20])],
-                           summary, [])
-        return respond(True, extra, ["Split tunnel is off (full tunnel) on every active Client VPN endpoint ("
-                                     + str(len(endpoints)) + ")"], [], summary, [])
+            value = as_bool(field(endpoint, "splitTunnel", "SplitTunnel"))
+            if value is None:
+                verdicts.append([endpoint_label(endpoint), "unknown"])
+            elif value is False:
+                verdicts.append([endpoint_label(endpoint), "pass"])
+            else:
+                verdicts.append([endpoint_label(endpoint), "fail"])
+        return decide(verdicts, "splitTunnelEndpoints", "Split tunnel is on on", "Split tunnel is off (full tunnel) on every active Client VPN endpoint", summary)
     except Exception as e:
         return not_evaluated("Could not evaluate the Client VPN endpoint list: the response has an unexpected shape")

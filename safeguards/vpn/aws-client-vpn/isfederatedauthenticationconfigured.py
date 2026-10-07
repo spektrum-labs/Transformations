@@ -20,9 +20,10 @@ def transform(input):
     isFederatedAuthenticationConfigured - True only when there is at least one active Client VPN
     endpoint and every active endpoint has a "federated-authentication" option naming an IAM SAML
     provider (FederatedAuthentication.SamlProviderArn): VPN sign-in goes through the customer's
-    SAML identity provider. False when any active endpoint signs in only with a certificate or a
-    directory, or names no SAML provider. Also returns samlProviders (distinct provider ARNs, as a
-    number). Does not prove what the identity provider demands at sign-in.
+    SAML identity provider. False when an endpoint's options are all recognised and none is
+    federated. Not evaluated (None) when an endpoint reports no option, an unrecognised option, or a
+    federated option with no SAML provider ARN, and none fails. Also returns samlProviders (distinct
+    provider ARNs, as a number). Does not prove what the identity provider demands at sign-in.
     """
     import json
     from datetime import datetime, timezone
@@ -92,6 +93,18 @@ def transform(input):
         label = as_text(field(endpoint, "clientVpnEndpointId", "ClientVpnEndpointId"))
         return label or "an endpoint with no id"
 
+    def decide(verdicts, extra_name, fail_text, pass_text, summary, more=None):
+        failed = [v[0] for v in verdicts if v[1] == "fail"]
+        unknown = [v[0] for v in verdicts if v[1] == "unknown"]
+        extra = {"clientVpnEndpoints": len(verdicts), extra_name: len(failed)}
+        for name in (more or {}):
+            extra[name] = more[name]
+        if failed:
+            return respond(False, extra, [], [fail_text + ": " + ", ".join(failed[:20])], summary, [])
+        if unknown:
+            return not_evaluated("Not reported, so not judged, on: " + ", ".join(unknown[:20]), extra, summary)
+        return respond(True, extra, [pass_text + " (" + str(len(verdicts)) + ")"], [], summary, [])
+
     try:
         data = input
         if isinstance(data, bytes):
@@ -139,9 +152,17 @@ def transform(input):
             return not_evaluated("No active AWS Client VPN endpoint in this Region: AWS Client VPN does not "
                                  "provide remote access here, so it has no answer", {"clientVpnEndpoints": 0}, summary)
 
-        missing = []
+        def auth_types(endpoint):
+            types = []
+            for option in as_list(field(endpoint, "authenticationOptions", "AuthenticationOptions")):
+                types.append(as_text(field(option, "type", "Type")).lower())
+            return types
+
+        known = ["certificate-authentication", "directory-service-authentication", "federated-authentication"]
         providers = []
+        verdicts = []
         for endpoint in endpoints:
+            types = auth_types(endpoint)
             arn = ""
             for option in as_list(field(endpoint, "authenticationOptions", "AuthenticationOptions")):
                 if as_text(field(option, "type", "Type")).lower() == "federated-authentication":
@@ -150,14 +171,13 @@ def transform(input):
             if arn:
                 if arn not in providers:
                     providers.append(arn)
+                verdicts.append([endpoint_label(endpoint), "pass"])
+            elif types and all([t in known for t in types]) and "federated-authentication" not in types:
+                verdicts.append([endpoint_label(endpoint), "fail"])
             else:
-                missing.append(endpoint_label(endpoint))
-        extra = {"clientVpnEndpoints": len(endpoints), "samlProviders": len(providers),
-                 "endpointsWithoutFederatedAuthentication": len(missing)}
-        if missing:
-            return respond(False, extra, [], ["No SAML federated authentication on: " + ", ".join(missing[:20])],
-                           summary, [])
-        return respond(True, extra, ["Every active Client VPN endpoint (" + str(len(endpoints))
-                                     + ") signs in through a SAML identity provider"], [], summary, [])
+                verdicts.append([endpoint_label(endpoint), "unknown"])
+        return decide(verdicts, "endpointsWithoutFederatedAuthentication", "No SAML federated authentication on",
+                      "Every active Client VPN endpoint signs in through a SAML identity provider", summary,
+                      {"samlProviders": len(providers)})
     except Exception as e:
         return not_evaluated("Could not evaluate the Client VPN endpoint list: the response has an unexpected shape")
