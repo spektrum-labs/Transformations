@@ -148,21 +148,23 @@ def transform(input):
         if not counted:
             return not_evaluated("Sophos Central lists only standby high-availability firewalls", validation,
                                  summary=summary)
-        # A standby is excluded because the docs do not say whether it reports connected, and
-        # that is an interpretation rather than a documented rule. Excluding a standby that
-        # reports DISCONNECTED would turn the interpretation into an assertion: it could pass a
-        # fleet whose standby is genuinely down. Measure what the docs support, and say
-        # "not measured" for the case they do not cover.
-        if auxiliary_offline:
-            return not_evaluated(
-                f"{auxiliary_offline} standby high-availability firewall(s) report status.connected false, and "
-                "the Sophos documentation does not say whether a standby reports itself connected",
-                validation, summary=summary)
         if connected < counted:
             result[CRITERIA_KEY] = False
             return create_response(result, validation, failed=[
                 f"{counted - connected} of {counted} Sophos firewall(s) are not connected to Sophos Central "
                 "(status.connected false)"], summary=summary)
+        # Only AFTER the counted firewalls have had their say. A standby is excluded because the
+        # docs do not say whether it reports connected, and that is an interpretation rather than
+        # a documented rule. The interpretation can only matter where it would flip the verdict
+        # to a pass: if a counted firewall is already offline the fleet fails however the standby
+        # is read, so checking this first would hide a disconnected primary behind a
+        # "not measured". Excluding a standby that reports DISCONNECTED would turn the
+        # interpretation into an assertion, so that case is not measured instead.
+        if auxiliary_offline:
+            return not_evaluated(
+                f"{auxiliary_offline} standby high-availability firewall(s) report status.connected false, and "
+                "the Sophos documentation does not say whether a standby reports itself connected",
+                validation, summary=summary)
         result[CRITERIA_KEY] = True
         return create_response(result, validation, passed=[
             f"All {counted} Sophos firewall(s) are connected to Sophos Central (status.connected true)"],
