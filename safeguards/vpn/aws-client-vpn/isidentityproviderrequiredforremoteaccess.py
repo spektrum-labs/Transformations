@@ -22,11 +22,11 @@ def transform(input):
     its AuthenticationOptions is "federated-authentication" naming an IAM SAML provider
     (FederatedAuthentication.SamlProviderArn). An endpoint whose only option is
     "certificate-authentication" (mutual TLS, no user sign-in) fails it: a device certificate alone
-    opens the tunnel.
+    opens the tunnel. An endpoint that signs in with "directory-service-authentication" and no
+    federated option also fails it: that is a measured "not SAML", fixed by switching the endpoint
+    to SAML federation.
 
     Not evaluated (None) when no endpoint fails but one or more:
-      * use "directory-service-authentication" without a federated option (Active Directory
-        sign-in: the EC2 API does not show what that directory demands);
       * report a federated option with no SAML provider ARN (a mismatch, not evidence);
       * report no authentication option, or a type this code does not recognise.
 
@@ -169,6 +169,7 @@ def transform(input):
                 types.append(as_text(field(option, "type", "Type")).lower())
             return types
 
+        known = ["certificate-authentication", "directory-service-authentication", "federated-authentication"]
         federated = 0
         directory = 0
         cert_only = 0
@@ -185,16 +186,16 @@ def transform(input):
                 verdicts.append([endpoint_label(endpoint), "pass"])
             elif "federated-authentication" in types:
                 verdicts.append([endpoint_label(endpoint) + " (federated option with no SAML provider)", "unknown"])
-            elif "directory-service-authentication" in types:
+            elif "directory-service-authentication" in types and all([t in known for t in types]):
                 directory = directory + 1
-                verdicts.append([endpoint_label(endpoint) + " (directory sign-in)", "unknown"])
+                verdicts.append([endpoint_label(endpoint) + " (directory sign-in, not SAML)", "fail"])
             elif types and all([t == "certificate-authentication" for t in types]):
                 cert_only = cert_only + 1
-                verdicts.append([endpoint_label(endpoint), "fail"])
+                verdicts.append([endpoint_label(endpoint) + " (certificate only)", "fail"])
             else:
                 verdicts.append([endpoint_label(endpoint) + " (no recognised authentication option)", "unknown"])
         return decide(verdicts, "endpointsWithoutIdentityProvider",
-                      "Certificate-only authentication (no identity-provider sign-in) on",
+                      "No SAML federation to an identity provider on",
                       "Every active Client VPN endpoint requires SAML federation to an identity provider",
                       summary, {"federatedEndpoints": federated, "directoryEndpoints": directory,
                                 "certificateOnlyEndpoints": cert_only})
