@@ -50,7 +50,11 @@ class TestSophosActiveWindow:
         body = {"items": [sophos_computer(30), sophos_computer(31)]}
         result = out(SOPHOS_EPP, body)
         assert result["staleEndpointCount"] == 2
-        assert result["requiredCoveragePercentage"] == 0
+        # Not 0%. A fleet whose newest check-in predates the active window leaves every coverage
+        # denominator empty, and percentage(0, 0) is 0, which graded as a measured failure of an
+        # estate nobody saw. The whole read is now Unevaluated and only the stale count survives
+        # (PR #1067 review, 2026-10-07).
+        assert result["requiredCoveragePercentage"] is None
 
     def test_stale_sensor_count_sees_a_dark_fleet(self):
         body = {"items": [sophos_computer(30), sophos_computer(31)]}

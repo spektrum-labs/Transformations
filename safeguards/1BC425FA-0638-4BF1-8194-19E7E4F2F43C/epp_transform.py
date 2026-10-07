@@ -1,13 +1,34 @@
 """
 Transformation: epp_transform (comprehensive)
-Vendor: MDR / Endpoint Protection Platform
+Vendor: Sophos Central (MDR / Endpoint Protection Platform)
 Category: Endpoint Security
+Method: getEndpoints (GET /endpoint/v1/endpoints)
 
 Evaluates safeguard types coverage based on endpoints response data
 and assigns a score from 0 to 100 for each safeguard type.
 
 Only endpoints seen within 15 days of the newest lastSeenAt in the response are
 scored (endpoint rules 2026-09-29); the rest are reported as staleEndpointCount.
+A product counts only when its assignedProducts entry reads status "installed".
+
+Fail closed (2026-10-07, back-ported from the CrowdStrike copy): a read that is not a
+complete Sophos endpoint list -- no body, an error envelope, no endpoint records, a list holding
+items this file cannot read, a list the connector stopped paging before the end, or a list with no
+active computer or server in it -- is Unevaluated for every key.
+
+Per-key "not measured" (Token-Service #981, merged to main 2026-10-07): a criterion whose key is
+ABSENT from transformedResponse is recorded isEvaluated False -- evaluate._criterion_key_missing,
+called at evaluate.py:2552 before compare_values. The gate tests PRESENCE, not value, and says so:
+a key that is present with a None value is explicitly not covered, falls through to compare_values
+and is graded a measured failure. So within a successful read, OMITTING a key is how this file says
+"I did not measure this", and returning None is how it would ship a false red. Two keys use it:
+isEPPLoggingEnabled, which this method can never answer, and isEPPEnabledForCriticalSystems in a
+tenant whose endpoint list holds no server. A read that measured nothing at all still goes through
+unevaluated() and the whole-response dataCollection error, which is the older and broader channel.
+
+That gate is merged, not necessarily released. Against a deployed Token-Service older than #981 an
+absent key grades exactly as None did -- a measured failure -- so the deploy is a named condition on
+this transformation's blast radius, recorded in PR #1067.
 """
 
 import json
@@ -15,6 +36,9 @@ from datetime import datetime, timedelta
 
 
 ACTIVE_WINDOW_DAYS = 15
+
+#: share of active computers and servers that must carry the installed xdr product for isEDRDeployed
+EDR_DEPLOYED_THRESHOLD = 95.0
 
 
 def parse_seen(value):
@@ -47,97 +71,166 @@ def active_endpoints(items):
     return active, stale
 
 
-def transform(input):
-    def extract_input(input_data):
-        if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-            return input_data["data"], input_data["validation"]
-        data = input_data
-        if isinstance(data, dict):
-            wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-            for _ in range(3):
-                unwrapped = False
-                for key in wrapper_keys:
-                    if key in data and isinstance(data.get(key), dict):
-                        data = data[key]
-                        unwrapped = True
-                        break
-                if not unwrapped:
-                    break
-        return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+def installed_codes(endpoint):
+    """Product codes Sophos reports as installed; an assigned but notInstalled product protects nothing."""
+    return [p.get("code") for p in (endpoint.get("assignedProducts") or [])
+            if isinstance(p, dict) and p.get("status") == "installed"]
 
-    def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                        recommendations=None, input_summary=None, transformation_errors=None,
-                        api_errors=None, additional_findings=None):
-        if validation is None:
-            validation = {"status": "unknown", "errors": [], "warnings": []}
-        return {
-            "transformedResponse": result,
-            "additionalInfo": {
-                "dataCollection": {
-                    "status": "error" if (api_errors or []) else "success",
-                    "errors": api_errors or []
-                },
-                "validation": {
-                    "status": validation.get("status", "unknown"),
-                    "errors": validation.get("errors", []),
-                    "warnings": validation.get("warnings", [])
-                },
-                "transformation": {
-                    "status": "error" if (transformation_errors or []) else "success",
-                    "errors": transformation_errors or [],
-                    "inputSummary": input_summary or {}
-                },
-                "evaluation": {
-                    "passReasons": pass_reasons or [],
-                    "failReasons": fail_reasons or [],
-                    "recommendations": recommendations or [],
-                    "additionalFindings": additional_findings or []
-                },
-                "metadata": {
-                    "evaluatedAt": datetime.utcnow().isoformat() + "Z",
-                    "schemaVersion": "1.0",
-                    "transformationId": "epp_transform",
-                    "vendor": "MDR Provider",
-                    "category": "Endpoint Security"
-                }
+
+def flag_true(value):
+    """True only for an explicit true; None, absent or unparseable is not a yes."""
+    return value is True or str(value).strip().lower() == "true"
+
+
+def percentage(count, total):
+    return round((count / total) * 100) if total > 0 else 0
+
+
+def truncation_flag(level):
+    """True when this level says Integration-Service stopped paging early.
+
+    It writes pages.truncated / pages.scannedCount into the body, but only when the body is an
+    object; a bare-array delivery has no body to write into, so the envelope flag
+    paginationTruncated is the only marker that survives it (integration-service
+    src/models/integrator.py, the maxPages branch). The CrowdStrike sibling
+    epp/crowdstrike-falcon/isEDRDeployed.py reads the same flag.
+    """
+    if not isinstance(level, dict):
+        return False
+    if flag_true(level.get("paginationTruncated")):
+        return True
+    pages = level.get("pages")
+    return isinstance(pages, dict) and flag_true(pages.get("paginationTruncated"))
+
+
+def extract_input(input_data):
+    """(data, validation, truncated).
+
+    `truncated` is collected at every level on the way down, because the envelope that carries
+    paginationTruncated is peeled off before the endpoint list is read.
+    """
+    truncated = truncation_flag(input_data)
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return (input_data["data"], input_data["validation"],
+                truncated or truncation_flag(input_data["data"]))
+    data = input_data
+    if isinstance(data, dict):
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+        for _ in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    truncated = truncated or truncation_flag(data)
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}, truncated
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Derived from the values as well as from api_errors: a result in which nothing was measured
+    # reads as a collection error even on a path that forgot to say so.
+    measured = any(value is not None for value in (result or {}).values())
+    collection_errors = api_errors or ([] if measured else ["Nothing was measured"])
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {
+                "status": "error" if collection_errors else "success",
+                "errors": collection_errors
+            },
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", [])
+            },
+            "transformation": {
+                "status": "error" if (transformation_errors or []) else "success",
+                "errors": transformation_errors or [],
+                "inputSummary": input_summary or {}
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or []
+            },
+            "metadata": {
+                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "schemaVersion": "1.0",
+                "transformationId": "epp_transform",
+                "vendor": "Sophos Central",
+                "category": "Endpoint Security"
             }
         }
+    }
 
+
+def transform(input):
     try:
         if isinstance(input, str):
             input = json.loads(input)
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
 
-        data, validation = extract_input(input)
+        data, validation, truncated = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={"isEPPEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unevaluated("Input validation failed: nothing was measured", validation)
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        # Keys this read does not answer. They are left out of transformedResponse, which is what
+        # records them as not evaluated (#981); this is the human-readable half of that.
+        unmeasured = [
+            "isEPPLoggingEnabled is not answered from this method: GET /endpoint/v1/endpoints "
+            "reports no logging, telemetry or data-upload setting"]
 
-        # Initialize counters
         # Token-Service preprocessing may deliver the endpoints as a bare list
         # (when the API response's `data` field is itself a list) or as a dict
-        # containing `items`. Handle both so counts aren't silently zeroed.
+        # containing `items`.
         if isinstance(data, list):
             items = data
-            explicit_configured = None
         elif isinstance(data, dict):
             items = data.get("items") or []
             if not isinstance(items, list):
                 items = []
-            explicit_configured = data.get("isEPPConfigured")
         else:
             items = []
-            explicit_configured = None
-        items, stale_endpoints = active_endpoints(items)
+
+        # Fail closed: a body that is not a complete endpoint list proves nothing about the estate,
+        # so every key is None with a dataCollection error (Unevaluated), never False and never True.
+        problem = no_endpoint_evidence(data, items, truncated)
+        if problem:
+            return unevaluated(problem, validation)
+
+        items, stale_endpoints = active_endpoints([e for e in items if is_endpoint_record(e)])
+
+        # Fail closed again, after the staleness filter. Every coverage denominator here is a count
+        # of active computers and servers, and percentage(0, 0) is 0 -- so a dark fleet, or a list
+        # holding only mobiles, used to come back as 0% with dataCollection "success": a measured
+        # failure of an estate nobody saw. Both are Unevaluated.
+        protectable = 0
+        for endpoint in items:
+            if endpoint.get("type") in ("computer", "server"):
+                protectable = protectable + 1
+        if protectable == 0:
+            if not items:
+                return unevaluated(
+                    "Every endpoint in the list last checked in more than " + str(ACTIVE_WINDOW_DAYS) +
+                    " days ago: a dark fleet is not a measurement of today's estate", validation,
+                    stale_endpoints=stale_endpoints)
+            return unevaluated(
+                "The endpoint list holds no active computer or server, so there is nothing to measure "
+                "endpoint protection coverage against", validation, stale_endpoints=stale_endpoints)
+
         total_endpoints = len(items)
         total_computers = 0
         total_servers = 0
@@ -148,6 +241,7 @@ def transform(input):
         ep_count = 0
         es_count = 0
         server_protection_count = 0
+        edr_count = 0
         mdr_count = 0
         network_protection_count = 0
         cloud_security_count = 0
@@ -158,9 +252,13 @@ def transform(input):
         encryption_count = 0
 
         for endpoint in items:
-            assigned_products = {product["code"]: product for product in endpoint.get("assignedProducts", [])}
-            services = {service["name"]: service for service in endpoint.get("health", {}).get("services", {}).get("serviceDetails", [])}
+            codes = installed_codes(endpoint)
+            health = endpoint.get("health") if isinstance(endpoint.get("health"), dict) else {}
+            health_services = health.get("services") if isinstance(health.get("services"), dict) else {}
+            services = [s.get("name") for s in (health_services.get("serviceDetails") or [])
+                        if isinstance(s, dict) and s.get("name")]
             endpoint_type = endpoint.get("type")
+            cloud = endpoint.get("cloud") if isinstance(endpoint.get("cloud"), dict) else {}
 
             # Count total number of computers, servers, mobile devices, and cloud endpoints
             if endpoint_type == "computer":
@@ -174,60 +272,66 @@ def transform(input):
                 total_cloud_endpoints = total_cloud_endpoints + 1
 
             # 1. Endpoint Protection
-            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
+            if endpoint_type == "computer" and "endpointProtection" in codes:
                 ep_count = ep_count + 1
 
             # 1.1 Endpoint Security
-            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
+            if endpoint_type == "computer" and "endpointProtection" in codes:
                 es_count = es_count + 1
 
             # 2. Server Protection
-            if endpoint_type == "server" and "endpointProtection" in assigned_products:
+            if endpoint_type == "server" and "endpointProtection" in codes:
                 server_protection_count = server_protection_count + 1
 
-            # 3. MDR (Managed Detection and Response)
-            if "mtr" in assigned_products or "xdr" in assigned_products:
+            # 2.1 EDR: the Sophos xdr product installed on a computer or server
+            if endpoint_type in ("computer", "server") and "xdr" in codes:
+                edr_count = edr_count + 1
+
+            # 3. MDR (Managed Detection and Response). mtr is the documented code for the managed
+            # service, and the five sibling Sophos copies of this transformation count mtr only;
+            # "mdr" is accepted beside it because Sophos renamed the product, though no body seen
+            # here carries that code. xdr is Intercept X Advanced with XDR, which the customer runs
+            # themselves, so counting it made "installed something" mean "managed by Sophos" -- the
+            # same aliasing this file removes elsewhere. mdrManaged is not in Sophos's documented
+            # endpoint schema; it counts only when it is explicitly true. It used to count whenever
+            # it was anything other than "false", so None and unknown values read as MDR-managed.
+            if "mtr" in codes or "mdr" in codes or flag_true(endpoint.get("mdrManaged")):
                 mdr_count = mdr_count + 1
-            elif "mdrManaged" in endpoint:
-                try:
-                    if str(endpoint["mdrManaged"]).lower() != "false":
-                        mdr_count = mdr_count + 1
-                except:
-                    pass
 
             # 4. Network Protection
-            if any("Network Threat Protection" in service_name for service_name in services):
+            if any("Network Threat Protection" in str(service_name) for service_name in services):
                 network_protection_count = network_protection_count + 1
 
             # 5. Cloud Security
-            if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
+            if cloud.get("provider") and "endpointProtection" in codes:
                 cloud_security_count = cloud_security_count + 1
 
             # 6. Mobile Protection
-            if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
+            if endpoint_type == "mobile" and "mobileProtection" in codes:
                 mobile_protection_count = mobile_protection_count + 1
 
             # 7. Email Security
-            if "emailSecurity" in assigned_products:
+            if "emailSecurity" in codes:
                 email_security_count = email_security_count + 1
 
             # 8. Phishing Protection
-            if "interceptX" in assigned_products:
+            if "interceptX" in codes:
                 phishing_protection_count = phishing_protection_count + 1
 
             # 9. Zero Trust Network Access
-            ztna_product = assigned_products.get("ztna")
-            if ztna_product and ztna_product.get("status") == "installed":
+            if "ztna" in codes:
                 ztna_count = ztna_count + 1
 
             # 10. Encryption
-            if endpoint.get("encryption", {}).get("volumes"):
+            encryption = endpoint.get("encryption") if isinstance(endpoint.get("encryption"), dict) else {}
+            if encryption.get("volumes"):
                 encryption_count = encryption_count + 1
 
         safeguard_counters = {
             "Endpoint Protection": ep_count,
             "Endpoint Security": es_count,
             "Server Protection": server_protection_count,
+            "EDR": edr_count,
             "MDR": mdr_count,
             "Network Protection": network_protection_count,
             "Cloud Security": cloud_security_count,
@@ -238,120 +342,117 @@ def transform(input):
             "Encryption": encryption_count
         }
 
-        # Initialize coverage scores
         coverage_scores = {}
+        coverage_scores["Endpoint Protection"] = percentage(ep_count, total_computers)
+        coverage_scores["Endpoint Security"] = percentage(es_count, total_computers)
+        coverage_scores["Server Protection"] = percentage(server_protection_count, total_servers)
+        coverage_scores["MDR"] = percentage(mdr_count, total_endpoints)
+        coverage_scores["Network Protection"] = percentage(network_protection_count, total_endpoints)
+        coverage_scores["Cloud Security"] = percentage(cloud_security_count, total_cloud_endpoints)
+        coverage_scores["Mobile Protection"] = percentage(mobile_protection_count, total_mobile_devices)
+        coverage_scores["Email Security"] = percentage(email_security_count, total_endpoints)
+        coverage_scores["Phishing Protection"] = percentage(phishing_protection_count, total_endpoints)
+        coverage_scores["Zero Trust Network Access"] = percentage(ztna_count, total_endpoints)
+        coverage_scores["Encryption"] = percentage(encryption_count, total_endpoints)
 
-        # Calculate scores
-        coverage_scores["Endpoint Protection"] = round(
-            (safeguard_counters["Endpoint Protection"] / total_computers) * 100
-            if total_computers > 0 else 0
-        )
+        # Endpoint Protection boolean flags. "Endpoint Protection" is the computers-only share, and
+        # percentage(0, 0) is 0, so a tenant whose estate is all servers -- every one of them
+        # protected -- read 0% and graded not enabled, not deployed and misconfigured. The booleans
+        # and the two required* percentages read the whole protectable estate instead: computers plus
+        # servers, the population the guard above has already proved is not empty.
+        protected_endpoints = ep_count + server_protection_count
+        protectable_endpoints = total_computers + total_servers
+        coverage_scores["isEPPEnabled"] = protected_endpoints > 0
+        coverage_scores["isEPPDeployed"] = protected_endpoints > 0
 
-        coverage_scores["Endpoint Security"] = round(
-            (safeguard_counters["Endpoint Security"] / total_computers) * 100
-            if total_computers > 0 else 0
-        )
+        # The next three were aliases of isEPPDeployed. Each now answers its own question or None.
+        #
+        # isEDRDeployed: the share of active computers and servers with the xdr product installed,
+        # against EDR_DEPLOYED_THRESHOLD. It proves the XDR component is on the endpoint, not that
+        # the threat protection policy setting that sends XDR data to Sophos is turned on; the
+        # endpoint list does not carry policy settings.
+        edr_population = protectable_endpoints
+        coverage_scores["edrDeployedPercentage"] = round(edr_count * 100.0 / edr_population, 2)
+        coverage_scores["isEDRDeployed"] = coverage_scores["edrDeployedPercentage"] >= EDR_DEPLOYED_THRESHOLD
 
-        coverage_scores["Server Protection"] = round(
-            (safeguard_counters["Server Protection"] / total_servers) * 100
-            if total_servers > 0 else 0
-        )
+        # isEPPEnabledForCriticalSystems: every active server has endpointProtection installed. It was
+        # computed from the computers-only count, so no server could ever affect it. With no active
+        # server in the list there is nothing to judge -- a server without the Sophos agent is not in
+        # the list either -- so the key is left out of the answer entirely. Not None: None is graded,
+        # an absent key is recorded not evaluated (#981). Never True, which would be a pass nobody
+        # measured.
+        # Held in a local as well: reading it back by name out of a dict is the shape
+        # tools/check_no_self_answer.py forbids, and that rule is syntactic by design.
+        critical_systems = None
+        if total_servers > 0:
+            critical_systems = server_protection_count == total_servers
+            coverage_scores["isEPPEnabledForCriticalSystems"] = critical_systems
 
-        coverage_scores["MDR"] = round(
-            (safeguard_counters["MDR"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
+        # isEPPLoggingEnabled is not emitted at all. The endpoint list carries nothing about logging,
+        # telemetry or data upload, so this file cannot answer it, and leaving the key out is how it
+        # says so: evaluate._criterion_key_missing records an absent key as not evaluated, while a
+        # None value would be compared and graded (#981). The requirement is document-only until some
+        # method evidences it; the reason is recorded in additionalFindings.
 
-        coverage_scores["Network Protection"] = round(
-            (safeguard_counters["Network Protection"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Cloud Security"] = round(
-            (safeguard_counters["Cloud Security"] / total_cloud_endpoints) * 100
-            if total_cloud_endpoints > 0 else 0
-        )
-
-        coverage_scores["Mobile Protection"] = round(
-            (safeguard_counters["Mobile Protection"] / total_mobile_devices) * 100
-            if total_mobile_devices > 0 else 0
-        )
-
-        coverage_scores["Email Security"] = round(
-            (safeguard_counters["Email Security"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Phishing Protection"] = round(
-            (safeguard_counters["Phishing Protection"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Zero Trust Network Access"] = round(
-            (safeguard_counters["Zero Trust Network Access"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Encryption"] = round(
-            (safeguard_counters["Encryption"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        # Endpoint Protection boolean flags
-        coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPDeployed"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
-
-        # Endpoint Security
-        coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
+        # Endpoint Security. The counter above stays per-type; the boolean reads the same
+        # computers-plus-servers population as isEPPEnabled, for the same reason.
+        coverage_scores["isEndpointSecurityEnabled"] = protected_endpoints > 0
 
         coverage_scores["staleEndpointCount"] = stale_endpoints
 
         # MDR
         coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
         coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
-        coverage_scores["requiredCoveragePercentage"] = coverage_scores["Endpoint Protection"]
-        coverage_scores["requiredConfigurationPercentage"] = coverage_scores["Endpoint Protection"]
+        coverage_scores["requiredCoveragePercentage"] = percentage(protected_endpoints, protectable_endpoints)
+        coverage_scores["requiredConfigurationPercentage"] = percentage(protected_endpoints,
+                                                                       protectable_endpoints)
 
-        # "Configured" must reflect real deployment: honor an explicit flag from
-        # the API if present, otherwise require at least one protected endpoint.
-        # Previously this defaulted to True, producing a false PASS on zero data.
-        if explicit_configured is not None:
-            coverage_scores["isEPPConfigured"] = bool(explicit_configured)
-        else:
-            coverage_scores["isEPPConfigured"] = (
-                total_endpoints > 0 and coverage_scores["Endpoint Protection"] > 0
-            )
+        # "Configured" reflects real deployment: at least one protected endpoint. The body's own
+        # isEPPConfigured was honoured here once; Sophos never sends it, and a criterion read out of
+        # the body it judges proves nothing.
+        coverage_scores["isEPPConfigured"] = protected_endpoints > 0
 
         # Inverted key (true = the insecure condition). Its RTA entry reads this file through the
-        # isEPPConfigured method but nothing emitted it, so the row had no value. A read with no endpoint
-        # proves nothing either way, so it is None (never False, which would be a pass).
-        coverage_scores["isEPPMisconfigured"] = (not coverage_scores["isEPPConfigured"]) if total_endpoints > 0 else None
+        # isEPPConfigured method. A read with nothing to measure never reaches here -- it returned
+        # Unevaluated above -- so this is always a real verdict, never None and never a free pass.
+        coverage_scores["isEPPMisconfigured"] = not coverage_scores["isEPPConfigured"]
 
         # Build pass/fail reasons (use concatenation to avoid list mutation in restricted Python)
-        epp_coverage = coverage_scores.get('Endpoint Protection', 0)
+        epp_coverage = coverage_scores["requiredCoveragePercentage"]
         if coverage_scores["isEPPEnabled"]:
-            if epp_coverage > 0:
-                pass_reasons = pass_reasons + [f"Endpoint protection active: {epp_coverage}% of devices protected"]
-            else:
-                pass_reasons = pass_reasons + ["Endpoint protection configured but no devices currently protected"]
-                recommendations = recommendations + ["Verify endpoint agent deployment status"]
+            pass_reasons = pass_reasons + [
+                f"Endpoint protection active on {protected_endpoints} of {protectable_endpoints} active "
+                f"computers and servers ({epp_coverage}%)"]
         else:
-            fail_reasons = fail_reasons + ["Endpoint protection not deployed or not reporting data"]
-            recommendations = recommendations + ["Deploy endpoint protection to all computers"]
+            fail_reasons = fail_reasons + [
+                "Endpoint protection not installed on any active computer or server"]
+            recommendations = recommendations + ["Deploy endpoint protection to every computer and server"]
 
-        server_coverage = coverage_scores.get("Server Protection", 0)
-        if server_coverage > 0:
-            pass_reasons = pass_reasons + [f"Server protection active: {server_coverage}% of servers protected"]
+        if coverage_scores["isEDRDeployed"] is True:
+            pass_reasons = pass_reasons + [
+                f"EDR deployed: xdr installed on {edr_count} of {edr_population} active computers and servers "
+                f"({coverage_scores['edrDeployedPercentage']}%)"]
+        elif coverage_scores["isEDRDeployed"] is False:
+            fail_reasons = fail_reasons + [
+                f"EDR not deployed widely enough: xdr installed on {edr_count} of {edr_population} active computers "
+                f"and servers ({coverage_scores['edrDeployedPercentage']}%, threshold {EDR_DEPLOYED_THRESHOLD}%)"]
+            recommendations = recommendations + ["Assign Intercept X Advanced with XDR to every computer and server"]
+
+        if critical_systems is True:
+            pass_reasons = pass_reasons + [f"Server protection installed on all {total_servers} active servers"]
+        elif critical_systems is False:
+            fail_reasons = fail_reasons + [
+                f"Server protection installed on {server_protection_count} of {total_servers} active servers"]
+            recommendations = recommendations + ["Install Sophos server protection on every server"]
+        else:
+            # Not a fail reason: the key is absent, so the criterion is not evaluated, not failed.
+            unmeasured = unmeasured + [
+                "isEPPEnabledForCriticalSystems is not answered for this tenant: the endpoint list "
+                "holds no active server to judge"]
 
         mdr_coverage = coverage_scores.get("MDR", 0)
         if coverage_scores["isMDREnabled"]:
-            if mdr_coverage > 0:
-                pass_reasons = pass_reasons + [f"MDR active: {mdr_coverage}% coverage"]
-            else:
-                pass_reasons = pass_reasons + ["MDR configured but no devices currently monitored"]
+            pass_reasons = pass_reasons + [f"MDR active: {mdr_coverage}% coverage"]
 
         return create_response(
             result=coverage_scores,
@@ -359,6 +460,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            additional_findings=unmeasured,
             input_summary={
                 "totalEndpoints": total_endpoints,
                 "staleEndpoints": stale_endpoints,
@@ -371,9 +473,123 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={"isEPPEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        message = "Transformation error: " + str(e)[:200]
+        return unevaluated(message, {"status": "error", "errors": [], "warnings": []},
+                           transformation_errors=[message])
+
+
+# ---- fail-closed guard (2026-10-07, after epp/crowdstrike/epp_transform.py 2026-10-02) ----------
+# An empty or unreadable read used to come back as measured False with dataCollection "success":
+# every coverage key read 0%, which graded as a real failure nobody had measured. A read that is not
+# a complete endpoint list is now Unevaluated for every key.
+
+#: keys this transformation answers from an endpoint list
+ENDPOINT_KEYS = ("Endpoint Protection", "Endpoint Security", "Server Protection", "MDR", "Network Protection",
+                 "Cloud Security", "Mobile Protection", "Email Security", "Phishing Protection",
+                 "Zero Trust Network Access", "Encryption", "isEPPEnabled", "isEPPDeployed",
+                 "isEPPEnabledForCriticalSystems", "isEDRDeployed", "edrDeployedPercentage",
+                 "isEndpointSecurityEnabled", "staleEndpointCount", "isMDREnabled", "isMDRLoggingEnabled",
+                 "requiredCoveragePercentage", "requiredConfigurationPercentage", "isEPPConfigured",
+                 "isEPPMisconfigured")
+
+#: fields a Sophos endpoint record (GET /endpoint/v1/endpoints) carries; one marks a record as an endpoint
+ENDPOINT_FIELDS = ("assignedProducts", "health", "hostname", "lastSeenAt", "os", "tamperProtectionEnabled",
+                   "tamperProtectionSupported", "associatedPerson", "ipv4Addresses")
+
+
+def is_endpoint_record(item):
+    """True when `item` reads as a Sophos endpoint record."""
+    if not isinstance(item, dict):
+        return False
+    for name in ENDPOINT_FIELDS:
+        if name in item:
+            return True
+    return False
+
+
+def vendor_error(data):
+    """Why `data` is a Sophos or platform error envelope, or None."""
+    if not isinstance(data, dict):
+        return None
+    for name in ("statusCode", "status_code", "httpStatus"):
+        code = data.get(name)
+        if isinstance(code, str) and code.strip().isdigit():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Sophos returned HTTP " + str(code)
+    if str(data.get("status")).strip().lower() == "error":
+        return "Sophos read failed: " + str(data.get("message") or data.get("errorType") or "error")[:200]
+    errors = data.get("errors") or data.get("error") or data.get("errorMessage")
+    if errors:
+        first = errors[0] if isinstance(errors, list) else errors
+        if isinstance(first, dict):
+            first = first.get("message") or first.get("code") or "error"
+        detail = data.get("message")
+        return "Sophos returned an error: " + str(first)[:100] + (": " + str(detail)[:100] if detail else "")
+    return None
+
+
+def unread_pages(data):
+    """Why the endpoint list is partial, or None. Integration-Service marks a read it stopped paging at
+    maxPages with pages.truncated; a body with a live pages.nextKey has pages nobody fetched."""
+    pages = data.get("pages") if isinstance(data, dict) else None
+    if not isinstance(pages, dict):
+        return None
+    if flag_true(pages.get("truncated")):
+        return ("The endpoint list was truncated after " + str(pages.get("scannedCount")) +
+                " endpoints: a sample is not the estate")
+    next_key = pages.get("nextKey")
+    if next_key is not None and str(next_key).strip().lower() not in ("", "none", "null"):
+        return "The endpoint list has unread pages (pages.nextKey is set): a sample is not the estate"
+    return None
+
+
+def no_endpoint_evidence(data, items, truncated=False):
+    """Why this read proves nothing about the estate, or None when it is a usable endpoint list."""
+    if not isinstance(data, (dict, list)) or not data:
+        return "Sophos returned no body: nothing was measured"
+    problem = vendor_error(data)
+    if problem:
+        return problem
+    if not items:
+        return ("Sophos returned no endpoints. A failed or partial read returns an empty list, "
+                "so zero endpoints is not evidence either way")
+    recognised = 0
+    for item in items:
+        if is_endpoint_record(item):
+            recognised = recognised + 1
+    if recognised == 0:
+        return "The response carries no Sophos endpoint records: nothing was measured"
+    if recognised < len(items):
+        # A list this file can only partly read is not the estate either: the unreadable items used
+        # to be dropped silently at the is_endpoint_record filter, and what remained was scored as
+        # though it were the whole list.
+        return ("The response carries " + str(len(items) - recognised) + " of " + str(len(items)) +
+                " items that are not Sophos endpoint records: a list that cannot be read in full "
+                "is not the estate")
+    if truncated:
+        return ("Integration-Service stopped paging this read (paginationTruncated): "
+                "a sample is not the estate")
+    return unread_pages(data)
+
+
+def unevaluated(problem, validation=None, transformation_errors=None, stale_endpoints=None):
+    """Every key as None plus a dataCollection error: reads Unevaluated, never True or False.
+
+    staleEndpointCount survives when the list itself was readable and every endpoint in it was
+    stale, because that count is the reason the read proves nothing and the endpoint rules
+    (2026-09-29) say to report it. It changes no verdict: the dataCollection error still records
+    every criterion, this one included, as not evaluated.
+    """
+    result = {}
+    for key in ENDPOINT_KEYS:
+        result[key] = None
+    if stale_endpoints is not None:
+        result["staleEndpointCount"] = stale_endpoints
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        transformation_errors=transformation_errors,
+    )

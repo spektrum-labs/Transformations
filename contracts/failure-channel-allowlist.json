@@ -2,7 +2,7 @@
   "contract": "failure-channel",
   "why": "a transform that catches its own exception must report it under additionalInfo.dataCollection.status \"error\", which is the only channel Token-Service's evaluator reads; reporting it under additionalInfo.transformation.status alone leaves the criterion graded at runtime; this list may only shrink",
   "generated_by": "tools/probe_failure_channel.py --emit-allowlist",
-  "count": 878,
+  "count": 876,
   "instances": [
     "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/confirmedlicensepurchased.py",
     "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/firewall_transform.py",
@@ -12,7 +12,6 @@
     "safeguards/182a41f5-ba7f-42c9-a3cd-7aa8399f5037/confirmedlicensepurchased.py",
     "safeguards/182a41f5-ba7f-42c9-a3cd-7aa8399f5037/network_transform.py",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/confirmedlicensepurchased_endpoints.py",
-    "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/isalertingconfigured.py",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/isalertingenabled.py",
     "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/isbehavioralmonitoringvalid.py",
