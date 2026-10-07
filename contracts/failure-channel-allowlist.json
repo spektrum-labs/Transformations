@@ -2,7 +2,7 @@
   "contract": "failure-channel",
   "why": "a transform that catches its own exception must report it under additionalInfo.dataCollection.status \"error\", which is the only channel Token-Service's evaluator reads; reporting it under additionalInfo.transformation.status alone leaves the criterion graded at runtime; this list may only shrink",
   "generated_by": "tools/probe_failure_channel.py --emit-allowlist",
-  "count": 879,
+  "count": 878,
   "instances": [
     "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/confirmedlicensepurchased.py",
     "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/firewall_transform.py",
@@ -562,7 +562,6 @@
     "safeguards/firewall/cato-networks/isFirewallEnabled.py",
     "safeguards/firewall/cisco/fmc/confirmedlicensepurchased.py",
     "safeguards/firewall/cisco/fmc/defaultdenyinbound.py",
-    "safeguards/firewall/cisco/fmc/firewall_transform.py",
     "safeguards/firewall/cisco/fmc/isfirewallconfigured.py",
     "safeguards/firewall/cisco/fmc/isfirewallperformant.py",
     "safeguards/firewall/cisco/fmc/isidsenabled.py",
