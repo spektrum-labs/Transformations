@@ -88,6 +88,17 @@ class IsRbacImplementedTests(unittest.TestCase):
             for out in self.each(payload):
                 self.assert_not_evaluated(out)
 
+    def test_rbac_value_that_is_not_a_list_is_not_evaluated(self):
+        for value, name in (("admin", "text"), ({"role": "x"}, "an object"), ({}, "an object"), (5, "a number"), (True, "a true/false value")):
+            for out in self.each({"rbac": value}):
+                self.assert_not_evaluated(out)
+                self.assertIn("'rbac' value is " + name, out["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_transformation_error_is_not_evaluated(self):
+        for out in self.each(b"\xff not json"):
+            self.assertIsNone(out["transformedResponse"][KEY])
+            self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
     # --- shapes it reads today: unchanged -------------------------------------------------
 
     def test_rbac_list_passes(self):
@@ -97,7 +108,7 @@ class IsRbacImplementedTests(unittest.TestCase):
             self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"], {"rbacAssignments": 2})
 
     def test_empty_rbac_list_still_fails(self):
-        for payload in ({"rbac": []}, {"rbac": None}, {"rbac": {}}):
+        for payload in ({"rbac": []}, {"rbac": None}):
             for out in self.each(payload):
                 self.assertIs(out["transformedResponse"][KEY], False)
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
