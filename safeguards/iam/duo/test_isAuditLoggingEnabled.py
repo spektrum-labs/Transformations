@@ -1,14 +1,14 @@
-"""isAuditLoggingEnabled: Duo's administrator audit log is readable (GET /admin/v1/logs/administrator).
+"""isAuditLoggingEnabled: Duo's administrator audit log has a recent event (GET /admin/v1/logs/administrator).
 
-getAdminLogs sends mintime = now - 30 days, so every event Duo returns is inside the last 30 days, and
-Duo v1 returns at most the EARLIEST 1000 events of that window (oldest first). Duo records administrator
-actions for every account with no setting to turn it off, so:
+getAdminLogs sends mintime = now - 30 days and Duo v1 returns at most the EARLIEST 1000 events of that
+window (oldest first). The check passes only when the newest event read is no more than maxEventAgeDays
+old (default 3):
 
-  * a successful read passes, empty or not (an empty window is no administrator activity, not a gap);
-  * an error, a vendor error marker or an unreadable body is Not evaluated (value None, data-collection
-    error), never False;
-  * the evidence names the window, the oldest and newest event read, and readMayBeTruncated, and a read at
-    the 1000-event limit says the newest event read may not be the newest in the window.
+  * newest event within the limit (exactly 3 days included) passes;
+  * newest event older than the limit, an empty log, an error, a vendor error marker or an unreadable body
+    is Not evaluated (value None, data-collection error), never False and never a pass;
+  * a read at the 1000-event limit passes only when the newest event read is already within the limit,
+    because a newer event could only make it fresher; otherwise it is Not evaluated.
 """
 import importlib.util
 import json
@@ -84,23 +84,23 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
         self.assertTrue(response["additionalInfo"]["dataCollection"]["errors"])
 
-    # --- success, empty: a pass ----------------------------------------------------
+    # --- empty: no newest event, so Not evaluated ------------------------------------
 
-    def test_success_empty_window_passes(self):
+    def test_empty_log_is_not_evaluated_never_a_pass_or_false(self):
         for payload in (returned([]), body([]), {"data": returned([]), "validation": {"status": "valid"}}):
             with self.subTest(payload=payload):
                 response = self.run_transform(payload)
-                self.assert_pass(response)
+                self.assert_unevaluated(response)
                 out = response["transformedResponse"]
-                self.assertEqual(out["totalLogCount"], 0)
-                self.assertIs(out["logsPresent"], False)
-                self.assertIs(out["readMayBeTruncated"], False)
-                self.assertEqual(out["windowDays"], 30)
-                self.assertIsNone(out["mostRecentTimestamp"])
-                reason = self.evaluation(response)["passReasons"][0]
+                self.assertIsNone(out[KEY])
+                self.assertIsNone(out["totalLogCount"])
+                summary = response["additionalInfo"]["transformation"]["inputSummary"]
+                self.assertEqual(summary["totalLogCount"], 0)
+                self.assertEqual(summary["maxEventAgeDays"], 3)
+                reason = self.evaluation(response)["failReasons"][0]
                 self.assertIn("no events", reason)
                 self.assertIn("last 30 days", reason)
-                self.assertIn("/admin/v1/logs/administrator", reason)
+                self.assertIn("3 days", reason)
 
     # --- success, non-empty: a pass, with the latest event and the window ---------
 
@@ -116,6 +116,8 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assertIs(out["readMayBeTruncated"], False)
         reason = self.evaluation(response)["passReasons"][0]
         self.assertIn("latest administrator event is " + out["mostRecentTimestamp"], reason)
+        self.assertIn("within 3 days", reason)
+        self.assertEqual(out["maxEventAgeDays"], 3)
         self.assertIn("last 30 days", reason)
         findings = self.evaluation(response)["additionalFindings"]
         self.assertTrue(any(f.startswith("Window read: the last 30 days") for f in findings))
@@ -136,25 +138,88 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assert_pass(response)
         self.assertEqual(response["transformedResponse"]["newestEventAgeDays"], 3)
 
-    def test_events_older_than_the_window_still_pass(self):
-        # mintime keeps these out today; if it ever widens, a readable log is still a pass.
-        self.assert_pass(self.run_transform(returned([entry(120), entry(400)])))
+    def test_events_older_than_the_window_are_not_evaluated(self):
+        self.assert_unevaluated(self.run_transform(returned([entry(120), entry(400)])))
 
     def test_never_false(self):
         for rows in ([], [entry(1)], [entry(45)], [entry(400)], [entry(1)] * 1000):
             with self.subTest(n=len(rows)):
                 self.assertIsNot(self.value(returned(rows)), False)
 
-    # --- a read at Duo's 1000-event limit: honest about what was not read ---------
+    # --- the 3-day recency rule ------------------------------------------------------
 
-    def test_read_at_the_limit_flags_truncation_and_says_newer_events_were_not_read(self):
+    def test_newest_event_exactly_3_days_old_passes(self):
+        response = self.run_transform(returned([entry(3), entry(20)]))
+        self.assert_pass(response)
+        out = response["transformedResponse"]
+        self.assertEqual(out["newestEventAgeDays"], 3)
+        self.assertEqual(out["maxEventAgeDays"], 3)
+
+    def test_newest_event_3_days_plus_1_minute_old_is_not_evaluated(self):
+        response = self.run_transform(returned([entry(3, seconds_extra=60), entry(20)]))
+        self.assert_unevaluated(response)
+        reason = self.evaluation(response)["failReasons"][0]
+        self.assertIn("older than the 3 days allowed", reason)
+        self.assertIn("Not evaluated, not a failure", reason)
+        summary = response["additionalInfo"]["transformation"]["inputSummary"]
+        self.assertEqual(summary["newestEventAgeDays"], 3)
+        self.assertEqual(summary["totalLogCount"], 2)
+
+    def test_newest_event_3_days_minus_1_minute_old_passes(self):
+        self.assert_pass(self.run_transform(returned([entry(3, seconds_extra=-60)])))
+
+    def test_stale_log_is_never_false(self):
+        for days in (4, 10, 29):
+            with self.subTest(days=days):
+                self.assertIsNone(self.value(returned([entry(days)])))
+
+    def test_old_events_do_not_rescue_a_stale_newest_event(self):
+        self.assertIsNone(self.value(returned([entry(5), entry(25), entry(29)])))
+
+    def test_one_fresh_event_among_old_ones_passes(self):
+        self.assertIs(self.value(returned([entry(29), entry(25), entry(1)])), True)
+
+    def test_max_event_age_days_is_a_parameter(self):
+        rows = returned([entry(5)])
+        self.assertIsNone(self.value(rows))  # default 3
+        self.assertIs(self.value({"maxEventAgeDays": 7, "response": [entry(5)]}), True)
+        self.assertIs(self.value({"response": {"response": [entry(5)]}, "maxEventAgeDays": 7}), True)
+        self.assertIsNone(self.value({"maxEventAgeDays": 1, "response": [entry(2)]}))
+        out = self.run_transform({"maxEventAgeDays": 7, "response": [entry(5)]})["transformedResponse"]
+        self.assertEqual(out["maxEventAgeDays"], 7)
+
+    def test_a_bad_max_event_age_days_falls_back_to_3(self):
+        for bad in (0, -5, "7", None, True, float("nan"), float("inf"), [7]):
+            with self.subTest(bad=bad):
+                self.assertIsNone(self.value({"maxEventAgeDays": bad, "response": [entry(5)]}))
+                self.assertIs(self.value({"maxEventAgeDays": bad, "response": [entry(2)]}), True)
+
+    def test_resolve_max_event_age_days_default(self):
+        self.assertEqual(self.t.DEFAULT_MAX_EVENT_AGE_DAYS, 3)
+        self.assertEqual(self.t.resolve_max_event_age_days(None, {}), 3)
+
+    # --- a read at Duo's 1000-event limit: Not evaluated unless the newest event read is recent --
+
+    def test_truncated_read_with_a_stale_newest_event_is_not_evaluated(self):
         rows = [entry(29, seconds_extra=i) for i in range(999)] + [entry(18)]
+        response = self.run_transform(returned(rows))
+        self.assert_unevaluated(response)
+        summary = response["additionalInfo"]["transformation"]["inputSummary"]
+        self.assertIs(summary["readMayBeTruncated"], True)
+        self.assertEqual(summary["totalLogCount"], 1000)
+        reason = self.evaluation(response)["failReasons"][0]
+        self.assertIn("earliest 1000 events", reason)
+        self.assertIn("newer events may exist that were not read", reason)
+        self.assertIn("recency cannot be shown", reason)
+
+    def test_truncated_read_with_a_recent_newest_event_passes_and_is_flagged(self):
+        rows = [entry(29, seconds_extra=i) for i in range(999)] + [entry(2)]
         response = self.run_transform(returned(rows))
         self.assert_pass(response)
         out = response["transformedResponse"]
         self.assertIs(out["readMayBeTruncated"], True)
         self.assertEqual(out["totalLogCount"], 1000)
-        self.assertEqual(out["mostRecentTimestamp"], (NOW - timedelta(days=18)).isoformat())
+        self.assertEqual(out["mostRecentTimestamp"], (NOW - timedelta(days=2)).isoformat())
         reason = self.evaluation(response)["passReasons"][0]
         self.assertIn("earliest 1000 events", reason)
         self.assertIn("newer events may exist that were not read", reason)
@@ -162,13 +227,17 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assertTrue(any("(may not be the newest in the window: the read stopped at Duo's 1000-event limit)"
                             in f for f in findings))
 
+    def test_truncated_read_just_over_the_limit_is_not_evaluated(self):
+        rows = [entry(29, seconds_extra=i) for i in range(999)] + [entry(3, seconds_extra=60)]
+        self.assertIsNone(self.value(returned(rows)))
+
     def test_999_entries_is_not_flagged_truncated(self):
-        out = self.run_transform(returned([entry(5)] * 999))["transformedResponse"]
+        out = self.run_transform(returned([entry(2)] * 999))["transformedResponse"]
         self.assertIs(out["readMayBeTruncated"], False)
 
     def test_read_may_be_truncated_reaches_the_evidence(self):
         self.assertIn("readMayBeTruncated", self.t.RESULT_KEYS)
-        response = self.run_transform(returned([entry(5)] * 1000))
+        response = self.run_transform(returned([entry(2)] * 1000))
         self.assertIn("readMayBeTruncated", response["additionalInfo"]["transformation"]["inputSummary"])
 
     # --- errors and unreadable bodies: Not evaluated -------------------------------
