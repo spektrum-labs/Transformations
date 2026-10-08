@@ -84,11 +84,40 @@ def transform(input):
                 fail_reasons=["Input validation failed"]
             )
 
+        # Wrong shape is not a finding. This file reads an object that carries an 'rbac' role
+        # assignment list. Handed anything else -- a bare list (Okta's /api/v1/org/factors catalogue
+        # of factor types was scored False for exactly this reason), a string, or an object with no
+        # 'rbac' key -- the read cannot answer the check, so the verdict is None (Not evaluated)
+        # with a reason, never False. dataCollection.status "error" (api_errors) is what makes
+        # Token-Service grade the None as Not evaluated instead of Failed.
+        # The 'rbac' value itself must be a list (or null, meaning no assignments). A string,
+        # object or number in its place cannot answer the check either.
+        rbac_ok = isinstance(data, dict) and 'rbac' in data and (data['rbac'] is None or isinstance(data['rbac'], list))
+        if not rbac_ok:
+            if isinstance(data, list):
+                shape = "a list of " + str(len(data)) + " items"
+            elif isinstance(data, dict) and 'rbac' not in data:
+                shape = "an object without an 'rbac' key"
+            elif isinstance(data, dict):
+                v = data['rbac']
+                kind = "text" if isinstance(v, str) else "an object" if isinstance(v, dict) else "a true/false value" if isinstance(v, bool) else "a number" if isinstance(v, (int, float)) else "another type"
+                shape = "an object whose 'rbac' value is " + kind + ", not a list"
+            else:
+                shape = "not an object"
+            reason = ("Not evaluated: the response is " + shape + ", not an object with an 'rbac' role "
+                      "assignment list, so it cannot show whether RBAC is implemented")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[reason],
+                api_errors=[reason]
+            )
+
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        rbac = data.get('rbac') or [] if isinstance(data, dict) else []
+        rbac = data.get('rbac') or []
         is_implemented = isinstance(rbac, list) and len(rbac) > 0
 
         if is_implemented:
@@ -107,9 +136,11 @@ def transform(input):
         )
 
     except Exception as e:
+        # An error is Not evaluated, never a finding.
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[f"Transformation error: {str(e)}"],
+            api_errors=[f"Transformation error: {str(e)}"]
         )
