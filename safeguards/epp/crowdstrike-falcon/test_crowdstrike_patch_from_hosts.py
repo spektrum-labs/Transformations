@@ -117,8 +117,7 @@ def test_real_hosts_one_off_among_130_passes_but_is_listed():
     first_active(body)["device_policies"]["sensor_update"]["settings_hash"] = ";101"
     value, status, evaluation = detail(body)
     active = sum(1 for h in body["resources"] if h["status"] == "normal" and h["reduced_functionality_mode"] != "yes")
-    if active >= 100:
-        assert (value, status) == (True, "success")
+    assert (value, status) == (active >= 100, "success")
     assert evaluation["additionalFindings"]
 
 
@@ -181,3 +180,20 @@ def test_truncated_list_and_non_host_bodies_are_not_measured():
 def test_empty_none_error():
     for body in ({}, None, "{}", ERROR):
         assert verdict(body) == (False, "error"), body
+
+
+def test_shown_percent_never_rounds_up_to_the_bar_on_a_fail():
+    # 98,999 of 100,000 is 98.999%: it fails, and the shown figure must not read 99.0.
+    out = MOD.transform(fleet(100000, 1001))
+    assert out["transformedResponse"]["isPatchManagementEnabled"] is False
+    assert out["transformedResponse"]["automaticUpdatePercent"] == 98.99
+    assert "(99.0%)" not in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+def test_named_sensors_are_the_first_25_in_name_order_whatever_the_response_order():
+    body = fleet(1000, 30)
+    reordered = copy.deepcopy(body)
+    reordered["resources"] = list(reversed(reordered["resources"]))
+    _, _, one = detail(body)
+    _, _, two = detail(reordered)
+    assert one["additionalFindings"] == two["additionalFindings"]

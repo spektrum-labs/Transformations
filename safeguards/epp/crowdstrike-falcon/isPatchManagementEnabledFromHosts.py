@@ -261,7 +261,8 @@ def transform(input):
         )
 
     not_auto = counts["pinned"] + counts["off"] + counts["none"]
-    percent = round(counts["auto"] * 100.0 / judged, 2) if judged else 0.0
+    # Round DOWN so the shown figure never reads 99.0 on a fail (98,999 of 100,000 is 98.99).
+    percent = (counts["auto"] * 10000 // judged) / 100 if judged else 0.0
     meets_share = judged > 0 and counts["auto"] * 100 >= MIN_AUTO_UPDATE_PERCENT * judged
     result_value = not api_errors and meets_share
 
@@ -306,7 +307,7 @@ def transform(input):
         for mode in ("off", "pinned", "none"):
             names = named[mode]
             if names:
-                shown = ", ".join(names[:MAX_NAMED_SENSORS])
+                shown = ", ".join(sorted(names)[:MAX_NAMED_SENSORS])
                 more = f" and {len(names) - MAX_NAMED_SENSORS} more" if len(names) > MAX_NAMED_SENSORS else ""
                 additional_findings.append(f"{len(names)} active sensors {labels[mode]}: {shown}{more}.")
 
