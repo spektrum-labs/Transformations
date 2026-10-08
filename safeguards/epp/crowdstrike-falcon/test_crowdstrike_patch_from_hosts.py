@@ -1,5 +1,6 @@
 """CrowdStrike isPatchManagementEnabled read from host records (Hosts: Read), not from
-/policy/combined/sensor-update (Sensor update policies: Read).
+/policy/combined/sensor-update (Sensor update policies: Read). Passes when at least 99% of active
+sensors have automatic sensor updates on; sensors below that are listed in the findings.
 
 Real payload (2026-09-25, redacted to the fields read, ids replaced): a Falcon EPP tenant's
 getDeviceDetails, 130 hosts, every sensor-update settings_hash a tagged release.
@@ -50,14 +51,97 @@ def test_real_hosts_all_tagged_pass():
     assert verdict({"apiResponse": HOSTS}) == (True, "success")
 
 
-def test_one_host_with_updates_off_or_pinned_or_no_policy_fails():
+def fleet(total, off, mode=";101"):
+    """`total` active hosts from the real fixture's first active host, `off` of them with the given
+    sensor-update settings_hash (default: sensor version updates off). Ids are generated."""
+    template = copy.deepcopy(first_active(HOSTS))
+    hosts = []
+    for i in range(total):
+        host = copy.deepcopy(template)
+        host["device_id"] = f"fleet-{i:05d}"
+        host["hostname"] = f"HOST-{i:05d}"
+        if i < off:
+            host["device_policies"]["sensor_update"]["settings_hash"] = mode
+        hosts.append(host)
+    return {"resources": hosts, "meta": {"pagination": {"total": total}}}
+
+
+def detail(body):
+    out = MOD.transform(body)
+    return (out["transformedResponse"]["isPatchManagementEnabled"], out["additionalInfo"]["dataCollection"]["status"],
+            out["additionalInfo"]["evaluation"])
+
+
+def test_share_boundary_98_9_fails_99_and_100_pass():
+    # 1000 active sensors: 11 off = 98.9% -> fail; 10 off = 99.0% -> pass; 0 off = 100% -> pass
+    assert detail(fleet(1000, 11))[:2] == (False, "success")
+    assert detail(fleet(1000, 10))[:2] == (True, "success")
+    assert detail(fleet(1000, 0))[:2] == (True, "success")
+
+
+def test_one_sensor_off_in_a_large_fleet_passes_and_is_still_listed():
+    value, status, evaluation = detail(fleet(5000, 1))
+    assert (value, status) == (True, "success")
+    assert evaluation["failReasons"] == []
+    assert any("HOST-00000" in f and "updates off" in f for f in evaluation["additionalFindings"])
+    assert any("do not update automatically" in r for r in evaluation["recommendations"])
+
+
+def test_small_fleet_one_off_fails_because_the_share_is_below_99():
+    value, status, evaluation = detail(fleet(50, 1))
+    assert (value, status) == (False, "success")
+    assert any("HOST-00000" in f for f in evaluation["additionalFindings"])
+
+
+def test_pinned_and_no_policy_count_against_the_share_and_are_listed():
+    value, _, evaluation = detail(fleet(100, 2, mode="3623;101"))
+    assert value is False
+    assert any("pinned" in f for f in evaluation["additionalFindings"])
+    body = fleet(100, 0)
+    for host in body["resources"][:2]:
+        host["device_policies"] = {}
+    value, _, evaluation = detail(body)
+    assert value is False
+    assert any("no sensor-update policy" in f for f in evaluation["additionalFindings"])
+
+
+def test_findings_name_at_most_25_sensors_and_count_the_rest():
+    _, _, evaluation = detail(fleet(1000, 30))
+    finding = next(f for f in evaluation["additionalFindings"] if "updates off" in f)
+    assert finding.startswith("30 active sensors")
+    assert "HOST-00024" in finding and "HOST-00025" not in finding and "and 5 more" in finding
+
+
+def test_real_hosts_one_off_among_130_passes_but_is_listed():
+    body = copy.deepcopy(HOSTS)
+    first_active(body)["device_policies"]["sensor_update"]["settings_hash"] = ";101"
+    value, status, evaluation = detail(body)
+    active = sum(1 for h in body["resources"] if h["status"] == "normal" and h["reduced_functionality_mode"] != "yes")
+    assert (value, status) == (active >= 100, "success")
+    assert evaluation["additionalFindings"]
+
+
+def test_real_hosts_many_off_or_pinned_or_no_policy_fail():
     for flip in (";101", "3623;101"):
         body = copy.deepcopy(HOSTS)
-        first_active(body)["device_policies"]["sensor_update"]["settings_hash"] = flip
+        for host in [h for h in body["resources"] if h["status"] == "normal" and h["reduced_functionality_mode"] != "yes"][:10]:
+            host["device_policies"]["sensor_update"]["settings_hash"] = flip
         assert verdict(body) == (False, "success"), flip
     body = copy.deepcopy(HOSTS)
-    first_active(body)["device_policies"] = {}
+    for host in [h for h in body["resources"] if h["status"] == "normal" and h["reduced_functionality_mode"] != "yes"][:10]:
+        host["device_policies"] = {}
     assert verdict(body) == (False, "success")
+
+
+def test_zero_active_sensors_is_not_evaluated_never_a_pass():
+    assert verdict({"resources": [], "meta": {"pagination": {"total": 0}}}) == (False, "error")
+    body = fleet(5, 0)
+    for host in body["resources"]:
+        host["last_seen"] = (datetime.utcnow() - timedelta(days=40)).strftime("%Y-%m-%dT%H:%M:%SZ")  # dark fleet
+    assert verdict(body) == (False, "error")
+    mobile_only = {"resources": [{"device_id": "m1", "platform_name": "iOS", "product_type_desc": "Mobile"}],
+                   "meta": {"pagination": {"total": 1}}}
+    assert verdict(mobile_only) == (False, "error")
 
 
 def test_unrecognised_settings_hash_is_not_measured():
@@ -79,8 +163,8 @@ def test_inactive_and_mobile_hosts_are_not_judged():
 
 
 def test_contained_host_is_active_and_judged_like_coverage_counts_it():
-    body = copy.deepcopy(HOSTS)
-    host = first_active(body)
+    body = fleet(50, 0)
+    host = body["resources"][0]
     host["status"] = "containment_pending"
     host["device_policies"] = {}
     assert verdict(body) == (False, "success")
@@ -94,6 +178,22 @@ def test_truncated_list_and_non_host_bodies_are_not_measured():
 
 
 def test_empty_none_error():
-    assert verdict({"resources": [], "meta": {"pagination": {"total": 0}}}) == (False, "success")
     for body in ({}, None, "{}", ERROR):
         assert verdict(body) == (False, "error"), body
+
+
+def test_shown_percent_never_rounds_up_to_the_bar_on_a_fail():
+    # 98,999 of 100,000 is 98.999%: it fails, and the shown figure must not read 99.0.
+    out = MOD.transform(fleet(100000, 1001))
+    assert out["transformedResponse"]["isPatchManagementEnabled"] is False
+    assert out["transformedResponse"]["automaticUpdatePercent"] == 98.99
+    assert "(99.0%)" not in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+def test_named_sensors_are_the_first_25_in_name_order_whatever_the_response_order():
+    body = fleet(1000, 30)
+    reordered = copy.deepcopy(body)
+    reordered["resources"] = list(reversed(reordered["resources"]))
+    _, _, one = detail(body)
+    _, _, two = detail(reordered)
+    assert one["additionalFindings"] == two["additionalFindings"]

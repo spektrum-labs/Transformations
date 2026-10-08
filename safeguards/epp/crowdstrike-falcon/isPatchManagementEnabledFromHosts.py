@@ -153,21 +153,31 @@ def is_reporting(device, clock):
 # so it is covered; it is counted separately so the output shows it. Any other status is not covered.
 CONTAINMENT_STATUSES = ("contained", "containment_pending", "lift_containment_pending")
 
+# The check passes when at least this share of active sensors have automatic sensor updates on.
+# One sensor in thousands on a pinned build is not a failed update programme; below the share the
+# check fails. Compared as whole numbers (auto * 100 >= share * judged), so 98.9% never rounds up.
+MIN_AUTO_UPDATE_PERCENT = 99
+# At most this many sensors are named in a finding; the rest are counted.
+MAX_NAMED_SENSORS = 25
+
 
 def transform(input):
     """
     isPatchManagementEnabled (CrowdStrike, from GET /devices/combined/devices/v1, Hosts: Read).
 
-    True when every active Falcon sensor has automatic sensor updates on: the sensor-update policy
-    applied to the host tracks a tagged CrowdStrike release (N, N-1 or N-2) rather than a pinned
-    build or "sensor version updates off". It reads each host's device_policies.sensor_update, so it
-    needs no Sensor update policies scope.
+    True when at least MIN_AUTO_UPDATE_PERCENT of active Falcon sensors have automatic sensor updates
+    on: the sensor-update policy applied to the host tracks a tagged CrowdStrike release (N, N-1 or
+    N-2) rather than a pinned build or "sensor version updates off". It reads each host's
+    device_policies.sensor_update, so it needs no Sensor update policies scope. Sensors below the
+    share are not hidden: those with updates off, pinned or with no policy are named in the
+    additional findings whether the check passes or fails.
 
     Active means what requiredCoveragePercentage counts: last_seen within ACTIVE_WINDOW_DAYS of the
     newest check-in, status "normal" or a network containment state, not in reduced functionality
     mode, and an agent_version. Mobile hosts have no sensor-update policy
     and are left out. Not measured (dataCollection error) on an API error, a truncated device list,
-    no resources list or a record that is not a host, or a settings_hash in a shape not recognised.
+    no resources list or a record that is not a host, a settings_hash in a shape not recognised, or
+    no active sensor to measure (zero active sensors is never a pass).
     """
     if isinstance(input, bytes):
         input = input.decode("utf-8")
@@ -203,6 +213,7 @@ def transform(input):
         api_errors.append("Response is not a Falcon host list (a record has no device_id); check the method wiring")
 
     counts = {"auto": 0, "pinned": 0, "off": 0, "none": 0, "unknown": 0}
+    named = {"off": [], "pinned": [], "none": []}
     judged = 0
     pending = 0
     skipped_mobile = 0
@@ -232,6 +243,8 @@ def transform(input):
             sensor_update = policies.get("sensor_update")
             mode = update_mode(sensor_update)
             counts[mode] = counts[mode] + 1
+            if mode in named:
+                named[mode].append(str(device.get("hostname") or device.get("device_id")))
             if mode == "auto" and str(sensor_update.get("applied")).strip().lower() != "true":
                 pending = pending + 1
         if counts["unknown"]:
@@ -240,44 +253,70 @@ def transform(input):
                 "recognise; not evaluated rather than guessed"
             )
 
+    if not api_errors and judged == 0:
+        api_errors.append(
+            f"No active Falcon sensor was returned ({len(resources)} host records, {skipped_mobile} mobile, "
+            f"{skipped_inactive} inactive, of which {not_reporting} not seen within {ACTIVE_WINDOW_DAYS} days); "
+            "automatic sensor updates cannot be measured"
+        )
+
     not_auto = counts["pinned"] + counts["off"] + counts["none"]
-    result_value = not api_errors and judged > 0 and not_auto == 0
+    # Round DOWN so the shown figure never reads 99.0 on a fail (98,999 of 100,000 is 98.99).
+    percent = (counts["auto"] * 10000 // judged) / 100 if judged else 0.0
+    meets_share = judged > 0 and counts["auto"] * 100 >= MIN_AUTO_UPDATE_PERCENT * judged
+    result_value = not api_errors and meets_share
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
+    additional_findings = []
     if api_errors:
         fail_reasons.append("Not measured: " + "; ".join(api_errors))
         recommendations.append(
             "Verify the CrowdStrike API credentials (Hosts: Read) and that the device method pages through the "
             "whole estate, then re-run the scan."
         )
-    elif judged == 0:
-        fail_reasons.append(
-            f"No active Falcon sensor was returned ({len(resources)} host records, {skipped_mobile} mobile, "
-            f"{skipped_inactive} inactive, of which {not_reporting} not seen within {ACTIVE_WINDOW_DAYS} days); "
-            "automatic sensor updates cannot be shown."
-        )
-        recommendations.append("Confirm Falcon sensors are deployed and reporting, then re-run the scan.")
     elif result_value:
         pass_reasons.append(
-            f"All {judged} active Falcon sensors (checked in within {ACTIVE_WINDOW_DAYS} days of the newest check-in) have a sensor-update policy that tracks a tagged CrowdStrike release "
-            f"(automatic sensor updates on){'; ' + str(pending) + ' have a newer policy revision pending' if pending else ''}."
+            f"{counts['auto']} of {judged} active Falcon sensors ({percent}%, checked in within {ACTIVE_WINDOW_DAYS} days of the newest check-in) "
+            f"have a sensor-update policy that tracks a tagged CrowdStrike release (automatic sensor updates on), "
+            f"meeting the {MIN_AUTO_UPDATE_PERCENT}% share"
+            f"{'; ' + str(pending) + ' have a newer policy revision pending' if pending else ''}."
         )
+        if not_auto:
+            recommendations.append(
+                f"{not_auto} active sensors do not update automatically (listed in the findings): set their "
+                "sensor-update policy to an automatic build (N-1 or N-2) in the Falcon console."
+            )
     else:
         fail_reasons.append(
-            f"{not_auto} of {judged} active Falcon sensors do not update automatically: {counts['off']} on a policy "
-            f"with sensor version updates off, {counts['pinned']} pinned to a fixed build, {counts['none']} with no "
-            "sensor-update policy applied."
+            f"{counts['auto']} of {judged} active Falcon sensors ({percent}%) update automatically, below the "
+            f"{MIN_AUTO_UPDATE_PERCENT}% share: {counts['off']} on a policy with sensor version updates off, "
+            f"{counts['pinned']} pinned to a fixed build, {counts['none']} with no sensor-update policy applied."
         )
         recommendations.append(
             "Set the sensor-update policy for those hosts' groups to an automatic build (N-1 or N-2) in the Falcon console."
         )
 
+    if not api_errors:
+        labels = {
+            "off": "on a sensor-update policy with sensor version updates off",
+            "pinned": "pinned to a fixed sensor build",
+            "none": "with no sensor-update policy applied",
+        }
+        for mode in ("off", "pinned", "none"):
+            names = named[mode]
+            if names:
+                shown = ", ".join(sorted(names)[:MAX_NAMED_SENSORS])
+                more = f" and {len(names) - MAX_NAMED_SENSORS} more" if len(names) > MAX_NAMED_SENSORS else ""
+                additional_findings.append(f"{len(names)} active sensors {labels[mode]}: {shown}{more}.")
+
     summary = {
         "hostRecords": len(resources),
         "activeSensorsJudged": judged,
         "automaticUpdates": counts["auto"],
+        "automaticUpdatePercent": percent,
+        "requiredAutomaticUpdatePercent": MIN_AUTO_UPDATE_PERCENT,
         "updatesOff": counts["off"],
         "pinnedBuild": counts["pinned"],
         "noSensorUpdatePolicy": counts["none"],
@@ -292,6 +331,7 @@ def transform(input):
     result = {
         "isPatchManagementEnabled": bool(result_value),
         "activeSensorsJudged": judged,
+        "automaticUpdatePercent": percent,
         "sensorsWithoutAutomaticUpdates": not_auto,
     }
 
@@ -302,6 +342,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=summary,
+        additional_findings=additional_findings,
         metadata={
             "transformationId": "isPatchManagementEnabled",
             "vendor": "CrowdStrike Falcon",
