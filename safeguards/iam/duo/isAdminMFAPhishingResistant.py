@@ -269,10 +269,10 @@ def refusal_unevaluated(found):
 
 
 def transform(input):
-    found = refusal_find(input, [], 0)
-    if found:
-        return refusal_unevaluated(found)
     try:
+        found = refusal_find(input, [], 0)
+        if found:
+            return refusal_unevaluated(found)
         body = unwrap(decode(input))
         text = error_text(body)
         if text:
