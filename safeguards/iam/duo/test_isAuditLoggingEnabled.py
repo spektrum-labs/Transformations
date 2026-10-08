@@ -189,10 +189,19 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
         self.assertEqual(out["maxEventAgeDays"], 7)
 
     def test_a_bad_max_event_age_days_falls_back_to_3(self):
-        for bad in (0, -5, "7", None, True, float("nan"), float("inf"), [7]):
+        for bad in (0, -5, "7", None, True, float("nan"), float("inf"), [7], 31, 10 ** 9, 1e300):
             with self.subTest(bad=bad):
                 self.assertIsNone(self.value({"maxEventAgeDays": bad, "response": [entry(5)]}))
                 self.assertIs(self.value({"maxEventAgeDays": bad, "response": [entry(2)]}), True)
+
+    def test_max_event_age_days_equal_to_the_window_is_accepted(self):
+        self.assertIs(self.value({"maxEventAgeDays": 30, "response": [entry(29)]}), True)
+
+    def test_max_event_age_days_inside_the_duo_response_body_is_ignored(self):
+        # The response body is vendor data, never a parameter: it cannot loosen the rule.
+        stale = {"maxEventAgeDays": 30, "response": [entry(5)]}
+        self.assertIsNone(self.value({"response": stale}))
+        self.assertIsNone(self.value({"data": stale, "validation": {"status": "valid"}}))
 
     def test_resolve_max_event_age_days_default(self):
         self.assertEqual(self.t.DEFAULT_MAX_EVENT_AGE_DAYS, 3)

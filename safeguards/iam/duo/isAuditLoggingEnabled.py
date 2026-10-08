@@ -17,9 +17,11 @@ that logging works today: we have no recent event to point to. An old newest eve
 evaluated (value None), never a pass and never False. An empty window has no newest event, so it is
 Not evaluated too.
 
-maxEventAgeDays is read from the input (top level or inside the data) when it is a positive number;
-otherwise the default of 3 applies. The age is measured to the second: exactly 3 days passes, 3 days
-and one minute is Not evaluated.
+maxEventAgeDays is read from the top level of the input only (a parameter from the evaluator, never from
+the Duo response body, which is vendor data) and only when it is a positive number no larger than the
+30-day window read; anything else (zero, negative, a string, a bool, NaN, infinity, or more than the window,
+which would accept any log) falls back to the default of 3, so a bad parameter can never switch the rule
+off. The age is measured to the second: exactly 3 days passes, 3 days and one minute is Not evaluated.
 
 Rules:
   newest event read is no more than maxEventAgeDays old        -> True
@@ -185,14 +187,15 @@ def iso_of(epoch_seconds):
 def resolve_max_event_age_days(*sources):
     """maxEventAgeDays from the first source dict that carries a usable value, else the default.
 
-    Usable means a positive finite number (a bool, zero, a negative, a string or NaN is ignored, so a
-    bad parameter can never switch the recency rule off).
+    Usable means a positive finite number no larger than WINDOW_DAYS (a bool, zero, a negative, a string,
+    NaN, infinity or a value past the window is ignored, so a bad parameter can never switch the recency
+    rule off). Callers pass only the evaluator's input, never the vendor response body.
     """
     for source in sources:
         if not isinstance(source, dict):
             continue
         value = source.get("maxEventAgeDays")
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < float("inf"):
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value <= WINDOW_DAYS:
             return value
     return DEFAULT_MAX_EVENT_AGE_DAYS
 
@@ -300,7 +303,7 @@ def transform(input):
         if validation.get("status") == "failed":
             return unevaluated_response("Input validation failed; the log list is not evidence",
                                         validation=validation, read_error=True)
-        max_age = resolve_max_event_age_days(input, data)
+        max_age = resolve_max_event_age_days(input)
         outcome = evaluate(data, now_utc(), max_age)
         if outcome["state"] != "pass":
             return unevaluated_response(outcome["reason"], validation=validation,
