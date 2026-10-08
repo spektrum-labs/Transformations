@@ -24,7 +24,8 @@ except ImportError:
 
 
 def run(key, body):
-    return load_code((HERE / (key.lower() + ".py")).read_text(), key)["transform"](body)[key]
+    out = load_code((HERE / (key.lower() + ".py")).read_text(), key)["transform"](body)
+    return out.get("transformedResponse", out)[key]
 
 
 def ts(days):
@@ -89,7 +90,8 @@ def test_status():
     for k in ["isSSOEnabled", "isMFAEnforcedForUsers", "isRansomwareDetectionEnabled", "isBackupImmutable", "isBackupClientVersionCurrent"]:
         assert run(k, s) is True, k
     assert run("isSSOEnabled", status(ssoEnabled={"currentConfigState": False})) is False
-    assert run("isSSOEnabled", status(ssoEnabled=None)) is False
+    # The setting is absent (not reported by this NetBackup version): not measured (was False).
+    assert run("isSSOEnabled", status(ssoEnabled=None)) is None
     assert run("isMFAEnforcedForUsers", status(mfaEnforced={"currentConfigState": False})) is False
     assert run("isRansomwareDetectionEnabled", status(backupAnomalyDetection={"currentConfigState": 1})) is False
     assert run("isRansomwareDetectionEnabled", status(backupAnomalyDetection={"currentConfigState": 3})) is False

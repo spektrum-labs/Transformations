@@ -8,15 +8,20 @@
 # as {"user": {"enabled": "true", "created": "...", "product": "<guid>", "subscribed": "true"}}.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "confirmedLicensePurchased"
+METHOD = "getAccount"
 
 
-def transform(input):
+def transform_bare(input):
     """
     Returns confirmedLicensePurchased = "confirmed" when Keepit reports the account as
     enabled (<enabled>true</enabled>), subscribed (<subscribed>true</subscribed>), with a
     product assigned (<product> present) and not scheduled for deletion (no
-    <deletion-deadline>). Otherwise returns "unconfirmed". The requirement compares with
-    isEquals "confirmed".
+    <deletion-deadline>). A readable <user> that fails any of these returns "unconfirmed".
+    A body without <user>, or one that cannot be read, returns None (not measured). The
+    requirement compares with isEquals "confirmed".
 
     Proves: Keepit itself says the account holds an active subscription with a product.
     Does not prove: which workloads the product licenses, seat counts, or the product's grace
@@ -52,7 +57,7 @@ def transform(input):
                 data = data[wrapper]
 
         if not isinstance(data, dict) or not isinstance(data.get("user"), dict):
-            return {key: "unconfirmed", "reason": "Response has no <user> element, so the account could not be read"}
+            return {key: None, "reason": "Response has no <user> element, so the account could not be read"}
 
         user = data["user"]
         enabled = as_bool(user.get("enabled"))
@@ -80,4 +85,34 @@ def transform(input):
             "productAssigned": has_product,
         }
     except Exception as e:
-        return {key: "unconfirmed", "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

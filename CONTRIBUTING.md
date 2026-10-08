@@ -113,6 +113,78 @@ A **proven** empty result set is different from silence, and is allowed to pass 
 that is the right reading — `{"findings": []}` may legitimately mean "we looked and
 there are none". `{}` may not.
 
+### Azure Resource Graph: zero rows is not a proven empty set
+
+The paragraph above is the general rule. **Azure Resource Graph is the named exception
+to it: an empty `rows` array is silence, not a proven empty set, and must be reported as
+not measured.**
+
+Resource Graph is RBAC-scoped, and
+[Microsoft's own documentation](https://learn.microsoft.com/en-us/azure/governance/resource-graph/overview#permissions-in-azure-resource-graph)
+says why zero rows cannot be read as zero resources:
+
+> No results are returned if you don't have at least `read` permissions to the Azure
+> object or object group. [...] If the user has access to any of the subscriptions in the
+> list, the query results are returned for the subscriptions the user has access to.
+> **This behavior is the same as when calling Resource Groups - List because you get
+> resource groups that you can access, without any indication that the result might be
+> partial.** If there are no subscriptions in the subscription list that the user has
+> appropriate rights to, the response is a *403* (Forbidden).
+
+So a `200` with `rows: []` means one of two things, and the response carries nothing that
+tells them apart:
+
+* the readable scope genuinely holds no such resource -- a real red; or
+* the vaults are in a subscription this principal cannot read -- a permissions artefact.
+
+A wholly unreadable scope is a `403`, which these transforms already report as not
+measured. A *partially* readable scope is the dangerous case: it returns `200` with only
+the readable subset "without any indication that the result might be partial". Zero rows
+therefore cannot be shown to have covered the estate, and a read that did not cover the
+estate may not produce a measured answer.
+
+```python
+# YES. Resource Graph returns zero rows for resources the caller cannot read, and a
+# partially readable scope says so nowhere in the response, so empty is not "none".
+if not isinstance(rows, list) or not rows:
+    return create_response(
+        result={criteriaKey: None}, validation=validation,
+        api_errors=["no Resource Graph rows in the response: zero rows is also what an "
+                    "unreadable subscription returns, so it is not evidence of none"])
+```
+
+**This applies to Resource Graph only.** An Azure *ARM* list endpoint -- `{"value": []}`
+from `backupProtectedItems`, `restoreJobs` or `diagnosticSettings` -- answers `403` on a
+scope the caller cannot read, so its empty list *is* a proven empty set and stays a
+measured `False`. Do not propagate this exception to ARM readers; the two are
+distinguished by which API produced the body, not by the body looking empty.
+
+**The census is enforced, not sampled.** A transform counts as a Resource Graph reader
+when it names Resource Graph *and* reads a `"rows"` key -- the pair is what separates the
+twelve Azure files from Datto BCDR, whose own envelope also carries `data.rows`, and from
+the EPP checks, which merely list `"rows"` among candidate container keys.
+`test_no_resource_graph_reader_is_missing_from_this_list`, in
+`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/test_not_measured_backups_azure_729.py`,
+walks the tree and fails if a reader exists that the rule's test table does not drive. Add
+a reader and that test makes you decide what it does with zero rows.
+
+Two consequences are deliberate and worth stating.
+
+A criterion whose only negative signal was "zero rows" can now answer only `True` or
+not-measured. `isBackupEnabled` is that criterion, in both its copies
+(`safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/` and `safeguards/backups/azure/`).
+That is a real loss of a red, accepted because the red it replaced was indistinguishable
+from a permissions artefact. The way to earn it back is to make the workflow send an
+explicit `subscriptions` list and compare it with what came back, which is a workflow
+change, not a transformation change.
+
+`safeguards/backups/azure/is_backup_encrypted.py` also lost a `totalRecords` fallback that
+stood where the zero-rows guard now is. `totalRecords` is Resource Graph's own count of
+matched records, so zero there carries exactly the ambiguity above; and the other branch
+asserted `isBackupEncrypted` `True` from `totalRecords > 0` alone, which is a count of
+vaults, not a reading of any vault's encryption. Both branches are gone rather than left
+reachable.
+
 ### Two exceptions, both narrow
 
 - **Inverted keys.** A few criteria use `True` to denote the *insecure* condition —
