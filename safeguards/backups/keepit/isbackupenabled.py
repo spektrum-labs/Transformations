@@ -10,9 +10,13 @@
 # strings "true"/"false".
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isBackupEnabled"
+METHOD = "listDevices"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when the Keepit account has at least one cloud connector (Microsoft 365, Entra ID,
     Google Workspace, Salesforce, ...) that Keepit reports as enabled (<enabled>true</enabled>)
@@ -21,7 +25,8 @@ def transform(input):
     Proves: a SaaS backup connector exists and is switched on in Keepit.
     Does not prove: that its backup jobs succeed, how often they run, or which users,
     mailboxes or sites the connector covers. A connector whose <enabled> element is absent
-    is not counted (the schema marks it optional), so an unexpected shape answers false.
+    is not counted (the schema marks it optional). An unreadable body, an error envelope or an
+    unexpected <devices> shape answers None (not measured); an empty <devices/> answers false.
     """
     key = "isBackupEnabled"
 
@@ -60,15 +65,15 @@ def transform(input):
                 data = data[wrapper]
 
         if not isinstance(data, dict) or "devices" not in data:
-            return {key: False, "reason": "Response has no <devices> element, so no connector could be read"}
+            return {key: None, "reason": "Response has no <devices> element, so no connector could be read"}
         if data.get("error") is True:
-            return {key: False, "reason": "Integration-Service returned an error envelope"}
+            return {key: None, "reason": "Integration-Service returned an error envelope"}
 
         devices = data.get("devices")
         if devices is None or devices == "":
             devices = {}
         if not isinstance(devices, dict):
-            return {key: False, "reason": "<devices> element has an unexpected shape"}
+            return {key: None, "reason": "<devices> element has an unexpected shape"}
 
         clouds = [c for c in listify(devices.get("cloud")) if isinstance(c, dict)]
         enabled = []
@@ -108,4 +113,34 @@ def transform(input):
             "connectorsWithoutEnabledElement": unstated,
         }
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

@@ -15,6 +15,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isCloudTierEncryptionEnabled = true when at least one cloud storage pool exists and every one has
@@ -119,12 +140,12 @@ def transform(input):
     try:
         disk, cloud, problem = read_all(input)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         if len(cloud) == 0:
-            return {key: False, "reason": "No cloud storage pool exists"}
+            return respond(key, False, "No cloud storage pool exists")
         bad = [str(b.get("name") or b.get("id")) for b in cloud if not encrypted(b)]
         if bad:
-            return {key: False, "reason": str(len(bad)) + " of " + str(len(cloud)) + " cloud storage pools are not encrypted", "unencryptedPools": bad[:25]}
-        return {key: True, "reason": "All " + str(len(cloud)) + " cloud storage pools are encrypted"}
+            return respond(key, False, str(len(bad)) + " of " + str(len(cloud)) + " cloud storage pools are not encrypted", {"unencryptedPools": bad[:25]})
+        return respond(key, True, "All " + str(len(cloud)) + " cloud storage pools are encrypted")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

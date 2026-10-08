@@ -3,13 +3,14 @@ Transformation: isBackupLoggingEnabled
 Vendor: Druva (Data Security Cloud, Enterprise Workloads)  |  Category: Backups
 Method: getAdminAuditTrails -> POST /platform/reporting/v1/reports/ewAdminAuditTrails
 Evaluates: True when the Druva Admin Audit Trails report returns at least one recorded administrator action, proving the backup console's audit trail is capturing activity.
-Fails closed: a missing, error or unrecognised body returns False.
+Not measured: a missing, error or unrecognised body, an empty report, failed validation or a
+transformation error returns None with dataCollection.status "error" (Unevaluated, never graded).
 """
 import json
 from datetime import datetime
 
 CRITERIA_KEY = "isBackupLoggingEnabled"
-FAIL_VALUE = False
+FAIL_VALUE = None
 RECOMMENDATION = "Confirm the API credential can read Druva Admin Audit Trails; an empty trail proves nothing."
 
 
@@ -72,10 +73,15 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, unrecognised, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = transformation_errors or fail_reasons or [CRITERIA_KEY + " could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else not_measured_reasons},
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": []},
@@ -116,4 +122,6 @@ def evaluate(records):
                "latestAuditRecord": latest[-1] if latest else None}
     if len(actions) > 0:
         return True, summary, [str(len(actions)) + " Druva admin audit trail records returned"]
-    return False, summary, ["Druva Admin Audit Trails report returned no administrator actions"]
+    # An empty trail proves nothing (see RECOMMENDATION): the report window may hold no admin
+    # activity, or the credential may not read it. Not measured, never a finding.
+    return None, summary, ["Druva Admin Audit Trails report returned no administrator actions; nothing was measured"]

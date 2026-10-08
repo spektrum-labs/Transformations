@@ -36,10 +36,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupImmutable") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupImmutable could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else not_measured_reasons},
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
@@ -101,12 +107,20 @@ def transform(input):
         else:
             rows = []
 
+        # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+        # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+        # answers 200 with only the readable subset and, in Microsoft's words, "without any
+        # indication that the result might be partial". So zero rows is equally "there are
+        # none" and "the vaults are in a subscription this principal cannot read", and the
+        # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+        # Resource Graph: zero rows is not a proven empty set".
         if not rows:
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["No backup vaults found in subscription"],
-                recommendations=["Create Azure Recovery Services or Backup vaults and enable soft delete"]
+                api_errors=["isBackupImmutable not evaluated: the Resource Graph query returned zero rows, which is also what a subscription this principal cannot read returns"],
+                recommendations=["Confirm the principal has at least Reader on every subscription "
+                                 "holding a Recovery Services or Backup vault, then re-run the query."]
             )
 
         all_immutable = True
@@ -156,7 +170,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
