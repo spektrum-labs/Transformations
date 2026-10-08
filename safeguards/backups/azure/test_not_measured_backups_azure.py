@@ -145,5 +145,34 @@ class NotMeasuredIsNotGraded(unittest.TestCase):
             self.assertTrue(MEASURED.get(name), name)
 
 
+# The five Resource Graph readers whose except and input-validation branches used to answer False.
+# A body that raises, or fails input validation, measured nothing, so it must read as not measured.
+RAISING_READERS = [
+    ("isbackupenabled", "isBackupEnabled"),
+    ("is_backup_types_scheduled", "isBackupTypesScheduled"),
+    ("is_backup_tested", "isBackupTested"),
+    ("is_backup_encrypted", "isBackupEncrypted"),
+    ("is_backup_immutable", "isBackupImmutable"),
+]
+
+
+class RaisingBodyIsNotGraded(unittest.TestCase):
+    def test_a_body_that_raises_reads_as_not_measured(self):
+        for name, key in RAISING_READERS:
+            with self.subTest(transform=name):
+                value, collection = run(name, key, Poisoned())
+                self.assertIsNone(value)
+                self.assertEqual(collection["status"], "error")
+                self.assertTrue(collection["errors"])
+
+    def test_a_body_that_fails_input_validation_reads_as_not_measured(self):
+        failed = {"data": {"rows": []}, "validation": {"status": "failed", "errors": ["bad shape"], "warnings": []}}
+        for name, key in RAISING_READERS:
+            with self.subTest(transform=name):
+                value, collection = run(name, key, failed)
+                self.assertIsNone(value)
+                self.assertEqual(collection["status"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()
