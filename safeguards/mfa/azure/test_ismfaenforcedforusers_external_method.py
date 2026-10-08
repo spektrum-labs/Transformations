@@ -115,17 +115,37 @@ def test_external_method_with_weak_or_no_ca_policy_is_never_fail(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_no_methods_and_no_external_method_fails_as_today(mode):
-    for b in (body(), body(enabled={"Email"}), body(policies=[])):
+def test_member_weak_method_and_no_external_method_fails_as_today(mode):
+    # A member-targeted weak method (Email OTP with targets, SMS) and no Microsoft MFA method: FAIL, as before.
+    member_email = {"id": "Email", "state": "enabled", "includeTargets": [{"targetType": "group", "id": "all_users"}]}
+    for b in (body(enabled={"Email"}), body(enabled={"Sms"}), body(enabled={"Sms"}, policies=[]),
+              body(extra=[member_email])):
         value, status, out = run(b, mode)
         assert (value, status) == (False, "success")
         assert "No MFA authentication methods enabled at the tenant level" in out["additionalInfo"]["evaluation"]["failReasons"]
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_no_member_targeted_method_is_not_evaluated(mode):
+    # J.J. 3 Oct / 5 Oct: nothing enabled, or only Email OTP with an empty includeTargets list (B2B guests only),
+    # says nothing about member MFA: not evaluated, never FAIL. The second case is the shape seen at one estate on
+    # 5 Oct (guest-only Email OTP plus the Microsoft-managed risky sign-in policy) that read FAIL before.
+    guest_email = {"id": "Email", "state": "enabled", "includeTargets": [], "allowExternalIdToUseEmailOtp": "enabled"}
+    risky = ca_policy("Microsoft-managed: Multifactor authentication and reauthentication for risky sign-ins")
+    risky["conditions"]["signInRiskLevels"] = ["high"]
+    for b, guest in ((body(), False), (body(extra=[guest_email], policies=[risky]), True), (body(policies=[]), False)):
+        value, status, out = run(b, mode)
+        assert (value, status) == (None, "error")
+        reason = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+        assert "No authentication method that targets members is enabled" in reason
+        assert ("B2B guests only" in reason) is guest
+        assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_disabled_external_method_does_not_rescue_a_fail(mode):
     off = dict(DUO, state="disabled")
-    assert run(body(extra=[off]), mode)[:2] == (False, "success")
+    assert run(body(enabled={"Sms"}, extra=[off]), mode)[:2] == (False, "success")
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -134,8 +154,9 @@ def test_strong_methods_enabled_unchanged(mode):
     value, status, out = run(body(enabled={"MicrosoftAuthenticator", "Fido2"}), mode)
     assert (value, status) == (True, "success")
     assert out["transformedResponse"]["enabledMethods"] == ["Fido2", "MicrosoftAuthenticator"]
-    # Group-targeted policy still counts; strong methods plus Duo still pass on the Microsoft evidence.
-    assert run(body(enabled={"Fido2"}, policies=[ca_policy("MFA", users=(), groups=("g1",))]), mode)[:2] == (True, "success")
+    # Group-targeted policy only: not evaluated since J.J.'s 4 Oct decision (ALL_USERS_TARGET_MODE "unevaluated");
+    # group membership is not read here. Strong methods plus Duo still pass on the Microsoft evidence.
+    assert run(body(enabled={"Fido2"}, policies=[ca_policy("MFA", users=(), groups=("g1",))]), mode)[:2] == (None, "error")
     assert run(body(enabled={"MicrosoftAuthenticator"}, extra=[DUO]), mode)[:2] == (True, "success")
     # Strong methods but no CA policy requiring MFA (or only a disabled / non-MFA one): FAIL, as before.
     for policies in ([], [ca_policy("off", state="disabled")], [ca_policy("block", grant=("block",))]):

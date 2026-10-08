@@ -62,10 +62,12 @@ CASES = [
      lambda: first(lambda e: e.update(osVersion="")), False),
     ("iseppenabled", "isEPPEnabled", False, True,
      lambda: first(lambda e: e["eppAgent"].update(status="unknown")), False),
-    # isEPPConfigured is a whole-number percentage of protection agents with an applied policy
-    # (the capture: 0 of 28 agents; healthy: 32 of 32; one flipped: 31 of 32).
-    ("iseppconfigured", "isEPPConfigured", 0, 100,
-     lambda: first(lambda e: e["eppAgent"].update(policyName="")), 96),
+    # isEPPConfigured is a whole-number percentage of protection agents with an applied policy.
+    # The capture's 28 agents are Worry-Free managed, which never report a policy to Vision One:
+    # unmeasured, so None (not 0). Healthy: 32 of 32. One agent under another manager with no
+    # policy: 31 of 32.
+    ("iseppconfigured", "isEPPConfigured", None, 100,
+     lambda: first(lambda e: e["eppAgent"].update(policyName="", protectionManager="Trend Micro Apex One")), 96),
     ("endpointoperationalstatusunprotectedcount", "endpointOperationalStatusUnprotectedCount", None, 0,
      lambda: first(lambda e: e["eppAgent"].update(version="", protectionManager="")), 1),
     ("contentversiondriftcount", "contentVersionDriftCount", None, 0,

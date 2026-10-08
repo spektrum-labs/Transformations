@@ -128,12 +128,25 @@ there are none". `{}` may not.
   transformation error. What is never fine is an `except` branch that returns the
   criterion satisfied.
 
+### A None verdict must say it was not measured
+
+Returning a criterion as `None` is the right answer when the body cannot answer it, but
+`None` alone is not enough. Token-Service grades a `None` criterion as **Failed** (with
+`isEvaluated: true`) unless the same output carries `additionalInfo.dataCollection.status
+== "error"`, and `create_response` sets that status only from a non-empty `api_errors`.
+So every `None` path must pass `api_errors=[reason]` (a flat dict needs an
+`additionalInfo.dataCollection` with `status: "error"`), including the `except` branch:
+`transformation_errors` alone records the error under `transformation`, not
+`dataCollection`, and the `None` still grades as a fail. `tools/check_none_not_evaluated.py`
+enforces this.
+
 Run both contracts locally before you open a pull request:
 
 ```bash
 python3 tools/check_fail_closed.py --self-test && python3 tools/check_fail_closed.py
 python3 tools/check_discriminates.py --self-test && python3 tools/check_discriminates.py
 python3 tools/check_sandbox_compile.py --self-test && python3 tools/check_sandbox_compile.py
+python3 tools/check_none_not_evaluated.py --self-test && python3 tools/check_none_not_evaluated.py
 ```
 
 The third one matters more than it looks. Production compiles every transform with

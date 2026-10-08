@@ -1,0 +1,111 @@
+{
+  "Users": [
+    {
+      "id": 2,
+      "username": "Administrator",
+      "source": "CyberArk",
+      "userType": "Built-InAdmins",
+      "componentUser": false,
+      "enableUser": true,
+      "suspended": false,
+      "groupsMembership": [
+        {
+          "groupID": 1,
+          "groupName": "Vault Admins",
+          "groupType": "Vault"
+        }
+      ],
+      "vaultAuthorization": [
+        "AddUpdateUsers",
+        "AddSafes",
+        "ManageDirectoryMapping",
+        "AuditUsers",
+        "BackupAllSafes",
+        "RestoreAllSafes",
+        "ResetUsersPasswords",
+        "ActivateUsers"
+      ],
+      "allowedAuthenticationMethods": [
+        "AuthTypePass"
+      ],
+      "location": "\\",
+      "personalDetails": {
+        "firstName": "Example",
+        "lastName": "User"
+      }
+    },
+    {
+      "id": 31,
+      "username": "adm-jdoe",
+      "source": "LDAP",
+      "userType": "EPVUser",
+      "componentUser": false,
+      "enableUser": true,
+      "suspended": false,
+      "groupsMembership": [
+        {
+          "groupID": 1,
+          "groupName": "Vault Admins",
+          "groupType": "Vault"
+        }
+      ],
+      "vaultAuthorization": [
+        "AddSafes",
+        "AuditUsers"
+      ],
+      "allowedAuthenticationMethods": [
+        "AuthTypeLDAP"
+      ],
+      "location": "\\",
+      "personalDetails": {
+        "firstName": "Example",
+        "lastName": "User"
+      }
+    },
+    {
+      "id": 40,
+      "username": "jdoe",
+      "source": "LDAP",
+      "userType": "EPVUser",
+      "componentUser": false,
+      "enableUser": true,
+      "suspended": false,
+      "groupsMembership": [
+        {
+          "groupID": 21,
+          "groupName": "Safe Users",
+          "groupType": "Directory"
+        }
+      ],
+      "vaultAuthorization": [],
+      "allowedAuthenticationMethods": [
+        "AuthTypeSAML"
+      ],
+      "location": "\\",
+      "personalDetails": {
+        "firstName": "Example",
+        "lastName": "User"
+      }
+    },
+    {
+      "id": 5,
+      "username": "PasswordManager",
+      "source": "CyberArk",
+      "userType": "CPM",
+      "componentUser": true,
+      "enableUser": true,
+      "suspended": false,
+      "groupsMembership": [],
+      "vaultAuthorization": [
+        "AddUpdateUsers"
+      ],
+      "allowedAuthenticationMethods": [],
+      "location": "\\",
+      "personalDetails": {
+        "firstName": "Example",
+        "lastName": "User"
+      }
+    }
+  ],
+  "Total": 4
+}

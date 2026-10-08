@@ -14,6 +14,20 @@ no users list, or a list still carrying nextPageToken is not measured (None, dat
 import json
 from datetime import datetime
 
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('mfaExemptUserAccountsCount',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 CRITERIA_KEY = "mfaExemptUserAccountsCount"
 NOT_MEASURED = None
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/admin.directory.user.readonly"
@@ -41,6 +55,12 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -120,9 +140,34 @@ def active_users(input):
             and not is_true(u.get("archived"))], None
 
 
-def names(users, limit=10):
-    shown = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in users]
-    return ", ".join(shown[:limit]) + (" (and more)" if len(shown) > limit else "")
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_names(users):
+    return [str(u.get("primaryEmail") or u.get("id") or "unknown").strip()[:100] for u in users]
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Google Workspace (<scope>): N of M <what>: a, b and K more'."""
+    return "Google Workspace (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
 
 
 def transform(input):
@@ -141,7 +186,9 @@ def evaluate(users):
         return create_response(result={CRITERIA_KEY: None}, api_errors=["No active users were returned"],
                                fail_reasons=["Not measured: no active users were returned"])
     exempt = [u for u in users if not is_true(u.get("isEnrolledIn2Sv")) and not is_true(u.get("isEnforcedIn2Sv"))]
+    affected = account_names(exempt)
     reason = "%d of %d active users are neither enrolled in nor enforced for 2-Step Verification" % (len(exempt), len(users))
+    line = affected_line("active users", affected, len(users), "users have no 2-Step Verification enrolled or enforced")
     return create_response(result={CRITERIA_KEY: len(exempt)}, pass_reasons=[reason] if not exempt else [],
-                           fail_reasons=[reason + ": " + names(exempt)] if exempt else [],
-                           input_summary={"activeUsers": len(users), "exempt": len(exempt)})
+                           fail_reasons=[reason + "; " + line] if exempt else [],
+                           input_summary=with_affected({"activeUsers": len(users), "exempt": len(exempt)}, affected))

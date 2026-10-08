@@ -1,0 +1,203 @@
+"""
+Transformation: isRuntimeMonitoringEnabled
+Vendor: Amazon GuardDuty  |  Category: Cloud Security
+
+Integration-Service workflow getGuardDutyDetectorState, legs:
+  detectorIds <- listGuardDutyDetectors: GET /detector
+  detectors   <- getGuardDutyDetector: GET /detector/{detectorId}, one call per detector id
+  https://docs.aws.amazon.com/guardduty/latest/APIReference/API_ListDetectors.html
+  https://docs.aws.amazon.com/guardduty/latest/APIReference/API_GetDetector.html
+
+True when every detector is ENABLED and its Runtime Monitoring feature (RUNTIME_MONITORING or EKS_RUNTIME_MONITORING) is ENABLED.
+False when there is no detector in the Region, a detector is suspended, or the feature is DISABLED.
+EKS_RUNTIME_MONITORING is the older, EKS-only form of the same protection plan.
+
+Fail closed: a failed, refused (401/403), error-shaped, truncated or unrecognised read is null
+(Not evaluated), never True; so is a detector that does not report the feature at all.
+"""
+
+import json
+from datetime import datetime, timezone
+
+VENDOR = "Amazon GuardDuty"
+CATEGORY = "Cloud Security"
+WRAPPERS = ("data", "response", "result", "apiResponse", "Output")
+
+
+def parse(value):
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        value = json.loads(value) if value.strip() else None
+    return value
+
+
+def unwrap(data, keys):
+    """The first dict (under the usual Integration-Service wrappers) that carries one of keys."""
+    for depth in range(6):
+        if not isinstance(data, dict):
+            return None
+        for key in keys:
+            if key in data:
+                return data
+        nxt = None
+        for key in WRAPPERS:
+            if isinstance(data.get(key), dict):
+                nxt = data[key]
+                break
+        if nxt is None:
+            return None
+        data = nxt
+    return None
+
+
+def error_text(body):
+    """Why a body is an error, or None. Integration-Service envelopes and AWS rest-json error
+    bodies ({"__type": ...}, {"message": ...}) both count."""
+    if not isinstance(body, dict):
+        return "not an object"
+    if body.get("error") is True or body.get("errorType") or body.get("status") == "Error":
+        return "Integration-Service error " + str(body.get("statusCode") or "") + ": " + str(
+            body.get("message") or body.get("errorMessage") or "")[:200]
+    if body.get("__type"):
+        return "AWS error " + str(body.get("__type"))[:120]
+    return None
+
+
+def to_float(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def to_int(value):
+    number = to_float(value)
+    if number is None or number < 0 or number != int(number):
+        return None
+    return int(number)
+
+
+def load_detectors(input):
+    """(ids, detectors, problem) from a GuardDuty workflow output:
+      detectorIds <- ListDetectors (GET /detector)
+      detectors   <- GetDetector, one response per detector id (iterate step)
+    ids == [] is a complete answer: there is no detector in the connected Region."""
+    legs = unwrap(parse(input), ("detectorIds",))
+    if legs is None:
+        data = unwrap(parse(input), ("__type", "error", "errorType", "message"))
+        problem = error_text(data) if data is not None else None
+        return None, None, "ListDetectors: " + (problem or "no GuardDuty detector list in the response")
+    problem = error_text(legs)
+    if problem:
+        return None, None, "ListDetectors: " + problem
+    ids = legs.get("detectorIds")
+    if not isinstance(ids, list) or not all([isinstance(i, str) and i for i in ids]):
+        return None, None, "ListDetectors: unreadable detectorIds"
+    if legs.get("nextToken"):
+        return None, None, "ListDetectors returned more pages than were read"
+    if not ids:
+        return [], [], None
+    detectors = legs.get("detectors")
+    if isinstance(detectors, dict):
+        detectors = [detectors]
+    if not isinstance(detectors, list):
+        return None, None, "GetDetector: not returned"
+    if len(detectors) != len(ids):
+        return None, None, "GetDetector: " + str(len(detectors)) + " responses for " + str(len(ids)) + " detector(s)"
+    for body in detectors:
+        problem = error_text(body)
+        if problem:
+            return None, None, "GetDetector: " + problem
+        if str(body.get("status") or "").upper() not in ("ENABLED", "DISABLED"):
+            return None, None, "GetDetector: no readable detector status"
+    return ids, detectors, None
+
+
+def is_enabled(detector):
+    return str(detector.get("status") or "").upper() == "ENABLED"
+
+
+def feature_states(detector, names):
+    """Statuses (ENABLED/DISABLED) of the named detector features, in the order found."""
+    out = []
+    features = detector.get("features")
+    if not isinstance(features, list):
+        return out
+    for feature in features:
+        if isinstance(feature, dict) and str(feature.get("name") or "").upper() in names:
+            out.append(str(feature.get("status") or "").upper())
+    return out
+
+
+def build_response(result, pass_reasons=None, fail_reasons=None, errors=None, summary=None,
+                   recommendations=None, transform_id=""):
+    errors = errors or []
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if errors else "success", "errors": errors},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "error" if errors else "success", "errors": errors,
+                               "inputSummary": summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
+                           "recommendations": recommendations or [], "additionalFindings": []},
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "1.0",
+                         "transformationId": transform_id, "vendor": VENDOR, "category": CATEGORY},
+        },
+    }
+
+
+KEY = "isRuntimeMonitoringEnabled"
+FEATURES = ('RUNTIME_MONITORING', 'EKS_RUNTIME_MONITORING')
+LABEL = "Runtime Monitoring"
+
+
+def detector_feature(detector):
+    """ENABLED, DISABLED or None (not reported)."""
+    states = feature_states(detector, FEATURES)
+    if "ENABLED" in states:
+        return "ENABLED"
+    if states:
+        return "DISABLED"
+    return None
+
+
+def transform(input):
+    try:
+        ids, detectors, problem = load_detectors(input)
+        if problem:
+            return build_response({KEY: None}, errors=[problem], transform_id=KEY)
+        if not ids:
+            return build_response({KEY: False}, fail_reasons=[
+                "GuardDuty has no detector in the connected Region, so " + LABEL + " is not running there"],
+                transform_id=KEY)
+        missing = []
+        off = []
+        for i in range(len(ids)):
+            if not is_enabled(detectors[i]):
+                off.append(ids[i] + " (detector suspended)")
+                continue
+            state = detector_feature(detectors[i])
+            if state is None:
+                missing.append(ids[i])
+            elif state != "ENABLED":
+                off.append(ids[i])
+        if off:
+            return build_response({KEY: False}, fail_reasons=[
+                LABEL + " is not enabled on GuardDuty detector " + ", ".join(off)],
+                recommendations=["Enable " + LABEL + " in the GuardDuty console (Protection plans)."], transform_id=KEY)
+        if missing:
+            return build_response({KEY: None}, errors=[
+                "GuardDuty detector " + ", ".join(missing) + " does not report " + LABEL +
+                " (" + " or ".join(FEATURES) + "); it may not be available in this Region"], transform_id=KEY)
+        return build_response({KEY: True}, pass_reasons=[
+            LABEL + " is ENABLED on GuardDuty detector " + ", ".join(ids)], transform_id=KEY)
+    except Exception as error:
+        return build_response({KEY: None}, errors=[str(error)[:300]], transform_id=KEY)

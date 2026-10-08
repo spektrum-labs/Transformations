@@ -95,6 +95,39 @@ jobs:
       - name: No criterion may be incapable of reporting a failure
         run: python tools/check_discriminates.py
 
+      # The fourth contract. A criterion a transform returns as None means "not measured",
+      # but Token-Service grades None as FAILED (isEvaluated true) unless the same output
+      # carries additionalInfo.dataCollection.status "error" -- which create_response sets
+      # only from a non-empty api_errors. Twice on 2026-10-05 a None verdict without one
+      # reached production as a red check nobody had measured. This judges the no-evidence
+      # battery plus a poisoned body that drives each transform down its except path.
+      - name: None-verdict checker self-test
+        run: python tools/check_none_not_evaluated.py --self-test
+
+      - name: A None criterion must reach the evaluator as not evaluated
+        run: python tools/check_none_not_evaluated.py
+
+      # The fifth contract, and the mirror of the one above. That one asks whether a None
+      # verdict reaches the evaluator as not-evaluated. This asks the prior question: when
+      # a transform catches its OWN exception, does it report that on a channel the
+      # evaluator reads at all? additionalInfo.dataCollection.status is the only one it
+      # reads; additionalInfo.transformation.status is read by _self_reported_failure in
+      # vacuous_output.py, which is wired into onboarding validation and phase-4 and never
+      # into evaluate.py. So the contract rewards the careless pattern: a transform that
+      # lets its exception escape is caught by transform_response and correctly not
+      # evaluated, while one that catches it and reports it properly under
+      # transformation_errors returns a well-formed body carrying dataCollection "success"
+      # and is graded as a measurement. Measured on 8fa4a935: 880 of 1209 judged files,
+      # 548 of them wired to a production criterion. Listed files are reported and do not
+      # fail the run; the list may only shrink, and entries that no longer reproduce are
+      # reported STALE so the ratchet keeps moving. RestrictedPython is installed by the
+      # sandbox step above.
+      - name: Failure-channel checker self-test
+        run: python tools/probe_failure_channel.py --self-test
+
+      - name: A transform's own failure must be reported on the channel the evaluator reads
+        run: python tools/probe_failure_channel.py
+
       # The third contract. Production does not import these files: it compiles each
       # one with RestrictedPython, which rejects names starting with "_", `x["k"] += 1`
       # and `nonlocal` -- all of which plain Python (and so every step above) accepts.
@@ -103,6 +136,22 @@ jobs:
       # Same job, not a new one, so no new required-check name is created.
       - name: Install sandbox dependency
         run: pip install "RestrictedPython>=8.0,<9.0"
+
+      # The fifth contract, and the one the other four structurally cannot see. A transform
+      # that answers criterion X by reading a field named X out of the vendor body has asked
+      # the question of the answer. check_fail_closed clears it because it answers the UNSAFE
+      # answer from an empty body; check_discriminates clears it because a synthetic body
+      # containing the invented field makes it look perfectly discriminating. That is the
+      # general trap: a checker that builds its own input cannot catch a transform reading a
+      # field no vendor sends, because the checker invents exactly the field the transform
+      # invented. Measured on main: 34 files, four of them answering isFirewallEnabled with
+      # `data.get('isFirewallEnabled', False)` -- unconditionally false for every Fortinet,
+      # Cloudflare and Cisco FMC customer.
+      - name: Self-answer checker self-test
+        run: python tools/check_no_self_answer.py --self-test
+
+      - name: No criterion may be read out of the body it judges
+        run: python tools/check_no_self_answer.py
 
       - name: Sandbox-compile checker self-test
         run: python tools/check_sandbox_compile.py --self-test

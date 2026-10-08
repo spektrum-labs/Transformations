@@ -19,7 +19,11 @@ response that still carries nextLink (pages left unread) all return false.
 Verdict: true when at least one endpoint has a protection agent and every endpoint with a
 protection agent reports eppAgent.componentVersion "latestVersion" or
 "controlledLatestVersion" (latest allowed by the version control policy).
-"outdatedVersion", "unknownVersions" and a missing value fail it.
+"outdatedVersion" fails it. "unknownVersions" or a missing value is unmeasured (Vision One does
+not know the agent's components, e.g. a Worry-Free managed or sensor-only agent): with no outdated
+agent and at least one unmeasured agent the value is None (Not evaluated), never False.
+The None verdict carries its reason in api_errors (dataCollection error), so Token-Service
+stores it as Unevaluated rather than as a failed comparison.
 
 What this proves: every Trend protection agent runs the latest pattern/engine components
 it is allowed to. What it does not prove: component freshness on endpoints with no
@@ -154,17 +158,23 @@ def transform(input):
             return failed
         agents = 0
         stale = []
+        unknown = []
         for e in endpoints:
             agent = sub(e, "eppAgent")
             if agent is None:
                 continue
             agents = agents + 1
             version = agent.get("componentVersion")
-            if version not in CURRENT:
+            if version in (None, "", "unknownVersions"):
+                unknown.append(endpoint_name(e))
+            elif version not in CURRENT:
                 stale.append(endpoint_name(e) + " (" + str(version) + ")")
         value = agents > 0 and len(stale) == 0
+        if agents > 0 and not stale and unknown:
+            value = None
         summary = {"totalEndpoints": len(endpoints), "endpointsWithProtectionAgent": agents,
-                   "agentsNotCurrent": len(stale), "sampleNotCurrent": stale[:10]}
+                   "agentsNotCurrent": len(stale), "sampleNotCurrent": stale[:10],
+                   "agentsUnknownComponents": len(unknown)}
         pass_reasons = []
         fail_reasons = []
         recommendations = []
@@ -173,10 +183,15 @@ def transform(input):
         elif stale:
             fail_reasons.append("%d of %d protection agents do not run the latest components: %s" % (len(stale), agents, ", ".join(stale[:10])))
             recommendations.append("Check component update status and version control policy for the listed endpoints")
+        elif unknown:
+            fail_reasons.append("%d of %d protection agents report unknown component versions (not visible to Vision One), "
+                                "so component currency cannot be read here: %s" % (len(unknown), agents, ", ".join(unknown[:10])))
+            recommendations.append("Check component versions in the protection manager console, or attach evidence")
         else:
             pass_reasons.append("All %d protection agents run the latest allowed components" % agents)
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
-                               recommendations=recommendations, input_summary=summary)
+                               recommendations=recommendations, input_summary=summary,
+                               api_errors=(fail_reasons if value is None else None))
     except Exception as e:
         return failure(criteriaKey, False, e)

@@ -6,10 +6,28 @@ Category: Identity / Secure Score
 Evaluates if MFA is enforced for users based on:
 - Microsoft Secure Score controlScores (MFARegistrationV2)
 - Authentication method configurations
+
+Authentication method configurations (GET /v1.0/policies/authenticationMethodsPolicy):
+- Only a strong method counts (STRONG_METHOD_IDS, the same list as mfa/azure/ismfaenforcedforusers.py plus
+  hardware OATH tokens). Email one-time passcodes (including the guest-only Email OTP setting), SMS and voice
+  are weak factors and never make the key True (J.J., 3 Oct 2026: "no weak factors"). Before 5 Oct 2026 any
+  enabled method passed, so a tenant whose only enabled method was Email OTP read True.
+- An external authentication method (for example Cisco Duo) with no strong Microsoft method reads not
+  evaluated (value None, dataCollection.status "error"): that provider enforces the factor and Entra cannot
+  grade it. Same rule as mfa/azure/ismfaenforcedforusers.py.
+- No method that targets members (nothing enabled, or only Email OTP with an empty includeTargets list, which
+  reaches B2B guests only) reads not evaluated: the methods policy does not govern member sign-in then
+  (J.J. 5 Oct, from the 3 Oct rule in mfa/azure/ismfaenforcedforusers.py). Guest Email OTP still fails
+  authTypesAllowed.
+- Neither Secure Score data nor an authenticationMethodConfigurations list reads not evaluated: a read that
+  returned nothing is not evidence either way.
 """
 
 import json
 from datetime import datetime
+
+STRONG_METHOD_IDS = ("microsoftauthenticator", "fido2", "softwareoath", "hardwareoath", "temporaryaccesspass")
+WEAK_METHOD_IDS = ("email", "sms", "voice")
 
 
 # ============================================================================
@@ -223,26 +241,78 @@ def transform(input):
         # ----------------------------------------------------------------
         # Fallback: Process authentication method configurations
         # ----------------------------------------------------------------
-        elif 'authenticationMethodConfigurations' in data:
+        elif isinstance(data.get('authenticationMethodConfigurations'), list):
             mfa_info = {"mfaTypes": []}
-            enabled_methods = [
-                obj for obj in data['authenticationMethodConfigurations']
-                if 'state' in obj and str(obj['state']).lower() == "enabled"
-            ]
-            mfa_info['mfaTypes'] = enabled_methods
+            strong_methods = []
+            weak_names = []
+            external_names = []
+            guest_only_email = False
+            other_enabled = []
+            for obj in data['authenticationMethodConfigurations']:
+                if not isinstance(obj, dict) or str(obj.get('state') or '').lower() != "enabled":
+                    continue
+                method_id = str(obj.get('id') or '')
+                if "externalauthenticationmethodconfiguration" in str(obj.get('@odata.type') or '').lower():
+                    external_names.append(str(obj.get('displayName') or method_id or 'external method')[:60])
+                elif method_id.lower() in STRONG_METHOD_IDS:
+                    strong_methods.append(obj)
+                elif method_id.lower() == "email" and isinstance(obj.get('includeTargets'), list) \
+                        and len(obj.get('includeTargets')) == 0:
+                    # Email OTP with no include targets reaches B2B guests only, not members. It still
+                    # fails authTypesAllowed ("no weak factors"), but it says nothing about member MFA.
+                    guest_only_email = True
+                elif method_id.lower() in WEAK_METHOD_IDS:
+                    weak_names.append(method_id)
+                else:
+                    other_enabled.append(method_id)
+            mfa_info['mfaTypes'] = strong_methods
+            if guest_only_email:
+                mfa_info['guestOnlyEmail'] = True
 
-            is_enabled = len(enabled_methods) > 0
+            is_enabled = len(strong_methods) > 0
 
             if is_enabled:
-                method_names = [m.get('id', 'unknown') for m in enabled_methods[:5]]
-                pass_reasons.append(f"{len(enabled_methods)} MFA methods enabled: {', '.join(method_names)}")
+                method_names = [m.get('id', 'unknown') for m in strong_methods[:5]]
+                pass_reasons.append(f"{len(strong_methods)} strong MFA methods enabled: {', '.join(method_names)}")
+            elif external_names:
+                return create_response(
+                    result={criteriaKey: None, "externalMethodsEnabled": external_names},
+                    validation=validation,
+                    api_errors=["No Microsoft MFA method is enabled; MFA is provided by an external authentication "
+                                "method (" + ", ".join(external_names[:3]) + "), which Microsoft Entra cannot grade"],
+                    recommendations=["Answer this check from the external MFA provider's own integration"]
+                )
+            elif not weak_names and not other_enabled:
+                # No method that targets members is enabled (nothing at all, or only guest-only Email OTP).
+                # The methods policy is then not what governs member sign-in (per-user MFA, security
+                # defaults or Conditional Access may), so this read is not evidence either way.
+                return create_response(
+                    result={criteriaKey: None, "guestOnlyEmail": guest_only_email},
+                    validation=validation,
+                    api_errors=["No authentication method that targets members is enabled"
+                                + (" (Email one-time passcode is enabled for B2B guests only)" if guest_only_email else "")
+                                + ", so the authentication methods policy does not show whether MFA is enforced for users"],
+                    recommendations=["Answer this check from Conditional Access or the Microsoft Entra ID integration"]
+                )
             else:
-                fail_reasons.append("No MFA authentication methods are enabled")
-                recommendations.append("Enable at least one MFA authentication method (e.g., Microsoft Authenticator)")
+                if weak_names:
+                    fail_reasons.append("Only weak methods are enabled (" + ", ".join(weak_names) + "): email one-time "
+                                        "passcodes, SMS and voice do not count as MFA enforcement")
+                else:
+                    fail_reasons.append("No strong MFA method is enabled (enabled: " + ", ".join(other_enabled[:5]) + ")")
+                recommendations.append("Enable a strong MFA method (Microsoft Authenticator, FIDO2 security keys or "
+                                       "OATH tokens) and require it for all users")
+            if weak_names:
+                mfa_info['weakMethodsEnabled'] = weak_names
 
         else:
-            fail_reasons.append("MFA configuration data not available - verify API permissions")
-            recommendations.append("Verify the Microsoft Graph API integration is returning data")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["MFA configuration data not available: no Secure Score data and no authentication "
+                            "methods policy was read"],
+                recommendations=["Verify the Microsoft Graph integration has Policy.Read.All and is returning data"]
+            )
 
         # ----------------------------------------------------------------
         # Build result
@@ -255,6 +325,8 @@ def transform(input):
         }
         if mfa_info is not None and 'mfaTypes' in mfa_info:
             result['mfaTypes'] = mfa_info['mfaTypes']
+        if mfa_info is not None and 'weakMethodsEnabled' in mfa_info:
+            result['weakMethodsEnabled'] = mfa_info['weakMethodsEnabled']
 
         input_summary = {
             "hasSecureScoreData": len(value) > 0,

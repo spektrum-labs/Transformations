@@ -1,0 +1,109 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "public_display_name": "admin",
+      "email_address": "admin@example.com",
+      "enabled": true,
+      "perm_admin": true,
+      "security_provider_id": 1,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    },
+    {
+      "id": 2,
+      "username": "adm-jdoe@example.com",
+      "public_display_name": "adm-jdoe@example.com",
+      "email_address": "adm-jdoe@example.com",
+      "enabled": true,
+      "perm_admin": true,
+      "security_provider_id": 2,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    },
+    {
+      "id": 3,
+      "username": "jdoe@example.com",
+      "public_display_name": "jdoe@example.com",
+      "email_address": "jdoe@example.com",
+      "enabled": true,
+      "perm_admin": false,
+      "security_provider_id": 2,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    },
+    {
+      "id": 4,
+      "username": "asmith@example.com",
+      "public_display_name": "asmith@example.com",
+      "email_address": "asmith@example.com",
+      "enabled": false,
+      "perm_admin": true,
+      "security_provider_id": 2,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    }
+  ],
+  "securityProviders": [
+    {
+      "id": 1,
+      "name": "Local",
+      "type": "local",
+      "enabled": true,
+      "user_authentication": true,
+      "group_lookup": false
+    },
+    {
+      "id": 2,
+      "name": "Corporate SAML",
+      "type": "saml",
+      "enabled": true,
+      "user_authentication": true,
+      "group_lookup": true
+    }
+  ],
+  "groupPolicies": [
+    {
+      "id": 1,
+      "name": "PRA Administrators",
+      "perm_admin": true,
+      "members": [
+        {
+          "id": 11,
+          "security_provider_id": 2,
+          "user_id": 2
+        },
+        {
+          "id": 14,
+          "security_provider_id": 2,
+          "user_id": 3
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Everyone (SAML)",
+      "perm_admin": false,
+      "members": [
+        {
+          "id": 12,
+          "security_provider_id": 2,
+          "group_id": "Everyone"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Support Reps",
+      "perm_admin": null,
+      "members": [
+        {
+          "id": 13,
+          "security_provider_id": 2,
+          "user_id": 3
+        }
+      ]
+    }
+  ]
+}

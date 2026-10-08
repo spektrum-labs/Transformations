@@ -53,19 +53,23 @@ def test_fido2_alongside_phishable_methods_still_passes():
     assert out["transformedResponse"]["enabledStrongMethods"] == ["FIDO2 security key"]
 
 
-def test_authenticator_only_during_migration_is_not_evaluated():
-    assert strong(methods(["MicrosoftAuthenticator"], "preMigration")) is None
+def test_authenticator_only_during_migration_fails():
+    # 4 Oct 2026: FIDO2, TAP and CBA are not available in the legacy MFA/SSPR policies (Microsoft), so a
+    # policy with neither strong method enabled has none, whatever the migration state.
+    assert strong(methods(["MicrosoftAuthenticator"], "preMigration")) is False
 
 
 def test_no_strong_method_after_migration_fails():
     assert strong(methods(["Sms", "Email"])) is False
 
 
-def test_no_strong_method_during_migration_or_with_external_method_is_not_evaluated():
-    assert strong(methods(["Email"], "migrationInProgress")) is None
+def test_no_strong_method_with_external_method_is_not_evaluated():
+    assert strong(methods(["Email"], "migrationInProgress")) is False
     duo = {"@odata.type": "#microsoft.graph.externalAuthenticationMethodConfiguration", "id": "bfa47a53",
            "displayName": "Cisco Duo", "state": "enabled"}
     assert strong(methods([], extra=[duo])) is None
+    assert strong(methods([], "migrationInProgress", extra=[duo])) is None
+    assert strong(methods(["Sms"], "preMigration", extra=[duo])) is None
 
 
 def test_strong_auth_without_the_policy_is_not_evaluated():

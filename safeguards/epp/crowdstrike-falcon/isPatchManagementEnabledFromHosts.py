@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 
 def extract_input(input_data):
@@ -81,8 +82,8 @@ def is_rfm(value):
 def update_mode(sensor_update):
     """Read a host's sensor-update settings_hash: "auto", "pinned", "off", "none" or "unknown".
 
-    The hash is "<build>;<n>". Measured 2026-09-25 against the sensor-update policies on 5 Falcon
-    tenants (about 10,000 hosts): every host whose policy build is a tagged release (N, N-1, N-2,
+    The hash is "<build>;<n>". Measured 2026-09-25 against the sensor-update policies on several real
+    Falcon tenants: every host whose policy build is a tagged release (N, N-1, N-2,
     for example "21309|n-1|tagged|1") reports "tagged|<tag>;..."; a pinned build reports
     "<digits>;..."; an empty build (sensor version updates off) reports ";...". Anything else is
     "unknown" and the key is not measured, rather than guessed.
@@ -99,6 +100,60 @@ def update_mode(sensor_update):
     return "unknown"
 
 
+# A host counts as reporting only when its last_seen is within this many days of the response's
+# clock. The same window, clock and rule are written identically in requiredCoveragePercentage.py,
+# isEPPConfiguredFromHosts.py, isEDRDeployed.py and isPatchManagementEnabledFromHosts.py, so every
+# CrowdStrike host check agrees on which hosts are reporting.
+# It matches the 15-day endpoint rule the Sophos and NinjaOne checks already apply.
+ACTIVE_WINDOW_DAYS = 15
+
+
+def parse_time(value):
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Falcon sends Z; an offset is converted rather than dropped. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
+        return None
+    try:
+        when = datetime.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
+
+
+def reference_clock(devices):
+    """The newest last_seen in the response, so a scan of cached data judges hosts against the data's
+    own time. When that newest check-in is itself older than the window the whole fleet is dark, and
+    the wall clock is used so every host is stale rather than every host fresh."""
+    known = [parse_time(d.get("last_seen")) for d in devices if isinstance(d, dict)]
+    known = [t for t in known if t is not None]
+    wall = datetime.utcnow()
+    if not known:
+        return wall
+    # Capped at the wall clock: one future-dated record must not make every real host stale.
+    newest = min(max(known), wall)
+    if newest < wall - timedelta(days=ACTIVE_WINDOW_DAYS):
+        return wall
+    return newest
+
+
+def is_reporting(device, clock):
+    """A missing or unreadable last_seen is not reporting, never reporting."""
+    seen = parse_time(device.get("last_seen"))
+    return seen is not None and seen >= clock - timedelta(days=ACTIVE_WINDOW_DAYS)
+
+
+# Falcon's status field is network containment state. A contained host still runs a working sensor,
+# so it is covered; it is counted separately so the output shows it. Any other status is not covered.
+CONTAINMENT_STATUSES = ("contained", "containment_pending", "lift_containment_pending")
+
+
 def transform(input):
     """
     isPatchManagementEnabled (CrowdStrike, from GET /devices/combined/devices/v1, Hosts: Read).
@@ -108,8 +163,9 @@ def transform(input):
     build or "sensor version updates off". It reads each host's device_policies.sensor_update, so it
     needs no Sensor update policies scope.
 
-    Active means what requiredCoveragePercentage counts: status "normal", not in reduced
-    functionality mode, an agent_version and a last_seen. Mobile hosts have no sensor-update policy
+    Active means what requiredCoveragePercentage counts: last_seen within ACTIVE_WINDOW_DAYS of the
+    newest check-in, status "normal" or a network containment state, not in reduced functionality
+    mode, and an agent_version. Mobile hosts have no sensor-update policy
     and are left out. Not measured (dataCollection error) on an API error, a truncated device list,
     no resources list or a record that is not a host, or a settings_hash in a shape not recognised.
     """
@@ -151,17 +207,22 @@ def transform(input):
     pending = 0
     skipped_mobile = 0
     skipped_inactive = 0
+    not_reporting = 0
+    clock = reference_clock(resources)
     if not api_errors:
         for device in resources:
             platform = str(device.get("platform_name") or "")
             if device.get("product_type_desc") == "Mobile" or platform in ("Android", "iOS"):
                 skipped_mobile = skipped_mobile + 1
                 continue
+            reporting = is_reporting(device, clock)
+            if not reporting:
+                not_reporting = not_reporting + 1
             active = (
-                device.get("status") == "normal"
+                reporting
+                and (device.get("status") == "normal" or device.get("status") in CONTAINMENT_STATUSES)
                 and not is_rfm(device.get("reduced_functionality_mode"))
                 and bool(device.get("agent_version"))
-                and bool(device.get("last_seen"))
             )
             if not active:
                 skipped_inactive = skipped_inactive + 1
@@ -194,12 +255,13 @@ def transform(input):
     elif judged == 0:
         fail_reasons.append(
             f"No active Falcon sensor was returned ({len(resources)} host records, {skipped_mobile} mobile, "
-            f"{skipped_inactive} inactive); automatic sensor updates cannot be shown."
+            f"{skipped_inactive} inactive, of which {not_reporting} not seen within {ACTIVE_WINDOW_DAYS} days); "
+            "automatic sensor updates cannot be shown."
         )
         recommendations.append("Confirm Falcon sensors are deployed and reporting, then re-run the scan.")
     elif result_value:
         pass_reasons.append(
-            f"All {judged} active Falcon sensors have a sensor-update policy that tracks a tagged CrowdStrike release "
+            f"All {judged} active Falcon sensors (checked in within {ACTIVE_WINDOW_DAYS} days of the newest check-in) have a sensor-update policy that tracks a tagged CrowdStrike release "
             f"(automatic sensor updates on){'; ' + str(pending) + ' have a newer policy revision pending' if pending else ''}."
         )
     else:
@@ -223,6 +285,9 @@ def transform(input):
         "policyRevisionPending": pending,
         "mobileSkipped": skipped_mobile,
         "inactiveSkipped": skipped_inactive,
+        "notReportingSkipped": not_reporting,
+        "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "referenceClock": clock.isoformat() + "Z",
     }
     result = {
         "isPatchManagementEnabled": bool(result_value),

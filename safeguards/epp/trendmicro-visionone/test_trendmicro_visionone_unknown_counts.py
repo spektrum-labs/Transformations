@@ -1,6 +1,6 @@
 """A count Trend Vision One does not make known is not evaluated, never a failed check (2 Oct 2026).
 
-At Infraservices, isolatedEndpointCount, contentVersionDriftCount and endpointOperationalStatusUnprotectedCount
+On a real customer estate, isolatedEndpointCount, contentVersionDriftCount and endpointOperationalStatusUnprotectedCount
 returned None (some endpoints report no known isolation, version or agent status) with dataCollection "success",
 so the platform stored them as Failed. A None count must carry a dataCollection error. Built on the real
 response shape in fixture_endpoints_real_shape.json.

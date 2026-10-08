@@ -1,18 +1,20 @@
 """
-Transformation: isConditionalAccessEnabled
+Transformation: isConditionalAccessEnabled (and conditionalAccessAppPercentage)
 Vendor: Duo (Cisco)  |  Integration: Duo (a2abbcf5)  |  Category: Multifactor Authentication
 
-Evidence: workflow getStrongAuthPolicies (two GETs, merged under output keys). Both are Duo Admin API
-Policies v2 endpoints (v5-signed by Integration-Service) and need "Grant resource - Read".
-  policies <- getDuoPolicies:      GET /admin/v2/policies (paged): every policy with its enabled sections
-  summary  <- getDuoPolicySummary: GET /admin/v2/policies/summary: where each policy is applied
-              (policy_applies_to), policy_count, response_is_truncated
+Evidence: workflow getApplicationPolicyCoverage (three GETs, merged under output keys). All are Duo Admin API
+endpoints, v5-signed by Integration-Service, and need "Grant resource - Read".
+  policies     <- getDuoPolicies:      GET /admin/v2/policies (paged): every policy with its sections
+  summary      <- getDuoPolicySummary: GET /admin/v2/policies/summary: where each policy is applied
+                  (policy_applies_to), policy_count, response_is_truncated
+  integrations <- getIntegrations:     GET /admin/v3/integrations (paged): every Duo-protected application.
+                  An application's policy_key names the custom policy attached to it and is absent when none
+                  is, so an application without one is governed by the global policy.
 
-What is judged: every policy that can govern a Duo-protected application. That is the global policy (it
-governs every application without its own policy) plus every custom policy the summary shows applied to
-an application or to groups within one. A custom policy inherits, section by section, every section it
-does not set from the global policy (Duo builds the resulting policy from the top-most section in the
-stack). Unapplied custom policies govern nothing.
+What is judged: every application. Its effective policy is its own policy's sections, falling back SECTION BY
+SECTION to the global policy's sections (Duo: "custom policies only need to specify the settings they wish to
+enforce"; the higher-precedence policy wins for a setting both configure). An application is COVERED when its
+effective policy carries at least one access condition.
 
 A CONDITION is a non-default setting that blocks access on a context signal. Only these count:
   user_location         default_action "deny-access", or a non-empty deny_access_countries_list (geo-blocking)
@@ -21,7 +23,8 @@ A CONDITION is a non-default setting that blocks access on a context signal. Onl
   trusted_endpoints     trusted_endpoint_checking "require-trusted"
   health_checks /       requires_duo_desktop, enforce_encryption, enforce_firewall, enforce_system_password or
   duo_desktop           an *_endpoint_security_list naming at least one OS or agent; enforce_signed_payload or
-                        enforce_device_id_pinning "enforce-enabled"
+                        enforce_device_id_pinning "enforce-enabled". requires_duo_desktop is a LIST of operating
+                        system names (["windows"]), empty when Duo Desktop is not required.
   operating_systems     a non-empty block_os_list, or an os_restrictions block_policy other than "no-remediation"
   browsers              a non-empty blocked_browsers_list, or out_of_date_behavior "warn-and-block"
   full_disk_encryption  require_encryption true
@@ -29,19 +32,34 @@ Not counted, because they are Duo defaults or not access conditions: authenticat
 authentication_policy, new_user, remembered_devices, risk_based_factor_selection, screen_lock,
 tampered_devices, duo_mobile_app, mobile_device_biometrics, plugins, and "require-mfa" settings (MFA is
 already required by the authentication policy, so they add no block). A policy that carries only defaults
-is not conditional access.
+is not conditional access. Lower Duo tiers do not return user_location or anonymous_networks at all; an
+absent section is simply not a condition.
+
+Application-group (group_app) bindings: some users of an application get a different policy, which
+application-level data cannot resolve. An application with any such binding is INDETERMINATE: counted neither
+covered nor uncovered, and while any application is indeterminate the boolean is never True. (Its group policies
+are still read, so an unreadable one fails closed.)
 
 Rule:
-  True   every governing policy carries at least one condition, so every Duo-protected application blocks
-         access on location, network, device health, OS, browser or endpoint trust.
-  False  no governing policy carries any condition (the global policy and every applied custom policy are
-         defaults-only with respect to access conditions).
-  Not evaluated (null): the governing policies differ (some carry a condition, some do not). The Policies API
-         does not say which applications fall to the global policy or which application is the VPN, email or
-         IAM gateway, so partial coverage is not graded. Also null on: an error body (a 403 means the Admin API
-         application lacks "Grant resource - Read"), no or several global policies, a truncated summary, a
-         policy list whose size does not match summary.policy_count, a section that is not an object, or a
-         list or flag that cannot be read.
+  isConditionalAccessEnabled
+    True   every application is covered.
+    False  the applications were fully enumerated and at least one is not covered.
+    Not evaluated (null): an error body or vendorErrorAsResponse marker (a 403 means the Admin API application
+           lacks "Grant resource - Read"); integrations missing, empty or not a list, or not read to the end
+           (paginationTruncated / truncated set, metadata.next_offset remaining, or metadata.total_objects
+           differing from the applications read); policies or summary
+           missing; a truncated summary; a policy list whose size does not match summary.policy_count; no or
+           several global policies; an application whose policy_key is not in the policy list; a section of a
+           governing policy that is not an object, or a wrong-typed value or unrecognised enum in one; no
+           uncovered application but at least one indeterminate one; any exception.
+  conditionalAccessAppPercentage  covered applications / all applications * 100, one decimal. Emitted whenever
+           the applications were enumerated and read, including when the boolean is False.
+  conditionalAccessAppsCovered, conditionalAccessAppsTotal, conditionalAccessAppsOnGlobalPolicy,
+  conditionalAccessAppsIndeterminate: the supporting counts.
+
+Known limit: USER-GROUP policies (precedence below application, above global) are invisible in this data, so a
+tenant that applies its conditions by user group is UNDERSTATED here. Resolving them needs the group membership
+endpoints (GET /admin/v2/groups/{id}/users).
 
 Does not prove: impossible-travel or risk scoring (Duo Trust Monitor is not in the Policies API), or anything
 about services Duo does not sit in front of.
@@ -50,13 +68,34 @@ about services Duo does not sit in front of.
 import json
 from datetime import datetime
 
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isConditionalAccessEnabled',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 CRITERIA_KEY = "isConditionalAccessEnabled"
+PERCENT_KEY = "conditionalAccessAppPercentage"
+COVERED_KEY = "conditionalAccessAppsCovered"
+TOTAL_KEY = "conditionalAccessAppsTotal"
+GLOBAL_COUNT_KEY = "conditionalAccessAppsOnGlobalPolicy"
+INDETERMINATE_KEY = "conditionalAccessAppsIndeterminate"
 WRAPPERS = ["apiResponse", "api_response", "result", "Output", "data"]
+PARTS = ("policies", "summary", "integrations")
 CONDITION_SECTIONS = ["user_location", "anonymous_networks", "authorized_networks", "trusted_endpoints",
                       "health_checks", "duo_desktop", "operating_systems", "browsers", "full_disk_encryption"]
 HEALTH_LISTS = ["requires_duo_desktop", "enforce_encryption", "enforce_firewall", "enforce_system_password",
                 "windows_endpoint_security_list", "macos_endpoint_security_list", "linux_endpoint_security_list"]
 GRANT = "the Admin API permission 'Grant resource - Read'"
+NAMED_LIMIT = 10
 
 
 UNREADABLE = "unreadable setting: "
@@ -68,12 +107,18 @@ def unreadable(message):
 
 
 def create_response(result, pass_reasons=None, fail_reasons=None, recommendations=None,
-                    input_summary=None, api_errors=None, transformation_errors=None, findings=None):
+                    input_summary=None, api_errors=None, transformation_errors=None, findings=None, warnings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
-            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "validation": {"status": "unknown", "errors": [], "warnings": warnings or []},
             "transformation": {"status": "error" if (transformation_errors or []) else "success",
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
@@ -84,8 +129,13 @@ def create_response(result, pass_reasons=None, fail_reasons=None, recommendation
     }
 
 
+def empty_result():
+    return {CRITERIA_KEY: None, PERCENT_KEY: None, COVERED_KEY: None, TOTAL_KEY: None, GLOBAL_COUNT_KEY: None,
+            INDETERMINATE_KEY: None}
+
+
 def not_evaluated(reason, summary=None, findings=None):
-    return create_response({CRITERIA_KEY: None}, api_errors=[reason], fail_reasons=["Not evaluated: " + reason],
+    return create_response(empty_result(), api_errors=[reason], fail_reasons=["Not evaluated: " + reason],
                            input_summary=summary, findings=findings)
 
 
@@ -99,12 +149,37 @@ def decode(raw):
     return raw
 
 
+def marker_text(body):
+    """Integration-Service's vendorErrorAsResponse marker as an error text, else ''."""
+    if not isinstance(body, dict) or "vendorErrorAsResponse" not in body:
+        return ""
+    marker = body.get("vendorErrorAsResponse")
+    status = ""
+    detail = body
+    if isinstance(marker, dict):
+        status = str(marker.get("status") or "")
+        detail = marker.get("body")
+    detail = decode(detail) if isinstance(detail, (str, bytes)) else detail
+    code = ""
+    message = ""
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or "")
+        message = str(detail.get("message") or "")
+    text = ("Duo answered HTTP %s %s %s" % (status or "error", code, message)).strip()
+    if status == "403" or code == "40301":
+        text = text + " (the Admin API application needs " + GRANT + ")"
+    return text[:300]
+
+
 def error_text(body):
     """Duo's or Integration-Service's error text when body is an error envelope, else ''."""
     if body is None:
         return "no response body"
     if not isinstance(body, dict):
         return ""
+    text = marker_text(body)
+    if text:
+        return text
     if body.get("error"):
         return str(body.get("message") or body.get("error"))[:300]
     if str(body.get("stat", "")).upper() == "FAIL":
@@ -164,6 +239,15 @@ BROWSERS = ("chrome", "firefox", "safari", "edge", "ie", "internet-explorer", "o
             "other", "unknown")
 OS_BLOCK_POLICIES = ("end-of-life", "not-up-to-date", "less-than-version", "less-than-latest-version",
                      "less-than-latest")
+
+# The enum values Duo documents for each deciding setting. A value outside its set is not guessed at: it makes
+# the setting unreadable, so an unrecognised value can neither count as a condition nor quietly count as none.
+DEFAULT_ACTIONS = ("deny-access", "ignore-location", "require-mfa", "no-2fa", "allow-access-no-2fa")
+ANONYMOUS_BEHAVIOURS = ("deny", "no-action", "require-mfa")
+TRUSTED_CHECKING = ("require-trusted", "allow-all", "not-configured")
+OUT_OF_DATE_BEHAVIOURS = ("warn-and-block", "no-remediation", "warn-only")
+ENFORCEMENT = ("enforce-enabled", "no-enforcement", "enforce-disabled", "warn-only")
+OS_POLICIES = OS_BLOCK_POLICIES + ("no-remediation", "warn-only")
 
 
 def is_country(v):
@@ -230,10 +314,28 @@ HEALTH_VALIDATORS = {"requires_duo_desktop": in_platforms, "enforce_encryption":
                      "linux_endpoint_security_list": is_vendor}
 
 
+def enum(section, key, allowed, field):
+    """The lower-cased enum value of a setting, '' when absent; unreadable when wrong-typed or unrecognised."""
+    value = section.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise unreadable(field + " is not text")
+    text = word(value)
+    if text == "":
+        return ""
+    if text not in allowed:
+        raise unreadable(field + " holds a value that is not a known setting: " + text[:30])
+    return text
+
+
 def unwrap(body):
     for attempt in range(3):
-        if not isinstance(body, dict) or "policies" in body or "summary" in body:
+        if not isinstance(body, dict):
             return body
+        for part in PARTS:
+            if part in body:
+                return body
         moved = False
         for key in WRAPPERS:
             if isinstance(body.get(key), dict):
@@ -281,6 +383,83 @@ def summary_of(part):
     return part, ""
 
 
+def incomplete_text(container):
+    """Why a paged applications read is incomplete, '' when nothing says it is. Integration-Service marks a read it
+    stopped early with paginationTruncated (on the envelope or its response_metadata) and metadata.truncated, and
+    clears metadata.next_offset once every page is read."""
+    if not isinstance(container, dict):
+        return ""
+    meta_blocks = [container]
+    for key in ("response_metadata", "metadata"):
+        if isinstance(container.get(key), dict):
+            meta_blocks.append(container[key])
+    for block in meta_blocks:
+        for key in ("paginationTruncated", "truncated"):
+            if key in block and flag(block.get(key)) is not False:
+                return "GET /admin/v3/integrations was not read to the end (%s is set)" % key
+    metadata = container.get("metadata")
+    if isinstance(metadata, dict):
+        next_offset = metadata.get("next_offset")
+        if next_offset is not None and str(next_offset).strip() not in ("", "none", "null"):
+            return "GET /admin/v3/integrations was not read to the end (metadata.next_offset remains)"
+    return ""
+
+
+def expected_total(container):
+    """metadata.total_objects when the envelope carries it, else None; unreadable -> -1 (never matches)."""
+    if not isinstance(container, dict) or not isinstance(container.get("metadata"), dict):
+        return None
+    if "total_objects" not in container["metadata"]:
+        return None
+    value = container["metadata"].get("total_objects")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def integration_list(part, body=None):
+    """(applications, error) from the getIntegrations output; every entry must be an application object and the
+    list must be complete."""
+    part = decode(part)
+    totals = []
+    for container in (body, part):
+        text = incomplete_text(container)
+        if text:
+            return None, text
+    if isinstance(part, dict):
+        text = error_text(part)
+        if text:
+            return None, text
+        totals.append(expected_total(part))
+        part = part.get("response", part.get("integrations"))
+        if isinstance(part, dict):
+            text = error_text(part) or incomplete_text(part)
+            if text:
+                return None, text
+            totals.append(expected_total(part))
+            part = part.get("integrations", part.get("response"))
+    if not isinstance(part, list):
+        return None, "GET /admin/v3/integrations returned no application list"
+    if not part:
+        return None, "GET /admin/v3/integrations returned no applications"
+    apps = []
+    for entry in part:
+        if not isinstance(entry, dict):
+            return None, "GET /admin/v3/integrations returned an entry that is not an application"
+        key = entry.get("integration_key")
+        if not isinstance(key, str) or key.strip() == "":
+            return None, "GET /admin/v3/integrations returned an application without an integration_key"
+        apps.append(entry)
+    for total in totals:
+        if total is not None and total != len(apps):
+            return None, ("GET /admin/v3/integrations reports %s applications but %d were read"
+                          % ("an unreadable count of" if total < 0 else str(total), len(apps)))
+    return apps, ""
+
+
 def sections_of(policy):
     sections = policy.get("sections")
     if sections is None:
@@ -294,9 +473,13 @@ def name_of(policy):
     return str(policy.get("policy_name") or policy.get("policy_key") or "unnamed")[:100]
 
 
-def effective_section(policy, glob, name):
-    """The section that governs: the policy's own, else the global policy's; {} when neither sets it."""
-    for source in (policy, glob):
+def app_name(app):
+    return str(app.get("name") or app.get("integration_key") or "unnamed")[:100]
+
+
+def effective_section(chain, name):
+    """The section that governs: the first policy in chain (highest precedence first) that sets it; {} if none."""
+    for source in chain:
         sections = sections_of(source)
         if name in sections:
             value = sections[name]
@@ -311,14 +494,15 @@ def effective_section(policy, glob, name):
 def conditions_in(section_name, s):
     """The access conditions one section imposes (a list of short descriptions)."""
     found = []
+    field = section_name + "."
     if section_name == "user_location":
-        if word(s.get("default_action")) == "deny-access":
+        if enum(s, "default_action", DEFAULT_ACTIONS, field + "default_action") == "deny-access":
             found.append("user location: unlisted countries are denied")
-        denied = real_items(s.get("deny_access_countries_list"), is_country, "user_location.deny_access_countries_list")
+        denied = real_items(s.get("deny_access_countries_list"), is_country, field + "deny_access_countries_list")
         if denied:
             found.append("user location: %d countr%s denied" % (len(denied), "y" if len(denied) == 1 else "ies"))
     elif section_name == "anonymous_networks":
-        if word(s.get("anonymous_access_behavior")) == "deny":
+        if enum(s, "anonymous_access_behavior", ANONYMOUS_BEHAVIOURS, field + "anonymous_access_behavior") == "deny":
             found.append("anonymous networks (proxies, VPNs, Tor) are denied")
     elif section_name == "authorized_networks":
         deny_other = s.get("deny_other_access")
@@ -335,14 +519,15 @@ def conditions_in(section_name, s):
             if real_items(blocked.get("ip_list"), is_network, "authorized_networks.blocked.ip_list"):
                 found.append("authorized networks: listed networks are blocked")
     elif section_name == "trusted_endpoints":
-        if word(s.get("trusted_endpoint_checking")) == "require-trusted":
+        if enum(s, "trusted_endpoint_checking", TRUSTED_CHECKING, field + "trusted_endpoint_checking") \
+                == "require-trusted":
             found.append("trusted endpoints: only managed (trusted) endpoints may sign in")
     elif section_name in ("health_checks", "duo_desktop"):
-        named = [k for k in HEALTH_LISTS if real_items(s.get(k), HEALTH_VALIDATORS[k], section_name + "." + k)]
+        named = [k for k in HEALTH_LISTS if real_items(s.get(k), HEALTH_VALIDATORS[k], field + k)]
         if named:
             found.append("device health (%s): %s" % (section_name, ", ".join(named)))
         for k in ("enforce_signed_payload", "enforce_device_id_pinning"):
-            if word(s.get(k)) == "enforce-enabled":
+            if enum(s, k, ENFORCEMENT, field + k) == "enforce-enabled":
                 found.append("device health (%s): %s" % (section_name, k))
     elif section_name == "operating_systems":
         blocked_os = real_items(s.get("block_os_list"), in_os, "operating_systems.block_os_list")
@@ -356,14 +541,15 @@ def conditions_in(section_name, s):
                 rule = restrictions[os_name]
                 if not isinstance(rule, dict):
                     raise unreadable("operating_systems.os_restrictions.%s is not an object" % str(os_name)[:20])
-                policy_word = word(rule.get("block_policy"))
+                policy_word = enum(rule, "block_policy", OS_POLICIES,
+                                   "operating_systems.os_restrictions.%s.block_policy" % str(os_name)[:20])
                 if policy_word in OS_BLOCK_POLICIES:
-                    found.append("operating systems: out-of-date %s blocked (%s)" % (str(os_name)[:20], policy_word[:30]))
+                    found.append("operating systems: out-of-date %s blocked (%s)" % (str(os_name)[:20], policy_word))
     elif section_name == "browsers":
         blocked_browsers = real_items(s.get("blocked_browsers_list"), in_browsers, "browsers.blocked_browsers_list")
         if blocked_browsers:
             found.append("browsers: %s blocked" % ", ".join([x[:20] for x in blocked_browsers[:10]]))
-        if word(s.get("out_of_date_behavior")) == "warn-and-block":
+        if enum(s, "out_of_date_behavior", OUT_OF_DATE_BEHAVIOURS, field + "out_of_date_behavior") == "warn-and-block":
             found.append("browsers: out-of-date browsers blocked")
     elif section_name == "full_disk_encryption":
         value = s.get("require_encryption")
@@ -376,11 +562,35 @@ def conditions_in(section_name, s):
     return found
 
 
-def conditions_of(policy, glob):
+def conditions_of(chain):
     found = []
     for name in CONDITION_SECTIONS:
-        found.extend(conditions_in(name, effective_section(policy, glob, name)))
+        found.extend(conditions_in(name, effective_section(chain, name)))
     return found
+
+
+def named(labels):
+    shown = ", ".join(labels[:NAMED_LIMIT])
+    if len(labels) > NAMED_LIMIT:
+        shown = shown + " and %d more" % (len(labels) - NAMED_LIMIT)
+    return shown
+
+
+def group_bindings(summary):
+    """[(policy_key, integration_key)] for every application-group (group_app) binding in the summary."""
+    out = []
+    for entry in summary["policies"]:
+        if not isinstance(entry, dict):
+            continue
+        applies = entry.get("policy_applies_to")
+        if not isinstance(applies, list):
+            continue
+        for target in applies:
+            if not isinstance(target, dict) or word(target.get("apply_type")) != "group_app":
+                continue
+            key = target.get("app_integration_key", target.get("integration_key"))
+            out.append((str(entry.get("policy_key")), str(key)))
+    return out
 
 
 def transform(input):
@@ -391,6 +601,9 @@ def transform(input):
             return not_evaluated(text)
         if not isinstance(body, dict) or "policies" not in body or "summary" not in body:
             return not_evaluated("the Policies v2 bodies (policies and summary) were not returned")
+        if "integrations" not in body:
+            return not_evaluated("the applications list (GET /admin/v3/integrations) was not returned; the check "
+                                 "needs the getApplicationPolicyCoverage workflow")
 
         policies, text = policy_list(body.get("policies"))
         if text:
@@ -398,6 +611,9 @@ def transform(input):
         summary, text = summary_of(body.get("summary"))
         if text:
             return not_evaluated("GET /admin/v2/policies/summary failed: " + text + " (needs " + GRANT + ")")
+        apps, text = integration_list(body.get("integrations"), body)
+        if text:
+            return not_evaluated(text + " (needs " + GRANT + ")")
 
         if flag(summary.get("response_is_truncated")) is not False:
             return not_evaluated("the policy summary is truncated or does not say whether it is")
@@ -412,47 +628,90 @@ def transform(input):
         if len(global_policies) != 1:
             return not_evaluated("expected exactly one global policy, found %d" % len(global_policies))
         glob = global_policies[0]
+        by_key = {}
+        for p in policies:
+            by_key[str(p.get("policy_key"))] = p
 
-        applied = []
-        for entry in summary["policies"]:
-            if isinstance(entry, dict) and isinstance(entry.get("policy_applies_to"), list) \
-                    and entry["policy_applies_to"]:
-                applied.append(str(entry.get("policy_key")))
-        governing = [glob] + [p for p in policies if p is not glob and str(p.get("policy_key")) in applied]
+        app_keys = [str(a.get("integration_key")) for a in apps]
+        groups = {}
+        for policy_key, integration_key in group_bindings(summary):
+            if policy_key not in by_key:
+                return not_evaluated("an application-group binding names a policy the policy list does not carry")
+            if integration_key not in app_keys:
+                return not_evaluated("an application-group binding names an application the applications list "
+                                     "does not carry, so the list is incomplete")
+            groups.setdefault(integration_key, []).append(by_key[policy_key])
 
+        covered = []
+        uncovered = []
+        indeterminate = []
+        on_global = 0
         try:
-            verdicts = []
-            for p in governing:
-                label = "the global policy" if p is glob else "policy '%s'" % name_of(p)
-                verdicts.append((label, conditions_of(p, glob)))
+            for app in apps:
+                policy_key = app.get("policy_key")
+                if policy_key is None or str(policy_key).strip() == "":
+                    own = glob
+                else:
+                    own = by_key.get(str(policy_key))
+                    if own is None:
+                        return not_evaluated("application '%s' names a policy_key the policy list does not carry"
+                                             % app_name(app))
+                if own is glob:
+                    on_global = on_global + 1
+                chain = [glob] if own is glob else [own, glob]
+                found = conditions_of(chain)
+                bound = groups.get(str(app.get("integration_key")), [])
+                for group_policy in bound:
+                    # read every group policy so an unreadable one still fails closed
+                    conditions_of([group_policy] + chain)
+                if bound:
+                    indeterminate.append(app_name(app))
+                elif found:
+                    covered.append((app_name(app), found))
+                else:
+                    uncovered.append(app_name(app))
         except ValueError as e:
             if not str(e).startswith(UNREADABLE):
                 raise
             return not_evaluated("a policy setting cannot be read: " + str(e)[len(UNREADABLE):])
 
-        with_conditions = [(label, found) for label, found in verdicts if found]
-        without = [label for label, found in verdicts if not found]
-        info = {"policiesRead": len(policies), "governingPolicies": len(governing),
-                "appliedCustomPolicies": len(governing) - 1, "policiesWithConditions": len(with_conditions),
-                "policiesWithoutConditions": len(without)}
-        described = [label + ": " + "; ".join(found[:6]) for label, found in with_conditions]
+        total = len(apps)
+        percentage = round(len(covered) * 100.0 / total, 1)
+        result = {CRITERIA_KEY: None, PERCENT_KEY: percentage, COVERED_KEY: len(covered), TOTAL_KEY: total,
+                  GLOBAL_COUNT_KEY: on_global, INDETERMINATE_KEY: len(indeterminate)}
+        info = {"policiesRead": len(policies), "applications": total, "applicationsCovered": len(covered),
+                "applicationsUncovered": len(uncovered), "applicationsIndeterminate": len(indeterminate),
+                "applicationsOnGlobalPolicy": on_global, "groupBindings": sum([len(v) for v in groups.values()])}
+        described = [label + ": " + "; ".join(found[:6]) for label, found in covered[:NAMED_LIMIT]]
+        indeterminate_note = []
+        if indeterminate:
+            indeterminate_note = ["Application-group policies apply to some users of these applications, which "
+                                  "application-level data cannot resolve, so they are counted neither covered nor "
+                                  "uncovered: " + named(indeterminate)]
+        user_group_note = ("User-group policies are not visible to this check, so coverage applied by user group "
+                           "is understated")
 
-        if not without:
-            return create_response({CRITERIA_KEY: True}, input_summary=info, pass_reasons=[
-                "Every Duo policy that governs an application blocks access on a context condition (location, "
-                "network, device health, OS, browser or endpoint trust)"] + described)
-        if not with_conditions:
-            return create_response({CRITERIA_KEY: False}, input_summary=info, fail_reasons=[
-                "No Duo policy that governs an application carries an access condition: the global policy and "
-                "every applied custom policy keep Duo's defaults for location, anonymous networks, authorized "
-                "networks, device health, operating systems, browsers, encryption and trusted endpoints"],
-                recommendations=["In the Duo Admin Panel (Policies), add blocking conditions to the global policy, "
-                                 "for example User Location (deny high-risk countries), Anonymous Networks (deny), "
-                                 "Trusted Endpoints (require trusted) or Device Health checks"])
-        return not_evaluated("Duo policies differ (%d carry an access condition, %d do not: %s) and the Policies API "
-                             "does not say which applications fall to which policy" % (
-                                 len(with_conditions), len(without), ", ".join(without[:5])),
-                             summary=info, findings=described)
+        if uncovered:
+            result[CRITERIA_KEY] = False
+            return create_response(result, input_summary=info, findings=described + indeterminate_note,
+                                   fail_reasons=["%d of %d Duo applications have no access condition in their "
+                                                 "effective policy (%.1f%% covered): %s" % (
+                                                     len(uncovered), total, percentage, named(uncovered))],
+                                   recommendations=["In the Duo Admin Panel (Policies), add a blocking condition to "
+                                                    "the global policy or to the policy of each application named, "
+                                                    "for example Trusted Endpoints (require trusted), Device Health "
+                                                    "or Duo Desktop requirements, Authorized Networks, or (on tiers "
+                                                    "that offer them) User Location and Anonymous Networks",
+                                                    user_group_note])
+        if indeterminate:
+            return create_response(result, input_summary=info, findings=described + indeterminate_note,
+                                   fail_reasons=["Not evaluated: no application is uncovered, but %d cannot be "
+                                                 "decided from application-level data" % len(indeterminate)],
+                                   api_errors=indeterminate_note, warnings=indeterminate_note)
+        result[CRITERIA_KEY] = True
+        return create_response(result, input_summary=info, findings=described, pass_reasons=[
+            "All %d Duo applications have an access condition (location, network, device health, OS, browser or "
+            "endpoint trust) in their effective policy" % total], recommendations=[user_group_note])
     except Exception as e:
-        return create_response({CRITERIA_KEY: None}, transformation_errors=[str(e)],
+        return create_response(empty_result(), transformation_errors=[str(e)],
                                fail_reasons=["Transformation error: %s" % str(e)])

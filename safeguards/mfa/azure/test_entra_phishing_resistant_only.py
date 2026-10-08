@@ -154,7 +154,8 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
         self.assertIs(self.value(body), False)
 
     def test_guest_only_email_otp_fails(self):
-        # J.J. 3 Oct 2026 00:55 ET: guest-only email OTP FAILS.
+        # J.J. 3 Oct 2026 00:55 ET: guest-only email OTP FAILS. Kept here on purpose: the 5 Oct 2026
+        # zero-target decision (TX #995) changed authtypesallowed.py only.
         res = self.run_t(policy(*(FIDO_ONLY + [("Email", {"state": "enabled"})])))
         self.assertIs(res["transformedResponse"][KEY], False)
         self.assertIs(res["transformedResponse"]["guestOnlyEmailOtp"], True)

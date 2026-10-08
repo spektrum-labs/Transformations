@@ -12,12 +12,16 @@ dataCollection error and the reason.
 All host data here is synthetic ("estate A")."""
 import importlib.util
 import pathlib
+from datetime import datetime, timedelta
 
 import pytest
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 
+
+# Fresh, so the 15-day reporting window never ages these synthetic hosts out.
+RECENT = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def load(name):
     spec = importlib.util.spec_from_file_location("cs_falcon_" + name + "_rfm_yes", HERE / (name + ".py"))
@@ -38,7 +42,7 @@ def host(n, rfm="no", sensor_update=True, agent_version="7.40.21309.0"):
         policies["sensor_update"] = {"policy_id": "su-a", "applied": True}
     record = {"device_id": "estate-a-dev-%04d" % n, "hostname": "estate-a-host-%04d" % n,
               "status": "normal", "platform_name": "Windows", "device_policies": policies,
-              "last_seen": "2026-10-02T05:00:00Z"}
+              "last_seen": RECENT}
     if rfm is not ABSENT:
         record["reduced_functionality_mode"] = rfm
     if agent_version is not None:

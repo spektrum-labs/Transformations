@@ -7,7 +7,8 @@ including tenants with thousands of onboarded machines (2026-09-29).
 
 Value: true when at least one eligible machine (not excluded, onboardingStatus not Unsupported or
 InsufficientInfo) is onboarded to MDE, whose sensor is the EDR and whose Defender AV platform is the
-EPP; false on a real inventory with none. How much of the estate is covered is
+EPP; false on a real inventory with none, with the reason "Defender for Endpoint is connected and has 0
+onboarded devices" (a finding for this tool). How much of the estate is covered is
 requiredCoveragePercentage, a number, not this flag.
 
 Not evaluated (dataCollection error, values None): an error or unrecognised body, or an inventory that
@@ -45,7 +46,7 @@ def extract_input(value):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def create_response(result, validation, errors=(), passed=(), failed=(), summary=None):
+def create_response(result, validation, errors=(), passed=(), failed=(), summary=None, recommendations=()):
     return {
         "transformedResponse": result,
         "additionalInfo": {
@@ -59,7 +60,7 @@ def create_response(result, validation, errors=(), passed=(), failed=(), summary
             "evaluation": {
                 "passReasons": list(passed),
                 "failReasons": list(failed) + list(errors),
-                "recommendations": [],
+                "recommendations": list(recommendations),
                 "additionalFindings": [],
             },
             "metadata": {
@@ -85,6 +86,12 @@ def read_inventory(data):
     if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
         raise ValueError("The machine inventory has more pages than were read (@odata.nextLink still present)")
     return machines
+
+
+def seen_in_inventory(count):
+    if count:
+        return " (" + str(count) + " eligible machines in its inventory, none onboarded)"
+    return " (its machine inventory is empty)"
 
 
 def measure(machines):
@@ -114,7 +121,15 @@ def transform(input):
         line = f"{result['onboardedDevices']} of {result['eligibleDevices']} eligible machines onboarded to MDE"
         summary = dict(result)
         summary["reading"] = line
-        return create_response(result, validation, errors=errors, summary=summary)
+        if result["isEDRDeployed"]:
+            return create_response(result, validation, errors=errors, summary=summary,
+                                   passed=[line.replace("to MDE", "to Defender for Endpoint")])
+        zero = ("Defender for Endpoint is connected and has 0 onboarded devices"
+                + seen_in_inventory(result["eligibleDevices"]) + ", so its EDR sensor and antivirus protect no device")
+        return create_response(result, validation, errors=errors, summary=summary, failed=[zero], recommendations=[
+                "Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, Settings > "
+                "Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint "
+                "tool protects them"])
     except Exception as error:
         result = {}
         for key in KEYS:

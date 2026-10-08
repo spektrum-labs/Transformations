@@ -9,8 +9,13 @@ Eligibility matches microsoft_endpoint_oneclick.py: not excluded, onboardingStat
 InsufficientInfo. A server is an eligible machine whose osPlatform names a server.
 Value: round(100 * onboarded servers / eligible servers); the pass bar lives in the requirement.
 
+No onboarded machine at all (a readable inventory that is empty, or in which nothing is onboarded): 0, with
+the reason "Defender for Endpoint is connected and has 0 onboarded devices, so it protects no server". The
+tool is connected and verifiably protects nothing, a finding for this tool.
+
 Not evaluated (dataCollection error, value None): an error or unrecognised body, an inventory that
-still carries @odata.nextLink (pages left unread), or an inventory with no server.
+still carries @odata.nextLink (pages left unread), or an inventory whose onboarded machines include no
+server (the organisation may have no server, so there is no server coverage to measure).
 """
 
 import json
@@ -44,7 +49,7 @@ def extract_input(value):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def create_response(result, validation, errors=(), passed=(), failed=(), summary=None):
+def create_response(result, validation, errors=(), passed=(), failed=(), summary=None, recommendations=()):
     return {
         "transformedResponse": result,
         "additionalInfo": {
@@ -58,7 +63,7 @@ def create_response(result, validation, errors=(), passed=(), failed=(), summary
             "evaluation": {
                 "passReasons": list(passed),
                 "failReasons": list(failed) + list(errors),
-                "recommendations": [],
+                "recommendations": list(recommendations),
                 "additionalFindings": [],
             },
             "metadata": {
@@ -86,6 +91,12 @@ def read_inventory(data):
     return machines
 
 
+def seen_in_inventory(count):
+    if count:
+        return " (" + str(count) + " eligible machines in its inventory, none onboarded)"
+    return " (its machine inventory is empty)"
+
+
 def measure(machines):
     eligible = [
         machine for machine in machines
@@ -94,10 +105,16 @@ def measure(machines):
     ]
     servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
+    onboarded = [machine for machine in eligible if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
+    coverage = round(100 * len(protected_servers) / len(servers)) if servers else None
+    if coverage is None and not onboarded:
+        coverage = 0
     return {
-        "serverCoveragePercentage": round(100 * len(protected_servers) / len(servers)) if servers else None,
+        "serverCoveragePercentage": coverage,
         "totalServerCount": len(servers),
         "onboardedServerCount": len(protected_servers),
+        "onboardedDevices": len(onboarded),
+        "eligibleDevices": len(eligible),
     }
 
 
@@ -113,6 +130,13 @@ def transform(input):
         line = f"{result['onboardedServerCount']} of {result['totalServerCount']} servers onboarded to MDE"
         summary = dict(result)
         summary["reading"] = line
+        if result["onboardedDevices"] == 0:
+            zero = ("Defender for Endpoint is connected and has 0 onboarded devices"
+                    + seen_in_inventory(result["eligibleDevices"]) + ", so it protects no server")
+            return create_response(result, validation, errors=errors, summary=summary, failed=[zero], recommendations=[
+                "Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, Settings > "
+                "Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint "
+                "tool protects them"])
         return create_response(result, validation, errors=errors, summary=summary)
     except Exception as error:
         result = {}

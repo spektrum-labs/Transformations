@@ -1,7 +1,9 @@
 """Duo getDuoSettings checks: a read that measured nothing is Unevaluated (all None, dataCollection error), never False.
 
-authTypesAllowed and confirmPasswordPolicyEnforced used to answer False for {}, empty input, error bodies and
-their except path. A real settings payload keeps its True/False answer exactly.
+confirmPasswordPolicyEnforced used to answer False for {}, empty input, error bodies and its except path. A real
+settings payload keeps its True/False answer exactly. (authTypesAllowed no longer reads settings: Duo documents the
+push/sms/voice/mobile_otp settings flags as legacy and always false. It reads Policies v2; see
+test_duo_authtypes_allowed_policies.py.)
 """
 import importlib.util
 import json
@@ -9,17 +11,6 @@ import unittest
 from pathlib import Path
 
 CASES = {
-    "authTypesAllowed": {
-        "keys": ["authTypesAllowed", "enabledAuthTypes", "pushEnabled", "smsEnabled", "voiceEnabled",
-                 "mobileOtpEnabled", "totalEnabledTypes"],
-        "real": [
-            ({"push_enabled": True, "sms_enabled": False, "voice_enabled": False, "mobile_otp_enabled": False}, True),
-            ({"push_enabled": False, "sms_enabled": True, "voice_enabled": True, "mobile_otp_enabled": False}, False),
-            ({"push_enabled": False, "sms_enabled": False, "voice_enabled": False, "mobile_otp_enabled": True}, True),
-            ({"push_enabled": False}, False),
-        ],
-        "unmeasured": {"name": "Acme", "timezone": "UTC", "lockout_threshold": 10},
-    },
     "confirmPasswordPolicyEnforced": {
         "keys": ["confirmPasswordPolicyEnforced", "minimumPasswordLength", "requiresUpperAlpha",
                  "requiresLowerAlpha", "requiresNumeric", "requiresSpecial", "lengthPolicyMet",

@@ -64,20 +64,94 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
     def info(self, body):
         return self.t.transform(body)["additionalInfo"]
 
-    # J.J. 3 Oct 2026: email OTP enabled for any target, guests included, is a weak factor.
-    def test_guest_only_email_otp_fails(self):
+    # Josh, 5 Oct 2026, superseding J.J.'s 3 Oct rule: a method enabled with an EMPTY
+    # includeTargets list targets nobody, so it is not counted -- neither weak nor strong.
+    # Both shapes occur in real tenants (Email with empty targets, and Email targeted at
+    # all_users or a group), so member-targeted email OTP still occurs and still fails
+    # (test_member_targeted_email_otp_fails).
+    def test_zero_target_email_otp_is_not_counted(self):
         configs = [self.cfg(id="MicrosoftAuthenticator"),
                    self.cfg(id="Email", allowExternalIdToUseEmailOtp="default", includeTargets=[])]
-        self.assertEqual(self.verdict(self.body(configs)), (False, "success"))
-        reasons = " ".join(self.info(self.body(configs))["evaluation"]["failReasons"])
-        self.assertIn("guest", reasons)
+        self.assertEqual(self.verdict(self.body(configs)), (True, "success"))
+        info = self.info(self.body(configs))
+        self.assertEqual(info["evaluation"]["failReasons"], [])
+        self.assertEqual(info["transformation"]["inputSummary"]["zeroTargetMethodsIgnored"], ["Email"])
 
-    def test_guest_only_email_otp_as_only_method_fails(self):
-        # The 5 "unclear" fleet pairs: guest-only email OTP is the only enabled method.
+    def test_zero_target_email_otp_as_only_method_is_not_evaluated(self):
+        # Removing the zero-target method leaves nothing enabled, which is the existing
+        # "no member method" rule: not evaluated. Tenants in this position are typically
+        # migrationInProgress, where legacy per-user MFA governs sign-in.
         configs = [self.cfg(id="Email", includeTargets=[]), {"id": "Sms", "state": "disabled"}]
-        for migration in ("preMigration", "migrationComplete"):
+        for migration in ("preMigration", "migrationInProgress", "migrationComplete"):
             with self.subTest(migration=migration):
-                self.assertEqual(self.verdict(self.body(configs, migration)), (False, "success"))
+                self.assertEqual(self.verdict(self.body(configs, migration)), (False, "error"))
+                errors = " ".join(self.info(self.body(configs, migration))["dataCollection"]["errors"])
+                self.assertIn("No member authentication method is enabled", errors)
+
+    def test_guest_email_otp_is_an_additional_finding_only_when_an_admin_chose_it(self):
+        chosen = [self.cfg(id="MicrosoftAuthenticator"),
+                  self.cfg(id="Email", allowExternalIdToUseEmailOtp="enabled", includeTargets=[])]
+        info = self.info(self.body(chosen))
+        self.assertEqual(self.verdict(self.body(chosen)), (True, "success"))
+        self.assertTrue(any("B2B guest" in f for f in info["evaluation"]["additionalFindings"]))
+
+    def test_guest_email_otp_on_microsofts_default_raises_nothing(self):
+        # "default" is Microsoft's tenant default, not an admin choice. It is NOT "off": Microsoft
+        # turned guest email OTP on for default tenants from October 2021. It is left out on purpose.
+        default = [self.cfg(id="MicrosoftAuthenticator"),
+                   self.cfg(id="Email", allowExternalIdToUseEmailOtp="default", includeTargets=[])]
+        findings = self.info(self.body(default))["evaluation"]["additionalFindings"]
+        self.assertFalse(any("guest" in f.lower() for f in findings))
+
+    def test_a_missing_include_targets_key_is_unknown_not_empty(self):
+        # Only a PRESENT and EMPTY list targets nobody. No key at all is still classified.
+        configs = [self.cfg(id="MicrosoftAuthenticator"), self.cfg(id="Email")]
+        self.assertEqual(self.verdict(self.body(configs)), (False, "success"))
+
+    def test_zero_target_applies_to_every_method_not_only_email(self):
+        weak_nobody = [self.cfg(id="MicrosoftAuthenticator"), self.cfg(id="Sms", includeTargets=[])]
+        self.assertEqual(self.verdict(self.body(weak_nobody)), (True, "success"))
+        # ...and a strong method nobody can use is not evidence of strong auth either.
+        strong_nobody = [self.cfg(id="Fido2", includeTargets=[])]
+        self.assertEqual(self.verdict(self.body(strong_nobody)), (False, "error"))
+
+    def test_a_zero_target_weak_method_is_named_in_additional_findings(self):
+        # A lost target list must not turn a weak method into a silent pass.
+        for weak in ("Sms", "Voice", "Email"):
+            with self.subTest(weak=weak):
+                configs = [self.cfg(id="MicrosoftAuthenticator"), self.cfg(id=weak, includeTargets=[])]
+                self.assertEqual(self.verdict(self.body(configs)), (True, "success"))
+                findings = self.info(self.body(configs))["evaluation"]["additionalFindings"]
+                self.assertIn(f"{weak} is enabled but targets no users (includeTargets is empty); not counted",
+                              findings)
+
+    def test_a_zero_target_strong_method_raises_no_weak_finding(self):
+        configs = [self.cfg(id="MicrosoftAuthenticator"), self.cfg(id="Fido2", includeTargets=[])]
+        findings = self.info(self.body(configs))["evaluation"]["additionalFindings"]
+        self.assertFalse(any("targets no users" in f for f in findings))
+
+    def test_guest_only_email_otp_summary_reflects_guest_reachability(self):
+        for setting, expected in (("enabled", True), ("default", True), ("disabled", False), (None, True)):
+            with self.subTest(setting=setting):
+                email = self.cfg(id="Email", includeTargets=[])
+                if setting is not None:
+                    email["allowExternalIdToUseEmailOtp"] = setting
+                summary = self.info(self.body([self.cfg(id="Fido2"), email]))["transformation"]["inputSummary"]
+                self.assertIs(summary["guestOnlyEmailOtp"], expected)
+        summary = self.info(self.body([self.cfg(id="Fido2")]))["transformation"]["inputSummary"]
+        self.assertIs(summary["guestOnlyEmailOtp"], False)
+
+    def test_only_zero_target_methods_names_them_in_the_not_evaluated_reason(self):
+        errors = " ".join(self.info(self.body([self.cfg(id="Fido2", includeTargets=[])]))["dataCollection"]["errors"])
+        self.assertIn("No member authentication method is enabled", errors)
+        self.assertIn("enabled but targeting no one, so not counted: Fido2", errors)
+        plain = " ".join(self.info(self.body([{"id": "Sms", "state": "disabled"}]))["dataCollection"]["errors"])
+        self.assertNotIn("targeting no one", plain)
+
+    def test_recommendation_no_longer_tells_members_to_fix_a_guest_default(self):
+        configs = [self.cfg(id="Fido2"), self.cfg(id="Sms", includeTargets=[{"targetType": "group", "id": "g"}])]
+        recs = " ".join(self.info(self.body(configs))["evaluation"]["recommendations"])
+        self.assertNotIn("guests", recs)
 
     def test_member_targeted_email_otp_fails(self):
         configs = [self.cfg(id="MicrosoftAuthenticator"),
@@ -97,14 +171,16 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
                 configs.append(self.cfg(id="TemporaryAccessPass", maximumLifetimeInMinutes="480"))
                 self.assertEqual(self.verdict(self.body(configs)), (True, "success"))
 
-    def test_bounded_temporary_access_pass_with_guest_email_fails_on_email(self):
+    def test_bounded_temporary_access_pass_with_zero_target_email_passes(self):
+        # A common "case B" shape: strong methods for everyone, a bounded TAP,
+        # and Email enabled with empty targets. Neither the TAP nor the Email is counted.
         configs = [self.cfg(id="Fido2"), self.cfg(id="MicrosoftAuthenticator"),
                    self.cfg(id="TemporaryAccessPass", maximumLifetimeInMinutes=480),
                    self.cfg(id="Email", includeTargets=[])]
-        self.assertEqual(self.verdict(self.body(configs)), (False, "success"))
-        reasons = " ".join(self.info(self.body(configs))["evaluation"]["failReasons"])
-        self.assertIn("Email", reasons)
-        self.assertNotIn("TemporaryAccessPass", reasons)
+        self.assertEqual(self.verdict(self.body(configs)), (True, "success"))
+        info = self.info(self.body(configs))
+        self.assertEqual(info["evaluation"]["failReasons"], [])
+        self.assertTrue(any("Temporary Access Pass" in f for f in info["evaluation"]["additionalFindings"]))
 
     def test_unbounded_temporary_access_pass_fails(self):
         for lifetime in (None, 0, "", "abc"):
