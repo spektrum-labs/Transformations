@@ -11,7 +11,7 @@
 #                    present or msExchRecipientTypeDetails is a mailbox type), exchangeAttributesReadable,
 #                    mailAttribute (the AD "mail" value or null), isBuiltInAdministrator, viaGroup
 # The AD-side analogue of a productivity licence / enabled Exchange plan is an Exchange mailbox. A "mail"
-# attribute alone is a finding, not a fail (J.J. ruling, 3 Oct 2026).
+# attribute alone is a finding, not a fail.
 
 
 def transform(input):

@@ -27,7 +27,7 @@
   },
   "citations": [
     "safeguards/iam/microsoft-active-directory/aredomainadminaccountsseparate.py",
-    "feedback_mfa_admin_pam_rules (J.J. 3 Oct 2026: mail attribute alone is a finding)"
+    "Product decision: a mail attribute alone is a finding, not a fail; fail only on an Exchange mailbox"
   ],
   "changeLog": [
     {
