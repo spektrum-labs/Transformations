@@ -18,16 +18,18 @@ def transform(input):
     areHypervisorAdminsDedicated - True only when at least one Hyper-V host was read completely and EVERY
     administrator principal on EVERY host is shown to be a dedicated account.
 
-    NT AUTHORITY\\Authenticated Users, INTERACTIVE, NETWORK and the other well-known broad groups are broad groups, not
-    system identities. A tenant administrator manages tenant VMs, not the fabric, so that profile is not an admin role.
-    Administrators are the members of "Hyper-V Administrators" and of the local "Administrators" group, plus
-    members of SCVMM user roles with profile Administrator or DelegatedAdministrator.
+    Administrators are the members of "Hyper-V Administrators" and of the local "Administrators" group, plus members of
+    SCVMM user roles whose profile (matched case-insensitively) is Administrator, DelegatedAdmin / DelegatedAdministrator
+    or FabricAdministrator. A tenant administrator manages tenant VMs, not the fabric, so that profile is not an admin
+    role.
 
     False when an administrator is a broad group (Domain Users, Everyone, Authenticated Users, Users, Domain
     Computers) or a named user whose directory record shows an Exchange mailbox (a daily-use account).
 
     A named user is dedicated when the directory record is found and shows no mailbox, or the name has a clear
-    admin affix (adm-, admin- prefix; -adm, -admin suffix). A GROUP is never dedicated by its name.
+    admin affix (adm-, admin- prefix; -adm, -admin suffix). A GROUP is never dedicated by its name. NT AUTHORITY\\
+    Authenticated Users, INTERACTIVE, NETWORK and the other well-known broad groups are broad groups, not system
+    identities.
     Not judged here: SYSTEM, LOCAL SERVICE, NETWORK SERVICE and NT SERVICE\\* identities, disabled accounts, the built-in Administrator (a
     finding: shared break-glass), and the Domain Admins / Enterprise Admins groups (a finding: the Active Directory
     check judges that group's membership).
@@ -99,7 +101,7 @@ def transform(input):
             data = data.decode("utf-8")
         if isinstance(data, str):
             data = json.loads(data) if data.strip() else None
-        for depth in range(6):
+        for _ in range(6):
             unwrapped = False
             for wrapper in ["data", "response", "result", "apiResponse", "_response_data"]:
                 if isinstance(data, dict) and wrapper in data and "hosts" not in data:
@@ -128,7 +130,10 @@ def transform(input):
             directory[as_text(k).lower()] = as_dict(raw_dir[k])
 
         def record(name, domain):
-            for k in [name + "@" + domain, domain + "\\" + name, name]:
+            keys = [name + "@" + domain, domain + "\\" + name]
+            if not domain:
+                keys.append(name)
+            for k in keys:
                 if k.lower() in directory:
                     return directory[k.lower()]
             return {}
@@ -161,6 +166,8 @@ def transform(input):
             for m in admins.get("members"):
                 if isinstance(m, dict):
                     entries.append(m)
+                else:
+                    scvmm_unknown.append("an administrator entry that is not a member record")
             if scvmm.get("present") is True:
                 for role in as_list(scvmm.get("roles")):
                     role = as_dict(role)
@@ -169,6 +176,8 @@ def transform(input):
                         for m in as_list(role.get("members")):
                             if isinstance(m, dict):
                                 entries.append(m)
+                            else:
+                                scvmm_unknown.append("an SCVMM role member that is not a member record")
                     elif profile not in ["readonlyadmin", "readonlyadministrator", "selfserviceuser", "tenantadmin", "tenantadministrator"]:
                         scvmm_unknown.append("SCVMM role " + (as_text(role.get("name")) or "with no name") + " (unrecognised profile)")
 

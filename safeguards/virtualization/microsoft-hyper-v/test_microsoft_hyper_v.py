@@ -155,3 +155,17 @@ def test_accepts_json_string_bytes_and_wrapper():
     assert value(transform(json.dumps(body))) is True
     assert value(transform(json.dumps(body).encode())) is True
     assert value(transform({"response": body})) is True
+
+
+def test_entries_that_are_not_member_records_are_never_silently_dropped():
+    body = snap(host("EX\\Domain Users", member("adm-alice")))
+    assert value(transform(body)) is None
+    roles = [{"name": "R", "profile": "Administrator", "members": ["Everyone"]}]
+    body = snap(host(member("adm-alice"), scvmm={"present": True, "complete": True, "roles": roles}))
+    assert value(transform(body)) is None
+
+
+def test_a_local_account_does_not_inherit_a_domain_users_directory_record():
+    d = {"alice@corp": {"found": True, "enabled": True, "hasMailbox": False}}
+    assert value(transform(snap(host(member("alice", domain="HV01")), directory=d))) is None
+    assert value(transform(snap(host(member("alice", domain="corp")), directory=d))) is True
