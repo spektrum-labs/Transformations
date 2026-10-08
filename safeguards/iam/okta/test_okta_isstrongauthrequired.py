@@ -36,7 +36,8 @@ def rule(name, mode="2FA", access="ALLOW", status="ACTIVE", kind="ASSURANCE", me
     method = {"type": kind, "factorMode": mode, "reauthenticateIn": "PT12H",
               "constraints": [{"knowledge": {"required": True, "types": ["password"]}}]}
     if methods is not None:
-        method["constraints"].append({"possession": {"required": True, "authenticationMethods": methods}})
+        # One constraint object holds both families (Okta ORs separate constraint objects).
+        method["constraints"][0]["possession"] = {"required": True, "authenticationMethods": methods}
     return {"id": "rul-" + name, "name": name, "status": status,
             "actions": {"appSignOn": {"access": access, "verificationMethod": method}}}
 
@@ -83,7 +84,10 @@ CLASSIC = {"signOnPolicies": [{"id": "pol-so", "name": "Global Session", "status
            "signOnRules": [[{"name": "Rule A", "status": "ACTIVE", "actions": {"signon": {"access": "ALLOW", "requireFactor": True}}},
                             {"name": "Rule B", "status": "INACTIVE", "actions": {"signon": {"access": "ALLOW", "requireFactor": False}}},
                             {"name": "Rule C", "status": "ACTIVE", "actions": {"signon": {"access": "DENY", "requireFactor": False}}}]],
-           "accessPolicies": [], "accessRules": [], "authenticators": STRONG_AUTHENTICATORS}
+           "accessPolicies": [], "accessRules": [],
+           "factors": [{"factorType": "token:software:totp", "provider": "EXAMPLE", "status": "ACTIVE"},
+                       {"factorType": "push", "provider": "EXAMPLE", "status": "ACTIVE"},
+                       {"factorType": "sms", "provider": "EXAMPLE", "status": "INACTIVE"}]}
 
 
 class StrongAuthTests(unittest.TestCase):
@@ -197,9 +201,41 @@ class StrongAuthTests(unittest.TestCase):
         payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
         self.assert_value(payload, True)
 
-    def test_classic_require_factor_with_a_weak_authenticator_on_is_false(self):
+    def test_classic_require_factor_with_a_weak_factor_on_is_false(self):
+        for factor_type in ("sms", "call", "email", "question"):
+            payload = copy.deepcopy(CLASSIC)
+            payload["factors"].append({"factorType": factor_type, "provider": "EXAMPLE", "status": "ACTIVE"})
+            self.assert_value(payload, False)
+            out = load().transform(payload)
+            self.assertIn("weak factors are on: " + factor_type, out["additionalInfo"]["evaluation"]["failReasons"][0])
+
+    def test_classic_uses_the_authenticator_list_when_it_has_no_factor_list(self):
         payload = copy.deepcopy(CLASSIC)
+        del payload["factors"]
+        payload["authenticators"] = STRONG_AUTHENTICATORS
+        self.assert_value(payload, True)
         payload["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
+        self.assert_value(payload, False)
+
+    def test_only_knowledge_methods_listed_leaves_possession_open(self):
+        payload = copy.deepcopy(REAL_PASS)
+        knowledge_only = rule("Default")
+        knowledge_only["actions"]["appSignOn"]["verificationMethod"]["constraints"] = [
+            {"knowledge": {"required": True, "authenticationMethods": [{"key": "okta_password", "method": "password"}]},
+             "possession": {}}]
+        payload["result"]["accessRules"][1] = [knowledge_only]
+        payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
+        self.assert_value(payload, False)
+        payload["result"]["authenticators"] = STRONG_AUTHENTICATORS
+        self.assert_value(payload, True)
+
+    def test_one_constraint_without_possession_methods_leaves_the_rule_open(self):
+        payload = copy.deepcopy(REAL_PASS)
+        payload["result"]["accessRules"] = [[rule("Admin", methods=STRONG_METHODS)], [rule("Default", methods=STRONG_METHODS)],
+                                            [rule("Hardware", methods=STRONG_METHODS)], []]
+        payload["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"]["constraints"].append(
+            {"knowledge": {"required": True, "types": ["password"]}})
+        payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
         self.assert_value(payload, False)
 
     def test_classic_is_judged_when_the_access_policy_read_fails(self):
@@ -258,10 +294,18 @@ class StrongAuthTests(unittest.TestCase):
             payload["result"]["authenticators"] = authenticators
             self.assert_value(payload, None)
             out = load().transform(payload)
-            self.assertIn("authenticator list was not read", out["additionalInfo"]["dataCollection"]["errors"][0])
+            self.assertIn("authenticator list", out["additionalInfo"]["dataCollection"]["errors"][0])
             classic = copy.deepcopy(CLASSIC)
-            classic["authenticators"] = authenticators
+            classic["factors"] = authenticators
             self.assert_value(classic, None)
+
+    def test_a_failed_authenticator_read_names_the_error(self):
+        payload = copy.deepcopy(REAL_PASS)
+        payload["result"]["authenticators"] = {"errorCode": "E0000006", "errorSummary": "You do not have permission"}
+        out = load().transform(payload)
+        self.assertIsNone(out["transformedResponse"][KEY])
+        self.assertIn("authenticator list read failed: You do not have permission",
+                      out["additionalInfo"]["dataCollection"]["errors"][0])
 
     def test_identity_engine_global_session_does_not_stand_in_for_failed_app_policies(self):
         payload = copy.deepcopy(REAL_PASS["result"])
