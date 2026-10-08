@@ -6,8 +6,9 @@ Method: listAuditLogs  (GET {serverUrl}/v1/auditlogs)
 True only when the Abnormal Portal audit log is readable and holds at least one entry:
 the response carries an "auditLogs" list with at least one record that has a timestamp
 (each record names the user, category, action, status and source IP). The endpoint returns
-the last 90 days by default. An empty list, an error envelope (401/403), an empty body or an
-unrelated payload fails closed.
+the last 90 days by default. An error envelope (401/403), an empty body or an unrelated payload
+fails closed (False). A readable but EMPTY auditLogs list proves nothing either way, so the
+answer is None with a dataCollection error (Not evaluated), never False.
 
 What this proves: Abnormal records portal activity (searches, message views, remediations,
 sign-ins) and exposes it through its API. What it does not prove: that logs are exported to
@@ -101,6 +102,16 @@ def transform(input):
                     categories.append(category)
 
         enabled = stamped > 0
+        if not enabled and isinstance(data, dict) and isinstance(data.get("auditLogs"), list) and not data["auditLogs"]:
+            reason = ("GET /v1/auditlogs returned an empty auditLogs list for the 90-day window; "
+                      "that does not show whether audit logging is on, so the check is not evaluated.")
+            return create_response(
+                result={criteriaKey: None, "auditLogRecordsOnPage": 0},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                input_summary={"auditLogRecordsOnPage": 0},
+            )
 
         if enabled:
             pass_reasons = [

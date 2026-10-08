@@ -9,8 +9,8 @@ with a body that carries a "threats" list (even an empty one: a tenant with no t
 still a licensed tenant). Nothing else counts. An error envelope (401/403), an empty body or an
 unrelated payload has no "threats" list and fails closed.
 
-This proves an active, API-enabled Abnormal tenant for this token. It does not read a license
-tier or a seat count.
+Capability note: product active via API; tier not visible. This proves an active, API-enabled
+Abnormal tenant for this token. It does not read a license tier or a seat count.
 """
 
 import json
@@ -92,7 +92,7 @@ def transform(input):
         if licensed:
             pass_reasons = [
                 "GET /v1/threats answered with a threats list (%d on this page), so the Abnormal REST API "
-                "is enabled for this tenant and the token is accepted." % threat_count
+                "is enabled for this tenant and the token is accepted (product active via API; tier not visible)." % threat_count
             ]
             fail_reasons = []
             recommendations = []

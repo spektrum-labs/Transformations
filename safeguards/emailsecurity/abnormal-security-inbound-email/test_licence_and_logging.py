@@ -94,8 +94,16 @@ class LoggingTests(unittest.TestCase):
         self.assertIs(self.v({"response": AUDIT}), True)
         self.assertIs(self.v(stringify(AUDIT)), True)
 
-    def test_empty_list_fails(self):
-        self.assertIs(self.v({"auditLogs": [], "pageNumber": 1}), False)
+    def test_empty_list_is_not_evaluated(self):
+        out = self.t.transform({"auditLogs": [], "pageNumber": 1})
+        self.assertIsNone(out["transformedResponse"]["isEmailLoggingEnabled"])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        out = self.t.transform(json.dumps({"auditLogs": []}))
+        self.assertIsNone(out["transformedResponse"]["isEmailLoggingEnabled"])
+
+    def test_licence_note_in_pass_reason(self):
+        lic = load("confirmedLicensePurchased").transform(THREATS)
+        self.assertIn("tier not visible", lic["additionalInfo"]["evaluation"]["passReasons"][0])
 
     def test_records_without_timestamp_fail(self):
         self.assertIs(self.v({"auditLogs": [{"action": "login"}, "x", None]}), False)
