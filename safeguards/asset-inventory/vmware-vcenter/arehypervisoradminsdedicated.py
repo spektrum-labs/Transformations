@@ -214,6 +214,7 @@ def transform(input):
             name = p["name"]
             low = name.lower()
             is_group = p["type"] == "GROUP"
+            is_user = p["type"] == "USER"
             if (not is_group) and p["domain"].lower() == "vsphere.local":
                 solution = False
                 for prefix in solution_prefixes:
@@ -234,9 +235,9 @@ def transform(input):
             rec = record(p)
             if rec.get("found") is True and rec.get("hasMailbox") is True:
                 failed.append(p["label"] + " (has an Exchange mailbox: daily-use account)")
-            elif (not is_group) and rec.get("found") is True and rec.get("hasMailbox") is False and rec.get("enabled") is not False:
+            elif is_user and rec.get("found") is True and rec.get("hasMailbox") is False and rec.get("enabled") is not False:
                 dedicated.append(p["label"])
-            elif (not is_group) and follows_convention(name):
+            elif is_user and follows_convention(name):
                 dedicated.append(p["label"])
                 findings.append(p["label"] + " judged dedicated by naming convention only (no directory record)")
             else:

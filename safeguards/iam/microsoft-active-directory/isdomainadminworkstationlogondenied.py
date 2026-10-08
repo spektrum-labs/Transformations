@@ -132,7 +132,7 @@ def transform(input):
 
         admin_sid = domain_sid + "-512"
         findings = []
-        gpos = [g for g in as_list(rights.get("gpos")) if isinstance(g, dict) and g.get("enabled") is True]
+        gpos = [g for g in as_list(rights.get("gpos")) if isinstance(g, dict) and g.get("enabled") is not False]
         # Per right, the GPOs that DEFINE it (a non-empty list). User Rights Assignments do not merge: only the winning
         # GPO's list applies, so a baseline GPO that sets "Deny log on locally: Guests" overrides a deny linked higher up.
         rights_fields = ["denyInteractive", "denyRemoteInteractive"]
@@ -141,6 +141,8 @@ def transform(input):
             name = as_text(g.get("displayName")) or "a GPO with no name"
             local = denies(g.get("denyInteractive"), admin_sid)
             remote = denies(g.get("denyRemoteInteractive"), admin_sid)
+            if g.get("enabled") is not True:
+                continue
             if local and remote:
                 any_denying = True
             elif local or remote:
@@ -199,7 +201,8 @@ def transform(input):
             if not candidates:
                 return "none"
             for c in candidates:
-                if c["gpo"].get("appliesTo") != "authenticated" or c["gpo"].get("wmiFiltered") is True:
+                if c["gpo"].get("enabled") is not True or c["gpo"].get("appliesTo") != "authenticated" \
+                        or c["gpo"].get("wmiFiltered") is True:
                     return "unknown"
             enforced = [c for c in candidates if c["enforced"]]
             if enforced:

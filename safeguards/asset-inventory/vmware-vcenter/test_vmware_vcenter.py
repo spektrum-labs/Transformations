@@ -141,6 +141,12 @@ def test_sso_administrators_count():
     assert value(transform(body)) is False
 
 
+def test_principal_without_a_type_is_never_dedicated_by_name():
+    body = snap(perm("adm-alice"), {"principal": {"name": "vc-admin", "domain": "corp.example.test"},
+                                    "role": {"id": "-1"}, "object": {"type": "Folder", "id": "group-d1"}, "propagating": True})
+    assert value(transform(body)) is None
+
+
 def test_default_sso_administrators_group_is_judged_through_its_expanded_members():
     root = perm("Administrators", domain="vsphere.local", kind="GROUP")
     body = snap(root, sso=[{"name": "adm-alice", "domain": "example.test", "type": "USER"}])

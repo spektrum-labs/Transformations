@@ -225,6 +225,15 @@ def test_a_right_defined_with_an_empty_list_still_wins_and_clears_the_deny():
     assert value(denied(rights([root, empty], [ou(WS, 10)])), DENIED) is False
 
 
+def test_gpo_with_no_enabled_flag_is_a_candidate_with_unknown_verdict_not_dropped():
+    root = gpo(links=[{"scopeDn": DOMAIN_DN, "enabled": True, "enforced": False, "linkOrder": 1}])
+    b = baseline()
+    del b["enabled"]
+    assert value(denied(rights([root, b], [ou(WS, 10)])), DENIED) is None
+    b["enabled"] = False
+    assert value(denied(rights([root, b], [ou(WS, 10)])), DENIED) is True
+
+
 def test_snapshot_without_the_all_defining_gpos_marker_is_not_evaluated():
     body = rights([gpo()], [ou(WS, 10)])
     del body["logonRights"]["allDefiningGposIncluded"]
