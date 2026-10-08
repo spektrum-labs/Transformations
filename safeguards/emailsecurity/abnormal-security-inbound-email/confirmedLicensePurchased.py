@@ -6,8 +6,10 @@ Method: listThreats  (GET {serverUrl}/v1/threats)
 Abnormal publishes no billing or subscription endpoint. What the REST API does prove is that
 the tenant has the Abnormal REST API enabled and the token is accepted: GET /v1/threats answers
 with a body that carries a "threats" list (even an empty one: a tenant with no threats today is
-still a licensed tenant). Nothing else counts. An error envelope (401/403), an empty body or an
-unrelated payload has no "threats" list and fails closed.
+still a licensed tenant). Nothing else counts as a pass. An error envelope (401/403), an empty body,
+an unrelated payload or a transform error is an API error, not evidence that no licence exists:
+the key is None (Not evaluated) with a dataCollection error, never False. The API has no
+positive "off" signal, so this check never returns False.
 
 Capability note: product active via API; tier not visible. This proves an active, API-enabled
 Abnormal tenant for this token. It does not read a license tier or a seat count.
@@ -23,8 +25,10 @@ def extract_input(input_data):
         input_data = json.loads(input_data)
     elif isinstance(input_data, bytes):
         input_data = json.loads(input_data.decode("utf-8"))
+    enriched_validation = None
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
+        enriched_validation = input_data["validation"]
+        input_data = input_data["data"]
     data = input_data
     if isinstance(data, dict):
         wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
@@ -37,6 +41,8 @@ def extract_input(input_data):
                     break
             if not unwrapped:
                 break
+    if enriched_validation is not None:
+        return data, enriched_validation
     validation = {
         "status": "unknown",
         "errors": [],
@@ -89,36 +95,35 @@ def transform(input):
         licensed = isinstance(threats, list)
         threat_count = len(threats) if licensed else 0
 
-        if licensed:
-            pass_reasons = [
-                "GET /v1/threats answered with a threats list (%d on this page), so the Abnormal REST API "
-                "is enabled for this tenant and the token is accepted (product active via API; tier not visible)." % threat_count
-            ]
-            fail_reasons = []
-            recommendations = []
-        else:
-            pass_reasons = []
-            fail_reasons = [
-                "GET /v1/threats did not return a threats list, so an active Abnormal subscription "
-                "is not confirmed."
-            ]
-            recommendations = [
-                "Confirm the Abnormal subscription is active and the REST API token is valid, has the "
-                "Threats - Read Access box ticked and is not expired or blocked by the IP safelist."
-            ]
+        if not licensed:
+            reason = ("GET /v1/threats did not return a threats list (error body, 401/403, empty or "
+                      "unrelated payload), so the Abnormal subscription could not be evaluated.")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                recommendations=[
+                    "Confirm the REST API token is valid, has the Threats - Read Access box ticked and "
+                    "is not expired or blocked by the IP safelist, then re-run."
+                ],
+                input_summary={"threatsListPresent": False},
+            )
 
         return create_response(
-            result={criteriaKey: licensed, "threatsOnPage": threat_count},
+            result={criteriaKey: True, "threatsOnPage": threat_count},
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"threatsListPresent": licensed, "threatsOnPage": threat_count},
+            pass_reasons=[
+                "GET /v1/threats answered with a threats list (%d on this page), so the Abnormal REST API "
+                "is enabled for this tenant and the token is accepted (product active via API; tier not visible)." % threat_count
+            ],
+            input_summary={"threatsListPresent": True, "threatsOnPage": threat_count},
         )
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
+            api_errors=["Transformation error: " + str(e)],
             fail_reasons=["Transformation error: " + str(e)],
         )
