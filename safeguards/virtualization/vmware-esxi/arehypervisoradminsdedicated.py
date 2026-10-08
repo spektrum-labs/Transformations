@@ -28,8 +28,8 @@ def transform(input):
     False when on any host an administrator assignment goes to a broad group (Domain Users, Everyone, Authenticated
     Users, Users, Domain Computers), to a named user whose directory record shows an Exchange mailbox, or when root is
     the only administrator with lockdown disabled. A GROUP is never dedicated by its name. A named user is dedicated
-    when the directory record is found and shows no mailbox, or the name has a clear admin affix (adm-, admin-, da-,
-    a- prefix; -adm, -admin, -a suffix). The built-in dcui and vpxuser accounts are system accounts and not judged.
+    when the directory record is found and shows no mailbox, or the name has a clear admin affix (adm-, admin-,
+    a- prefix; -adm, -admin suffix). The built-in dcui and vpxuser accounts are system accounts and not judged.
 
     Not evaluated (None) when no host was read, hostsComplete or a host's permissionsComplete is not true, a role
     cannot be resolved, or no failure is measured and one or more principals are neither shown dedicated nor shared.
@@ -85,10 +85,10 @@ def transform(input):
 
     def follows_convention(name):
         text = name.lower()
-        for prefix in ["adm-", "adm_", "admin-", "admin_", "da-", "da_", "a-", "a_"]:
+        for prefix in ["adm-", "adm_", "admin-", "admin_", "a-", "a_"]:
             if text.startswith(prefix) and len(text) > len(prefix):
                 return True
-        for suffix in ["-adm", "_adm", "-admin", "_admin", "-a", "_a"]:
+        for suffix in ["-adm", "_adm", "-admin", "_admin"]:
             if text.endswith(suffix) and len(text) > len(suffix):
                 return True
         return False
@@ -121,7 +121,7 @@ def transform(input):
         directory = as_dict(data.get("directory"))
 
         def record(p):
-            for k in [p["name"] + "@" + p["domain"], p["domain"] + "\\" + p["name"], p["name"]]:
+            for k in [p["name"] + "@" + p["domain"], p["domain"] + "\\" + p["name"]]:
                 if k.lower() in directory:
                     return as_dict(directory[k.lower()])
             for k in directory:
@@ -177,7 +177,7 @@ def transform(input):
                     continue
                 domain = as_text(principal.get("domain"))
                 label = (domain + "\\" + name) if domain else name
-                principals[label.lower()] = {"label": label, "name": name, "domain": domain,
+                principals[(as_text(principal.get("type")).upper() + ":" + label).lower()] = {"label": label, "name": name, "domain": domain,
                                              "type": as_text(principal.get("type")).upper()}
 
             lockdown = as_text(host.get("lockdownMode")).lower()
@@ -196,6 +196,8 @@ def transform(input):
                 others.append(p)
             for p in others:
                 low = p["name"].lower()
+                if "\\" in low:
+                    low = low.rsplit("\\", 1)[1]
                 is_group = p["type"] == "GROUP"
                 is_user = p["type"] == "USER"
                 if low in broad:
@@ -211,8 +213,10 @@ def transform(input):
                 else:
                     host_unknown.append(p["label"] + (" (group: members not read)" if is_group else ""))
             if has_root and not others:
-                if lockdown == "disabled":
+                if lockdown == "disabled" and not unresolved:
                     host_fail.append("root is the only administrator and lockdown mode is disabled: a shared root login is the only way in")
+                elif lockdown == "disabled":
+                    host_unknown.append("root looks like the only administrator but a custom role could not be resolved")
                 elif lockdown in ["normal", "strict"]:
                     findings.append(hname + ": root is the only administrator (shared break-glass login); lockdown mode is " + lockdown)
                     host_unknown.append("no named administrator to judge (root only)")
@@ -231,7 +235,7 @@ def transform(input):
             else:
                 passed_hosts = passed_hosts + 1
 
-        extra = {"hostsJudged": len(hosts), "hostsFailed": len(failed_hosts)}
+        extra = {"hostsJudged": passed_hosts + len(failed_hosts), "hostsFailed": len(failed_hosts), "hostsNotEvaluated": len(unknown_hosts)}
         summary = {"hostsRead": len(hosts), "hostsPassed": passed_hosts}
         if failed_hosts:
             return respond(False, extra, [],

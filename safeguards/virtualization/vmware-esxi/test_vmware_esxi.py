@@ -95,7 +95,7 @@ def test_group_is_never_dedicated_by_name_and_typeless_principal_is_not_a_user()
     assert value(transform(snap(host(perm("vc-admin", kind=""))))) is None
 
 
-@pytest.mark.parametrize("name", ["maria.da.silva", "a.smith", "jadministrator", "dave"])
+@pytest.mark.parametrize("name", ["maria.da.silva", "a.smith", "jadministrator", "dave", "da-silva", "da_cruz", "smith_a", "jones-a"])
 def test_personal_names_are_not_dedicated_evidence(name):
     assert value(transform(snap(host(perm(name))))) is None
 
@@ -139,3 +139,28 @@ def test_accepts_json_string_bytes_and_wrapper():
     assert value(transform(json.dumps(body))) is True
     assert value(transform(json.dumps(body).encode())) is True
     assert value(transform({"response": body})) is True
+
+
+def test_root_only_fail_needs_every_role_resolved():
+    body = snap(host(perm("root"), perm("gina", role_id="1001"), lockdown="disabled"))
+    assert value(transform(body)) is None
+    resolved = snap(host(perm("root"), perm("gina", role_id="1001", admin=False), lockdown="disabled"))
+    assert value(transform(resolved)) is False
+
+
+def test_same_name_user_and_group_are_both_judged():
+    body = snap(host(perm("ops", kind="USER", domain="example.test"), perm("ops", kind="GROUP", domain="example.test")))
+    assert value(transform(body)) is None
+    assert "ops" in transform(body)["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_bare_name_directory_key_never_matches_a_domain_user():
+    body = snap(host(perm("dave", domain="example.test")), directory={"dave": {"found": True, "enabled": True, "hasMailbox": False}})
+    assert value(transform(body)) is None
+
+
+def test_domain_prefixed_broad_group_name_still_fails_and_counts_are_honest():
+    r = transform(snap(host(perm("CORP\\Domain Users", kind="GROUP")), host(perm("root"), name="esx02.example.test")))
+    assert value(r) is False
+    assert r["transformedResponse"]["hostsJudged"] == 1 and r["transformedResponse"]["hostsFailed"] == 1
+    assert r["transformedResponse"]["hostsNotEvaluated"] == 1
