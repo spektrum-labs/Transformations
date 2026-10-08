@@ -84,11 +84,33 @@ def transform(input):
                 fail_reasons=["Input validation failed"]
             )
 
+        # Wrong shape is not a finding. This file reads an object that carries an 'rbac' role
+        # assignment list. Handed anything else -- a bare list (Okta's /api/v1/org/factors catalogue
+        # of factor types was scored False for exactly this reason), a string, or an object with no
+        # 'rbac' key -- the read cannot answer the check, so the verdict is None (Not evaluated)
+        # with a reason, never False. dataCollection.status "error" (api_errors) is what makes
+        # Token-Service grade the None as Not evaluated instead of Failed.
+        if not isinstance(data, dict) or 'rbac' not in data:
+            if isinstance(data, list):
+                shape = "a list of " + str(len(data)) + " items"
+            elif isinstance(data, dict):
+                shape = "an object without an 'rbac' key"
+            else:
+                shape = "not an object"
+            reason = ("Not evaluated: the response is " + shape + ", not an object with an 'rbac' role "
+                      "assignment list, so it cannot show whether RBAC is implemented")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[reason],
+                api_errors=[reason]
+            )
+
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        rbac = data.get('rbac') or [] if isinstance(data, dict) else []
+        rbac = data.get('rbac') or []
         is_implemented = isinstance(rbac, list) and len(rbac) > 0
 
         if is_implemented:
