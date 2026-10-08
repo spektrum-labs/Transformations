@@ -5,6 +5,9 @@
 #   GET /api/v1/policies/{policyId}/rules         -> signOnRules      (one list per policy, same order)
 #   GET /api/v1/policies?type=ACCESS_POLICY       -> accessPolicies   (authentication policies)
 #   GET /api/v1/policies/{policyId}/rules         -> accessRules      (one list per policy, same order)
+# Optional, not fetched by getMfaPolicyRules today:
+#   GET /api/v1/authenticators                    -> authenticators   (scope okta.authenticators.read)
+# Without it, a rule that requires a factor but lists no accepted methods cannot be judged (Not evaluated).
 # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tag/Policy/
 #   listPolicies, listPolicyRules (scope okta.policies.read, already granted for isMFAEnforcedForUsers).
 #   AccessPolicyRule.actions.appSignOn.{access, verificationMethod.{type, factorMode, constraints[]}}
@@ -26,14 +29,19 @@ def transform(input):
       * require a factor: verificationMethod type ASSURANCE with factorMode 2FA, and
       * not accept a weak factor: when the rule lists the authentication methods it accepts
         (constraints[].possession.authenticationMethods), none may be SMS or voice (key phone_number),
-        email (key okta_email) or a security question (key security_question).
+        email (key okta_email) or a security question (key security_question). When the rule lists no
+        methods, any enrolled authenticator can satisfy it, so the org's ACTIVE authenticators decide: a weak
+        one switched on is False, none is a pass, and an unread authenticator list is Not evaluated.
     Rule conditions (network zone, group, device) are ignored on purpose: a rule scoped to one zone that
     accepts one factor or a weak factor is still a weak path. Policies with resourceType
     END_USER_ACCOUNT_MANAGEMENT (enrolment, recovery, unlock) are not app sign-in and are reported, not judged.
 
     Classic Engine (the authentication policy list holds no active app policy): every ACTIVE rule that ALLOWs
     access in every ACTIVE global session (OKTA_SIGN_ON) policy must have requireFactor true. A Classic rule
-    cannot name factors, so weak factors are not judged there.
+    cannot name factors, so a requireFactor rule is judged against the org's ACTIVE authenticators in the same
+    way. Classic is also judged when the authentication policy read fails, but only when the global session
+    rules carry no primaryFactor (an Identity Engine field), so an Identity Engine org whose app policies could
+    not be read is never judged from its global session policy alone.
 
     False when a readable rule accepts less than a factor or names a weak factor.
     None (Not evaluated, dataCollection.status "error"), never False, when the read cannot answer: an error
@@ -41,13 +49,12 @@ def transform(input):
     rules, no rule that allows sign-on, a verification method this code does not read (AUTH_METHOD_CHAIN,
     ID_PROOFING, missing) when no readable rule already fails, and a transformation error.
 
-    Does not prove: which authenticators the org has switched on (authTypesAllowed reads
-    /api/v1/authenticators), a weak factor that a rule accepts without listing methods, that every user has
+    Does not prove: that every user has
     enrolled a factor, or that the factors are phishing-resistant (isAdminMFAPhishingResistant,
     isPhishingResistantOnlyEnabled).
     """
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     key = "isStrongAuthRequired"
     weak_keys = ["phone_number", "okta_email", "security_question"]
@@ -84,7 +91,7 @@ def transform(input):
                                                    "and security question from the methods those rules accept"]
                                if value is False else [],
                                "additionalFindings": []},
-                "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
+                "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "schemaVersion": "1.0",
                              "transformationId": key, "vendor": "Okta", "category": "Identity and Access Management"},
             },
         }
@@ -147,6 +154,40 @@ def transform(input):
                         names.append(entry_key + ("/" + entry_method if entry_method else ""))
         return names
 
+    def weak_authenticators(raw):
+        """ACTIVE weak authenticators, or None when the authenticator list is missing or unreadable."""
+        listed = rule_list(raw)
+        if not listed:
+            return None
+        found = [a for a in listed if as_text(a.get("key"))]
+        if not found:
+            return None
+        names = []
+        for item in found:
+            if not is_active(item):
+                continue
+            name = as_text(item.get("key")).lower()
+            settings = item.get("settings") if isinstance(item.get("settings"), dict) else {}
+            if name == "okta_email" and as_text(settings.get("allowedFor")).lower() in ["recovery", "none"]:
+                continue
+            if name in weak_keys:
+                names.append(name)
+        return names
+
+    def lists_methods(method):
+        constraints = method.get("constraints")
+        if not isinstance(constraints, list):
+            return False
+        for constraint in constraints:
+            if not isinstance(constraint, dict):
+                continue
+            for family in ["possession", "knowledge", "inherence"]:
+                block = constraint.get(family)
+                listed = block.get("authenticationMethods") if isinstance(block, dict) else None
+                if isinstance(listed, list) and listed:
+                    return True
+        return False
+
     try:
         data = input
         if isinstance(data, bytes):
@@ -165,7 +206,20 @@ def transform(input):
         access, access_problem = pair(data.get("accessPolicies"), data.get("accessRules"), "Authentication (ACCESS_POLICY)")
         signon, signon_problem = pair(data.get("signOnPolicies"), data.get("signOnRules"), "Global session (OKTA_SIGN_ON)")
         if access_problem is not None:
-            return not_evaluated(access_problem, {})
+            if signon is None:
+                return not_evaluated(access_problem + "; " + (signon_problem or "no global session policy"), {})
+            # Classic orgs answer the ACCESS_POLICY read with an error. Only fall back to the global session
+            # policy when its rules look Classic: Identity Engine rules carry actions.signon.primaryFactor.
+            for policy, rules in signon:
+                for r in rules:
+                    acts = r.get("actions") if isinstance(r.get("actions"), dict) else {}
+                    so = acts.get("signon") if isinstance(acts.get("signon"), dict) else {}
+                    if "primaryFactor" in so:
+                        return not_evaluated(access_problem + ", and the global session rules are Identity Engine "
+                                             "rules, so they cannot answer for app sign-in alone", {})
+        weak_on = weak_authenticators(data.get("authenticators"))
+        unrestricted = ("lists no accepted methods and the org's authenticator list was not read"
+                        if weak_on is None else None)
 
         app_policies = []
         other_policies = []
@@ -203,6 +257,13 @@ def transform(input):
                         names = weak_names(method)
                         if names:
                             weak.append(where + " (accepts " + ", ".join(names[:4]) + ")")
+                        elif lists_methods(method):
+                            strong = strong + 1
+                        elif weak_on is None:
+                            unread.append(where + " (" + unrestricted + ")")
+                        elif weak_on:
+                            weak.append(where + " (lists no accepted methods, and weak authenticators are on: "
+                                        + ", ".join(weak_on[:4]) + ")")
                         else:
                             strong = strong + 1
                     elif method_type == "ASSURANCE":
@@ -227,7 +288,14 @@ def transform(input):
                     judged = judged + 1
                     where = as_text(policy.get("name")) + " / " + as_text(rule.get("name"))
                     if is_true(sign_on.get("requireFactor")):
-                        strong = strong + 1
+                        if weak_on is None:
+                            unread.append(where + " (requireFactor true, but a Classic rule cannot name factors and the "
+                                          "org's authenticator list was not read)")
+                        elif weak_on:
+                            weak.append(where + " (requireFactor true, and weak authenticators are on: "
+                                        + ", ".join(weak_on[:4]) + ")")
+                        else:
+                            strong = strong + 1
                     else:
                         weak.append(where + " (requireFactor false)")
         else:
@@ -241,9 +309,9 @@ def transform(input):
             fails = ["Weak sign-in path: " + line for line in weak[:10]]
             return respond(False, [], fails, summary, [])
         if unread:
-            return not_evaluated(str(len(unread)) + " allowing sign-on rule(s) use a verification method this check does not read: "
+            return not_evaluated(str(len(unread)) + " allowing sign-on rule(s) cannot be judged: "
                                  + "; ".join(unread[:5]), summary)
         return respond(True, [engine + ": all " + str(judged) + " allowing sign-on rule(s) across " + str(policy_count)
-                              + " policies require a factor and accept no listed weak factor"], [], summary, [])
+                              + " policies require a factor that no weak authenticator can satisfy"], [], summary, [])
     except Exception as e:
         return not_evaluated("Transformation error: " + str(e), {})
