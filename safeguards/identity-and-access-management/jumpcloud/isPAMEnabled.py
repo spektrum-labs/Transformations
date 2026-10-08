@@ -93,20 +93,23 @@ def transform(input):
             return unevaluated("JumpCloud Privileged Access status isPam is not a boolean.", validation)
         is_active = as_bool(data.get("isActive")) if "isActive" in data else None
         is_pwm = as_bool(data.get("isPwm")) if "isPwm" in data else None
-        summary = {"isPam": is_pam, "isActive": is_active, "isPwm": is_pwm}
+        # Summary keys are our own names, not the vendor's field names: the verdict is the only
+        # criterion this transform emits, and it must never be a field read back out of the body.
+        summary = {"privilegedAccessActivated": is_pam, "tenantActive": is_active,
+                   "passwordVaultActivated": is_pwm}
         if is_pam and is_active is False:
             return unevaluated("JumpCloud reports PAM activated (isPam true) but the tenant not active (isActive "
                                "false); nothing is claimed.", validation)
         if is_pam:
             return create_response(
-                result={KEY: True, "isPam": True}, validation=validation,
+                result={KEY: True}, validation=validation,
                 pass_reasons=["JumpCloud Privileged Access (PAM) is activated for the tenant "
                               "(GET /api/v2/privileged-access/status isPam=true). This shows PAM is enabled; it does "
                               "not show which admin or service accounts it manages or their rotation schedule."],
                 input_summary=summary)
         pwm_note = " A JumpCloud password vault is activated (isPwm=true), but a password manager is not PAM." if is_pwm else ""
         return create_response(
-            result={KEY: False, "isPam": False}, validation=validation,
+            result={KEY: False}, validation=validation,
             fail_reasons=["JumpCloud Privileged Access (PAM) is not activated for the tenant "
                           "(GET /api/v2/privileged-access/status isPam=false)." + pwm_note],
             recommendations=["Activate JumpCloud Privileged Access, or attest the PAM tool that manages admin and "
