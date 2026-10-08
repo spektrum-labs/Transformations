@@ -357,7 +357,9 @@ def read_ids(body):
 
 def read_workforce(body):
     """Lower-case ids of the enabled Member accounts, read whole; None otherwise. Disabled or guest items are left
-    out whatever the filter did; an item that does not say both is not read."""
+    out whatever the filter did. A disabled item need not carry a userType (Graph returns null for some legacy
+    accounts); an enabled item that does not say its userType, or any item that does not say accountEnabled, is not
+    read."""
     pages = list_pages(body)
     if pages is None:
         return None
@@ -367,10 +369,14 @@ def read_workforce(body):
             if not isinstance(item, dict) or not str(item.get("id") or "").strip():
                 return None
             enabled = item.get("accountEnabled")
-            kind = item.get("userType")
-            if not isinstance(enabled, bool) or not isinstance(kind, str):
+            if not isinstance(enabled, bool):
                 return None
-            if enabled and kind.strip().lower() == "member":
+            if not enabled:
+                continue  # a disabled account is outside the workforce whatever its userType (Graph returns null for some)
+            kind = item.get("userType")
+            if not isinstance(kind, str):
+                return None
+            if kind.strip().lower() == "member":
                 ids.add(str(item["id"]).strip().lower())
     return ids
 
