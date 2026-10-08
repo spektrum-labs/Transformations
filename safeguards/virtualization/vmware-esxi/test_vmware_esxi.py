@@ -164,3 +164,14 @@ def test_domain_prefixed_broad_group_name_still_fails_and_counts_are_honest():
     assert value(r) is False
     assert r["transformedResponse"]["hostsJudged"] == 1 and r["transformedResponse"]["hostsFailed"] == 1
     assert r["transformedResponse"]["hostsNotEvaluated"] == 1
+
+
+def test_a_mail_enabled_group_is_not_failed_for_its_mailbox():
+    body = snap(host(perm("ESX Admins", kind="GROUP", domain="example.test")),
+                directory={"esx admins@example.test": {"found": True, "enabled": True, "hasMailbox": True}})
+    assert value(transform(body)) is None
+
+
+def test_a_directory_user_named_like_a_system_account_is_still_judged():
+    body = snap(host(perm("root"), perm("adm-alice"), perm("vpxuser", domain="example.test")))
+    assert value(transform(body)) is None

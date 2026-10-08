@@ -34,7 +34,7 @@ def transform(input):
     Not evaluated (None) when no host was read, hostsComplete or a host's permissionsComplete is not true, a role
     cannot be resolved, or no failure is measured and one or more principals are neither shown dedicated nor shared.
 
-    Returns hostsJudged and hostsFailed beside the verdict.
+    Returns hostsJudged (passed + failed), hostsFailed and hostsNotEvaluated beside the verdict.
     """
     import json
     from datetime import datetime, timezone
@@ -188,7 +188,7 @@ def transform(input):
             for lowered in principals:
                 p = principals[lowered]
                 low = p["name"].lower()
-                if low in system_accounts and p["type"] != "GROUP":
+                if low in system_accounts and p["type"] != "GROUP" and p["domain"] == "":
                     continue
                 if low == "root" and p["type"] != "GROUP" and p["domain"] == "":
                     has_root = True
@@ -204,7 +204,7 @@ def transform(input):
                     host_fail.append(p["label"] + " (broad group: every member is an administrator)")
                     continue
                 rec = record(p)
-                if rec.get("found") is True and rec.get("hasMailbox") is True:
+                if is_user and rec.get("found") is True and rec.get("hasMailbox") is True:
                     host_fail.append(p["label"] + " (has an Exchange mailbox: daily-use account)")
                 elif is_user and rec.get("found") is True and rec.get("hasMailbox") is False and rec.get("enabled") is not False:
                     pass
