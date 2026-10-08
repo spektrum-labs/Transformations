@@ -48,10 +48,20 @@ def app_policy(name, status="ACTIVE"):
 ACCOUNT_POLICY = {"id": "pol-acct", "name": "Account Management", "type": "ACCESS_POLICY", "status": "ACTIVE",
                   "_embedded": {"resourceType": "END_USER_ACCOUNT_MANAGEMENT"}}
 STRONG_METHODS = [{"key": "okta_verify", "method": "push"}, {"key": "webauthn", "method": "webauthn"}]
+# /api/v1/authenticators shape (key, status, settings.allowedFor); synthetic values.
+STRONG_AUTHENTICATORS = [
+    {"key": "okta_password", "status": "ACTIVE"},
+    {"key": "okta_verify", "status": "ACTIVE"},
+    {"key": "webauthn", "status": "ACTIVE"},
+    {"key": "okta_email", "status": "ACTIVE", "settings": {"allowedFor": "recovery"}},
+    {"key": "phone_number", "status": "INACTIVE"},
+]
 
 REAL_PASS = {"result": {
     "signOnPolicies": [{"id": "pol-so", "name": "Global Session", "type": "OKTA_SIGN_ON", "status": "ACTIVE"}],
-    "signOnRules": [[{"name": "Default", "status": "ACTIVE", "actions": {"signon": {"access": "ALLOW", "requireFactor": False}}}]],
+    "signOnRules": [[{"name": "Default", "status": "ACTIVE",
+                      "actions": {"signon": {"access": "ALLOW", "requireFactor": False, "primaryFactor": "PASSWORD_IDP_ANY_FACTOR"}}}]],
+    "authenticators": STRONG_AUTHENTICATORS,
     "accessPolicies": [app_policy("Console"), app_policy("Apps"), app_policy("Strong Apps"), ACCOUNT_POLICY],
     "accessRules": [
         [rule("Admin"), rule("Catch-all")],
@@ -73,7 +83,7 @@ CLASSIC = {"signOnPolicies": [{"id": "pol-so", "name": "Global Session", "status
            "signOnRules": [[{"name": "Rule A", "status": "ACTIVE", "actions": {"signon": {"access": "ALLOW", "requireFactor": True}}},
                             {"name": "Rule B", "status": "INACTIVE", "actions": {"signon": {"access": "ALLOW", "requireFactor": False}}},
                             {"name": "Rule C", "status": "ACTIVE", "actions": {"signon": {"access": "DENY", "requireFactor": False}}}]],
-           "accessPolicies": [], "accessRules": []}
+           "accessPolicies": [], "accessRules": [], "authenticators": STRONG_AUTHENTICATORS}
 
 
 class StrongAuthTests(unittest.TestCase):
@@ -171,6 +181,36 @@ class StrongAuthTests(unittest.TestCase):
         payload["result"]["accessRules"][1] = [rule("Default", mode="1FA"), rule("Chain", kind="AUTH_METHOD_CHAIN")]
         self.assert_value(payload, False)
 
+    def test_rule_without_listed_methods_and_a_weak_authenticator_on_is_false(self):
+        for weak in ({"key": "phone_number", "status": "ACTIVE"}, {"key": "security_question", "status": "ACTIVE"},
+                     {"key": "okta_email", "status": "ACTIVE", "settings": {"allowedFor": "any"}}):
+            payload = copy.deepcopy(REAL_PASS)
+            payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [weak]
+            self.assert_value(payload, False)
+            out = load().transform(payload)
+            self.assertIn("weak authenticators are on: " + weak["key"], out["additionalInfo"]["evaluation"]["failReasons"][0])
+
+    def test_rule_listing_only_strong_methods_passes_even_with_a_weak_authenticator_on(self):
+        payload = copy.deepcopy(REAL_PASS)
+        payload["result"]["accessRules"] = [[rule("Admin", methods=STRONG_METHODS)], [rule("Default", methods=STRONG_METHODS)],
+                                            [rule("Hardware", methods=STRONG_METHODS)], []]
+        payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
+        self.assert_value(payload, True)
+
+    def test_classic_require_factor_with_a_weak_authenticator_on_is_false(self):
+        payload = copy.deepcopy(CLASSIC)
+        payload["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
+        self.assert_value(payload, False)
+
+    def test_classic_is_judged_when_the_access_policy_read_fails(self):
+        for failed in ({"errorCode": "E0000001", "errorSummary": "Api validation failed: type"}, None, "oops"):
+            payload = copy.deepcopy(CLASSIC)
+            payload["accessPolicies"] = failed
+            self.assert_value(payload, True)
+            failing = copy.deepcopy(payload)
+            failing["signOnRules"][0][0]["actions"]["signon"]["requireFactor"] = False
+            self.assert_value(failing, False)
+
     # --- not evaluated (never False) --------------------------------------------------------
 
     def test_factor_catalogue_is_not_evaluated(self):
@@ -211,6 +251,28 @@ class StrongAuthTests(unittest.TestCase):
             payload = copy.deepcopy(REAL_PASS)
             payload["result"]["accessRules"][1] = [rule("Default", kind=kind)]
             self.assert_value(payload, None)
+
+    def test_rules_without_listed_methods_and_no_authenticator_list_are_not_evaluated(self):
+        for authenticators in (None, [], {"errorCode": "E0000006", "errorSummary": "denied"}, "oops"):
+            payload = copy.deepcopy(REAL_PASS)
+            payload["result"]["authenticators"] = authenticators
+            self.assert_value(payload, None)
+            out = load().transform(payload)
+            self.assertIn("authenticator list was not read", out["additionalInfo"]["dataCollection"]["errors"][0])
+            classic = copy.deepcopy(CLASSIC)
+            classic["authenticators"] = authenticators
+            self.assert_value(classic, None)
+
+    def test_identity_engine_global_session_does_not_stand_in_for_failed_app_policies(self):
+        payload = copy.deepcopy(REAL_PASS["result"])
+        payload["accessPolicies"] = {"errorCode": "E0000006", "errorSummary": "denied"}
+        self.assert_value(payload, None)
+
+    def test_neither_policy_source_readable_is_not_evaluated(self):
+        payload = copy.deepcopy(CLASSIC)
+        payload["accessPolicies"] = None
+        payload["signOnRules"] = "oops"
+        self.assert_value(payload, None)
 
     def test_classic_without_active_policy_is_not_evaluated(self):
         payload = copy.deepcopy(CLASSIC)
