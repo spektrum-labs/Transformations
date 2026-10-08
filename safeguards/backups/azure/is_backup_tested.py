@@ -54,12 +54,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupTested") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupTested could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -134,6 +139,35 @@ def collect_restore_jobs(node, found, depth):
                 collect_restore_jobs(node[key], found, depth + 1)
 
 
+def job_collection_seen(node, depth):
+    """True when the payload carries a restore-job collection whose emptiness is PROVEN.
+
+    An ARM list -- restoreJobResults, restoreJobs, value -- answers 403 on a scope the
+    caller cannot read, so an empty one is a measured "no restore jobs". A Resource Graph
+    table is NOT such a collection when its rows are empty, because zero rows is equally
+    "none ran" and "I could not see the vault". Same contract as the copy in
+    safeguards/729cebc6-8abd-4511-ac85-1455a690eebe/is_backup_tested.py.
+    """
+    if depth > MAX_WALK_DEPTH:
+        return False
+    if isinstance(node, list):
+        for item in node:
+            if job_collection_seen(item, depth + 1):
+                return True
+        return False
+    if not isinstance(node, dict):
+        return False
+    for key in ["restoreJobResults", "restoreJobs", "value"]:
+        if isinstance(node.get(key), list):
+            return True
+    if isinstance(node.get("columns"), list) and node.get("rows"):
+        return True
+    for key in ["apiResponse", "data"]:
+        if key in node and job_collection_seen(node[key], depth + 1):
+            return True
+    return False
+
+
 def rows_from_arg_table(data):
     """Fallback for the legacy Resource Graph payload, so this transform is
     safe to ship before the definition is repointed to the ARM endpoint."""
@@ -200,7 +234,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -210,6 +244,28 @@ def transform(input):
         jobs = list(found.values())
         if not jobs:
             jobs = rows_from_arg_table(data)
+
+        # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+        # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+        # answers 200 with only the readable subset and, in Microsoft's words, "without any
+        # indication that the result might be partial". So zero rows is equally "there are
+        # none" and "the vaults are in a subscription this principal cannot read", and the
+        # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+        # Resource Graph: zero rows is not a proven empty set".
+        # An ARM restore-job list 403s on a scope the caller cannot read, so an empty one IS
+        # a proven empty set and stays a measured False below. Only a payload that carried no
+        # such list -- or carried nothing but a Resource Graph table with zero rows -- is
+        # unmeasured, which is what job_collection_seen draws the line on.
+        if not jobs and not job_collection_seen(data, 0):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupTested not evaluated: no restore job was returned by either the ARM "
+                            "restore-job list or the Resource Graph fallback, and zero Resource Graph rows "
+                            "is also what a subscription this principal cannot read returns"],
+                recommendations=["Confirm the principal has at least Reader on every subscription "
+                                 "holding a Recovery Services or Backup vault, then re-run the query."]
+            )
 
         now = datetime.utcnow()
         cutoff = now - timedelta(days=RECENCY_DAYS)
@@ -299,7 +355,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: " + str(e)]

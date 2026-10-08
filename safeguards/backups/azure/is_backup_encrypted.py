@@ -38,10 +38,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupEncrypted") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupEncrypted could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else not_measured_reasons},
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
@@ -63,30 +69,37 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+            return create_response(result={criteriaKey: None}, validation=validation, fail_reasons=["Input validation failed"])
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        # Resource Graph table response or direct totalRecords check
-        inner_data = data.get("data", data)
-        rows = inner_data.get("rows", [])
+        inner_data = data.get("data", data) if isinstance(data, dict) else None
+        rows = inner_data.get("rows") if isinstance(inner_data, dict) else None
+        rows = rows if isinstance(rows, list) else []
 
-        # If no Resource Graph rows, fall back to totalRecords check
+        # Zero Resource Graph rows is not a measured answer. Resource Graph is RBAC-scoped:
+        # a scope the caller cannot read at all answers 403, but a PARTIALLY readable scope
+        # answers 200 with only the readable subset and, in Microsoft's words, "without any
+        # indication that the result might be partial". So zero rows is equally "there are
+        # none" and "the vaults are in a subscription this principal cannot read", and the
+        # response carries nothing that tells them apart. See CONTRIBUTING.md, "Azure
+        # Resource Graph: zero rows is not a proven empty set".
+        # This also retires the totalRecords fallback that used to stand here. totalRecords
+        # is Resource Graph's OWN count of matched records, so zero there is the same
+        # ambiguous reading as zero rows; and its other branch asserted isBackupEncrypted
+        # True from totalRecords > 0 alone, which is a count of vaults, not a reading of
+        # any vault's encryption. Both are gone rather than left reachable.
         if not rows:
-            total = data.get("totalRecords", inner_data.get("totalRecords", -1))
-            if total >= 0:
-                all_encrypted = total > 0
-                if all_encrypted:
-                    pass_reasons.append("Backup vaults found with encryption configured")
-                else:
-                    fail_reasons.append("No backup vaults found")
-                    recommendations.append("Create Azure backup vaults with encryption enabled")
-                return create_response(
-                    result={criteriaKey: all_encrypted}, validation=validation,
-                    pass_reasons=pass_reasons, fail_reasons=fail_reasons, recommendations=recommendations
-                )
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["isBackupEncrypted not evaluated: the Resource Graph query returned zero rows, "
+                            "which is also what a subscription this principal cannot read returns"],
+                recommendations=["Confirm the principal has at least Reader on every subscription "
+                                 "holding a Recovery Services or Backup vault, then re-run the query."]
+            )
 
         # Parse Resource Graph rows for encryption details
         vaults_evaluated = 0
@@ -135,7 +148,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
