@@ -1,0 +1,70 @@
+{
+  "name": "hasAuthenticationLogAPIAccess",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- Duo answers 'the credential can read the authentication log' (a successful read, even an empty one, is true; a 403 is a measured false), while JumpCloud answers 'at least one authentication event came back' (an activity proxy under which a tenant with no recent logins reads false). See conflict.positions.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- the Duo Admin API authentication log endpoint (one read, v1 or v2) at Duo; authentication-type events in a Directory Insights read at JumpCloud",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown until ruled: either a successful authentication-log read whose records all carry timestamp, factor, result and username (Duo; an empty window passes only when the body proves success), or at least one event whose event_type contains login, auth or mfa (JumpCloud)",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"},
+    {"srn": "37d36d50-df89-42f0-9435-c130ba6dc717", "name": "Duo - MSP partner account"},
+    {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management", "note": "RTA URL pinned at f9020402 (IS repo config says develop); the file is identical on main"}
+  ],
+  "aliases": [],
+  "owner": "J.J.",
+  "conflict": {
+    "summary": "Three integrations, two files. The type agrees (boolean); the truth condition does not. Duo treats the key as a permission: a quiet window is true and only Duo's 403/40301 refusal is false. JumpCloud treats it as activity: a read with events but none of an authentication type is false, so a working credential on a tenant with no recent logins reads as no access, and an empty read is not measured. The same tenant state therefore reads true at Duo and false or Not evaluated at JumpCloud.",
+    "positions": [
+      {
+        "meaning": "The Admin API credential can read the authentication log: a successful read is true, including an empty window when the body proves success; Duo's 403 / 40301 'Access forbidden' is a measured false, as are records missing timestamp, factor, result or username.",
+        "valueType": "boolean",
+        "population": "one Duo authentication-log read, /admin/v1/logs/authentication or /admin/v2/logs/authentication",
+        "integrations": [
+          {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"},
+          {"srn": "37d36d50-df89-42f0-9435-c130ba6dc717", "name": "Duo - MSP partner account"}
+        ],
+        "files": ["safeguards/iam/duo/hasAuthenticationLogAPIAccess.py:264,:272,:289,:306,:339-340"],
+        "source": "File read for this entry; test_hasAuthenticationLogAPIAccess.py; RTA description 'Authentication event audit trail via Duo Admin API v2 logs'"
+      },
+      {
+        "meaning": "At least one Directory Insights event with an event_type containing login, auth or mfa is returned. Events with none of those types (below the 10000-row cap) are a measured false; an empty read, or none at the cap, is not measured.",
+        "valueType": "boolean",
+        "population": "authentication-type events in a JumpCloud Directory Insights read (service directory) by searchDirectoryAuditEvents",
+        "integrations": [
+          {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"}
+        ],
+        "files": ["safeguards/identity-and-access-management/jumpcloud/hasAuthenticationLogAPIAccess.py:87,:110,:172,:195"],
+        "source": "File read for this entry; test_jumpcloud_logs_fail_closed.py; RTA description 'API access to authentication log events'"
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Rule whether the key asserts a permission (the credential can read the authentication log, Duo) or activity (authentication events were returned, JumpCloud). If it is activity, it belongs with the presence key the isIAMLoggingEnabled ruling produces, where an empty read is not measured rather than false."
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Does hasAuthenticationLogAPIAccess mean 'the credential is permitted to read the authentication log' or 'authentication events were returned in the read window', and is a successful read with no authentication events true, false or not measured?"
+    }
+  },
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "safeguards/iam/duo/hasAuthenticationLogAPIAccess.py:89-96,:264,:272,:289,:306,:339-340",
+    "safeguards/identity-and-access-management/jumpcloud/hasAuthenticationLogAPIAccess.py:87,:110,:172,:195",
+    "safeguards/iam/duo/test_hasAuthenticationLogAPIAccess.py",
+    "safeguards/identity-and-access-management/jumpcloud/test_jumpcloud_logs_fail_closed.py",
+    "integration-service integration_configs: iam/duo.json, iam/duo_msp.json, identity-and-access-management/jumpcloud.json",
+    "spektrum-labs-cli reports/qc-2026-10-06/defs/<srn>.json: the production RTA rows for the three integrations",
+    "contracts/criteria-registry-allowlist.json: safeguards/iam/duo/hasAuthenticationLogAPIAccess.py::hasAuthenticationLogAPIAccess"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-08", "change": "Registered at V0 so the registry gate can fail push runs on main; contested because Duo answers a permission (an empty successful read is true) and JumpCloud answers authentication activity (no authentication events is false)."}
+  ]
+}

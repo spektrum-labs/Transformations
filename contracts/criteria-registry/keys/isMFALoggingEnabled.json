@@ -1,0 +1,82 @@
+{
+  "name": "isMFALoggingEnabled",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- four integrations answer 'any audit record came back' with no MFA filter at all (a quiet tenant reads false), while JumpCloud answers 'at least one MFA-marked event came back' (an empty read is not measured). Nothing reads an MFA logging setting. See conflict.positions.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- every audit record in the vendor's default read window at Okta and Azure AD; MFA-marked Directory Insights events at JumpCloud",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown until ruled: either at least one audit record of any kind (Okta, Azure AD) or at least one event marked as MFA (JumpCloud: mfa true, mfa_meta, auth_mfa_context, or an event_type containing mfa)",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+    {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+    {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)", "note": "RTA URL pinned at ea2d2a3f; the file is identical on main"},
+    {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management", "note": "RTA URL pinned at f9020402 (IS repo config says develop); the file is identical on main"}
+  ],
+  "aliases": [],
+  "owner": "J.J.",
+  "conflict": {
+    "summary": "Five wired integrations, four wired files. The type agrees (boolean); the population does not. At Okta and Azure AD the key name says MFA but the code applies no MFA filter: it is the same affirmative_signal as isAuditLoggingEnabled, and the Okta file emits isIAMLoggingEnabled with the same value from the same read, although the Okta and Azure AD RTA descriptions say 'MFA-related records'. Only JumpCloud filters for MFA events. Both sides are activity proxies; no file reads an MFA logging setting.",
+    "positions": [
+      {
+        "meaning": "At least one audit record of any kind is returned, or the body carries an explicit on flag. No MFA filter, no recency. An empty read is a measured false.",
+        "valueType": "boolean",
+        "population": "all audit records in the vendor's default read window",
+        "integrations": [
+          {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta", "note": "the same file also emits isIAMLoggingEnabled with the same value"},
+          {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+          {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+          {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)"}
+        ],
+        "files": [
+          "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/is_mfa_logging_enabled.py:83,:95,:104,:114",
+          "safeguards/mfa/azure/ismfaloggingenabled.py:82,:94,:113",
+          "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/is_mfa_logging_enabled.py:82,:94,:113 @ ea2d2a3f",
+          "safeguards/iam/saviynt/ismfaloggingenabled.py:35 (unwired in production: the only RTA row is in the Integration-Service repo config mfa/saviynt.json; it counts authentication events but passes on any record)"
+        ],
+        "source": "Files read for this entry; RTA descriptions in the 2026-10-06 definition snapshot ('returns true if MFA-related records exist' at Okta, 'MFA-related audit logging' at Azure AD) describe a filter the code does not apply"
+      },
+      {
+        "meaning": "At least one Directory Insights event is marked as MFA (mfa true, mfa_meta, auth_mfa_context, or an event_type containing mfa). No MFA event in a read below the 10000-row cap is a measured false; an empty read, or none at the cap, is not measured.",
+        "valueType": "boolean",
+        "population": "MFA-marked JumpCloud Directory Insights events returned by searchDirectoryAuditEvents",
+        "integrations": [
+          {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"}
+        ],
+        "files": ["safeguards/identity-and-access-management/jumpcloud/isMFALoggingEnabled.py:91,:103,:107,:160,:183"],
+        "source": "File read for this entry; test_jumpcloud_logs_fail_closed.py:101"
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Rule this key with isIAMLoggingEnabled, whose open decision already asks whether isMFALoggingEnabled is a separate control or an alias. If separate, the Okta and Azure AD files must filter for MFA events (as JumpCloud does) or leave this key; if an alias, the JumpCloud filter is a stricter meaning that needs its own name."
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Is isMFALoggingEnabled a distinct control (MFA events are recorded) or an alias of isIAMLoggingEnabled / isAuditLoggingEnabled, given that Okta and Azure AD answer it from every audit record and only JumpCloud filters for MFA events? And what does an empty read mean?"
+    }
+  },
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/is_mfa_logging_enabled.py:2,:7,:83,:95,:104,:114",
+    "safeguards/mfa/azure/ismfaloggingenabled.py:82,:94,:113",
+    "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/is_mfa_logging_enabled.py:82,:94,:113",
+    "safeguards/iam/saviynt/ismfaloggingenabled.py:31-35,:53",
+    "safeguards/identity-and-access-management/jumpcloud/isMFALoggingEnabled.py:91,:103,:107,:160,:183",
+    "safeguards/identity-and-access-management/jumpcloud/test_jumpcloud_logs_fail_closed.py",
+    "integration-service integration_configs: iam/okta.json, iam/okta_app.json, iam/azure-ad.json, iam/azure-ad-oneclick.json, mfa/azure.json, mfa/saviynt.json, identity-and-access-management/jumpcloud.json",
+    "spektrum-labs-cli reports/qc-2026-10-06/defs/<srn>.json: the five production RTA rows and their descriptions; Savyint has no isMFALoggingEnabled row",
+    "contracts/criteria-registry/keys/isIAMLoggingEnabled.json: conflict.summary and decision.question on isMFALoggingEnabled",
+    "contracts/criteria-registry-allowlist.json: the four file::isMFALoggingEnabled entries"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-08", "change": "Registered at V0 so the registry gate can fail push runs on main; contested because four integrations answer from every audit record with no MFA filter while JumpCloud answers from MFA-marked events only, with different empty-read meanings."}
+  ]
+}

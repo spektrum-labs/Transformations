@@ -1,0 +1,43 @@
+{
+  "name": "isGroupMembershipChangeAudited",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when JumpCloud's directory-events read for the lookback window contains at least one group-membership or association event. This is an ACTIVITY PROXY: a tenant where no membership changed in the window reads false although auditing is on. Not measured when the read hit its page limit with no matching event.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "directory events returned for the queried lookback window",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "at least one directory event whose event_type or association field shows a group-membership change in the window",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34",
+      "name": "JumpCloud"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/identity-and-access-management/jumpcloud/isGroupMembershipChangeAudited.py: matching_count > 0 rule and the PAGE_LIMIT guard"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered at V0 so the registry gate can fail push runs on main; proposed, single emitter. Recorded as an activity proxy, the same shape that made isIAMLoggingEnabled contested; flagged for the owner."
+    }
+  ]
+}
