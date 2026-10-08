@@ -1,0 +1,134 @@
+{
+  "name": "isMFAEnabled",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- no single meaning is held in production. Eight integrations answer this key with five incompatible meanings, listed under conflict.positions; until the owner rules, no new implementation may be added under this name.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- differs per position: a policy object, a tenant method catalogue, the set of sign-on rules, the set of accounts, or the customer's own application end users",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown -- the five positions require five different reads; see conflict.positions",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management", "Multifactor Authentication"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+    {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+    {"srn": "604d0794-4237-439e-aa12-c319c8f4498b", "name": "Supabase-Data Security"},
+    {"srn": "d9d4f54e-a73f-4e47-a3a9-9a6784e65b22", "name": "Acre Security Access Control-Physical Security"},
+    {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"},
+    {"srn": "34dbca1b-b58f-4f58-a1fc-cc90e177c218", "name": "Ping Federate - MFA"},
+    {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "conflict": {
+    "summary": "All eight integrations agree on the TYPE (boolean) and disagree on what true asserts. Five meanings: a policy or setting exists; a method is available and something demands it; at least one sign-on path requires a second factor; every account has MFA; the customer's own application end users have MFA. It is dormant only because the six requirements asking it name 'Multifactor Authentication' while every answering integration is filed elsewhere -- repair the taxonomy (Wave F) first and all five meanings switch on at once under one name.",
+    "positions": [
+      {
+        "meaning": "A policy or setting object says MFA is on: Okta's MFA_ENROLL policy has status active; Ping Federate has at least one MFA-type IdP adapter configured; Saviynt's security settings report MFA enabled.",
+        "valueType": "boolean",
+        "population": "one configuration object",
+        "integrations": [
+          {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+          {"srn": "34dbca1b-b58f-4f58-a1fc-cc90e177c218", "name": "Ping Federate - MFA"},
+          {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"}
+        ],
+        "files": [
+          "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/mfa_transform.py",
+          "safeguards/mfa/pingfederate/ismfaenabled.py",
+          "safeguards/iam/saviynt/ismfaenabled.py"
+        ],
+        "source": "Okta: plan D1 -- the undeletable system MFA_ENROLL Default Policy every org has, so true for an org with no MFA (86ded564/mfa_transform.py:103-110). Ping and Saviynt: RTA descriptions only (defs snapshot), code not read -- V0."
+      },
+      {
+        "meaning": "MFA methods are enabled at the tenant AND at least one enabled Conditional Access policy's grantControls.builtInControls contains mfa.",
+        "valueType": "boolean",
+        "population": "tenant method catalogue plus the Conditional Access policy set",
+        "integrations": [{"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"}],
+        "files": ["safeguards/mfa/azure/ismfaenabled.py"],
+        "source": "iam-mfa.md F-iam-mfa-18: is_enabled = methods_available and mfa_enforced (:120-121). The RTA description says only 'methods are enabled', which understates the code."
+      },
+      {
+        "meaning": "At least one sign-on-allowing rule across the global session and authentication policies requires two factors.",
+        "valueType": "boolean",
+        "population": "every sign-on-allowing policy rule",
+        "integrations": [{"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"}],
+        "files": ["safeguards/iam/okta/ismfaenforcedforusers.py"],
+        "source": "iam-mfa.md F-iam-mfa-03 (replayed on a real body): the same file emits isMFAEnforcedForUsers with the stricter 'every rule' meaning (:26-28, :66, :214-215). Correct as written; do not 'fix' the shared URL."
+      },
+      {
+        "meaning": "Every enabled account (operator, system user) has a second factor enrolled.",
+        "valueType": "boolean",
+        "population": "accounts",
+        "integrations": [
+          {"srn": "d9d4f54e-a73f-4e47-a3a9-9a6784e65b22", "name": "Acre Security Access Control-Physical Security"},
+          {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management", "note": "aggregation unstated; plausible, not confirmed"}
+        ],
+        "files": [
+          "safeguards/physical-security/acre-security-access-control/isMFAEnabled.py",
+          "safeguards/identity-and-access-management/jumpcloud/isMFAEnabled.py"
+        ],
+        "source": "key-registry.md F-KEY-13 (RTA descriptions; code cross-checked only for Okta). Acre also emits mfaCoveragePercentage."
+      },
+      {
+        "meaning": "Every Supabase project verifies a second factor for ITS END USERS -- the customer's own application users, not the customer's workforce.",
+        "valueType": "boolean",
+        "population": "the customer's application end users, per project",
+        "integrations": [{"srn": "604d0794-4237-439e-aa12-c319c8f4498b", "name": "Supabase-Data Security", "note": "wired on develop"}],
+        "files": ["safeguards/dlp/supabase/isMFAEnabled.py"],
+        "source": "key-registry.md F-KEY-13; RTA description. Also emits mfaCoveragePercentage -- over PROJECTS, a third population under that name."
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Retire isMFAEnabled as a name with no independent meaning and move each position to a key that says what it measures. Two reviewers disagreed on the destination for the middle positions and both are recorded: key-registry F-KEY-13 deprecates isMFAEnabled entirely (enforcement vendors to isMFAEnforcedForUsers, policy-only vendors to isMFAPolicyConfigured); iam-mfa F-iam-mfa-18 calls Azure's 'available AND demanded' the right definition of isMFAEnabled itself. This proposal follows F-KEY-13 because Azure's definition is still 'at least one policy', which isMFAEnforcedForUsers (every path, 49 requirements) is not.",
+      "splitKeys": [
+        {"name": "isMFAPolicyConfigured", "definition": "An MFA policy, adapter or setting is configured; nothing about whether any sign-on path requires it was read. Presence evidence, weaker than enforcement.", "valueType": "boolean", "existing": false, "wouldTake": ["Okta (3bc425fa)", "Ping Federate - MFA", "Savyint"]},
+        {"name": "isMFARequiredByAnyPolicy", "definition": "At least one enabled access policy or rule that can grant sign-on requires a second factor.", "valueType": "boolean", "existing": false, "wouldTake": ["Okta - Application", "Azure AD"]},
+        {"name": "isMFAEnforcedForUsers", "definition": "Every authentication path that grants a user access requires a second factor; no path accepts a single factor.", "valueType": "boolean", "existing": true, "wouldTake": ["none of today's isMFAEnabled answers -- listed so nobody aliases isMFAEnabled onto it"]},
+        {"name": "mfaCoveragePercentage", "definition": "Percentage of enabled workforce accounts with a second factor enrolled.", "valueType": "number", "unit": "percent", "existing": true, "wouldTake": ["Acre Security Access Control-Physical Security", "JumpCloud-Identity and Access Management"]},
+        {"name": "isAppEndUserMFAEnforced", "definition": "Every project of the customer's own application requires its end users to verify a second factor.", "valueType": "boolean", "existing": false, "wouldTake": ["Supabase-Data Security"]}
+      ]
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Do we retire isMFAEnabled into the five keys proposed (F-KEY-13), or keep it with Azure's 'methods available AND at least one policy requires MFA' as its single meaning (F-iam-mfa-18) and move only the policy-presence and population-mismatch vendors off it? Either way this must be decided before Wave F repairs the MFA category."
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": [
+      {"integration": {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"}, "transform": "safeguards/iam/okta/ismfaenforcedforusers.py", "level": "V2",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}, "evidence": "F-iam-mfa-04: the file's no-evidence handling omits api_errors; not re-replayed for this entry"},
+       "evidence": ["Real Labs body plus pass/fail mutations replayed (F-iam-mfa-03); no-evidence path known defective (F-iam-mfa-04), so not V3"]},
+      {"integration": {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"}, "transform": "safeguards/mfa/azure/ismfaenabled.py", "level": "V1",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}, "evidence": "F-iam-mfa-18: :80-85 returns False with no api_errors on validation failure, so the grading is FAIL (gap)"}},
+      {"integration": {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"}, "transform": "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/mfa_transform.py", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}}},
+      {"integration": {"srn": "604d0794-4237-439e-aa12-c319c8f4498b", "name": "Supabase-Data Security"}, "transform": "safeguards/dlp/supabase/isMFAEnabled.py @ develop", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}}},
+      {"integration": {"srn": "d9d4f54e-a73f-4e47-a3a9-9a6784e65b22", "name": "Acre Security Access Control-Physical Security"}, "transform": "safeguards/physical-security/acre-security-access-control/isMFAEnabled.py @ develop", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}}},
+      {"integration": {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"}, "transform": "safeguards/identity-and-access-management/jumpcloud/isMFAEnabled.py", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}}},
+      {"integration": {"srn": "34dbca1b-b58f-4f58-a1fc-cc90e177c218", "name": "Ping Federate - MFA"}, "transform": "safeguards/mfa/pingfederate/ismfaenabled.py", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}}},
+      {"integration": {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"}, "transform": "safeguards/iam/saviynt/ismfaenabled.py", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}}}
+    ]
+  },
+  "citations": [
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-registry.md F-KEY-13 (five definitions, 8 integrations, 6 requirements)",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/iam-mfa.md F-iam-mfa-03, F-iam-mfa-04, F-iam-mfa-18",
+    "spektrum-labs-cli docs/integration-qc-2026-10-06-remediation-plan.md: 'G1 must land before F' and D1",
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json and defs/<srn>.json: the eight RTA rows and their descriptions",
+    "tools/check_criteria_registry.py census 2026-10-07: 11 files on main emit this key"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-07", "change": "Seeded as contested from the 2026-10-06 integration QC. No meaning chosen."}
+  ]
+}
