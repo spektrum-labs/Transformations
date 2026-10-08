@@ -179,26 +179,33 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
     def test_one_fresh_event_among_old_ones_passes(self):
         self.assertIs(self.value(returned([entry(29), entry(25), entry(1)])), True)
 
+    def with_param(self, rows, **param):
+        """The evaluator envelope: the parameter sits next to data, outside the vendor body."""
+        return dict({"data": returned(rows), "validation": {"status": "valid", "errors": [], "warnings": []}},
+                    **param)
+
     def test_max_event_age_days_is_a_parameter(self):
-        rows = returned([entry(5)])
-        self.assertIsNone(self.value(rows))  # default 3
-        self.assertIs(self.value({"maxEventAgeDays": 7, "response": [entry(5)]}), True)
-        self.assertIs(self.value({"response": {"response": [entry(5)]}, "maxEventAgeDays": 7}), True)
-        self.assertIsNone(self.value({"maxEventAgeDays": 1, "response": [entry(2)]}))
-        out = self.run_transform({"maxEventAgeDays": 7, "response": [entry(5)]})["transformedResponse"]
+        self.assertIsNone(self.value(returned([entry(5)])))  # default 3
+        self.assertIs(self.value(self.with_param([entry(5)], maxEventAgeDays=7)), True)
+        self.assertIsNone(self.value(self.with_param([entry(2)], maxEventAgeDays=1)))
+        out = self.run_transform(self.with_param([entry(5)], maxEventAgeDays=7))["transformedResponse"]
         self.assertEqual(out["maxEventAgeDays"], 7)
 
     def test_a_bad_max_event_age_days_falls_back_to_3(self):
         for bad in (0, -5, "7", None, True, float("nan"), float("inf"), [7], 31, 10 ** 9, 1e300):
             with self.subTest(bad=bad):
-                self.assertIsNone(self.value({"maxEventAgeDays": bad, "response": [entry(5)]}))
-                self.assertIs(self.value({"maxEventAgeDays": bad, "response": [entry(2)]}), True)
+                self.assertIsNone(self.value(self.with_param([entry(5)], maxEventAgeDays=bad)))
+                self.assertIs(self.value(self.with_param([entry(2)], maxEventAgeDays=bad)), True)
 
     def test_max_event_age_days_equal_to_the_window_is_accepted(self):
-        self.assertIs(self.value({"maxEventAgeDays": 30, "response": [entry(29)]}), True)
+        self.assertIs(self.value(self.with_param([entry(29)], maxEventAgeDays=30)), True)
+
+    def test_max_event_age_days_on_the_legacy_path_is_ignored(self):
+        # Legacy input IS the vendor body: a key in it is vendor data, never a parameter.
+        self.assertIsNone(self.value({"maxEventAgeDays": 30, "response": [entry(5)]}))
+        self.assertIsNone(self.value({"stat": "OK", "maxEventAgeDays": 30, "response": [entry(5)]}))
 
     def test_max_event_age_days_inside_the_duo_response_body_is_ignored(self):
-        # The response body is vendor data, never a parameter: it cannot loosen the rule.
         stale = {"maxEventAgeDays": 30, "response": [entry(5)]}
         self.assertIsNone(self.value({"response": stale}))
         self.assertIsNone(self.value({"data": stale, "validation": {"status": "valid"}}))
@@ -239,6 +246,34 @@ class DuoAuditLoggingReadableLogTests(unittest.TestCase):
     def test_truncated_read_just_over_the_limit_is_not_evaluated(self):
         rows = [entry(29, seconds_extra=i) for i in range(999)] + [entry(3, seconds_extra=60)]
         self.assertIsNone(self.value(returned(rows)))
+
+    # --- what may show recency ------------------------------------------------------------
+
+    def test_an_event_dated_in_the_future_is_not_recent_proof(self):
+        self.assertIsNone(self.value(returned([entry(-0.5)])))  # 12 hours ahead
+        self.assertIsNone(self.value(returned([entry(10), entry(-0.5)])))
+        self.assertIs(self.value(returned([entry(10), entry(-0.001)])), True)  # inside clock skew
+
+    def test_only_a_well_formed_entry_shows_recency(self):
+        recent_without_fields = {"timestamp": int((NOW - timedelta(hours=1)).timestamp())}
+        self.assertIsNone(self.value(returned([entry(20), recent_without_fields])))
+        response = self.run_transform(returned([entry(20), recent_without_fields]))
+        self.assertEqual(response["additionalInfo"]["transformation"]["inputSummary"]["wellFormedLogCount"], 1)
+        self.assertIs(self.value(returned([entry(1), recent_without_fields])), True)
+
+    def test_the_stale_reason_shows_the_exact_age(self):
+        response = self.run_transform(returned([entry(3, seconds_extra=60)]))
+        reason = self.evaluation(response)["failReasons"][0]
+        self.assertIn("(3 days 1 minute ago), older than the 3 days allowed", reason)
+        rows = [entry(29, seconds_extra=i) for i in range(999)] + [entry(3, seconds_extra=3600)]
+        reason = self.evaluation(self.run_transform(returned(rows)))["failReasons"][0]
+        self.assertIn("3 days 1 hour old, more than 3 days", reason)
+
+    def test_duration_text(self):
+        self.assertEqual(self.t.duration_text(0), "less than a minute")
+        self.assertEqual(self.t.duration_text(59), "less than a minute")
+        self.assertEqual(self.t.duration_text(90000), "1 day 1 hour")
+        self.assertEqual(self.t.duration_text(3 * 86400 + 60), "3 days 1 minute")
 
     def test_999_entries_is_not_flagged_truncated(self):
         out = self.run_transform(returned([entry(2)] * 999))["transformedResponse"]

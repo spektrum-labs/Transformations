@@ -17,9 +17,10 @@ that logging works today: we have no recent event to point to. An old newest eve
 evaluated (value None), never a pass and never False. An empty window has no newest event, so it is
 Not evaluated too.
 
-maxEventAgeDays is read from the top level of the input only (a parameter from the evaluator, never from
-the Duo response body, which is vendor data) and only when it is a positive number no larger than the
-30-day window read; anything else (zero, negative, a string, a bool, NaN, infinity, or more than the window,
+maxEventAgeDays is read only from the evaluator envelope ({"data": ..., "validation": ...}, next to
+"data"), never from the Duo response body, which is vendor data: on the legacy path the input IS the
+vendor body, so there the default of 3 always applies. It is used only when it is a positive number no
+larger than the 30-day window read; anything else (zero, negative, a string, a bool, NaN, infinity, or more than the window,
 which would accept any log) falls back to the default of 3, so a bad parameter can never switch the rule
 off. The age is measured to the second: exactly 3 days passes, 3 days and one minute is Not evaluated.
 
@@ -48,7 +49,7 @@ CRITERIA_KEY = "isAuditLoggingEnabled"
 REQUEST_LIMIT = 1000  # Duo v1 returns at most the earliest 1000 events from mintime
 WINDOW_DAYS = 30  # getAdminLogs sends mintime = now - 30 days
 DEFAULT_MAX_EVENT_AGE_DAYS = 3  # the newest event must be no older than this to pass
-FUTURE_SLACK_SECONDS = 86400
+FUTURE_SLACK_SECONDS = 300  # clock skew allowed; a later timestamp is never evidence of a recent event
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 ENDPOINT = "/admin/v1/logs/administrator"
 RESULT_KEYS = ["totalLogCount", "wellFormedLogCount", "logsPresent", "mostRecentTimestamp",
@@ -180,6 +181,19 @@ def age_text(days):
     return str(shown) + (" day" if shown == 1 else " days")
 
 
+def duration_text(seconds):
+    """'3 days 1 minute' / '5 hours' / 'less than a minute': an exact age for the stale reasons."""
+    total = int(seconds) if seconds > 0 else 0
+    days, rest = divmod(total, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    parts = []
+    for count, unit in ((days, "day"), (hours, "hour"), (minutes, "minute")):
+        if count:
+            parts.append(str(count) + " " + unit + ("" if count == 1 else "s"))
+    return " ".join(parts) if parts else "less than a minute"
+
+
 def iso_of(epoch_seconds):
     return (EPOCH + timedelta(seconds=epoch_seconds)).isoformat()
 
@@ -219,14 +233,19 @@ def evaluate(data, now=None, max_event_age_days=DEFAULT_MAX_EVENT_AGE_DAYS):
     well_formed = 0
     newest = None
     oldest = None
+    any_timestamp = False
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        if has_required_fields(entry):
+        is_well_formed = has_required_fields(entry)
+        if is_well_formed:
             well_formed = well_formed + 1
         ts = entry_epoch(entry)
         if ts is None or ts > now_epoch + FUTURE_SLACK_SECONDS:
-            continue  # no valid timestamp, or implausibly in the future: never evidence
+            continue  # no valid timestamp, or in the future: never evidence
+        any_timestamp = True
+        if not is_well_formed:
+            continue  # recency is shown only by an entry that is an administrator log entry
         if newest is None or ts > newest:
             newest = ts
         if oldest is None or ts < oldest:
@@ -249,14 +268,18 @@ def evaluate(data, now=None, max_event_age_days=DEFAULT_MAX_EVENT_AGE_DAYS):
                            "records administrator actions for every account and has no setting to turn "
                            "this off")
     if newest is None:
-        return dict(summary, state="unevaluated", readError=True,
-                    reason="None of the " + str(total) + " administrator log entries carries a usable "
-                           "timestamp, so the response cannot be read as an administrator log")
-    if well_formed == 0:
-        return dict(summary, state="unevaluated", readError=True,
-                    reason="None of the " + str(total) + " entries has the administrator log fields "
+        if any_timestamp and well_formed == 0:
+            reason_text = ("None of the " + str(total) + " entries has the administrator log fields "
                            "(action, username, timestamp), so the response cannot be read as an "
                            "administrator log")
+        elif not any_timestamp:
+            reason_text = ("None of the " + str(total) + " administrator log entries carries a usable "
+                           "timestamp, so the response cannot be read as an administrator log")
+        else:
+            reason_text = ("None of the " + str(total) + " entries has both the administrator log fields "
+                           "(action, username, timestamp) and a usable timestamp, so there is no event "
+                           "to measure recency from")
+        return dict(summary, state="unevaluated", readError=True, reason=reason_text)
     age_seconds = now_epoch - newest
     age_days = int(age_seconds // 86400) if age_seconds > 0 else 0
     summary["mostRecentTimestamp"] = iso_of(newest)
@@ -272,7 +295,7 @@ def evaluate(data, now=None, max_event_age_days=DEFAULT_MAX_EVENT_AGE_DAYS):
                      "window and newer events may exist that were not read")
         if stale:
             return dict(summary, state="unevaluated",
-                        reason=read_note + ". The newest event read is " + str(age_days) + " days old, "
+                        reason=read_note + ". The newest event read is " + duration_text(age_seconds) + " old, "
                                "more than " + age_text(max_event_age_days) + ", and the read does not show "
                                "whether a newer event exists, so recency cannot be shown")
         return dict(summary, state="pass",
@@ -282,7 +305,7 @@ def evaluate(data, now=None, max_event_age_days=DEFAULT_MAX_EVENT_AGE_DAYS):
         return dict(summary, state="unevaluated",
                     reason="Duo returned " + str(total) + " administrator log events (" + ENDPOINT + ") for "
                            + window_text + ". The latest administrator event is " + summary["mostRecentTimestamp"]
-                           + " (" + str(age_days) + " days ago), older than the " + age_text(max_event_age_days)
+                           + " (" + duration_text(age_seconds) + " ago), older than the " + age_text(max_event_age_days)
                            + " allowed, so there is no recent event to show that audit logging is working. "
                            "Not evaluated, not a failure")
     return dict(summary, state="pass",
@@ -303,7 +326,10 @@ def transform(input):
         if validation.get("status") == "failed":
             return unevaluated_response("Input validation failed; the log list is not evidence",
                                         validation=validation, read_error=True)
-        max_age = resolve_max_event_age_days(input)
+        # The parameter comes only from the evaluator envelope. On the legacy path the input IS the
+        # vendor body, which is never a source of parameters, so the default applies.
+        envelope = isinstance(input, dict) and "data" in input and "validation" in input
+        max_age = resolve_max_event_age_days(input) if envelope else DEFAULT_MAX_EVENT_AGE_DAYS
         outcome = evaluate(data, now_utc(), max_age)
         if outcome["state"] != "pass":
             return unevaluated_response(outcome["reason"], validation=validation,
