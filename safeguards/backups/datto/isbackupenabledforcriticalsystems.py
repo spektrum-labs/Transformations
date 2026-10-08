@@ -32,12 +32,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("isBackupEnabledForCriticalSystems") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["isBackupEnabledForCriticalSystems could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -79,7 +84,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -136,6 +141,21 @@ def transform(input):
                     critical_protected = True
                     protected_critical_count += 1
 
+        if critical_count == 0:
+            # No device list, or no device identifiable as critical (no isCritical /
+            # criticalSystem flag and no server type): the check's subject was never seen,
+            # so nothing was measured.
+            if len(devices) == 0:
+                reason = "isBackupEnabledForCriticalSystems not evaluated: no devices in the response"
+            else:
+                reason = "isBackupEnabledForCriticalSystems not evaluated: no device in the response is identifiable as a critical system (server)"
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[reason],
+                input_summary={"totalDevices": len(devices), "criticalSystems": 0, "protectedCriticalSystems": 0}
+            )
+
         if critical_protected:
             pass_reasons.append(f"Backup enabled for critical systems: {protected_critical_count}/{critical_count} servers protected")
         else:
@@ -160,7 +180,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

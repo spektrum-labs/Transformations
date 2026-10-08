@@ -7,7 +7,8 @@ Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/targets/
 Note: RCS/Azure/Glacier targets expose no encryptionType in the RSC schema, so they fail as not evidenced (not as unencrypted).
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
-unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
+unrecognised body is None with dataCollection status "error", so Token-Service records it as not
+evaluated rather than as a gap. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
@@ -47,10 +48,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
+    # Not measured is read off the value, so every path that leaves the criterion None -- the except
+    # branch included -- reports it to Token-Service as not evaluated rather than as a gap.
+    measured = result.get(KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else (fail_reasons or errors or ["No reading."])},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -79,7 +84,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -240,9 +245,9 @@ def evaluate(input):
     cloud = [t for t in targets if t.get("targetType") not in NON_CLOUD_TYPES]
     summary = {"activeCloudTargets": len(cloud)}
     if not cloud:
-        return fail(validation, "No active cloud archival location exists.", None, summary)
+        return fail(validation, "No active cloud archival location exists.", None, summary, value=False)
     gaps = encryption_gaps(cloud, AES256_TYPES)
     summary["gaps"] = gaps
     if gaps:
-        return fail(validation, "Encryption is not evidenced for every active cloud archival location: " + "; ".join(gaps) + ".", None, summary)
+        return fail(validation, "Encryption is not evidenced for every active cloud archival location: " + "; ".join(gaps) + ".", None, summary, value=False)
     return ok(validation, True, "All " + str(len(cloud)) + " active cloud archival locations report an encryption type.", summary)

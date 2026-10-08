@@ -4,10 +4,19 @@ Vendor: AWS
 Category: Backups / Compliance
 
 Checks whether any backups have been tested via restore operations.
+
+Rule (fail closed, the same rule recoverytestcompleted.py applies to the same body): true when at
+least one RestoreDBInstanceFromDBSnapshot event against a DB instance completed WITHOUT an errorCode
+in its CloudTrailEvent. AWS records failed API calls as events too, so an errored restore is evidence
+that someone tried, not that the backup restores. CloudTrail LookupEvents holds 90 days, which bounds
+the window. A vendor error or unreadable body is reported as not measured, never as a finding.
 """
 
 import json
 from datetime import datetime
+
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "isBackupTested"
 
 
 def extract_input(input_data):
@@ -44,12 +53,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     """
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -78,8 +91,30 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def vendor_error(data):
+    """The vendor's own error message when the body is an error envelope, else None."""
+    if data is None:
+        return "No response body"
+    if not isinstance(data, dict):
+        return None
+    for key in ["error", "errors", "Error", "ErrorResponse", "__type", "errorType", "errorCode"]:
+        value = data.get(key)
+        if value:
+            if isinstance(value, dict):
+                inner = value.get("Error") if isinstance(value.get("Error"), dict) else value
+                return str(inner.get("Message") or inner.get("message") or inner.get("Code") or value)
+            return "%s: %s" % (value, data.get("Message") or data.get("message") or "")
+    code = data.get("statusCode", data.get("status_code"))
+    try:
+        if code is not None and int(code) >= 400:
+            return "HTTP %s" % code
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
 def transform(input):
-    criteriaKey = "isBackupTested"
+    criteriaKey = CRITERIA_KEY
 
     try:
         if isinstance(input, str):
@@ -91,7 +126,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -103,8 +138,18 @@ def transform(input):
         # Navigate to event list. AWS CloudTrail returns events wrapped in
         # {Events: {member: [...]}}, where `member` may be a list (multiple
         # events) or a single dict (one event). Either shape is valid.
-        api_response = data.get("apiResponse", data) if isinstance(data, dict) else {}
-        lookup_response = api_response.get("LookupEventsResponse") or {}
+        api_response = data.get("apiResponse", data) if isinstance(data, dict) else data
+        error = vendor_error(api_response)
+        lookup_response = api_response.get("LookupEventsResponse") if isinstance(api_response, dict) else None
+        if error is None and not isinstance(lookup_response, dict):
+            error = "Response has no LookupEventsResponse; CloudTrail restore events were not read"
+        if error is not None:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=[error],
+                fail_reasons=["Not measured: " + error]
+            )
         lookup_result = lookup_response.get("LookupEventsResult") or {}
         events_container = lookup_result.get("Events") or {}
         event_members = events_container.get("member") if isinstance(events_container, dict) else events_container
@@ -116,9 +161,8 @@ def transform(input):
             event_members = []
 
         # For each event, check if any of its Resources is a DBInstance.
-        # Track successful vs errored events separately so the result output
-        # can surface the breakdown to reviewers, even though both count
-        # toward isBackupTested=true (see boolean comment below).
+        # Track successful vs errored events separately; only a successful
+        # restore counts toward isBackupTested=true (see boolean comment below).
         successful_restores = []
         failed_restores = []
         for event in event_members:
@@ -170,18 +214,25 @@ def transform(input):
             else:
                 successful_restores.append(entry)
 
-        # Boolean: any DBInstance restore event (successful or errored) counts
-        # as evidence of backup-test activity. The output still surfaces the
-        # success/failure breakdown so reviewers can interpret it.
+        # Boolean: only a DBInstance restore that completed without an errorCode
+        # shows the backup restores. An errored restore is an attempt, and is
+        # still surfaced in the breakdown so reviewers can see it.
         total_restore_events = len(successful_restores) + len(failed_restores)
-        is_backup_tested = total_restore_events > 0
+        is_backup_tested = len(successful_restores) > 0
 
         if is_backup_tested:
-            most_recent = successful_restores[0] if successful_restores else failed_restores[0]
+            most_recent = successful_restores[0]
             pass_reasons.append(
-                f"Found {total_restore_events} DB restore event(s) in CloudTrail "
-                f"({len(successful_restores)} successful, {len(failed_restores)} errored). "
+                f"Found {len(successful_restores)} successful DB restore event(s) in CloudTrail "
+                f"({len(failed_restores)} errored). "
                 f"Most recent: {most_recent['eventName']} at {most_recent['eventTime']} by {most_recent['user']}."
+            )
+        elif failed_restores:
+            fail_reasons.append(
+                f"All {len(failed_restores)} DB restore event(s) in CloudTrail carry an errorCode; no restore completed."
+            )
+            recommendations.append(
+                "Investigate the failed restores and complete a successful restore test from a backup snapshot."
             )
         else:
             fail_reasons.append("No backup restore events (DBInstance restores) found in CloudTrail logs.")
@@ -208,7 +259,7 @@ def transform(input):
         # - validationErrors: Schema validation issues (from Pydantic)
         # - transformationErrors: Runtime execution errors in transformation logic
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

@@ -10,6 +10,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isM365BackupCoverageEnabled = true when at least one ENABLED plan of type Office365 or ExchangeUser has
@@ -101,17 +122,17 @@ def transform(input):
         data = unwrap(parse_input(input), "plans")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         plans = data.get("plans")
         if not isinstance(plans, list):
-            return {key: False, "reason": "Response has no plans list"}
+            return respond(key, None, "Response has no plans list")
         count = as_int(data.get("plansCount"))
         if count is not None and count > len(plans):
-            return {key: False, "reason": "Read " + str(len(plans)) + " of " + str(count) + " plans"}
+            return respond(key, None, "Read " + str(len(plans)) + " of " + str(count) + " plans")
         hits = [pname(p) for p in plans if isinstance(p, dict) and str(p.get("planType") or "") in ("Office365", "ExchangeUser")
                 and str(p.get("status") or "").upper() == "ENABLED" and (as_int(p.get("associatedEntities")) or 0) > 0]
         if len(hits) == 0:
-            return {key: False, "reason": "No enabled Office365 or ExchangeUser plan has associated entities (" + str(len(plans)) + " plans read)"}
-        return {key: True, "reason": str(len(hits)) + " enabled Microsoft 365 plans protect entities", "plans": hits[:10]}
+            return respond(key, False, "No enabled Office365 or ExchangeUser plan has associated entities (" + str(len(plans)) + " plans read)")
+        return respond(key, True, str(len(hits)) + " enabled Microsoft 365 plans protect entities", {"plans": hits[:10]})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

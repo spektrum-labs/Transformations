@@ -30,7 +30,8 @@ except ImportError:
 
 
 def run(key, body):
-    return load_code((HERE / (key.lower() + ".py")).read_text(), key)["transform"](body)[key]
+    out = load_code((HERE / (key.lower() + ".py")).read_text(), key)["transform"](body)
+    return out.get("transformedResponse", out)[key]
 
 
 def domain(i=0, active=89, recent=71, retention="ICR", seats=15, sub="Classic:1234566", org=145):
@@ -50,12 +51,12 @@ KEYS = ["backupSuccessRatePercentage", "isBackupEnabled", "confirmedLicensePurch
 @pytest.mark.parametrize("key", KEYS)
 @pytest.mark.parametrize("body", FAIL_CLOSED, ids=range(len(FAIL_CLOSED)))
 def test_fail_closed(key, body):
-    assert run(key, copy.deepcopy(body)) in (None, False)
+    assert run(key, copy.deepcopy(body)) is None
 
 
 @pytest.mark.parametrize("key", KEYS)
 def test_two_organizations_refused(key):
-    assert run(key, [domain(0), domain(1, org=999)]) in (None, False)
+    assert run(key, [domain(0), domain(1, org=999)]) is None
 
 
 @pytest.mark.parametrize("wrap", [lambda b: b, json.dumps, lambda b: {"response": b}, lambda b: {"result": b},
@@ -78,6 +79,8 @@ def test_backup_enabled():
     assert run("isBackupEnabled", [domain(0), domain(1, recent=0)]) is False
     assert run("isBackupEnabled", [domain(0, active=0, recent=0)]) is False
     bad = copy.deepcopy(GOOD); bad[0]["backupStats"] = None
+    assert run("isBackupEnabled", bad) is None
+    bad[1]["backupStats"]["activeServicesWithRecentBackupCount"] = 0
     assert run("isBackupEnabled", bad) is False
 
 
@@ -85,11 +88,13 @@ def test_license():
     assert run("confirmedLicensePurchased", GOOD) is True
     assert run("confirmedLicensePurchased", [domain(0), domain(1, seats=0)]) is False
     assert run("confirmedLicensePurchased", [domain(0, sub="")]) is False
-    assert run("confirmedLicensePurchased", [domain(0, sub=None)]) is False
+    assert run("confirmedLicensePurchased", [domain(0, sub=None)]) is None
+    assert run("confirmedLicensePurchased", [domain(0, seats=None)]) is None
+    assert run("confirmedLicensePurchased", [domain(0, sub=None), domain(1, seats=0)]) is False
 
 
 def test_retention():
     assert run("isDeletionRetentionPeriodEnforced", GOOD) is True
     assert run("isDeletionRetentionPeriodEnforced", [domain(0), domain(1, retention="TBR")]) is None
-    assert run("isDeletionRetentionPeriodEnforced", [domain(0, retention="weird")]) is False
-    assert run("isDeletionRetentionPeriodEnforced", [domain(0, retention=None)]) is False
+    assert run("isDeletionRetentionPeriodEnforced", [domain(0, retention="weird")]) is None
+    assert run("isDeletionRetentionPeriodEnforced", [domain(0, retention=None)]) is None

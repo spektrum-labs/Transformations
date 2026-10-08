@@ -7,7 +7,8 @@ Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/clusterEncryptionInfo/
 Note: RSC exposes no rotation schedule; evidence is a completed rotation (CDM_DONE) within 365 days.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
-unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
+unrecognised body is None with dataCollection status "error", so Token-Service records it as not
+evaluated rather than as a gap. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
@@ -47,10 +48,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
+    # Not measured is read off the value, so every path that leaves the criterion None -- the except
+    # branch included -- reports it to Token-Service as not evaluated rather than as a gap.
+    measured = result.get(KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else (fail_reasons or errors or ["No reading."])},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -79,7 +84,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -223,7 +228,7 @@ def evaluate(input):
         return failure
     enc = [c for c in nodes if c.get("isEncrypted") is True]
     if not enc:
-        return fail(validation, "No Rubrik cluster is encrypted at rest.", None, {"clusters": len(nodes)})
+        return fail(validation, "No Rubrik cluster is encrypted at rest.", None, {"clusters": len(nodes)}, value=False)
     now = datetime.now(timezone.utc)
     gaps = []
     for c in enc:
@@ -241,5 +246,5 @@ def evaluate(input):
     summary = {"encryptedClusters": len(enc), "gaps": gaps}
     if gaps:
         return fail(validation, "Key rotation is not evidenced within " + str(MAX_DAYS) + " days for: " + ", ".join(gaps) + ".",
-                    "Rotate cluster encryption keys (RSC > Encryption) at least annually.", summary)
+                    "Rotate cluster encryption keys (RSC > Encryption) at least annually.", summary, value=False)
     return ok(validation, True, "All " + str(len(enc)) + " encrypted clusters completed a key rotation in the last " + str(MAX_DAYS) + " days.", summary)
