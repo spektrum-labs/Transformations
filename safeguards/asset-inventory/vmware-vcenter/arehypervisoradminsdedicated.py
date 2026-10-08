@@ -222,6 +222,9 @@ def transform(input):
                 if solution:
                     skipped = skipped + 1
                     continue
+            if is_group and low == "administrators" and p["domain"].lower() == "vsphere.local" \
+                    and data.get("ssoAdministratorsComplete") is True:
+                continue  # default root-folder group; its members were expanded into ssoAdministrators and are judged one by one
             if low in broad:
                 failed.append(p["label"] + " (broad group: every member is an administrator)")
                 continue

@@ -93,6 +93,12 @@ def test_incomplete_or_empty_member_list_is_not_evaluated():
     assert value(separate(admins(member("old", enabled=False))), SEPARATE) is None
 
 
+def test_unexpanded_group_member_is_not_judged_so_no_true():
+    r = separate(admins(member("adm-x"), {"sam": "Ops Admins", "type": "group", "enabled": True}))
+    assert value(r, SEPARATE) is None
+    assert value(separate(admins(member("carol", hasMailbox=True), {"sam": "Ops Admins", "type": "group"})), SEPARATE) is False
+
+
 def test_members_with_missing_type_or_enabled_are_never_dropped_into_a_true():
     no_type = {"sam": "jdoe", "enabled": True, "hasMailbox": True, "exchangeAttributesReadable": True}
     no_enabled = {"sam": "jdoe2", "type": "user", "hasMailbox": True, "exchangeAttributesReadable": True}
@@ -132,7 +138,7 @@ def ou(dn, count, blocked=None):
 
 def rights(gpos, ous, readable=True, complete=True):
     return {"schema": "spektrum.ad.v1", "domainSid": SID,
-            "logonRights": {"gposComplete": complete, "ouInheritanceReadable": readable, "gpos": gpos, "workstationOus": ous}}
+            "logonRights": {"gposComplete": complete, "allDefiningGposIncluded": True, "ouInheritanceReadable": readable, "gpos": gpos, "workstationOus": ous}}
 
 
 WS = "OU=Workstations," + DOMAIN_DN
@@ -207,6 +213,22 @@ def baseline(name="Workstation baseline", links=None, order=1):
     return {"displayName": name, "enabled": True, "appliesTo": "authenticated", "wmiFiltered": False,
             "denyInteractive": [SID + "-501"], "denyRemoteInteractive": [SID + "-501"],
             "links": links if links is not None else [{"scopeDn": WS, "enabled": True, "enforced": False, "linkOrder": order}]}
+
+
+def test_a_right_defined_with_an_empty_list_still_wins_and_clears_the_deny():
+    root = gpo(links=[{"scopeDn": DOMAIN_DN, "enabled": True, "enforced": False, "linkOrder": 1}])
+    empty = baseline()
+    empty["denyInteractive"] = []
+    empty["denyRemoteInteractive"] = []
+    empty["definesDenyInteractive"] = True
+    empty["definesDenyRemoteInteractive"] = True
+    assert value(denied(rights([root, empty], [ou(WS, 10)])), DENIED) is False
+
+
+def test_snapshot_without_the_all_defining_gpos_marker_is_not_evaluated():
+    body = rights([gpo()], [ou(WS, 10)])
+    del body["logonRights"]["allDefiningGposIncluded"]
+    assert value(denied(body), DENIED) is None
 
 
 def test_baseline_gpo_nearer_the_ou_overrides_a_deny_linked_at_the_domain_root():

@@ -7,6 +7,8 @@
 # Snapshot shape (schema "spektrum.ad.v1"):
 #   domainSid                   e.g. S-1-5-21-1-2-3 (Domain Admins is <domainSid>-512)
 #   logonRights.gposComplete    true only when every GPO in the domain was read
+#   logonRights.allDefiningGposIncluded  true only when EVERY GPO defining either right is in gpos[] (required for any answer)
+#   gpos[].definesDenyInteractive / definesDenyRemoteInteractive  true when the GPO defines the right, even with an empty list
 #   logonRights.gpos[]          EVERY GPO that defines either right (not only those denying Domain Admins): displayName, enabled (computer settings on), appliesTo ("authenticated" |
 #                               "filtered" | "unknown"), wmiFiltered, denyInteractive[], denyRemoteInteractive[]
 #                               (SIDs as strings, or {sid, containsDomainAdmins}), links[{scopeDn, enabled, enforced, linkOrder}]
@@ -83,6 +85,13 @@ def transform(input):
     def same(a, b):
         return as_text(a).lower() == as_text(b).lower()
 
+    def defines(g, field):
+        # A right can be defined with an EMPTY list ("Define these policy settings" ticked, no members): that GPO still wins.
+        flag = g.get("defines" + field[0].upper() + field[1:])
+        if isinstance(flag, bool):
+            return flag
+        return len(as_list(g.get(field))) > 0
+
     def denies(entries, admin_sid):
         for entry in as_list(entries):
             if isinstance(entry, dict):
@@ -117,6 +126,9 @@ def transform(input):
             return not_evaluated("The snapshot carries no GPO logon-rights data or no domain SID, so the read cannot be shown to have run")
         if rights.get("gposComplete") is not True:
             return not_evaluated("The GPO list is incomplete, so a GPO that denies logon could be missing")
+        if rights.get("allDefiningGposIncluded") is not True:
+            return not_evaluated("The snapshot does not state that every GPO defining a deny-logon right was sent, so which "
+                                 "GPO wins cannot be resolved")
 
         admin_sid = domain_sid + "-512"
         findings = []
@@ -162,7 +174,7 @@ def transform(input):
             blocked = [as_text(b) for b in as_list(ou.get("inheritanceBlockedAt"))]
             candidates = []
             for g in gpos:
-                if not as_list(g.get(field)):
+                if not defines(g, field):
                     continue
                 for link in as_list(g.get("links")):
                     if not isinstance(link, dict) or link.get("enabled") is not True:

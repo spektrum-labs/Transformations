@@ -112,7 +112,8 @@ def transform(input):
                 findings.append("Computer account " + name + " is a Domain Admins member")
                 continue
             if kind == "group":
-                findings.append("Group " + name + " is listed as a Domain Admins member and was not expanded")
+                unclassified.append(name)
+                findings.append("Group " + name + " is listed as a Domain Admins member and was not expanded, so its members were not judged")
                 continue
             if member.get("enabled") is False:
                 continue

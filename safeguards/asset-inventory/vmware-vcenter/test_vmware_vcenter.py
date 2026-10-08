@@ -141,6 +141,16 @@ def test_sso_administrators_count():
     assert value(transform(body)) is False
 
 
+def test_default_sso_administrators_group_is_judged_through_its_expanded_members():
+    root = perm("Administrators", domain="vsphere.local", kind="GROUP")
+    body = snap(root, sso=[{"name": "adm-alice", "domain": "example.test", "type": "USER"}])
+    assert value(transform(body)) is None  # membership not stated complete: group stays unknown
+    body["ssoAdministratorsComplete"] = True
+    assert value(transform(body)) is True
+    body["ssoAdministrators"].append({"name": "Domain Users", "domain": "example.test", "type": "GROUP"})
+    assert value(transform(body)) is False
+
+
 def test_partial_lists_are_not_evaluated():
     assert value(transform(rest(rest_item("adm-alice"), marker="next-page"))) is None
     assert value(transform(snap(perm("adm-alice"), complete=False))) is None
