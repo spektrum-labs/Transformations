@@ -1,0 +1,37 @@
+{
+  "name": "sensorDeploymentPercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Percentage, 0 to 100, of a CrowdStrike Falcon tenant's non-mobile hosts that have a reporting sensor: agent_version set, not in Reduced Functionality Mode, and last_seen within 15 days. Supporting figure emitted beside isEPPDeployed, which is true when this is at least 95. Null when the hosts cannot be read completely.",
+  "valueType": "number",
+  "unit": "percent",
+  "population": "non-mobile hosts returned by the Falcon host-details read, excluding mobile platforms",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "not a verdict key: it carries no pass or fail of its own. A figure is emitted only from a complete read of host records; an ID-only list, a partial or truncated read, an all-mobile read, or a list mixing in anything that is not a host record yields null.",
+  "evidenceClass": "measured",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": ["Endpoint Security"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "d61a39d7-f00a-4963-bc9c-38164918e883", "name": "CrowdStrike Falcon-Endpoint Security"},
+    {"srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e", "name": "Crowdstrike - XDR Falcon"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/crowdstrike-falcon/isEPPDeployed.py: RESULT_KEYS and the create_response call that emits it",
+    "safeguards/epp/crowdstrike-falcon/test_crowdstrike_epp_deployed_measured.py: asserts the value and dataCollection.status on complete, partial, empty and error bodies"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered with the PR that first emits it, so the criteria-registry ratchet does not grow. Proposed and V0: no validation record yet."
+    }
+  ]
+}
