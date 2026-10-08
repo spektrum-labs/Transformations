@@ -91,6 +91,22 @@ class GoogleAdminPhishingResistantTests(unittest.TestCase):
                 self.assertIsNone(value)
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
 
+    def test_transform_crash_is_not_evaluated_on_the_channel_the_evaluator_reads(self):
+        original = self.t.unwrap
+
+        def boom(_body):
+            raise RuntimeError("synthetic crash")
+
+        self.t.unwrap = boom
+        try:
+            value, out = self.run_(body(USERS, [factor("PASSKEY_ONLY")]))
+        finally:
+            self.t.unwrap = original
+        self.assertIsNone(value)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["errors"], ["Transformation error: synthetic crash"])
+        self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()

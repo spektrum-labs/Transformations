@@ -201,5 +201,8 @@ def transform(input):
                              "to each administrator needs org unit IDs that users.list does not carry" % (
                                  len(strong), len(values)), summary)
     except Exception as e:
+        # dataCollection.status is the only channel the evaluator reads, and it is derived
+        # from api_errors: without it a None verdict is graded FAILED, not Not evaluated.
         return create_response({CRITERIA_KEY: None}, transformation_errors=[str(e)],
+                               api_errors=["Transformation error: %s" % str(e)[:200]],
                                fail_reasons=["Transformation error: %s" % str(e)])
