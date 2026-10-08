@@ -156,7 +156,11 @@ def transform(input):
             if admins.get("complete") is not True or not isinstance(admins.get("members"), list):
                 unknown.append(host_name + " (administrator list incomplete)")
                 continue
-            scvmm = as_dict(host.get("scvmm"))
+            raw_scvmm = host.get("scvmm")
+            if not isinstance(raw_scvmm, dict) or not isinstance(raw_scvmm.get("present"), bool):
+                unknown.append(host_name + " (SCVMM state unreadable)")
+                continue
+            scvmm = raw_scvmm
             if scvmm.get("present") is True and scvmm.get("complete") is not True:
                 unknown.append(host_name + " (SCVMM roles present but not fully read)")
                 continue

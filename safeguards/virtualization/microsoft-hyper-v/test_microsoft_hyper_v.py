@@ -179,3 +179,10 @@ def test_malformed_scvmm_containers_are_not_read_as_no_admins():
 
 def test_a_host_listing_no_administrators_at_all_is_not_credible():
     assert value(transform(snap(host()))) is None
+
+
+def test_malformed_scvmm_value_is_not_read_as_no_scvmm():
+    for sc in ["error", ["x"], {"present": "true", "complete": True, "roles": []}, {"present": 1, "complete": True, "roles": []}, None]:
+        h = host(member("adm-alice"))
+        h["scvmm"] = sc
+        assert value(transform(snap(h))) is None, sc
