@@ -133,15 +133,18 @@ def transform(input):
         admin_sid = domain_sid + "-512"
         findings = []
         gpos = [g for g in as_list(rights.get("gpos")) if isinstance(g, dict) and g.get("enabled") is not False]
-        # Per right, the GPOs that DEFINE it (a non-empty list). User Rights Assignments do not merge: only the winning
+        # Per right, the GPOs that DEFINE it (definesDeny* flag, or a non-empty list when the flag is absent). User Rights Assignments do not merge: only the winning
         # GPO's list applies, so a baseline GPO that sets "Deny log on locally: Guests" overrides a deny linked higher up.
         rights_fields = ["denyInteractive", "denyRemoteInteractive"]
         any_denying = False
+        maybe_denying = False
         for g in gpos:
             name = as_text(g.get("displayName")) or "a GPO with no name"
             local = denies(g.get("denyInteractive"), admin_sid)
             remote = denies(g.get("denyRemoteInteractive"), admin_sid)
             if g.get("enabled") is not True:
+                if local and remote:
+                    maybe_denying = True
                 continue
             if local and remote:
                 any_denying = True
@@ -157,6 +160,8 @@ def transform(input):
                 total = total + count
         picture = rights.get("ouInheritanceReadable") is True and len(ous) > 0 and total > 0
 
+        if not any_denying and maybe_denying:
+            return not_evaluated("The only GPO(s) denying Domain Admins have no readable enabled flag, so whether they apply is unknown")
         if not any_denying:
             extra = {"workstationsTotal": total if picture else None, "workstationsCovered": 0,
                      "coveragePercentage": 0 if picture else None}
@@ -179,9 +184,14 @@ def transform(input):
                 if not defines(g, field):
                     continue
                 for link in as_list(g.get("links")):
-                    if not isinstance(link, dict) or link.get("enabled") is not True:
+                    if not isinstance(link, dict) or link.get("enabled") is False:
                         continue
                     scope = as_text(link.get("scopeDn"))
+                    if not (isinstance(link.get("enabled"), bool) and isinstance(link.get("enforced"), bool)):
+                        # A link whose enabled/enforced flag is missing or not a boolean could win: never dropped as "off".
+                        if same(scope, dn) or under(dn, scope):
+                            candidates.append({"gpo": g, "enforced": False, "depth": depth(scope), "order": None, "unknownFlags": True})
+                        continue
                     if same(scope, dn):
                         reach = True
                     elif under(dn, scope):
@@ -197,11 +207,12 @@ def transform(input):
                     order = link.get("linkOrder")
                     if isinstance(order, bool) or not isinstance(order, int):
                         order = None
-                    candidates.append({"gpo": g, "enforced": link.get("enforced") is True, "depth": depth(scope), "order": order})
+                    candidates.append({"gpo": g, "enforced": link.get("enforced") is True, "depth": depth(scope), "order": order,
+                                       "unknownFlags": False})
             if not candidates:
                 return "none"
             for c in candidates:
-                if c["gpo"].get("enabled") is not True or c["gpo"].get("appliesTo") != "authenticated" \
+                if c["unknownFlags"] or c["gpo"].get("enabled") is not True or c["gpo"].get("appliesTo") != "authenticated" \
                         or c["gpo"].get("wmiFiltered") is True:
                     return "unknown"
             enforced = [c for c in candidates if c["enforced"]]

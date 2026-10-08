@@ -234,6 +234,24 @@ def test_gpo_with_no_enabled_flag_is_a_candidate_with_unknown_verdict_not_droppe
     assert value(denied(rights([root, b], [ou(WS, 10)])), DENIED) is True
 
 
+def test_link_with_a_missing_enabled_or_enforced_flag_is_unknown_not_off():
+    root = gpo(links=[{"scopeDn": DOMAIN_DN, "enabled": True, "enforced": False, "linkOrder": 1}])
+    no_enabled = baseline(links=[{"scopeDn": WS, "enforced": False, "linkOrder": 1}])
+    assert value(denied(rights([root, no_enabled], [ou(WS, 10)])), DENIED) is None
+    # tier-0 deny linked at the OU; an enforced baseline at the root whose enforced flag is missing
+    near = gpo(links=[{"scopeDn": WS, "enabled": True, "enforced": False, "linkOrder": 1}])
+    no_enforced = baseline(links=[{"scopeDn": DOMAIN_DN, "enabled": True, "linkOrder": 1}])
+    assert value(denied(rights([near, no_enforced], [ou(WS, 10)])), DENIED) is None
+    off = baseline(links=[{"scopeDn": WS, "enabled": False, "enforced": False, "linkOrder": 1}])
+    assert value(denied(rights([root, off], [ou(WS, 10)])), DENIED) is True
+
+
+def test_only_denying_gpo_with_unknown_enabled_flag_is_not_evaluated_not_false():
+    g = gpo()
+    del g["enabled"]
+    assert value(denied(rights([g], [ou(WS, 10)])), DENIED) is None
+
+
 def test_snapshot_without_the_all_defining_gpos_marker_is_not_evaluated():
     body = rights([gpo()], [ou(WS, 10)])
     del body["logonRights"]["allDefiningGposIncluded"]
