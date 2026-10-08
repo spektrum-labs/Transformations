@@ -1,0 +1,39 @@
+{
+  "name": "areHypervisorAdminsDedicated",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when at least one administrator assignment exists on the vCenter and every administrator principal is shown to be a dedicated account.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "principals holding an Admin (or ModifyPermissions) role on a folder, datacenter, cluster, host or any propagating object of one vCenter, plus SSO Administrators",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete permission list in which every administrator principal is shown dedicated by directory record or admin naming convention, and none is a broad group or a mailbox account.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Asset Inventory"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/asset-inventory/vmware-vcenter/arehypervisoradminsdedicated.py",
+    "vSphere Automation API 9.0 Vcenter Authorization Permissions (POST /api/vcenter/authorization/permissions?action=list)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real-tenant body replayed yet, so V0)."
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "name": "areDomainAdminAccountsSeparate",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every enabled user in the on-premises Domain Admins group (nested groups expanded) is read and none has an Exchange mailbox, i.e. administrators do not use their daily-use accounts.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled user accounts that are effective Domain Admins members of one AD domain; denominator = judged members",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete Domain Admins member list in which every enabled member's mailbox state was read and none has a mailbox; a mail attribute alone is a finding, not a fail.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/iam/microsoft-active-directory/aredomainadminaccountsseparate.py",
+    "feedback_mfa_admin_pam_rules (J.J. 3 Oct 2026: mail attribute alone is a finding)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real-tenant body replayed yet, so V0)."
+    }
+  ]
+}
