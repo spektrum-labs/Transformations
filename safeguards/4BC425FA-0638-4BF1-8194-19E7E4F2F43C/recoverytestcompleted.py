@@ -21,7 +21,10 @@ import json
 from datetime import datetime, timezone, timedelta
 
 CRITERIA_KEY = "recoveryTestCompleted"
-WINDOW_DAYS = 365
+# CloudTrail LookupEvents "can look up events that occurred in a Region within the last 90 days"
+# (docs.aws.amazon.com/awscloudtrail/latest/APIReference/API_LookupEvents.html), so a longer window
+# would only claim a reach the API does not have.
+WINDOW_DAYS = 90
 
 
 def extract_input(input_data):
@@ -47,12 +50,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -163,7 +170,7 @@ def transform(input):
             error = "Response has no LookupEventsResponse; CloudTrail restore events were not read"
         if error is not None:
             return create_response(
-                result={CRITERIA_KEY: False},
+                result={CRITERIA_KEY: None},
                 validation=validation,
                 api_errors=[error],
                 fail_reasons=["Not measured: " + error]
@@ -212,7 +219,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={CRITERIA_KEY: False},
+            result={CRITERIA_KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: %s" % str(e)]

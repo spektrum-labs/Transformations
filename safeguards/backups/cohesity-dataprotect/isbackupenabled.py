@@ -10,6 +10,34 @@
 import json
 from datetime import datetime, timezone
 
+VENDOR = "Cohesity"
+PRODUCT = "DataProtect"
+METHOD = "getProtectionGroups"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -75,10 +103,10 @@ def transform(input):
     try:
         body, problem = body_with(input, ["protectionGroups"])
         if body is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         pgs = body.get("protectionGroups")
         if not isinstance(pgs, list):
-            return {key: False, "reason": "protectionGroups has an unexpected shape"}
+            return respond(key, None, "protectionGroups has an unexpected shape")
         good = []
         for g in pgs:
             if not isinstance(g, dict) or g.get("isDeleted") is True or g.get("isActive") is False or g.get("isPaused") is True:
@@ -87,7 +115,7 @@ def transform(input):
             if info is not None and info.get("status") in ["Succeeded", "SucceededWithWarning"]:
                 good.append(str(g.get("name")))
         if not good:
-            return {key: False, "reason": "No active protection group has a successful last backup run"}
-        return {key: True, "reason": str(len(good)) + " active protection groups have a successful last backup run", "groups": good[:20]}
+            return respond(key, False, "No active protection group has a successful last backup run")
+        return respond(key, True, str(len(good)) + " active protection groups have a successful last backup run", {"groups": good[:20]})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
