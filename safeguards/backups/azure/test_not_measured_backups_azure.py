@@ -166,12 +166,16 @@ class RaisingBodyIsNotGraded(unittest.TestCase):
                 self.assertTrue(collection["errors"])
 
     def test_a_body_that_fails_input_validation_reads_as_not_measured(self):
-        failed = {"data": {"rows": []}, "validation": {"status": "failed", "errors": ["bad shape"], "warnings": []}}
+        # extract_input is stubbed so that ONLY the input-validation branch can decide the answer:
+        # with the data absent, a branch that returned False would be graded red here.
+        failed = {"status": "failed", "errors": ["bad shape"], "warnings": []}
         for name, key in RAISING_READERS:
             with self.subTest(transform=name):
-                value, collection = run(name, key, failed)
-                self.assertIsNone(value)
-                self.assertEqual(collection["status"], "error")
+                module = load(name)
+                module.extract_input = lambda _input, _failed=failed: (None, _failed)
+                out = module.transform({"any": "body"})
+                self.assertIsNone(out["transformedResponse"][key])
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
 
 
 if __name__ == "__main__":
