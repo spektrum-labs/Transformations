@@ -47,6 +47,9 @@ def transform(input):
     whole output and Token-Service grades on that status alone, so a value beside a None would be dropped by
     the evaluator while still reading as a measurement: when either key is None both are set to None, and the
     half that was sound is stated in dataCollection.errors instead of carried in transformedResponse.
+    That withholding is a limit of one output serving two keys, not a verdict on isMFAEnabled: ismfaenabled.py
+    answers isMFAEnabled alone, so one readable two-factor rule beside rules this code cannot read stays True
+    there. A definition that points isMFAEnabled at this file still gets Not evaluated in that shape.
 
     A remediation is recommended only for a measured False. A not-measured output recommends nothing,
     because there is nothing yet to tell the customer to fix.
