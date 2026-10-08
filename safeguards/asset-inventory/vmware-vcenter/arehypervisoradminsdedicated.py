@@ -72,7 +72,7 @@ def transform(input):
                 "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "1.0",
                              "transformationId": key, "vendor": "VMware by Broadcom",
                              "product": "VMware vCenter Server",
-                             "category": "Asset Inventory"},
+                             "category": "Virtualization"},
             },
         }
 

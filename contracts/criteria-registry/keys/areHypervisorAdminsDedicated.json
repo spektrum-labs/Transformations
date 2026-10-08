@@ -15,7 +15,7 @@
   },
   "emptyPopulationMeans": "not_measured",
   "allowedCategories": [
-    "Asset Inventory"
+    "Virtualization"
   ],
   "integrationPolicy": "any",
   "allowedIntegrations": [],
