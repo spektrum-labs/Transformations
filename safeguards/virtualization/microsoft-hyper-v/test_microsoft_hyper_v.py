@@ -84,8 +84,32 @@ def test_system_service_and_disabled_principals_are_not_judged():
 
 
 def test_personal_names_are_not_dedicated_evidence():
-    for name in ["maria.da.silva", "a.smith", "jadministrator"]:
+    for name in ["maria.da.silva", "a.smith", "jadministrator", "da-silva", "a-lee", "jose-a", "maria_a"]:
         assert value(transform(snap(host(member(name))))) is None
+
+
+def test_authenticated_users_in_nt_authority_is_a_broad_group_not_a_system_identity():
+    for name in ["Authenticated Users", "INTERACTIVE", "NETWORK", "Everyone"]:
+        r = transform(snap(host(member("adm-alice"), member(name, domain="NT AUTHORITY", kind="group"))))
+        assert value(r) is False, name
+
+
+def test_scvmm_profiles_match_case_insensitively_both_spellings_and_unknown_is_not_evaluated():
+    def with_profile(profile, who="Everyone"):
+        roles = [{"name": "R", "profile": profile, "members": [{"name": who, "domain": "", "type": "group"}]}]
+        return transform(snap(host(member("adm-alice"), scvmm={"present": True, "complete": True, "roles": roles})))
+    for p in ["administrator", "DelegatedAdmin", "DelegatedAdministrator", "FabricAdministrator"]:
+        assert value(with_profile(p)) is False, p
+    for p in ["ReadOnlyAdmin", "TenantAdmin", "SelfServiceUser"]:
+        assert value(with_profile(p)) is True, p
+    assert value(with_profile("Mystery")) is None
+    assert value(with_profile("Unknown")) is None
+
+
+def test_malformed_host_entry_is_not_evaluated():
+    body = snap(host(member("adm-alice")))
+    body["hosts"].append("garbage")
+    assert value(transform(body)) is None
 
 
 def test_scvmm_admin_roles_count_and_read_only_roles_do_not():

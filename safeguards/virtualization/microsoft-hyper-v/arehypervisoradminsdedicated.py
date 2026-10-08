@@ -18,6 +18,8 @@ def transform(input):
     areHypervisorAdminsDedicated - True only when at least one Hyper-V host was read completely and EVERY
     administrator principal on EVERY host is shown to be a dedicated account.
 
+    NT AUTHORITY\\Authenticated Users, INTERACTIVE, NETWORK and the other well-known broad groups are broad groups, not
+    system identities. A tenant administrator manages tenant VMs, not the fabric, so that profile is not an admin role.
     Administrators are the members of "Hyper-V Administrators" and of the local "Administrators" group, plus
     members of SCVMM user roles with profile Administrator or DelegatedAdministrator.
 
@@ -25,13 +27,13 @@ def transform(input):
     Computers) or a named user whose directory record shows an Exchange mailbox (a daily-use account).
 
     A named user is dedicated when the directory record is found and shows no mailbox, or the name has a clear
-    admin affix (adm-, admin-, da-, a- prefix; -adm, -admin, -a suffix). A GROUP is never dedicated by its name.
-    Not judged here: NT AUTHORITY and NT SERVICE principals, disabled accounts, the built-in Administrator (a
+    admin affix (adm-, admin- prefix; -adm, -admin suffix). A GROUP is never dedicated by its name.
+    Not judged here: SYSTEM, LOCAL SERVICE, NETWORK SERVICE and NT SERVICE\\* identities, disabled accounts, the built-in Administrator (a
     finding: shared break-glass), and the Domain Admins / Enterprise Admins groups (a finding: the Active Directory
     check judges that group's membership).
 
     Not evaluated (None) when the host list or a host's administrator list is incomplete, the Hyper-V role is not
-    installed on a host, SCVMM was present but not read completely, or an administrator can be neither shown
+    installed on a host, an SCVMM role has an unrecognised profile, SCVMM was present but not read completely, or an administrator can be neither shown
     dedicated nor shown shared. A measured failure on any host still gives False.
 
     Scope: the Hyper-V hosts the connector read. Says nothing about VMware, vCenter or other hypervisors.
@@ -77,15 +79,16 @@ def transform(input):
     def not_evaluated(reason, extra=None, summary=None, findings=None):
         return respond(None, extra or {}, [], [reason], summary or {}, [reason], findings or [])
 
-    broad = ["domain users", "everyone", "authenticated users", "users", "domain computers", "all users"]
+    broad = ["domain users", "everyone", "authenticated users", "users", "domain computers", "all users",
+             "interactive", "network", "remote interactive logon", "anonymous logon"]
     domain_admin_groups = ["domain admins", "enterprise admins"]
 
     def follows_convention(name):
         text = name.lower()
-        for prefix in ["adm-", "adm_", "admin-", "admin_", "da-", "da_", "a-", "a_"]:
+        for prefix in ["adm-", "adm_", "admin-", "admin_"]:
             if text.startswith(prefix) and len(text) > len(prefix):
                 return True
-        for suffix in ["-adm", "_adm", "-admin", "_admin", "-a", "_a"]:
+        for suffix in ["-adm", "_adm", "-admin", "_admin"]:
             if text.endswith(suffix) and len(text) > len(suffix):
                 return True
         return False
@@ -114,6 +117,8 @@ def transform(input):
         if data.get("hostsComplete") is not True:
             return not_evaluated("The host list is incomplete, so not every Hyper-V host was read")
         hosts = [h for h in data.get("hosts") if isinstance(h, dict)]
+        if len(hosts) != len(data.get("hosts")):
+            return not_evaluated("The host list holds an entry that is not a host record, so not every host was read")
         if not hosts:
             return not_evaluated("No Hyper-V host is in the snapshot, so there is nothing to judge")
 
@@ -152,17 +157,22 @@ def transform(input):
                 continue
 
             entries = []
+            scvmm_unknown = []
             for m in admins.get("members"):
                 if isinstance(m, dict):
                     entries.append(m)
             if scvmm.get("present") is True:
                 for role in as_list(scvmm.get("roles")):
                     role = as_dict(role)
-                    if as_text(role.get("profile")) in ["Administrator", "DelegatedAdministrator"]:
+                    profile = as_text(role.get("profile")).lower()
+                    if profile in ["administrator", "delegatedadmin", "delegatedadministrator", "fabricadministrator"]:
                         for m in as_list(role.get("members")):
                             if isinstance(m, dict):
                                 entries.append(m)
+                    elif profile not in ["readonlyadmin", "readonlyadministrator", "selfserviceuser", "tenantadmin", "tenantadministrator"]:
+                        scvmm_unknown.append("SCVMM role " + (as_text(role.get("name")) or "with no name") + " (unrecognised profile)")
 
+            host_unknown.extend(scvmm_unknown)
             seen = []
             for m in entries:
                 name = as_text(m.get("name"))
@@ -177,7 +187,10 @@ def transform(input):
                 kind = as_text(m.get("type")).lower()
                 low = name.lower()
                 dom = domain.lower()
-                if dom in ["nt authority", "nt service", "window manager", "font driver host"] or dom.startswith("nt "):
+                if low in broad:
+                    host_fail.append(label + " (broad group: every member is an administrator)")
+                    continue
+                if dom == "nt service" or (dom == "nt authority" and low in ["system", "local service", "network service"]):
                     continue
                 if m.get("enabled") is False:
                     continue
@@ -186,9 +199,6 @@ def transform(input):
                     continue
                 if kind == "group" and low in domain_admin_groups:
                     findings.append(host_name + ": " + label + " is an administrator; its membership is judged by the Active Directory check")
-                    continue
-                if low in broad:
-                    host_fail.append(label + " (broad group: every member is an administrator)")
                     continue
                 if kind not in ["user", "group", "computer"]:
                     host_unknown.append(label + " (unrecognised account type)")
@@ -229,5 +239,5 @@ def transform(input):
         return respond(True, extra,
                        ["All administrators on all " + str(len(hosts)) + " Hyper-V host(s) are dedicated accounts"], [],
                        summary, [], findings)
-    except Exception as e:
+    except Exception:
         return not_evaluated("Could not evaluate the Hyper-V snapshot: the response has an unexpected shape")
