@@ -19,7 +19,12 @@ def load(name):
     spec = importlib.util.spec_from_file_location("commvault_" + name, HERE / (name + ".py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.transform
+
+    def run(body):
+        # Full-envelope checks answer under transformedResponse; the legacy ones answer flat.
+        out = module.transform(body)
+        return out.get("transformedResponse", out)
+    return run
 
 
 def job(status="Completed", i=0, kind="Backup"):
@@ -75,10 +80,10 @@ def test_job_log_accessible():
     del broken["jobs"][3]["jobSummary"]["jobEndTime"]
     del broken["jobs"][3]["jobSummary"]["lastUpdateTime"]
     assert t(broken)["isJobExecutionLogAccessible"] is False
-    assert t(jobs([]))["isJobExecutionLogAccessible"] is False
-    assert t(PAGED)["isJobExecutionLogAccessible"] is False
+    assert t(jobs([]))["isJobExecutionLogAccessible"] is None
+    assert t(PAGED)["isJobExecutionLogAccessible"] is None
     for bad in EMPTYISH:
-        assert t(bad)["isJobExecutionLogAccessible"] is False
+        assert t(bad)["isJobExecutionLogAccessible"] is None
 
 
 def test_backup_enabled():
@@ -86,9 +91,9 @@ def test_backup_enabled():
     assert t(HEALTHY)["isBackupEnabled"] is True
     assert t(jobs(["Failed", "Killed"]))["isBackupEnabled"] is False
     assert t({"totalRecordsWithoutPaging": 0})["isBackupEnabled"] is False
-    assert t(PAGED)["isBackupEnabled"] is False
+    assert t(PAGED)["isBackupEnabled"] is None
     for bad in EMPTYISH:
-        assert t(bad)["isBackupEnabled"] is False
+        assert t(bad)["isBackupEnabled"] is None
 
 
 @pytest.mark.parametrize("name,key", [("isbackuptested", "isBackupTested"), ("arebackupstested", "areBackupsTested")])
@@ -97,9 +102,9 @@ def test_restore_tested(name, key):
     assert t(jobs(["Failed", "Completed"], kind="Restore"))[key] is True
     assert t(jobs(["Failed", "Killed"], kind="Restore"))[key] is False
     assert t(jobs([], kind="Restore"))[key] is False
-    assert t(jobs(["Completed"], kind="Restore", total=5))[key] is False
+    assert t(jobs(["Completed"], kind="Restore", total=5))[key] is None
     for bad in EMPTYISH:
-        assert t(bad)[key] is False
+        assert t(bad)[key] is None
 
 
 # ---- plans -------------------------------------------------------------------------------
@@ -122,9 +127,9 @@ def test_backup_types_scheduled():
     assert t(plans([plan(1), plan(2, status="BACKUP_DISABLED")]))["isBackupTypesScheduled"] is False
     assert t(plans([plan(1), plan(2, rpo=0)]))["isBackupTypesScheduled"] is False
     assert t(plans([plan(3, kind="Laptop")]))["isBackupTypesScheduled"] is False
-    assert t(plans([plan(1)], count=40))["isBackupTypesScheduled"] is False
+    assert t(plans([plan(1)], count=40))["isBackupTypesScheduled"] is None
     for bad in EMPTYISH:
-        assert t(bad)["isBackupTypesScheduled"] is False
+        assert t(bad)["isBackupTypesScheduled"] is None
 
 
 def test_rpo_within_sla():
@@ -133,7 +138,7 @@ def test_rpo_within_sla():
     assert t(plans([plan(1), plan(2, rpo=2880)]))["isProtectionPolicyRPOWithinSLA"] is False
     assert t(plans([]))["isProtectionPolicyRPOWithinSLA"] is False
     for bad in EMPTYISH:
-        assert t(bad)["isProtectionPolicyRPOWithinSLA"] is False
+        assert t(bad)["isProtectionPolicyRPOWithinSLA"] is None
 
 
 def test_m365_coverage():
@@ -143,9 +148,9 @@ def test_m365_coverage():
     assert t(plans([plan(1), plan(5, kind="Office365", entities=0)]))[key] is False
     assert t(plans([plan(5, kind="Office365", status="DISABLED", entities=120)]))[key] is False
     assert t(plans([plan(1)]))[key] is False
-    assert t(plans([plan(5, kind="Office365", entities=9)], count=30))[key] is False
+    assert t(plans([plan(5, kind="Office365", entities=9)], count=30))[key] is None
     for bad in EMPTYISH:
-        assert t(bad)[key] is False
+        assert t(bad)[key] is None
 
 
 # ---- storage -----------------------------------------------------------------------------
@@ -190,15 +195,15 @@ def test_backup_encrypted():
     assert t(storage([], []))["isBackupEncrypted"] is False
     partial = copy.deepcopy(GOOD_STORAGE)
     partial["diskStorageDetails"] = partial["diskStorageDetails"][:1]
-    assert t(partial)["isBackupEncrypted"] is False
+    assert t(partial)["isBackupEncrypted"] is None
     missing = copy.deepcopy(GOOD_STORAGE)
     del missing["cloudStorageDetails"]
-    assert t(missing)["isBackupEncrypted"] is False
+    assert t(missing)["isBackupEncrypted"] is None
     errored = copy.deepcopy(GOOD_STORAGE)
     errored["cloudStorageDetails"][1] = ERR_CV
-    assert t(errored)["isBackupEncrypted"] is False
+    assert t(errored)["isBackupEncrypted"] is None
     for bad in EMPTYISH:
-        assert t(bad)["isBackupEncrypted"] is False
+        assert t(bad)["isBackupEncrypted"] is None
 
 
 def test_cloud_tier_encryption():
@@ -208,7 +213,7 @@ def test_cloud_tier_encryption():
     assert t(storage([detail(1)], [detail(3, encrypt=False)]))["isCloudTierEncryptionEnabled"] is False
     assert t(storage([detail(1)], []))["isCloudTierEncryptionEnabled"] is False
     for bad in EMPTYISH:
-        assert t(bad)["isCloudTierEncryptionEnabled"] is False
+        assert t(bad)["isCloudTierEncryptionEnabled"] is None
 
 
 def test_external_target_aes256():
@@ -218,7 +223,7 @@ def test_external_target_aes256():
     assert t(storage([], [detail(3, cipher="Twofish")]))["isExternalTargetEncryptionAES256"] is False
     assert t(storage([detail(1)], []))["isExternalTargetEncryptionAES256"] is False
     for bad in EMPTYISH:
-        assert t(bad)["isExternalTargetEncryptionAES256"] is False
+        assert t(bad)["isExternalTargetEncryptionAES256"] is None
 
 
 # ---- identity, syslog, licence, 2FA ------------------------------------------------------
@@ -235,7 +240,7 @@ def test_sso():
     assert t(unconfigured)["isSSOEnabled"] is False
     assert t({"identityServers": []})["isSSOEnabled"] is False
     for bad in EMPTYISH:
-        assert t(bad)["isSSOEnabled"] is False
+        assert t(bad)["isSSOEnabled"] is None
 
 
 SYSLOG = {"hostname": "siem.example.com", "port": 6514, "enabled": True, "secureMessaging": True,
@@ -250,7 +255,7 @@ def test_audit_forwarding():
         b[field] = value
         assert t(b)["isAuditLogForwardingEnabled"] is False
     for bad in EMPTYISH:
-        assert t(bad)["isAuditLogForwardingEnabled"] is False
+        assert t(bad)["isAuditLogForwardingEnabled"] is None
 
 
 def test_licence():
@@ -261,7 +266,7 @@ def test_licence():
     assert t(dict(lic, licenseMode="EVALUATION"))["confirmedLicensePurchased"] is False
     assert t(dict(lic, expiryDate=1600000000))["confirmedLicensePurchased"] is False
     for bad in EMPTYISH:
-        assert t(bad)["confirmedLicensePurchased"] is False
+        assert t(bad)["confirmedLicensePurchased"] is None
 
 
 def test_mfa():
@@ -270,9 +275,9 @@ def test_mfa():
     assert t(ok)["isMFAEnforcedForUsers"] is True
     assert t({"twoFactorAuthenticationInfo": {"mode": 2, "userGroups": [{"userGroupName": "master"}]}})["isMFAEnforcedForUsers"] is False
     assert t({"twoFactorAuthenticationInfo": {"mode": 0}})["isMFAEnforcedForUsers"] is False
-    assert t({"twoFactorAuthenticationInfo": {"mode": 1}, "error": {"errorCode": 5, "errorString": "denied"}})["isMFAEnforcedForUsers"] is False
+    assert t({"twoFactorAuthenticationInfo": {"mode": 1}, "error": {"errorCode": 5, "errorString": "denied"}})["isMFAEnforcedForUsers"] is None
     for bad in EMPTYISH:
-        assert t(bad)["isMFAEnforcedForUsers"] is False
+        assert t(bad)["isMFAEnforcedForUsers"] is None
 
 
 # ---- alerts ------------------------------------------------------------------------------
@@ -306,7 +311,7 @@ def test_failure_notification():
     assert t(alerts([alert_detail(1, criteria="Restore Job Failed")]))[key] is False
     partial = alerts([alert_detail(1), alert_detail(2)])
     partial["alertDefinitionDetails"] = partial["alertDefinitionDetails"][:1]
-    assert t(partial)[key] is False
+    assert t(partial)[key] is None
     assert t({"alertDefinitions": []})[key] is False
     for bad in EMPTYISH:
-        assert t(bad)[key] is False
+        assert t(bad)[key] is None

@@ -1365,6 +1365,7 @@
     "safeguards/iam/duo/hasHighRiskUserDetectionByPolicy.py::hasHighRiskUserDetectionAPIAccess",
     "safeguards/iam/duo/isAdminMFAPhishingResistant.py::isAdminMFAPhishingResistant",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::isAuditLoggingEnabled",
+    "safeguards/iam/duo/isAuditLoggingEnabled.py::maxEventAgeDays",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::newestEventAgeDays",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::totalLogCount",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::wellFormedLogCount",

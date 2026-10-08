@@ -229,11 +229,11 @@ def test_admins_fail_closed_paths_name_no_one(mode):
 # ---- isMFAConfiguredForSecurityAdmins ----
 
 @pytest.mark.parametrize("mode", MODES)
-def test_secadmins_pass_names_uncovered_role_holders(mode):
+def test_secadmins_one_role_fails_and_names_uncovered_role_holders(mode):
     assignments = {"value": [assign(GLOBAL_ADMIN, 1), assign(SECURITY_ADMIN, 2), assign(EXCHANGE_ADMIN, 3)]}
     registration = {"value": [reg(1, True), reg(2, True), reg(3, False)]}
     out = load(SECADMINS, mode)(secadmins_input([GLOBAL_ADMIN], assignments, registration))
-    assert out["transformedResponse"]["isMFAConfiguredForSecurityAdmins"] is True
+    assert out["transformedResponse"]["isMFAConfiguredForSecurityAdmins"] is False
     assert out["transformedResponse"]["coveredRoles"] == ["Global Administrator"]
     assert summary(out)["affectedAccounts"] == [upn(2)]
     assert first_reason(out).endswith(
@@ -249,8 +249,9 @@ def test_secadmins_fail_names_every_holder(mode):
     out = load(SECADMINS, mode)(secadmins_input([], assignments, registration))
     assert out["transformedResponse"]["isMFAConfiguredForSecurityAdmins"] is False
     assert summary(out)["affectedAccounts"] == [upn(2), upn(1)]
-    assert first_reason(out).startswith("No enabled Conditional Access policy requires MFA for security admin roles; "
-                                        "Microsoft Entra ID (")
+    assert first_reason(out).startswith("0 of 6 security admin roles require MFA through an enabled Conditional "
+                                        "Access policy; not covered: Global Administrator, ")
+    assert "; Microsoft Entra ID (" in first_reason(out)
 
 
 @pytest.mark.parametrize("mode", MODES)
