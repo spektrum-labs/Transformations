@@ -188,7 +188,7 @@ def test_both_checks_share_one_window_and_one_rule():
     """And so do isEDRDeployed and isPatchManagementEnabledFromHosts: every CrowdStrike host check agrees
     on which hosts are reporting."""
     files = ("requiredCoveragePercentage.py", "isEPPConfiguredFromHosts.py", "isEDRDeployed.py",
-             "isPatchManagementEnabledFromHosts.py")
+             "isEPPDeployed.py", "isPatchManagementEnabledFromHosts.py")
     sources = [(HERE / f).read_text() for f in files]
     for name in ("ACTIVE_WINDOW_DAYS = ", "def parse_time(", "def reference_clock(", "def is_reporting("):
         bodies = {src[src.index(name):].split("\n\n\n")[0] for src in sources}
