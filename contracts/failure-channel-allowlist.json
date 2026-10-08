@@ -75,7 +75,6 @@
     "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/ismfaenforcedforusers.py",
     "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/ismfarequiredforcloudapps.py",
     "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/ismfarequiredforremoteaccess.py",
-    "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/isrbacimplemented.py",
     "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/isrdpprotected.py",
     "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/legacyauthblocked.py",
     "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/mfa_transform.py",
