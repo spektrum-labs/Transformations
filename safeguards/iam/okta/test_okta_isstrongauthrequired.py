@@ -318,6 +318,42 @@ class StrongAuthTests(unittest.TestCase):
         payload["signOnRules"] = "oops"
         self.assert_value(payload, None)
 
+    def test_identity_engine_with_no_active_app_policy_is_not_judged_from_global_session(self):
+        payload = copy.deepcopy(REAL_PASS["result"])
+        for p in payload["accessPolicies"]:
+            p["status"] = "INACTIVE"
+        self.assert_value(payload, None)
+
+    def test_malformed_possession_lists_are_not_a_restriction(self):
+        for listed in ([None], ["okta_verify"], [{}], [{"key": "okta_verify"}, 5]):
+            payload = copy.deepcopy(REAL_PASS)
+            weird = rule("Default", methods=STRONG_METHODS)
+            weird["actions"]["appSignOn"]["verificationMethod"]["constraints"][0]["possession"]["authenticationMethods"] = listed
+            payload["result"]["accessRules"][1] = [weird]
+            payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
+            self.assert_value(payload, False)
+        payload = copy.deepcopy(REAL_PASS)
+        bad = rule("Default", methods=STRONG_METHODS)
+        bad["actions"]["appSignOn"]["verificationMethod"]["constraints"].append("not an object")
+        payload["result"]["accessRules"][1] = [bad]
+        payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number", "status": "ACTIVE"}]
+        self.assert_value(payload, False)
+
+    def test_weak_entry_without_status_counts_as_on(self):
+        payload = copy.deepcopy(REAL_PASS)
+        payload["result"]["authenticators"] = STRONG_AUTHENTICATORS + [{"key": "phone_number"}]
+        self.assert_value(payload, False)
+        classic = copy.deepcopy(CLASSIC)
+        classic["factors"].append({"factorType": "sms", "provider": "EXAMPLE"})
+        self.assert_value(classic, False)
+
+    def test_wrapped_failed_read_names_the_error(self):
+        payload = copy.deepcopy(REAL_PASS)
+        payload["result"]["authenticators"] = {"apiResponse": {"errorCode": "E0000006", "errorSummary": "denied here"}}
+        out = load().transform(payload)
+        self.assertIsNone(out["transformedResponse"][KEY])
+        self.assertIn("read failed: denied here", out["additionalInfo"]["dataCollection"]["errors"][0])
+
     def test_classic_without_active_policy_is_not_evaluated(self):
         payload = copy.deepcopy(CLASSIC)
         payload["signOnPolicies"][0]["status"] = "INACTIVE"

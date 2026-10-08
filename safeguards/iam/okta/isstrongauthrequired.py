@@ -159,6 +159,9 @@ def transform(input):
         return names
 
     def read_problem(raw, label):
+        for wrapper in ["apiResponse", "response", "result"]:
+            if isinstance(raw, dict) and wrapper in raw:
+                raw = raw[wrapper]
         if raw is None:
             return "the org's " + label + " list was not read"
         if isinstance(raw, dict):
@@ -176,7 +179,9 @@ def transform(input):
         names = []
         for item in found:
             factor_type = as_text(item.get("factorType")).lower()
-            if is_active(item) and factor_type in ["sms", "call", "email", "question"]:
+            # A weak entry with no status counts as on (fails closed); only an explicit non-ACTIVE status is off.
+            status = as_text(item.get("status")).upper()
+            if (status == "" or status == "ACTIVE") and factor_type in ["sms", "call", "email", "question"]:
                 names.append(factor_type)
         return names
 
@@ -190,7 +195,8 @@ def transform(input):
             return None
         names = []
         for item in found:
-            if not is_active(item):
+            status = as_text(item.get("status")).upper()
+            if status and status != "ACTIVE":
                 continue
             name = as_text(item.get("key")).lower()
             settings = item.get("settings") if isinstance(item.get("settings"), dict) else {}
@@ -206,13 +212,18 @@ def transform(input):
         constraints = method.get("constraints")
         if not isinstance(constraints, list):
             return False
-        readable = [c for c in constraints if isinstance(c, dict)]
-        if not readable:
+        if not constraints:
             return False
-        for constraint in readable:
+        for constraint in constraints:
+            # An entry that is not an object cannot show a restriction, so the rule is not restricted.
+            if not isinstance(constraint, dict):
+                return False
             block = constraint.get("possession")
             listed = block.get("authenticationMethods") if isinstance(block, dict) else None
-            if not (isinstance(listed, list) and listed):
+            if not isinstance(listed, list):
+                return False
+            named = [m for m in listed if isinstance(m, dict) and (as_text(m.get("key")) or as_text(m.get("method")))]
+            if not named or len(named) != len(listed):
                 return False
         return True
 
@@ -236,15 +247,6 @@ def transform(input):
         if access_problem is not None:
             if signon is None:
                 return not_evaluated(access_problem + "; " + (signon_problem or "no global session policy"), {})
-            # Classic orgs answer the ACCESS_POLICY read with an error. Only fall back to the global session
-            # policy when its rules look Classic: Identity Engine rules carry actions.signon.primaryFactor.
-            for policy, rules in signon:
-                for r in rules:
-                    acts = r.get("actions") if isinstance(r.get("actions"), dict) else {}
-                    so = acts.get("signon") if isinstance(acts.get("signon"), dict) else {}
-                    if "primaryFactor" in so:
-                        return not_evaluated(access_problem + ", and the global session rules are Identity Engine "
-                                             "rules, so they cannot answer for app sign-in alone", {})
         weak_on = weak_authenticators(data.get("authenticators"))
         unrestricted = (None if weak_on is not None else
                         "does not restrict its possession factor, and " + read_problem(data.get("authenticators"), "authenticator"))
@@ -300,6 +302,17 @@ def transform(input):
                         unread.append(where + " (verification method " + (method_type or "missing") + ")")
         elif signon is not None:
             engine = "Classic Engine"
+            # Only judge the global session policy when its rules look Classic: Identity Engine rules carry
+            # actions.signon.primaryFactor, and an Identity Engine org's app policies (unread or none active)
+            # are what decide app sign-in, so its global session policy cannot answer alone.
+            for policy, rules in signon:
+                for r in rules:
+                    acts = r.get("actions") if isinstance(r.get("actions"), dict) else {}
+                    so = acts.get("signon") if isinstance(acts.get("signon"), dict) else {}
+                    if "primaryFactor" in so:
+                        return not_evaluated((access_problem or "No active app authentication policy was returned")
+                                             + ", and the global session rules are Identity Engine rules, so they "
+                                             "cannot answer for app sign-in alone", {})
             classic_weak = weak_factors(data.get("factors"))
             classic_problem = read_problem(data.get("factors"), "factor")
             if classic_weak is None and weak_on is not None:
