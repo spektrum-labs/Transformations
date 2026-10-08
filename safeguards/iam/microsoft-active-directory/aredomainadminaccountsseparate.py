@@ -70,7 +70,7 @@ def transform(input):
         for prefix in ["adm-", "adm_", "a-", "a_", "admin-", "admin_", "da-", "da_"]:
             if text.startswith(prefix):
                 return True
-        for suffix in ["-adm", "_adm", "-a", "_a", ".adm", "-admin", "_admin"]:
+        for suffix in ["-adm", "_adm", "-a", "_a", "-admin", "_admin"]:
             if text.endswith(suffix):
                 return True
         return False
@@ -104,6 +104,7 @@ def transform(input):
         members = [m for m in admins.get("members") if isinstance(m, dict)]
         users = []
         findings = []
+        unclassified = []
         for member in members:
             kind = as_text(member.get("type")).lower()
             name = as_text(member.get("sam")) or as_text(member.get("sid")) or "an account with no name"
@@ -113,13 +114,22 @@ def transform(input):
             if kind == "group":
                 findings.append("Group " + name + " is listed as a Domain Admins member and was not expanded")
                 continue
-            if kind != "user":
-                findings.append(name + " has an unrecognised account type")
+            if member.get("enabled") is False:
                 continue
-            if member.get("enabled") is not True:
+            if kind == "user" and member.get("enabled") is True:
+                users.append(member)
                 continue
-            users.append(member)
+            # Unrecognised type or an enabled flag that is not a boolean: never dropped silently.
+            if member.get("hasMailbox") is True:
+                users.append(member)
+            else:
+                unclassified.append(name)
+                findings.append(name + " has an unrecognised account type or no enabled flag and was not judged")
 
+        if not users and unclassified:
+            return not_evaluated("Members with an unrecognised type or enabled flag could not be judged: "
+                                 + ", ".join(unclassified[:20]), {"domainAdminMembers": len(members), "judgedMembers": 0},
+                                 {"membersRead": len(members)}, findings)
         if not users:
             return not_evaluated("No enabled user account is an effective Domain Admins member, so there is nothing to judge",
                                  {"domainAdminMembers": len(members), "judgedMembers": 0},
@@ -155,8 +165,8 @@ def transform(input):
                            [str(len(with_mailbox)) + " of " + str(total) + " enabled Domain Admins members (" + str(percent)
                             + "%) have an Exchange mailbox, so they are daily-use accounts: " + ", ".join(with_mailbox[:20])],
                            summary, [], findings)
-        if unreadable:
-            return not_evaluated("Mailbox state could not be read for: " + ", ".join(unreadable[:20]), extra, summary, findings)
+        if unreadable or unclassified:
+            return not_evaluated("Could not judge: " + ", ".join((unreadable + unclassified)[:20]), extra, summary, findings)
         return respond(True, extra,
                        ["None of " + str(total) + " enabled Domain Admins members has an Exchange mailbox"], [],
                        summary, [], findings)

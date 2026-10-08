@@ -27,8 +27,9 @@ def transform(input):
     False when an administrator assignment goes to a broad group (Domain Users, Everyone, Authenticated Users, Users,
     Domain Computers) or to a named user whose directory record shows an Exchange mailbox (a daily-use account).
 
-    A named user is dedicated when the directory record is found and shows no mailbox, or the name follows an admin
-    naming convention (adm-, -adm, a-, -a, admin tokens). The built-in administrator@vsphere.local is a finding (shared
+    A named user is dedicated when the directory record is found and shows no mailbox, or the name has a clear
+    admin affix (adm-, admin-, da-, a- prefix; -adm, -admin, -a suffix). A GROUP is never dedicated by its name: its
+    members are not read, so it is not evaluated. The built-in administrator@vsphere.local is a finding (shared
     break-glass), and solution users (vpxd-, vsphere-webclient-, machine- ...) are not people and are not judged.
 
     Not evaluated (None) when no permission list was read or it is partial, or no administrator is judged, or one or
@@ -83,21 +84,14 @@ def transform(input):
                          "topologysvc-", "vstatsuser-", "vcls-", "vmware-vsan-", "lookupsvc-"]
     scoped_types = ["folder", "datacenter", "clustercomputeresource", "hostsystem", "root", "vcenter"]
 
-    def tokens(name):
-        text = name.lower()
-        for sep in ["-", "_", ".", " "]:
-            text = text.replace(sep, " ")
-        return [t for t in text.split(" ") if t]
-
     def follows_convention(name):
-        parts = tokens(name)
-        if not parts:
-            return False
-        for t in parts:
-            if t in ["adm", "admin", "vcadmin", "vadmin", "da"]:
+        text = name.lower()
+        for prefix in ["adm-", "adm_", "admin-", "admin_", "da-", "da_", "a-", "a_"]:
+            if text.startswith(prefix) and len(text) > len(prefix):
                 return True
-        if parts[0] == "a" or parts[-1] == "a":
-            return True
+        for suffix in ["-adm", "_adm", "-admin", "_admin", "-a", "_a"]:
+            if text.endswith(suffix) and len(text) > len(suffix):
+                return True
         return False
 
     try:
@@ -149,7 +143,11 @@ def transform(input):
             if isinstance(r, dict):
                 roles[as_text(r.get("id"))] = r
 
+        system_roles = ["-1", "-2", "-3", "-4", "-5"]
+        unresolved_roles = []
+
         def admin_role(role):
+            # True / False, or None when the role cannot be resolved (custom role id with no catalogue entry).
             role = as_dict(role)
             rid = as_text(role.get("id"))
             known = as_dict(roles.get(rid))
@@ -160,11 +158,20 @@ def transform(input):
             for p in privileges:
                 if as_text(p).lower() == "authorization.modifypermissions":
                     return True
-            return False
+            if role.get("adminCapable") is True or known.get("adminCapable") is True:
+                return True
+            if role.get("adminCapable") is False or known.get("adminCapable") is False:
+                return False
+            if rid in system_roles or (known and privileges):
+                return False
+            if rid not in unresolved_roles:
+                unresolved_roles.append(rid)
+            return None
 
         principals = {}
         for a in assignments:
-            if not admin_role(a.get("role")):
+            verdict = admin_role(a.get("role"))
+            if verdict is not True:
                 continue
             obj = as_dict(a.get("object"))
             if as_text(obj.get("type")).lower() not in scoped_types and a.get("propagating") is not True:
@@ -226,7 +233,7 @@ def transform(input):
                 failed.append(p["label"] + " (has an Exchange mailbox: daily-use account)")
             elif (not is_group) and rec.get("found") is True and rec.get("hasMailbox") is False and rec.get("enabled") is not False:
                 dedicated.append(p["label"])
-            elif follows_convention(name):
+            elif (not is_group) and follows_convention(name):
                 dedicated.append(p["label"])
                 findings.append(p["label"] + " judged dedicated by naming convention only (no directory record)")
             else:
@@ -240,6 +247,9 @@ def transform(input):
             return respond(False, extra, [],
                            [str(len(failed)) + " of " + str(judged) + " vCenter administrator principals are not dedicated: "
                             + "; ".join(failed[:20])], summary, [], findings)
+        if unresolved_roles:
+            return not_evaluated("Custom role(s) could not be resolved to admin or not (no role catalogue entry): "
+                                 + ", ".join(unresolved_roles[:20]), extra, summary, findings)
         if judged == 0:
             return not_evaluated("No administrator assignment was found among the permissions read, so there is nothing to judge",
                                  extra, summary, findings)

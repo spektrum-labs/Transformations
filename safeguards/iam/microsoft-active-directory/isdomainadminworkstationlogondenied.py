@@ -7,9 +7,9 @@
 # Snapshot shape (schema "spektrum.ad.v1"):
 #   domainSid                   e.g. S-1-5-21-1-2-3 (Domain Admins is <domainSid>-512)
 #   logonRights.gposComplete    true only when every GPO in the domain was read
-#   logonRights.gpos[]          displayName, enabled (computer settings on), appliesTo ("authenticated" |
+#   logonRights.gpos[]          EVERY GPO that defines either right (not only those denying Domain Admins): displayName, enabled (computer settings on), appliesTo ("authenticated" |
 #                               "filtered" | "unknown"), wmiFiltered, denyInteractive[], denyRemoteInteractive[]
-#                               (SIDs as strings, or {sid, containsDomainAdmins}), links[{scopeDn, enabled, enforced}]
+#                               (SIDs as strings, or {sid, containsDomainAdmins}), links[{scopeDn, enabled, enforced, linkOrder}]
 #   logonRights.ouInheritanceReadable   true when workstationOus carries the inheritance picture
 #   logonRights.workstationOus[]        dn, enabledWorkstations, inheritanceBlockedAt[] (DNs at or above the OU,
 #                                       up to the domain root, where Block Inheritance is set)
@@ -18,17 +18,22 @@
 
 def transform(input):
     """
-    isDomainAdminWorkstationLogonDenied - True only when every enabled workstation sits in an OU where an
-    enabled, unfiltered GPO denies Domain Admins BOTH "Deny log on locally" and "Deny log on through Remote
-    Desktop Services" (Microsoft tier-0 guidance denies both).
+    isDomainAdminWorkstationLogonDenied - True only when, for every enabled workstation OU, the GPO that WINS each
+    of "Deny log on locally" and "Deny log on through Remote Desktop Services" denies Domain Admins.
 
-    False when the whole GPO set was read and either no GPO denies Domain Admins both rights, or at least one
-    enabled workstation is not covered. The verdict travels with its denominator: workstationsCovered of
+    User Rights Assignments do not merge across GPOs: only the winning GPO's list applies. Precedence per right:
+    among enforced links the one highest in the hierarchy wins; otherwise the link nearest the OU wins; ties break by
+    linkOrder (lowest first). A baseline GPO linked at the OU that sets the right without Domain Admins therefore
+    overrides a tier-0 deny linked at the domain root, and that OU is NOT covered. Inheritance blocking removes
+    non-enforced links above the blocking OU.
+
+    False when the whole GPO set was read and either no GPO denies Domain Admins both rights, or at least one enabled
+    workstation OU's winning GPO does not deny them. The verdict travels with its denominator: workstationsCovered of
     workstationsTotal and coveragePercentage.
 
     Not evaluated (None) when the GPO set is incomplete, the domain SID or workstation picture is missing or
-    unreadable, there are no enabled workstations, or the only GPOs that could cover the rest are security- or
-    WMI-filtered so their scope cannot be resolved.
+    unreadable, there are no enabled workstations, or no failure is measured and which GPO wins cannot be resolved
+    (security- or WMI-filtered GPO defining the right, or tied links with no linkOrder).
     """
     import json
     from datetime import datetime, timezone
@@ -114,20 +119,18 @@ def transform(input):
             return not_evaluated("The GPO list is incomplete, so a GPO that denies logon could be missing")
 
         admin_sid = domain_sid + "-512"
-        clean = []
-        filtered = []
         findings = []
-        for gpo in as_list(rights.get("gpos")):
-            if not isinstance(gpo, dict) or gpo.get("enabled") is not True:
-                continue
-            name = as_text(gpo.get("displayName")) or "a GPO with no name"
-            local = denies(gpo.get("denyInteractive"), admin_sid)
-            remote = denies(gpo.get("denyRemoteInteractive"), admin_sid)
+        gpos = [g for g in as_list(rights.get("gpos")) if isinstance(g, dict) and g.get("enabled") is True]
+        # Per right, the GPOs that DEFINE it (a non-empty list). User Rights Assignments do not merge: only the winning
+        # GPO's list applies, so a baseline GPO that sets "Deny log on locally: Guests" overrides a deny linked higher up.
+        rights_fields = ["denyInteractive", "denyRemoteInteractive"]
+        any_denying = False
+        for g in gpos:
+            name = as_text(g.get("displayName")) or "a GPO with no name"
+            local = denies(g.get("denyInteractive"), admin_sid)
+            remote = denies(g.get("denyRemoteInteractive"), admin_sid)
             if local and remote:
-                if gpo.get("appliesTo") == "authenticated" and gpo.get("wmiFiltered") is not True:
-                    clean.append(gpo)
-                else:
-                    filtered.append(name)
+                any_denying = True
             elif local or remote:
                 findings.append("GPO " + name + " denies Domain Admins only "
                                 + ("locally" if local else "through Remote Desktop Services") + ", not both")
@@ -140,7 +143,7 @@ def transform(input):
                 total = total + count
         picture = rights.get("ouInheritanceReadable") is True and len(ous) > 0 and total > 0
 
-        if not clean and not filtered:
+        if not any_denying:
             extra = {"workstationsTotal": total if picture else None, "workstationsCovered": 0,
                      "coveragePercentage": 0 if picture else None}
             return respond(False, extra, [],
@@ -150,46 +153,87 @@ def transform(input):
             return not_evaluated("The workstation OU picture is missing or unreadable, or there are no enabled workstations, "
                                  "so coverage cannot be measured", {}, {"workstationOus": len(ous)}, findings)
 
+        def depth(dn):
+            return len(as_text(dn).split(","))
+
+        def verdict_for(ou, field):
+            # "deny" | "other" | "unknown" for one right on one OU: which GPO wins, and does it deny Domain Admins.
+            dn = as_text(ou.get("dn"))
+            blocked = [as_text(b) for b in as_list(ou.get("inheritanceBlockedAt"))]
+            candidates = []
+            for g in gpos:
+                if not as_list(g.get(field)):
+                    continue
+                for link in as_list(g.get("links")):
+                    if not isinstance(link, dict) or link.get("enabled") is not True:
+                        continue
+                    scope = as_text(link.get("scopeDn"))
+                    if same(scope, dn):
+                        reach = True
+                    elif under(dn, scope):
+                        stopped = False
+                        for b in blocked:
+                            if under(b, scope):
+                                stopped = True
+                        reach = (not stopped) or link.get("enforced") is True
+                    else:
+                        reach = False
+                    if not reach:
+                        continue
+                    order = link.get("linkOrder")
+                    if isinstance(order, bool) or not isinstance(order, int):
+                        order = None
+                    candidates.append({"gpo": g, "enforced": link.get("enforced") is True, "depth": depth(scope), "order": order})
+            if not candidates:
+                return "none"
+            for c in candidates:
+                if c["gpo"].get("appliesTo") != "authenticated" or c["gpo"].get("wmiFiltered") is True:
+                    return "unknown"
+            enforced = [c for c in candidates if c["enforced"]]
+            if enforced:
+                best = min([c["depth"] for c in enforced])
+                pool = [c for c in enforced if c["depth"] == best]
+            else:
+                best = max([c["depth"] for c in candidates])
+                pool = [c for c in candidates if c["depth"] == best]
+            winner = pool[0]
+            if len(pool) > 1:
+                orders = [c["order"] for c in pool]
+                if None in orders or len(set(orders)) < len(orders):
+                    return "unknown"
+                winner = pool[orders.index(min(orders))]
+            if denies(winner["gpo"].get(field), admin_sid):
+                return "deny"
+            return "other"
+
         covered = 0
         uncovered = []
+        unresolved = []
         for ou in ous:
             count = ou.get("enabledWorkstations")
             if not (isinstance(count, int) and not isinstance(count, bool) and count > 0):
                 continue
             dn = as_text(ou.get("dn"))
-            blocked = [as_text(b) for b in as_list(ou.get("inheritanceBlockedAt"))]
-            hit = False
-            for gpo in clean:
-                for link in as_list(gpo.get("links")):
-                    if not isinstance(link, dict) or link.get("enabled") is not True:
-                        continue
-                    scope = as_text(link.get("scopeDn"))
-                    if same(scope, dn):
-                        hit = True
-                    elif under(dn, scope):
-                        stopped = False
-                        for b in blocked:
-                            if under(b, scope) or (same(b, dn) and not same(b, scope)):
-                                stopped = True
-                        if not stopped or link.get("enforced") is True:
-                            hit = True
-            if hit:
+            verdicts = [verdict_for(ou, f) for f in rights_fields]
+            if verdicts[0] == "deny" and verdicts[1] == "deny":
                 covered = covered + count
+            elif "unknown" in verdicts and "other" not in verdicts and "none" not in verdicts:
+                unresolved.append(dn + " (" + str(count) + ")")
             else:
                 uncovered.append(dn + " (" + str(count) + ")")
         percent = int(100 * covered / total)
         extra = {"workstationsTotal": total, "workstationsCovered": covered, "coveragePercentage": percent}
-        summary = {"workstationOus": len(ous), "denyingGpos": len(clean), "filteredDenyingGpos": len(filtered)}
+        summary = {"workstationOus": len(ous), "gposRead": len(gpos)}
         if covered == total:
             return respond(True, extra,
                            ["Domain Admins are denied local and Remote Desktop Services logon on all " + str(total)
-                            + " enabled workstations"], [], summary, [], findings)
-        if filtered:
-            return not_evaluated("Uncovered workstation OUs may be covered by security- or WMI-filtered GPO(s) whose scope "
-                                 "cannot be resolved: " + ", ".join(filtered[:10]), extra, summary, findings)
-        return respond(False, extra, [],
-                       [str(total - covered) + " of " + str(total) + " enabled workstations (" + str(100 - percent)
-                        + "%) are not covered by a GPO that denies Domain Admins logon: " + ", ".join(uncovered[:20])],
-                       summary, [], findings)
+                            + " enabled workstations (the winning GPO for each right denies them)"], [], summary, [], findings)
+        if uncovered:
+            return respond(False, extra, [],
+                           [str(total - covered) + " of " + str(total) + " enabled workstations ("
+                            + str(100 - percent) + "%) are not covered by a winning GPO that denies Domain Admins logon: "
+                            + ", ".join(uncovered[:20])], summary, [], findings)
+        return not_evaluated("Which GPO wins could not be resolved (security- or WMI-filtered GPO, or link order missing) for: "
+                             + ", ".join(unresolved[:20]), extra, summary, findings)
     except Exception as e:
         return not_evaluated("Could not evaluate the logon-rights snapshot: the response has an unexpected shape")

@@ -93,6 +93,15 @@ def test_incomplete_or_empty_member_list_is_not_evaluated():
     assert value(separate(admins(member("old", enabled=False))), SEPARATE) is None
 
 
+def test_members_with_missing_type_or_enabled_are_never_dropped_into_a_true():
+    no_type = {"sam": "jdoe", "enabled": True, "hasMailbox": True, "exchangeAttributesReadable": True}
+    no_enabled = {"sam": "jdoe2", "type": "user", "hasMailbox": True, "exchangeAttributesReadable": True}
+    assert value(separate(admins(member("adm-x"), no_type, no_enabled)), SEPARATE) is False
+    quiet = {"sam": "mystery", "enabled": True, "hasMailbox": False, "exchangeAttributesReadable": True}
+    assert value(separate(admins(member("adm-x"), quiet)), SEPARATE) is None
+    assert value(separate(admins(quiet)), SEPARATE) is None
+
+
 @pytest.mark.parametrize("body", [{}, None, "{}", "", [], {"hello": "world"},
                                   {"error": {"statusCode": 401}}, {"statusCode": 403, "error": "Forbidden"}])
 def test_separate_never_answers_from_no_evidence(body):
@@ -185,11 +194,39 @@ def test_filtered_gpo_cannot_be_resolved_so_not_evaluated():
     assert r["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
-def test_filtered_gpo_beside_a_partial_clean_gpo_is_not_evaluated_not_false():
+def test_filtered_gpo_linked_where_the_clean_gpo_is_not_is_not_evaluated():
+    kiosks = "OU=Kiosks," + DOMAIN_DN
     clean = gpo()
-    f = gpo(name="Filtered", appliesTo="filtered")
-    r = denied(rights([clean, f], [ou(WS, 10), ou("OU=Kiosks," + DOMAIN_DN, 5)]))
+    f = gpo(name="Filtered", appliesTo="filtered", links=[{"scopeDn": kiosks, "enabled": True, "enforced": False}])
+    r = denied(rights([clean, f], [ou(WS, 10), ou(kiosks, 5)]))
     assert value(r, DENIED) is None
+
+
+def baseline(name="Workstation baseline", links=None, order=1):
+    # Defines both deny rights WITHOUT Domain Admins (e.g. "Deny log on locally: Guests").
+    return {"displayName": name, "enabled": True, "appliesTo": "authenticated", "wmiFiltered": False,
+            "denyInteractive": [SID + "-501"], "denyRemoteInteractive": [SID + "-501"],
+            "links": links if links is not None else [{"scopeDn": WS, "enabled": True, "enforced": False, "linkOrder": order}]}
+
+
+def test_baseline_gpo_nearer_the_ou_overrides_a_deny_linked_at_the_domain_root():
+    root = gpo(links=[{"scopeDn": DOMAIN_DN, "enabled": True, "enforced": False, "linkOrder": 1}])
+    r = denied(rights([root, baseline()], [ou(WS, 10)]))
+    assert value(r, DENIED) is False
+    assert r["transformedResponse"]["workstationsCovered"] == 0
+
+
+def test_enforced_root_deny_beats_a_nearer_baseline():
+    root = gpo(links=[{"scopeDn": DOMAIN_DN, "enabled": True, "enforced": True, "linkOrder": 1}])
+    assert value(denied(rights([root, baseline()], [ou(WS, 10)])), DENIED) is True
+
+
+def test_tied_links_use_link_order_and_missing_order_is_not_evaluated():
+    tier0 = gpo(links=[{"scopeDn": WS, "enabled": True, "enforced": False, "linkOrder": 1}])
+    assert value(denied(rights([tier0, baseline(order=2)], [ou(WS, 10)])), DENIED) is True
+    assert value(denied(rights([tier0, baseline(order=0)], [ou(WS, 10)])), DENIED) is False
+    no_order = baseline(links=[{"scopeDn": WS, "enabled": True, "enforced": False}])
+    assert value(denied(rights([gpo(), no_order], [ou(WS, 10)])), DENIED) is None
 
 
 def test_group_flagged_as_containing_domain_admins_counts():

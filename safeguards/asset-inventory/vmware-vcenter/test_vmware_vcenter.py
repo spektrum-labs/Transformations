@@ -74,6 +74,25 @@ def test_named_user_without_convention_or_record_is_not_evaluated():
     assert "dave" in r["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
+def test_group_is_never_dedicated_by_its_name():
+    r = transform(rest(rest_item("adm-alice"), rest_item("vCenter-Admin", kind="GROUP")))
+    assert value(r) is None
+    assert "vCenter-Admin" in r["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+@pytest.mark.parametrize("name", ["maria.da.silva", "a.smith", "smith.a", "joao.da.costa", "jadministrator"])
+def test_personal_names_are_not_dedicated_evidence(name):
+    assert value(transform(rest(rest_item(name)))) is None
+
+
+def test_custom_role_without_a_catalogue_entry_is_not_evaluated_but_a_measured_fail_wins():
+    assert value(transform(rest(rest_item("adm-alice"), rest_item("Domain Users", role="1001", kind="GROUP")))) is None
+    assert value(transform(rest(rest_item("adm-alice", role="-1"), rest_item("Domain Users", role="-1", kind="GROUP")))) is False
+    body = snap(perm("adm-alice"), perm("Domain Users", role_id="1001", kind="GROUP"),
+                roles=[{"id": "1001", "name": "Clone of Administrator", "adminCapable": True}])
+    assert value(transform(body)) is False
+
+
 def test_directory_record_without_mailbox_is_dedicated_evidence():
     body = snap(perm("dave"), directory={"dave@example.test": {"found": True, "enabled": True, "hasMailbox": False}})
     assert value(transform(body)) is True
