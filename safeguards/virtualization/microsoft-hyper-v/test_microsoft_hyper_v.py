@@ -169,3 +169,13 @@ def test_a_local_account_does_not_inherit_a_domain_users_directory_record():
     d = {"alice@corp": {"found": True, "enabled": True, "hasMailbox": False}}
     assert value(transform(snap(host(member("alice", domain="HV01")), directory=d))) is None
     assert value(transform(snap(host(member("alice", domain="corp")), directory=d))) is True
+
+
+def test_malformed_scvmm_containers_are_not_read_as_no_admins():
+    for sc in [{"present": True, "complete": True, "roles": None},
+               {"present": True, "complete": True, "roles": [{"name": "R", "profile": "Administrator", "members": None}]}]:
+        assert value(transform(snap(host(member("adm-alice"), scvmm=sc)))) is None
+
+
+def test_a_host_listing_no_administrators_at_all_is_not_credible():
+    assert value(transform(snap(host()))) is None

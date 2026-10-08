@@ -162,26 +162,32 @@ def transform(input):
                 continue
 
             entries = []
-            scvmm_unknown = []
+            entry_unknown = []
             for m in admins.get("members"):
                 if isinstance(m, dict):
                     entries.append(m)
                 else:
-                    scvmm_unknown.append("an administrator entry that is not a member record")
+                    entry_unknown.append("an administrator entry that is not a member record")
             if scvmm.get("present") is True:
+                if not isinstance(scvmm.get("roles"), list):
+                    entry_unknown.append("the SCVMM role list is not a list")
                 for role in as_list(scvmm.get("roles")):
                     role = as_dict(role)
                     profile = as_text(role.get("profile")).lower()
                     if profile in ["administrator", "delegatedadmin", "delegatedadministrator", "fabricadministrator"]:
+                        if not isinstance(role.get("members"), list):
+                            entry_unknown.append("SCVMM role " + (as_text(role.get("name")) or "with no name") + " (member list missing)")
                         for m in as_list(role.get("members")):
                             if isinstance(m, dict):
                                 entries.append(m)
                             else:
-                                scvmm_unknown.append("an SCVMM role member that is not a member record")
+                                entry_unknown.append("an SCVMM role member that is not a member record")
                     elif profile not in ["readonlyadmin", "readonlyadministrator", "selfserviceuser", "tenantadmin", "tenantadministrator"]:
-                        scvmm_unknown.append("SCVMM role " + (as_text(role.get("name")) or "with no name") + " (unrecognised profile)")
+                        entry_unknown.append("SCVMM role " + (as_text(role.get("name")) or "with no name") + " (unrecognised profile)")
 
-            host_unknown.extend(scvmm_unknown)
+            host_unknown.extend(entry_unknown)
+            if not entries:
+                host_unknown.append("no administrator is listed (the local Administrators group is never empty)")
             seen = []
             for m in entries:
                 name = as_text(m.get("name"))
@@ -246,7 +252,7 @@ def transform(input):
         if principals_judged == 0:
             return not_evaluated("No administrator principal was judged, so there is nothing to show", extra, summary, findings)
         return respond(True, extra,
-                       ["All administrators on all " + str(len(hosts)) + " Hyper-V host(s) are dedicated accounts"], [],
+                       ["No administrator on the " + str(len(hosts)) + " Hyper-V host(s) read is a broad group or a daily-use account, and every named administrator is shown dedicated"], [],
                        summary, [], findings)
     except Exception:
         return not_evaluated("Could not evaluate the Hyper-V snapshot: the response has an unexpected shape")
