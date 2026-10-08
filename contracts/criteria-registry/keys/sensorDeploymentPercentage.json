@@ -5,6 +5,7 @@
   "definition": "Percentage, 0 to 100, of a CrowdStrike Falcon tenant's non-mobile hosts that have a reporting sensor: agent_version set, not in Reduced Functionality Mode, and last_seen within 15 days. Supporting figure emitted beside isEPPDeployed, which is true when this is at least 95. Null when the hosts cannot be read completely.",
   "valueType": "number",
   "unit": "percent",
+  "domain": {"min": 0, "max": 100},
   "population": "non-mobile hosts returned by the Falcon host-details read, excluding mobile platforms",
   "polarity": "higher_is_better",
   "evidenceRequiredForTrue": "not a verdict key: it carries no pass or fail of its own. A figure is emitted only from a complete read of host records; an ID-only list, a partial or truncated read, an all-mobile read, or a list mixing in anything that is not a host record yields null.",
