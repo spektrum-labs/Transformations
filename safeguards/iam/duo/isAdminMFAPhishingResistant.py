@@ -199,6 +199,12 @@ def refusal_decoded(body):
 def refusal_find(value, path, depth):
     """[(path, marker)] for every vendorErrorAsResponse in the input: top level, under an output key, or nested."""
     value = refusal_decoded(value)
+    if isinstance(value, list):
+        found = []
+        if depth < 3:
+            for item in value:
+                found.extend(refusal_find(item, path, depth + 1))
+        return found
     if not isinstance(value, dict):
         return []
     if "vendorErrorAsResponse" in value:

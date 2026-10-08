@@ -129,6 +129,18 @@ class DuoPortedVendorErrorMarkerTests(unittest.TestCase):
                     value = load(name).transform(payload)["transformedResponse"][key]
                     self.assertIsNone(value)
 
+    def test_marker_inside_a_list_is_found(self):
+        # A workflow output delivered as a list of step results must not fall through to the original parser.
+        for name, key, healthy, endpoints in CASES:
+            for okey in endpoints:
+                with self.subTest(name=name, key=okey):
+                    out = load(name).transform({okey: [marker()]})
+                    self.check(out, key, endpoints[okey][0], endpoints[okey][1])
+            with self.subTest(name=name, shape="top-level list"):
+                out = load(name).transform([marker()])
+                self.assertIsNone(out["transformedResponse"][key])
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()
