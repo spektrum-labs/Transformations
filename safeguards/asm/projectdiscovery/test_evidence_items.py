@@ -57,6 +57,13 @@ OFFENDING = {  # the finding that makes each file fail, and the scan it needs
 }
 
 
+def items_of(name, out):
+    """The evidenceItems of a result; nuclei_transform carries one list per criterion, flattened here."""
+    if name == "nuclei_transform":
+        return [i for key in sorted(out["evidenceItemsByKey"]) for i in out["evidenceItemsByKey"][key]]
+    return out["evidenceItems"]
+
+
 def result(name, body):
     return MODULES[name]["transform"](body)["transformedResponse"]
 
@@ -106,9 +113,10 @@ class Items(unittest.TestCase):
             noise = [finding("info-template", "info", "https://x.example.com/"),
                      finding("low-template", "low", "https://y.example.com/")]
             out = result(name, scan(OFFENDING[name] + noise))
-            items = out["evidenceItems"]
+            items = items_of(name, out)
             self.assertEqual(len(items), len(OFFENDING[name]), name)
-            self.assertEqual([i["fingerprint"] for i in items], sorted(i["fingerprint"] for i in items), name)
+            if name != "nuclei_transform":
+                self.assertEqual([i["fingerprint"] for i in items], sorted(i["fingerprint"] for i in items), name)
             for item in items:
                 self.assertEqual(set(item), {"fingerprint", "kind", "label", "severity"})
                 self.assertEqual(item["kind"], "asm_finding")
@@ -121,11 +129,11 @@ class Items(unittest.TestCase):
             again = scan(list(reversed(OFFENDING[name])) + [finding("low-template", "low", "https://z.example.com/")],
                          timestamp="2026-02-02T00:00:00", templatesScanned=999, domainsScanned=3,
                          totalDiscovered=3, domainResults=scan([])["domainResults"] * 2)
-            before = {i["fingerprint"] for i in result(name, first)["evidenceItems"]}
-            after = {i["fingerprint"] for i in result(name, again)["evidenceItems"]}
+            before = {i["fingerprint"] for i in items_of(name, result(name, first))}
+            after = {i["fingerprint"] for i in items_of(name, result(name, again))}
             self.assertEqual(before, after, name)
             new = finding("new-template", "critical", "https://new.example.com/", tags=("cve", "kev"))
-            grown = {i["fingerprint"] for i in result(name, scan(OFFENDING[name] + [new]))["evidenceItems"]}
+            grown = {i["fingerprint"] for i in items_of(name, result(name, scan(OFFENDING[name] + [new])))}
             self.assertTrue(before < grown and len(grown - before) == 1, name)
 
     def test_duplicate_hits_on_one_url_collapse_and_query_is_ignored(self):
@@ -133,15 +141,45 @@ class Items(unittest.TestCase):
         b = finding("kev-template", "critical", "https://APP.example.com:443/login/", tags=("kev",))
         self.assertEqual(len(result("knownexploitedvulncount", scan([a, b]))["evidenceItems"]), 1)
 
+    def test_matcher_name_distinguishes_matchers_and_default_form_is_unchanged(self):
+        item = MODULES["criticalvulnerabilitycount"]["evidence_item"]
+        plain = finding("t1", "high", "https://app.example.com/p")
+        m1 = finding("t1", "high", "https://app.example.com/p", **{"matcher-name": "one"})
+        m2 = finding("t1", "high", "https://app.example.com/p", **{"matcher-name": "two"})
+        self.assertEqual(item(plain)["fingerprint"], hashlib.sha256(b"t1|https://app.example.com/p").hexdigest())
+        self.assertEqual(item(m1)["fingerprint"], hashlib.sha256(b"t1#one|https://app.example.com/p").hexdigest())
+        self.assertNotEqual(item(m1)["fingerprint"], item(m2)["fingerprint"])
+        self.assertEqual(len(result("knownexploitedvulncount", scan([
+            finding("t1", "critical", "https://app.example.com/p", tags=("kev",), **{"matcher-name": "one"}),
+            finding("t1", "critical", "https://app.example.com/p", tags=("kev",), **{"matcher-name": "two"})]))["evidenceItems"]), 2)
+
+    def test_nuclei_transform_lists_items_per_criterion(self):
+        high = finding("high-template", "high", "https://app.example.com/h")
+        crit = finding("crit-template", "critical", "https://app.example.com/c")
+        out = result("nuclei_transform", scan([high]))
+        self.assertTrue(out["noCriticalFindings"])
+        self.assertEqual(list(out["evidenceItemsByKey"]), ["noHighFindings"])
+        self.assertEqual([i["severity"] for i in out["evidenceItemsByKey"]["noHighFindings"]], ["high"])
+        out = result("nuclei_transform", scan([crit]))
+        self.assertTrue(out["noHighFindings"])
+        self.assertEqual(list(out["evidenceItemsByKey"]), ["noCriticalFindings"])
+        out = result("nuclei_transform", scan([high, crit]))
+        by = out["evidenceItemsByKey"]
+        self.assertEqual([i["severity"] for i in by["noCriticalFindings"]], ["critical"])
+        self.assertEqual([i["severity"] for i in by["noHighFindings"]], ["high"])
+        self.assertNotIn("evidenceItems", out)
+        self.assertNotIn("evidenceItemsByKey", result("nuclei_transform", scan([])))
+
     def test_no_items_and_unchanged_result_when_nothing_offends(self):
         for name, keys in FILES.items():
             out = result(name, scan([finding("info-template", "info", "https://x.example.com/")]))
             self.assertNotIn("evidenceItems", out, name)
+            self.assertNotIn("evidenceItemsByKey", out, name)
 
     def test_verdict_output_is_otherwise_unchanged(self):
         for name, keys in FILES.items():
             out = MODULES[name]["transform"](scan(OFFENDING[name]))
-            stripped = {k: v for k, v in out["transformedResponse"].items() if k != "evidenceItems"}
+            stripped = {k: v for k, v in out["transformedResponse"].items() if k not in ("evidenceItems", "evidenceItemsByKey")}
             self.assertIn(keys[0], stripped)
             self.assertNotIn("evidenceItems", stripped)
             if name == "nuclei_transform":

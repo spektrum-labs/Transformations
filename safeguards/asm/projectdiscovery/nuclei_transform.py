@@ -99,6 +99,8 @@ def capped_note(data):
 # Each offending finding becomes {fingerprint, kind, label, severity}. The fingerprint is the identity of the
 # thing found, so a rescan with different counts or timestamps yields the same value and a new finding a new one:
 #   fingerprint = sha256_hex(template-id + "|" + scheme://host[:port] + path)
+# When a finding carries a matcher-name the template part is template-id + "#" + matcher-name, so two matchers of
+# one template on one URL stay distinct; without a matcher-name the form above is unchanged.
 # Normalisation of the finding's matched-at (host as a fallback): scheme and host lower-cased; userinfo, query
 # string and fragment removed; the default port (80 for http, 443 for https) and a trailing dot on the host
 # removed; trailing slashes removed from the path, so the root path is "" and https://h/ equals https://h; the
@@ -178,6 +180,9 @@ def evidence_item(finding):
     template_id = str(finding.get("template-id") or info.get("name") or "unknown").strip()
     scheme, host, path = normalise_location(finding.get("matched-at") or finding.get("host"))
     sev = info.get("severity") or finding.get("severity")
+    matcher = str(finding.get("matcher-name") or "").strip()
+    if matcher:
+        template_id = template_id + "#" + matcher
     return {"fingerprint": sha256_hex(template_id + "|" + scheme + "://" + host + path), "kind": "asm_finding",
             "label": template_id + " at " + host + path, "severity": str(sev or "").strip().lower()}
 
@@ -266,7 +271,8 @@ def transform(input):
         medium_count = 0
         low_count = 0
         info_count = 0
-        offending = []
+        critical_findings = []
+        high_findings = []
 
         for finding in findings:
             severity = ""
@@ -280,12 +286,12 @@ def transform(input):
 
             if severity == "critical":
                 critical_count += 1
-                offending.append(finding)
+                critical_findings.append(finding)
                 finding_name = info.get("name", "Unknown") if isinstance(info, dict) else "Unknown"
                 additional_findings.append(f"CRITICAL: {finding_name}")
             elif severity == "high":
                 high_count += 1
-                offending.append(finding)
+                high_findings.append(finding)
                 finding_name = info.get("name", "Unknown") if isinstance(info, dict) else "Unknown"
                 additional_findings.append(f"HIGH: {finding_name}")
             elif severity == "medium":
@@ -342,8 +348,14 @@ def transform(input):
                 "totalFindings": total_findings,
                 "domain": domain
             }
-        if offending:
-            result["evidenceItems"] = evidence_items(offending)
+        # Per criterion: each key lists only the findings that make that key fail, and only when it fails.
+        by_key = {}
+        if critical_findings:
+            by_key["noCriticalFindings"] = evidence_items(critical_findings)
+        if high_findings:
+            by_key["noHighFindings"] = evidence_items(high_findings)
+        if by_key:
+            result["evidenceItemsByKey"] = by_key
 
         return create_response(
             result=result,
