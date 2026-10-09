@@ -63,10 +63,12 @@ def evaluate(data):
     if not url:
         return {"isSafeLinksEnabled": None, "reason": "No url breakdown present in messages-protected report"}
     total = url.get("breakdownMessagesTotal") or 0
-    non_rewritten = url.get("messagesWithNonRewrittenUrls") or 0
+    non_rewritten = url.get("messagesWithNonRewrittenUrls")
     permitted_clicks = url.get("messagesWithPermittedClicks") or 0
     if total <= 0:
         return {"isSafeLinksEnabled": None, "reason": "No URL-bearing messages observed in the window"}
+    if not isinstance(non_rewritten, (int, float)) or isinstance(non_rewritten, bool) or non_rewritten < 0 or non_rewritten > total:
+        return {"isSafeLinksEnabled": None, "reason": "URL breakdown has no usable messagesWithNonRewrittenUrls"}
     rewritten = total - non_rewritten
     rate = round((rewritten * 100.0) / total, 2)
     return {"isSafeLinksEnabled": rate >= 95.0,
