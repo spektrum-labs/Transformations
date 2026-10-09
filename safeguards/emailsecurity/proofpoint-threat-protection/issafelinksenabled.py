@@ -2,6 +2,10 @@
 Transformation: isSafeLinksEnabled
 Vendor: Proofpoint (Threat Protection / Core Email Protection)  |  Category: Email Security
 Evaluates: URL Defense is rewriting inbound links, proven by the share of URL-bearing messages that were rewritten in the messages-protected report.
+
+Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
+report section, no volume in the window, or an exception. False only when the report was read and shows the control
+below its threshold.
 """
 import json
 from datetime import datetime
@@ -22,6 +26,11 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors: carry the reason.
+    if not api_errors and isinstance(result, dict) and "isSafeLinksEnabled" in result and result["isSafeLinksEnabled"] is None:
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -46,18 +55,18 @@ def find_breakdown(rows, name):
 
 def evaluate(data):
     if not isinstance(data, dict):
-        return {"isSafeLinksEnabled": False, "reason": "Unexpected response type"}
+        return {"isSafeLinksEnabled": None, "reason": "Unexpected response type"}
     rows = data.get("statsByBreakdownValue")
     if not isinstance(rows, list):
-        return {"isSafeLinksEnabled": False, "reason": "messages-protected report returned no breakdown"}
+        return {"isSafeLinksEnabled": None, "reason": "messages-protected report returned no breakdown"}
     url = find_breakdown(rows, "url")
     if not url:
-        return {"isSafeLinksEnabled": False, "reason": "No url breakdown present in messages-protected report"}
+        return {"isSafeLinksEnabled": None, "reason": "No url breakdown present in messages-protected report"}
     total = url.get("breakdownMessagesTotal") or 0
     non_rewritten = url.get("messagesWithNonRewrittenUrls") or 0
     permitted_clicks = url.get("messagesWithPermittedClicks") or 0
     if total <= 0:
-        return {"isSafeLinksEnabled": False, "reason": "No URL-bearing messages observed in the window"}
+        return {"isSafeLinksEnabled": None, "reason": "No URL-bearing messages observed in the window"}
     rewritten = total - non_rewritten
     rate = round((rewritten * 100.0) / total, 2)
     return {"isSafeLinksEnabled": rate >= 95.0,
@@ -76,7 +85,7 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         res = evaluate(data)
-        value = res.get(key, False)
+        value = res.get(key)
         extra = {k: v for k, v in res.items() if k != key and k != "reason"}
         if value:
             pr = [f"URL Defense rewrote {extra.get('messagesWithRewrittenUrls')} of {extra.get('urlMessagesTotal')} URL-bearing messages ({extra.get('urlRewriteRatePct')}%), with {extra.get('messagesWithPermittedClicks')} permitted clicks"]
@@ -85,7 +94,7 @@ def transform(input):
             pr = []
             fr = [res.get("reason", f"URL rewrite rate {extra.get('urlRewriteRatePct')}% is below the 95% threshold")]
         return create_response({key: value, **extra}, validation, pr, fr,
-                               [] if value else ["Enable URL Defense rewriting for all inbound mail flows"],
+                               [] if value is not False else ["Enable URL Defense rewriting for all inbound mail flows"],
                                {key: value, **extra})
     except Exception as e:
-        return create_response({key: False}, None, [], ["Transformation error"], [], {}, [str(e)])
+        return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])
