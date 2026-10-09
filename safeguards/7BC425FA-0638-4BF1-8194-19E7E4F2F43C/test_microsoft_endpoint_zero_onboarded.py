@@ -1,9 +1,11 @@
-"""Defender for Endpoint (One-Click) connected with 0 onboarded devices is a finding for that tool.
+"""Defender for Endpoint (One-Click) with an empty machine inventory is Not evaluated, never a fail.
 
-A readable machine inventory (HTTP 200, a value array, no pages left) with no onboarded machine means the
-tool is connected and protects nothing. Device-coverage checks give a definite result that says so; they
-are not "not evaluated". Error bodies, unread pages and the advanced-hunting checks (which never see the
-machine list) stay not evaluated. Tenants with onboarded machines keep their values.
+A readable inventory with no eligible machine (empty, or only excluded/unsupported records) proves nothing
+about the estate, so the one-click, isEPPConfigured and EDR checks answer None with a dataCollection error
+("Defender has no onboarded devices"); the onboard-or-disconnect hint is guidance only. Eligible machines
+with none onboarded is still a definite result. Server coverage keeps its own behaviour. Error bodies,
+unread pages and the advanced-hunting checks stay not evaluated. Tenants with onboarded machines keep
+their values.
 Synthetic bodies only; no customer data.
 """
 import importlib.util
@@ -23,6 +25,7 @@ EDR = load("microsoft_endpoint_edrdeployed")
 SERVER = load("microsoft_endpoint_servercoverage")
 SCID = load("microsoft_endpoint_scid_compliance")
 ZERO = "Defender for Endpoint is connected and has 0 onboarded devices"
+EMPTY_REASON = "Defender has no onboarded devices"
 EMPTY = {"@odata.context": "https://api.securitycenter.microsoft.com/api/$metadata#Machines", "value": []}
 ERRORS = (None, {}, "", {"error": {"code": "Forbidden", "message": "Missing application roles"}},
           {"error": True, "message": "HTTP 403"}, {"statusCode": 401, "error": "Unauthorized"})
@@ -56,34 +59,49 @@ def fail_reasons(module, body):
 
 # ---- coverage checks give a definite, tool-scoped finding on 0 onboarded devices
 
-def test_oneclick_empty_inventory_says_zero_onboarded_first():
-    for body in (EMPTY, DISCOVERED_ONLY, dict(EMPTY, **{"@odata.nextLink": None})):
+def test_oneclick_empty_inventory_is_not_evaluated():
+    for body in (EMPTY, dict(EMPTY, **{"@odata.nextLink": None}), {"value": [machine(excluded=True)]}):
         result = out(ONECLICK, body)
         tr = result["transformedResponse"]
-        assert tr["isEPPEnabled"] is False and tr["isEPPLoggingEnabled"] is False
-        assert tr["requiredCoveragePercentage"] == 0 and tr["protectedDevices"] == 0
-        assert result["additionalInfo"]["dataCollection"]["status"] == "success"
-        reasons = result["additionalInfo"]["evaluation"]["failReasons"]
-        assert reasons[0].startswith(ZERO)
+        for key in ("isEPPEnabled", "isEPPConfigured", "isEPPLoggingEnabled", "requiredCoveragePercentage"):
+            assert tr[key] is None
+        assert result["additionalInfo"]["dataCollection"]["status"] == "error"
+        assert result["additionalInfo"]["dataCollection"]["errors"] == [EMPTY_REASON]
         assert result["additionalInfo"]["evaluation"]["recommendations"]
-    assert "inventory is empty" in fail_reasons(ONECLICK, EMPTY)[0]
-    assert "2 eligible machines" in fail_reasons(ONECLICK, DISCOVERED_ONLY)[0]
 
 
-def test_iseppconfigured_zero_onboarded_is_zero_not_unevaluated():
-    for body in (EMPTY, DISCOVERED_ONLY, {"value": [machine(excluded=True)]}):
-        assert value(CONFIGURED, body, "isEPPConfigured") == 0
-        assert type(value(CONFIGURED, body, "isEPPConfigured")) is int
-        assert collected(CONFIGURED, body) == "success"
-        assert fail_reasons(CONFIGURED, body)[0].startswith(ZERO)
+def test_oneclick_eligible_machines_none_onboarded_is_still_a_finding():
+    result = out(ONECLICK, DISCOVERED_ONLY)
+    tr = result["transformedResponse"]
+    assert tr["isEPPEnabled"] is False and tr["requiredCoveragePercentage"] == 0
+    assert result["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert result["additionalInfo"]["evaluation"]["failReasons"][0].startswith(ZERO)
 
 
-def test_edr_and_epp_deployed_zero_onboarded_fail_with_the_reason():
-    for body in (EMPTY, DISCOVERED_ONLY):
-        assert value(EDR, body, "isEDRDeployed") is False
-        assert value(EDR, body, "isEPPDeployed") is False
-        assert collected(EDR, body) == "success"
-        assert fail_reasons(EDR, body)[0].startswith(ZERO)
+def test_iseppconfigured_empty_inventory_is_not_evaluated():
+    for body in (EMPTY, {"value": [machine(excluded=True)]}):
+        assert value(CONFIGURED, body, "isEPPConfigured") is None
+        assert collected(CONFIGURED, body) == "error"
+        assert fail_reasons(CONFIGURED, body) == [EMPTY_REASON]
+
+
+def test_iseppconfigured_eligible_machines_none_onboarded_is_zero():
+    assert value(CONFIGURED, DISCOVERED_ONLY, "isEPPConfigured") == 0
+    assert collected(CONFIGURED, DISCOVERED_ONLY) == "success"
+    assert fail_reasons(CONFIGURED, DISCOVERED_ONLY)[0].startswith(ZERO)
+
+
+def test_edr_and_epp_deployed_empty_inventory_is_not_evaluated():
+    for body in (EMPTY, {"value": [machine(excluded=True)]}):
+        assert value(EDR, body, "isEDRDeployed") is None
+        assert value(EDR, body, "isEPPDeployed") is None
+        assert collected(EDR, body) == "error"
+        assert fail_reasons(EDR, body) == [EMPTY_REASON]
+
+
+def test_edr_eligible_machines_none_onboarded_fails():
+    assert value(EDR, DISCOVERED_ONLY, "isEDRDeployed") is False
+    assert collected(EDR, DISCOVERED_ONLY) == "success"
 
 
 def test_server_coverage_zero_onboarded_is_a_finding():
@@ -118,8 +136,8 @@ def test_error_bodies_and_unread_pages_stay_not_evaluated():
 
 def test_stringified_empty_inventory_is_read_the_same():
     import json
-    assert value(CONFIGURED, json.dumps(EMPTY), "isEPPConfigured") == 0
-    assert value(EDR, json.dumps(EMPTY), "isEDRDeployed") is False
+    assert value(CONFIGURED, json.dumps(EMPTY), "isEPPConfigured") is None
+    assert value(EDR, json.dumps(EMPTY), "isEDRDeployed") is None
 
 
 # ---- advanced hunting never sees the machine list: no invented verdict, exact reason
