@@ -40,8 +40,7 @@ KEYS = {
     "issafeattachmentsenabled": "isSafeAttachmentsEnabled",
 }
 UNMEASURED = {
-    "confirmedlicensepurchased": [{"preDeliveryProtectedMessages": 0, "postDeliveryProtectedMessages": 0,
-                                   "overallInboundProtection": 0}],
+    "confirmedlicensepurchased": [],
     "isantiphishingenabled": [{"threatCategories": [], "totalVolume": 0},
                               {"threatCategories": [{"name": "spam", "volume": 5}], "totalVolume": 5}],
     "issafelinksenabled": [{"statsByBreakdownValue": []},
@@ -62,6 +61,12 @@ class NoneReadsAsNotEvaluated(unittest.TestCase):
                     collection = out["additionalInfo"]["dataCollection"]
                     self.assertEqual(collection["status"], "error")
                     self.assertTrue(collection["errors"])
+
+    def test_zero_volume_valid_report_confirms_the_licence(self):
+        out = load("confirmedlicensepurchased").transform(
+            {"preDeliveryProtectedMessages": 0, "postDeliveryProtectedMessages": 0, "overallInboundProtection": 0})
+        self.assertIs(out["transformedResponse"]["confirmedLicensePurchased"], True)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
     def test_measured_answers_are_unchanged(self):
         def run(name, body):

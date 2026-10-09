@@ -1,12 +1,13 @@
 """
 Transformation: confirmedLicensePurchased
 Vendor: Proofpoint (Threat Protection / Core Email Protection)  |  Category: Email Security
-Evaluates: An active, licensed Proofpoint tenant is processing inbound mail, proven by a
-non-zero protected-message volume in the executive inbound-protection-overview report.
+Evaluates: An active, licensed Proofpoint tenant, proven by the executive inbound-protection-overview
+report answering with its protection metrics (a valid 200 report is True even at zero volume: the API
+answering for the cluster proves the licence).
 
 Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
-report section, no volume in the window, or an exception. False only when the report was read and shows the control
-below its threshold (isSafeLinksEnabled, isSafeAttachmentsEnabled). This check cannot read False: zero volume in the window is "no evidence", so it reads Not evaluated.
+report section, or an exception. False only when the report was read and shows the control
+below its threshold (isSafeLinksEnabled, isSafeAttachmentsEnabled). This check cannot read False: a valid report is True even at zero volume; an error, empty body, missing metrics or exception is None.
 """
 import json
 from datetime import datetime
@@ -60,9 +61,6 @@ def evaluate(data):
         return {"confirmedLicensePurchased": None,
                 "reason": "inbound-protection-overview did not return protection metrics"}
     total = (pre or 0) + (post or 0)
-    if total <= 0:
-        return {"confirmedLicensePurchased": None, "protectedMessages": total,
-                "reason": "No protected-message volume in the report window; not evaluated"}
     return {"confirmedLicensePurchased": True,
             "protectedMessages": total,
             "overallInboundProtectionPct": round((overall or 0) * 100, 2)}
@@ -80,7 +78,7 @@ def transform(input):
         value = res.get(key)
         extra = {k: v for k, v in res.items() if k != key and k != "reason"}
         if value:
-            pr = [f"Proofpoint processed {extra.get('protectedMessages')} protected messages; tenant is licensed and active"]
+            pr = [f"Proofpoint answered the inbound-protection report ({extra.get('protectedMessages')} protected messages in the window); tenant is licensed and active"]
             fr = []
         else:
             pr = []
