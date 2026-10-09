@@ -63,8 +63,8 @@ def test_server_coverage_with_pages_left_is_not_evaluated():
 def test_edr_deployed_needs_an_onboarded_machine():
     assert value(EDR, {"value": [machine("Windows11"), machine("Windows10", "CanBeOnboarded")]}, "isEDRDeployed") is True
     assert value(EDR, {"value": [machine("Windows11", "CanBeOnboarded")]}, "isEPPDeployed") is False
-    assert value(EDR, {"value": []}, "isEDRDeployed") is False
-    assert value(EDR, {"value": [dict(machine("Windows11"), isExcluded=True)]}, "isEDRDeployed") is False
+    assert value(EDR, {"value": []}, "isEDRDeployed") is None
+    assert value(EDR, {"value": [dict(machine("Windows11"), isExcluded=True)]}, "isEDRDeployed") is None
 
 
 def row(scid, compliant, applicable="1"):
