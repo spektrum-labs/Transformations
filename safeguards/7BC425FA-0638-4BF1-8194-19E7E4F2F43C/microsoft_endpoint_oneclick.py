@@ -1,12 +1,14 @@
 """Microsoft one-click Endpoint evaluation from MDE machine inventory.
 
 This stays separate from the legacy transforms so existing Endpoint customers
-keep their current verdicts. Valid empty Microsoft responses evaluate to false/0;
-API and validation errors remain collection errors instead of false positives.
+keep their current verdicts. A readable inventory with no eligible machine is Not evaluated (None,
+"Defender has no onboarded devices"), never a fail; API and validation errors remain collection errors
+instead of false positives.
 
 Reasons: every result leads with what the inventory shows (onboarded / eligible machines, sensors
-reporting, servers). A readable inventory with no onboarded machine is a finding for this tool, not a
-gap in the data: Defender for Endpoint is connected and protects 0 devices, and the reason says so.
+reporting, servers). Eligible machines with none onboarded is a finding for this tool (false / 0).
+No eligible machine at all is an empty result and proves nothing, so it is None; the onboard-or-disconnect
+hint is guidance only.
 """
 
 import json
@@ -89,7 +91,20 @@ def evaluate_machines(data):
     ]
     servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
-    coverage = round(100 * len(onboarded) / len(eligible)) if eligible else 0
+    if not eligible:
+        return {
+            "isEPPEnabled": None,
+            "isEPPConfigured": None,
+            "isEPPLoggingEnabled": None,
+            "requiredCoveragePercentage": None,
+            "serverCoveragePercentage": None,
+            "totalEndpointCount": 0,
+            "totalServerCount": 0,
+            "eligibleDevices": 0,
+            "protectedDevices": 0,
+            "reportingDevices": 0,
+        }
+    coverage = round(100 * len(onboarded) / len(eligible))
     server_coverage = round(100 * len(protected_servers) / len(servers)) if servers else 0
     return {
         "isEPPEnabled": bool(onboarded),
@@ -146,6 +161,9 @@ def transform(input):
             result = evaluate_machines(data)
         else:
             raise ValueError("Unrecognized Microsoft Endpoint response shape")
+        if result["eligibleDevices"] == 0:
+            return create_response(result, validation, errors=["Defender has no onboarded devices"],
+                                   summary={"returnedKeys": sorted(result)}, recommendations=describe(result)[1])
         readings, recommendations = describe(result)
         return create_response(result, validation, summary={"returnedKeys": sorted(result)},
                                readings=readings, recommendations=recommendations)
