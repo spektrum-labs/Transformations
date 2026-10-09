@@ -13,6 +13,7 @@ from .isEPPEnabled import IsEPPEnabledInput
 from .isEPPMisconfigured import IsEPPMisconfiguredInput
 from .isEncryptionEnabled import IsEncryptionEnabledInput
 from .isMaintenanceModeTimeLimited import IsMaintenanceModeTimeLimitedInput
+from .isMdmManaged import IsMdmManagedInput
 from .isPatchAutoApprovalRestricted import IsPatchAutoApprovalRestrictedInput
 from .isPatchManagementEnabled import IsPatchManagementEnabledInput
 from .isPatchManagementValid import IsPatchManagementValidInput
@@ -38,6 +39,7 @@ __all__ = [
     "IsEPPMisconfiguredInput",
     "IsEncryptionEnabledInput",
     "IsMaintenanceModeTimeLimitedInput",
+    "IsMdmManagedInput",
     "IsPatchAutoApprovalRestrictedInput",
     "IsPatchManagementEnabledInput",
     "IsPatchManagementValidInput",

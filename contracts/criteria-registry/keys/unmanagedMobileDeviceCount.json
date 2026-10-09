@@ -1,0 +1,39 @@
+{
+  "name": "unmanagedMobileDeviceCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Number of mobile devices the device management tool lists that are not enrolled and managed.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "mobile devices (iOS, iPadOS, Android) that the device management tool itself lists as not managed (for example pending enrolment)",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete device list with a managed or enrolled state read for every mobile device; an unreadable list is not measured rather than zero.",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Endpoint Security",
+    "Mobile Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/ninjaone-endpoint-management/isMdmManaged.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-09",
+      "change": "Registered with the first NinjaOne implementation (synthetic-fixture tests only; field names confirmed against a read-only device list, but no tenant body replayed through the transform, so V0). Intune and Lookout already emit this key."
+    }
+  ]
+}
