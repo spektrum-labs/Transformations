@@ -78,7 +78,7 @@ def create_response(result, validation, errors=(), passed=(), failed=(), summary
 
 def seen_in_inventory(count):
     if count:
-        return " (" + str(count) + " machines in its inventory, none onboarded)"
+        return " (" + str(count) + " eligible machines in its inventory, none onboarded)"
     return " (its machine inventory is empty)"
 
 
@@ -104,7 +104,7 @@ def measure(data):
                 "inventoryMachines": len(machines), "eligibleDevices": 0}
     if not onboarded:
         return {"isEPPConfigured": 0, "protectedDevices": 0, "configuredDevices": 0, "inactiveDevices": 0,
-                "inventoryMachines": len(machines)}
+                "inventoryMachines": len(machines), "eligibleDevices": len(eligible)}
     configured = [
         machine for machine in onboarded
         if str(machine.get("healthStatus") or "").lower() in CONFIGURED_SENSOR_STATES
@@ -132,7 +132,7 @@ def transform(input):
                 "tool protects them"])
         if result["protectedDevices"] == 0:
             line = ("Defender for Endpoint is connected and has 0 onboarded devices"
-                    + seen_in_inventory(result["inventoryMachines"]) + ", so no machine reports a healthy sensor (0%)")
+                    + seen_in_inventory(result["eligibleDevices"]) + ", so no machine reports a healthy sensor (0%)")
             return create_response(result, validation, failed=[line], summary=result, recommendations=[
                 "Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, Settings > "
                 "Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint "

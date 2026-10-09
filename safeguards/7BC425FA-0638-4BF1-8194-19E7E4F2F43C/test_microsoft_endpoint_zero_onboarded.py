@@ -1,9 +1,9 @@
 """Defender for Endpoint (One-Click) with an empty machine inventory is Not evaluated, never a fail.
 
 A readable inventory with no eligible machine (empty, or only excluded/unsupported records) proves nothing
-about the estate, so the one-click, isEPPConfigured and EDR checks answer None with a dataCollection error
+about the estate, so the one-click, isEPPConfigured, EDR and server coverage checks answer None with a dataCollection error
 ("Defender has no onboarded devices"); the onboard-or-disconnect hint is guidance only. Eligible machines
-with none onboarded is still a definite result. Server coverage keeps its own behaviour. Error bodies,
+with none onboarded is still a definite result. Error bodies,
 unread pages and the advanced-hunting checks stay not evaluated. Tenants with onboarded machines keep
 their values.
 Synthetic bodies only; no customer data.
@@ -104,11 +104,17 @@ def test_edr_eligible_machines_none_onboarded_fails():
     assert collected(EDR, DISCOVERED_ONLY) == "success"
 
 
-def test_server_coverage_zero_onboarded_is_a_finding():
-    for body in (EMPTY, DISCOVERED_ONLY):
-        assert value(SERVER, body, "serverCoveragePercentage") == 0
-        assert collected(SERVER, body) == "success"
-        assert fail_reasons(SERVER, body)[0].startswith(ZERO)
+def test_server_coverage_empty_inventory_is_not_evaluated():
+    for body in (EMPTY, {"value": [machine(excluded=True)]}):
+        assert value(SERVER, body, "serverCoveragePercentage") is None
+        assert collected(SERVER, body) == "error"
+        assert fail_reasons(SERVER, body) == [EMPTY_REASON]
+
+
+def test_server_coverage_eligible_machines_none_onboarded_is_a_finding():
+    assert value(SERVER, DISCOVERED_ONLY, "serverCoveragePercentage") == 0
+    assert collected(SERVER, DISCOVERED_ONLY) == "success"
+    assert fail_reasons(SERVER, DISCOVERED_ONLY)[0].startswith(ZERO)
 
 
 def test_server_coverage_with_devices_but_no_server_stays_not_evaluated():
