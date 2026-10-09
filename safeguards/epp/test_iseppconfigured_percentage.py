@@ -145,11 +145,14 @@ def test_zero_or_truncated_is_not_evaluated(rel, body):
     assert run(rel, body) == (None, "error")
 
 
-@pytest.mark.parametrize("body", [{"value": []}, {"value": [mde_machine("Active", onboarded=False)]}])
-def test_mde_connected_with_zero_onboarded_is_zero(body):
-    # A fully read MDE inventory with no onboarded machine: the tool is connected and protects nothing,
-    # a finding for that tool (0, with the reason), not a gap in the data.
-    assert run(MDE, body) == (0, "success")
+def test_mde_empty_inventory_is_not_evaluated():
+    # A fully read MDE inventory with no machine proves nothing: None, never a fail.
+    assert run(MDE, {"value": []}) == (None, "error")
+
+
+def test_mde_machines_present_but_none_onboarded_is_zero():
+    # Eligible machines exist and none is onboarded: a finding for that tool (0, with the reason).
+    assert run(MDE, {"value": [mde_machine("Active", onboarded=False)]}) == (0, "success")
 
 
 @pytest.mark.parametrize("rel", [SOPHOS, S1, NINJA, THREATDOWN, FALCON, MDE])
