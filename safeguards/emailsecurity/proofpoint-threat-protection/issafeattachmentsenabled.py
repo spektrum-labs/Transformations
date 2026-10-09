@@ -63,10 +63,12 @@ def evaluate(data):
     if not att:
         return {"isSafeAttachmentsEnabled": None, "reason": "No attachment breakdown present in messages-protected report"}
     total = att.get("breakdownMessagesTotal") or 0
-    protected = att.get("breakdownProtectedMessagesTotal") or 0
+    protected = att.get("breakdownProtectedMessagesTotal")
     exposed = att.get("potentiallyExposedMessages") or 0
     if total <= 0:
         return {"isSafeAttachmentsEnabled": None, "reason": "No attachment-bearing messages observed in the window"}
+    if not isinstance(protected, (int, float)) or isinstance(protected, bool) or protected < 0 or protected > total:
+        return {"isSafeAttachmentsEnabled": None, "reason": "Attachment breakdown has no usable breakdownProtectedMessagesTotal"}
     rate = round((protected * 100.0) / total, 2)
     return {"isSafeAttachmentsEnabled": rate >= 95.0,
             "attachmentMessagesTotal": total, "attachmentMessagesProtected": protected,

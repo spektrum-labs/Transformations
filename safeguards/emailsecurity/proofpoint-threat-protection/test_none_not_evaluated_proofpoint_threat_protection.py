@@ -44,9 +44,15 @@ UNMEASURED = {
     "isantiphishingenabled": [{"threatCategories": [], "totalVolume": 0},
                               {"threatCategories": [{"name": "spam", "volume": 5}], "totalVolume": 5}],
     "issafelinksenabled": [{"statsByBreakdownValue": []},
-                           {"statsByBreakdownValue": [{"breakdownName": "url", "breakdownMessagesTotal": 0}]}],
+                           {"statsByBreakdownValue": [{"breakdownName": "url", "breakdownMessagesTotal": 0}]},
+                           {"statsByBreakdownValue": [{"breakdownName": "url", "breakdownMessagesTotal": 10}]},
+                           {"statsByBreakdownValue": [{"breakdownName": "url", "breakdownMessagesTotal": 10,
+                                                       "messagesWithNonRewrittenUrls": 11}]}],
     "issafeattachmentsenabled": [{"statsByBreakdownValue": []},
-                                 {"statsByBreakdownValue": [{"breakdownName": "attachment", "breakdownMessagesTotal": 0}]}],
+                                 {"statsByBreakdownValue": [{"breakdownName": "attachment", "breakdownMessagesTotal": 0}]},
+                                 {"statsByBreakdownValue": [{"breakdownName": "attachment", "breakdownMessagesTotal": 10}]},
+                                 {"statsByBreakdownValue": [{"breakdownName": "attachment", "breakdownMessagesTotal": 10,
+                                                             "breakdownProtectedMessagesTotal": 11}]}],
 }
 COMMON = [[], {}, {"error": "403 Forbidden"}, {"errors": ["rate limited"]}, "not json {", None, Poisoned()]
 
