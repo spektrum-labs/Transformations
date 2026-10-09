@@ -1,7 +1,7 @@
 """Proofpoint Threat Protection checks answer None (not evaluated), never False, when the report cannot answer.
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is "error".
-Impelix #179: the report window moves from 30 to 7 days, so quiet tenants return empty reports more
+The report window moves from 30 to 7 days, so quiet tenants return empty reports more
 often; an empty, error or zero-volume report must read Not evaluated. Synthetic data only.
 """
 import importlib.util
