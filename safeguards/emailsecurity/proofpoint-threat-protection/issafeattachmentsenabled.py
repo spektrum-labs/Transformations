@@ -91,7 +91,7 @@ def transform(input):
             pr = []
             fr = [res.get("reason", "Attachment protection rate is below the 95% threshold")]
         return create_response({key: value, **extra}, validation, pr, fr,
-                               [] if value else ["Enable Attachment Defense sandboxing for inbound mail"],
+                               [] if value is not False else ["Enable Attachment Defense sandboxing for inbound mail"],
                                {key: value, **extra})
     except Exception as e:
         return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])

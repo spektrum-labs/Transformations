@@ -6,7 +6,7 @@ non-zero protected-message volume in the executive inbound-protection-overview r
 
 Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
 report section, no volume in the window, or an exception. False only when the report was read and shows the control
-below its threshold.
+below its threshold (isSafeLinksEnabled, isSafeAttachmentsEnabled). This check cannot read False: zero volume in the window is "no evidence", so it reads Not evaluated.
 """
 import json
 from datetime import datetime
@@ -86,7 +86,7 @@ def transform(input):
             pr = []
             fr = [res.get("reason", "No protected-message volume returned")]
         return create_response({key: value, **extra}, validation, pr, fr,
-                               [] if value else ["Confirm the Proofpoint subscription is active for this cluster"],
+                               [] if value is not False else ["Confirm the Proofpoint subscription is active for this cluster"],
                                {key: value, **extra})
     except Exception as e:
         return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])

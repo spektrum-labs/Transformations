@@ -94,7 +94,7 @@ def transform(input):
             pr = []
             fr = [res.get("reason", f"URL rewrite rate {extra.get('urlRewriteRatePct')}% is below the 95% threshold")]
         return create_response({key: value, **extra}, validation, pr, fr,
-                               [] if value else ["Enable URL Defense rewriting for all inbound mail flows"],
+                               [] if value is not False else ["Enable URL Defense rewriting for all inbound mail flows"],
                                {key: value, **extra})
     except Exception as e:
         return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])

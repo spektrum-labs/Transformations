@@ -5,7 +5,7 @@ Evaluates: Phishing, impostor (BEC) and TOAD messages are being actively classif
 
 Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
 report section, no volume in the window, or an exception. False only when the report was read and shows the control
-below its threshold.
+below its threshold (isSafeLinksEnabled, isSafeAttachmentsEnabled). This check cannot read False: zero detections in the window is "no evidence", so it reads Not evaluated.
 """
 import json
 from datetime import datetime
@@ -92,7 +92,7 @@ def transform(input):
             pr = []
             fr = [res.get("reason", "No phishing, BEC or TOAD detections were reported")]
         return create_response({key: value, **extra}, validation, pr, fr,
-                               [] if value else ["Verify impostor and phishing detection modules are enabled"],
+                               [] if value is not False else ["Verify impostor and phishing detection modules are enabled"],
                                {key: value, **extra})
     except Exception as e:
         return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])
