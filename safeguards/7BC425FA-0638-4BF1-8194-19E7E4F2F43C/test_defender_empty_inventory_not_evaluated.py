@@ -48,8 +48,8 @@ def test_empty_inventory_is_none_and_not_evaluated(name, key, body, unhealthy, h
 
 
 @pytest.mark.parametrize("name,key,body,unhealthy,healthy", CASES, ids=IDS)
-def test_one_real_unhealthy_device_is_a_fail(name, key, body, unhealthy, healthy):
-    out = load(name).transform(ONE_UNHEALTHY)
+def test_one_real_failing_device_is_a_fail(name, key, body, unhealthy, healthy):
+    out = load(name).transform(body)
     got = out["transformedResponse"][key]
     assert got == unhealthy and got is not None
     assert out["additionalInfo"]["dataCollection"]["status"] == "success"
