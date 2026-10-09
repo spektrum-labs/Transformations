@@ -2,6 +2,10 @@
 Transformation: isAntiPhishingEnabled
 Vendor: Proofpoint (Threat Protection / Core Email Protection)  |  Category: Email Security
 Evaluates: Phishing, impostor (BEC) and TOAD messages are being actively classified and blocked, proven by non-zero threat-category volumes.
+
+Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
+report section, no volume in the window, or an exception. False only when the report was read and shows the control
+below its threshold.
 """
 import json
 from datetime import datetime
@@ -22,6 +26,11 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors: carry the reason.
+    if not api_errors and isinstance(result, dict) and "isAntiPhishingEnabled" in result and result["isAntiPhishingEnabled"] is None:
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -48,15 +57,19 @@ def find_category(cats, name):
 
 def evaluate(data):
     if not isinstance(data, dict):
-        return {"isAntiPhishingEnabled": False, "reason": "Unexpected response type"}
+        return {"isAntiPhishingEnabled": None, "reason": "Unexpected response type"}
     cats = data.get("threatCategories")
     if not isinstance(cats, list):
-        return {"isAntiPhishingEnabled": False, "reason": "threat-categories report returned no categories"}
+        return {"isAntiPhishingEnabled": None, "reason": "threat-categories report returned no categories"}
     phishing = find_category(cats, "phishing")
     bec = find_category(cats, "bec")
     toad = find_category(cats, "toad")
     detected = phishing + bec + toad
-    return {"isAntiPhishingEnabled": detected > 0,
+    if detected <= 0:
+        return {"isAntiPhishingEnabled": None, "reason": "No phishing, BEC or TOAD detections in the report window; no volume to measure, so not evaluated",
+                "phishingVolume": phishing, "becVolume": bec, "toadVolume": toad,
+                "totalVolume": data.get("totalVolume") or 0}
+    return {"isAntiPhishingEnabled": True,
             "phishingVolume": phishing, "becVolume": bec, "toadVolume": toad,
             "totalVolume": data.get("totalVolume") or 0}
 
@@ -70,7 +83,7 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         res = evaluate(data)
-        value = res.get(key, False)
+        value = res.get(key)
         extra = {k: v for k, v in res.items() if k != key and k != "reason"}
         if value:
             pr = [f"Proofpoint classified {extra.get('phishingVolume')} phishing, {extra.get('becVolume')} BEC and {extra.get('toadVolume')} TOAD messages, confirming anti-phishing analysis is active"]
@@ -82,4 +95,4 @@ def transform(input):
                                [] if value else ["Verify impostor and phishing detection modules are enabled"],
                                {key: value, **extra})
     except Exception as e:
-        return create_response({key: False}, None, [], ["Transformation error"], [], {}, [str(e)])
+        return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])

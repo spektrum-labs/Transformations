@@ -2,6 +2,10 @@
 Transformation: isSafeAttachmentsEnabled
 Vendor: Proofpoint (Threat Protection / Core Email Protection)  |  Category: Email Security
 Evaluates: Attachment Defense is scanning inbound attachments, proven by the protected share of attachment-bearing messages.
+
+Not evaluated (None, with a dataCollection error), never False: an unexpected, empty or error response, a missing
+report section, no volume in the window, or an exception. False only when the report was read and shows the control
+below its threshold.
 """
 import json
 from datetime import datetime
@@ -22,6 +26,11 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors: carry the reason.
+    if not api_errors and isinstance(result, dict) and "isSafeAttachmentsEnabled" in result and result["isSafeAttachmentsEnabled"] is None:
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -46,18 +55,18 @@ def find_breakdown(rows, name):
 
 def evaluate(data):
     if not isinstance(data, dict):
-        return {"isSafeAttachmentsEnabled": False, "reason": "Unexpected response type"}
+        return {"isSafeAttachmentsEnabled": None, "reason": "Unexpected response type"}
     rows = data.get("statsByBreakdownValue")
     if not isinstance(rows, list):
-        return {"isSafeAttachmentsEnabled": False, "reason": "messages-protected report returned no breakdown"}
+        return {"isSafeAttachmentsEnabled": None, "reason": "messages-protected report returned no breakdown"}
     att = find_breakdown(rows, "attachment")
     if not att:
-        return {"isSafeAttachmentsEnabled": False, "reason": "No attachment breakdown present in messages-protected report"}
+        return {"isSafeAttachmentsEnabled": None, "reason": "No attachment breakdown present in messages-protected report"}
     total = att.get("breakdownMessagesTotal") or 0
     protected = att.get("breakdownProtectedMessagesTotal") or 0
     exposed = att.get("potentiallyExposedMessages") or 0
     if total <= 0:
-        return {"isSafeAttachmentsEnabled": False, "reason": "No attachment-bearing messages observed in the window"}
+        return {"isSafeAttachmentsEnabled": None, "reason": "No attachment-bearing messages observed in the window"}
     rate = round((protected * 100.0) / total, 2)
     return {"isSafeAttachmentsEnabled": rate >= 95.0,
             "attachmentMessagesTotal": total, "attachmentMessagesProtected": protected,
@@ -73,7 +82,7 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         res = evaluate(data)
-        value = res.get(key, False)
+        value = res.get(key)
         extra = {k: v for k, v in res.items() if k != key and k != "reason"}
         if value:
             pr = [f"Attachment Defense protected {extra.get('attachmentMessagesProtected')} of {extra.get('attachmentMessagesTotal')} attachment-bearing messages ({extra.get('attachmentProtectionRatePct')}%), {extra.get('potentiallyExposedMessages')} potentially exposed"]
@@ -85,4 +94,4 @@ def transform(input):
                                [] if value else ["Enable Attachment Defense sandboxing for inbound mail"],
                                {key: value, **extra})
     except Exception as e:
-        return create_response({key: False}, None, [], ["Transformation error"], [], {}, [str(e)])
+        return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])
