@@ -1,0 +1,124 @@
+{
+  "name": "isAdminMFAPhishingResistant",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- no single meaning is held: six integrations answer this key with five incompatible truth conditions (a phishing-resistant factor is merely available, the whole org permits only phishing-resistant factors, every admin has one enrolled, every admin sign-in is required to use one, or one admin policy permits one), listed under conflict.positions; until the owner rules, no new implementation may be added under this name.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- differs per position: the org-wide factor catalogue (not admins), users holding an admin role, or the vendor's own admin-console sign-in policy",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown -- the five positions require five different reads, and they also disagree on which methods count as phishing-resistant; see conflict.positions",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management", "Multifactor Authentication"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+    {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application", "note": "production RTA row pinned to 24622c5f (6 May 2026), three commits behind main"},
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+    {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo", "note": "production RTA row on main; not referenced by any Integration-Service integration_configs file on main"},
+    {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"},
+    {"srn": "5cdba755-d162-4cbe-b264-760d316ed66c", "name": "Google - MFA", "note": "production RTA row pinned to e357ad21 (develop); same verdict logic as main"}
+  ],
+  "aliases": [],
+  "owner": "J.J.",
+  "conflict": {
+    "summary": "All emitters agree on the TYPE (boolean) and disagree on what true asserts and on what counts as phishing-resistant. Five meanings: availability (some phishing-resistant factor is ACTIVE in the org); org-wide restriction (only phishing-resistant factors are ACTIVE, which entails admins); admin enrollment coverage (every admin has an ACTIVE phishing-resistant authenticator enrolled, phishable ones may coexist); admin enforcement (every admin sign-in is required to use a phishing-resistant method); and one-policy permission (an admin-console policy requires MFA and lists WebAuthn among the factors it allows). The phishing-resistant sets also differ: WebAuthn and FIDO U2F only (Okta pin); WebAuthn, U2F, Okta FastPass and smart card (Okta main); FIDO2, Windows Hello for Business and multi-factor certificate (Azure AD); WebAuthn only (Duo, JumpCloud); passkeys and security keys only (Google); FIDO2 or Microsoft Authenticator (an unwired file). Okta's main file holds two of these meanings itself, chosen by which body the definition hands it.",
+    "positions": [
+      {
+        "meaning": "Availability -- at least one phishing-resistant factor type (webauthn, or token:hardware from provider FIDO) is ACTIVE in the org's factor catalogue. Phishable factors active beside it are ignored; admins are not read.",
+        "valueType": "boolean",
+        "population": "the org factor catalogue (GET /api/v1/org/factors), not administrators",
+        "integrations": [{"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application", "note": "production row, method listOrgFactors, pinned 24622c5f"}],
+        "files": ["safeguards/iam/okta/isAdminMFAPhishingResistant.py @ 24622c5f"],
+        "source": "Pinned file read for this entry: PHISH_RESISTANT_TYPES = [\"webauthn\"], PHISH_RESISTANT_COMBOS = [(\"token:hardware\", \"FIDO\")], verdict has_phish_resistant = len(active_phish_resistant) > 0. QC 2026-10-06 F-iam-mfa-02: passes an org whose admins can still use SMS; an empty list returns False with dataCollection success."
+      },
+      {
+        "meaning": "Org-wide restriction -- phishing-resistant factors (webauthn, u2f, signed_nonce/FastPass, smart_card) are ACTIVE and no phishable factor is, so every member including admins can authenticate only with them; false when none is ACTIVE; not evaluated when both kinds are ACTIVE.",
+        "valueType": "boolean",
+        "population": "the org factor catalogue (GET /api/v1/org/factors), not administrators; per-admin reads, when merged, only name accounts and never change the verdict",
+        "integrations": [{"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta", "note": "production row at the 2026-10-06 QC used method getEstateSecondFactors, the org factor list; Okta - Application takes this path too once repointed to main (F-iam-mfa-02 fix)"}],
+        "files": [
+          "safeguards/iam/okta/isAdminMFAPhishingResistant.py (factor-list path, :600-644)",
+          "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isadminmfaphishingresistant.py (unwired; tenant authentication methods policy, true when only fido2 or microsoftAuthenticator is enabled -- counts Authenticator push, which Microsoft does not class as phishing-resistant)"
+        ],
+        "source": "Code read for this entry: PHISH_RESISTANT_TYPES :95, verdict :605-633. This is the meaning registered for isPhishingResistantOnlyEnabled except that FastPass counts here and is not evaluated there; QC F-iam-mfa-02 records that asymmetry as deliberate."
+      },
+      {
+        "meaning": "Admin enrollment coverage -- every user holding an Okta admin role has an ACTIVE phishing-resistant authenticator enrollment (webauthn, smart_card_idp, okta_verify_fastpass); false when any admin's ACTIVE enrollments are all known-phishable; not evaluated on indeterminate, inactive or partial reads. An admin with FIDO2 and SMS both enrolled counts as covered.",
+        "valueType": "boolean",
+        "population": "users holding an Okta admin role (GET /api/v1/iam/assignees/users) and their authenticator enrollments",
+        "integrations": [
+          {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta", "note": "Integration-Service integration_configs/iam/okta.json on main routes this key to getAdminAuthenticatorPosture; no production definition produced that body at the 2026-10-06 QC and it needs okta.roles.read"},
+          {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application", "note": "same, integration_configs/iam/okta_app.json"}
+        ],
+        "files": [
+          "safeguards/iam/okta/isAdminMFAPhishingResistant.py (coverage path, coverage_response :468-587, entered when the body carries adminEnrollments)",
+          "safeguards/874a78ff-2ca3-4c0e-ab86-19277536ac87/isadminmfaphishingresistant.py (unwired; Microsoft Secure Score control aad_phishing_MFA_strength at 100%)"
+        ],
+        "source": "Code read for this entry; product decision recorded in the file at :344-347 (Josh, 5 Oct 2026). QC 2026-10-06 F-iam-mfa-08: getAdminAuthenticatorPosture and adminEnrollments appear in 0 of 377 production definitions."
+      },
+      {
+        "meaning": "Admin enforcement -- every administrator sign-in is required to use a phishing-resistant method: Azure AD by enabled Conditional Access requiring an authentication strength of only fido2, windowsHelloForBusiness or x509CertificateMultiFactor for every admin role in Microsoft's template (or all users); Google by 2-Step Verification enforced for every active super or delegated admin and every factor policy PASSKEY_ONLY; Duo by the Admin Panel login setting permitting WebAuthn and nothing phishable.",
+        "valueType": "boolean",
+        "population": "administrators of the identity platform: Entra admin-role holders, Google super and delegated admins, Duo Admin Panel administrators",
+        "integrations": [
+          {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+          {"srn": "5cdba755-d162-4cbe-b264-760d316ed66c", "name": "Google - MFA", "note": "pinned e357ad21"},
+          {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"}
+        ],
+        "files": [
+          "safeguards/mfa/azure/isadminmfaphishingresistant.py",
+          "safeguards/mfa/google/isadminmfaphishingresistant.py",
+          "safeguards/iam/duo/isAdminMFAPhishingResistant.py"
+        ],
+        "source": "Code read for this entry: Azure from_ca_policies :335-408 (True only from CA; False from email OTP enabled :213-223 or AdminMFAV2 below 100% :429-436); Google :187-222; Duo :300-333. QC F-iam-mfa (Entra 'three bodies, each answering only what it can prove')."
+      },
+      {
+        "meaning": "One-policy permission -- at least one enabled JumpCloud authentication policy scoped to the Admin Portal requires MFA and lists WEBAUTHN among its allowed factors; other, phishable factors may be allowed beside it.",
+        "valueType": "boolean",
+        "population": "JumpCloud authentication policies scoped to admin_portal",
+        "integrations": [{"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"}],
+        "files": ["safeguards/identity-and-access-management/jumpcloud/isAdminMFAPhishingResistant.py"],
+        "source": "Code read for this entry: has_phishing_resistant = any(t in PHISHING_RESISTANT_FACTORS for t in types) :172-176 -- any, not all. An empty policy list returns False with dataCollection success."
+      }
+    ],
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Does isAdminMFAPhishingResistant assert that every admin sign-in is REQUIRED to use a phishing-resistant method (Azure AD, Google, Duo), that every admin HAS one enrolled (Okta coverage path), or that the org permits only phishing-resistant factors (Okta factor-list path) -- and which methods count (is Okta FastPass in, are smart card and certificate in)? The availability (Okta - Application pin) and one-policy (JumpCloud) positions pass tenants whose admins can still use phishable factors."
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/iam/okta/isAdminMFAPhishingResistant.py",
+    "safeguards/iam/okta/isAdminMFAPhishingResistant.py @ 24622c5fcf744d29b1241340b4e5679d9f996604 (the Okta - Application pin)",
+    "safeguards/iam/okta/test_isAdminMFAPhishingResistant.py",
+    "safeguards/iam/okta/test_okta_admin_mfa_affected_accounts.py",
+    "safeguards/iam/okta/test_okta_admin_mfa_coverage.py",
+    "safeguards/mfa/azure/isadminmfaphishingresistant.py",
+    "safeguards/mfa/azure/test_isadminmfaphishingresistant.py",
+    "safeguards/iam/duo/isAdminMFAPhishingResistant.py",
+    "safeguards/iam/duo/test_duo_admin_mfa_phishing_resistant.py",
+    "safeguards/iam/duo/test_duo_ported_vendor_error_marker.py",
+    "safeguards/iam/duo/test_none_not_evaluated_iam_duo.py",
+    "safeguards/identity-and-access-management/jumpcloud/isAdminMFAPhishingResistant.py",
+    "safeguards/identity-and-access-management/jumpcloud/test_jumpcloud_admin_mfa_phishing_resistant.py",
+    "safeguards/identity-and-access-management/jumpcloud/test_none_not_evaluated_identity_and_access_management_jumpcloud.py",
+    "safeguards/mfa/google/isadminmfaphishingresistant.py",
+    "safeguards/mfa/google/test_google_admin_mfa_phishing_resistant.py",
+    "safeguards/874a78ff-2ca3-4c0e-ab86-19277536ac87/isadminmfaphishingresistant.py",
+    "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isadminmfaphishingresistant.py",
+    "contracts/criteria-registry/keys/isPhishingResistantOnlyEnabled.json (the org-wide sibling key)",
+    "Integration-Service integration_configs: iam/okta.json, iam/okta_app.json, identity-and-access-management/jumpcloud.json, mfa/azure.json",
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json: the seven production RTA rows for this key and their pins",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/iam-mfa.md F-iam-mfa-02, F-iam-mfa-08 and the pinned-to-develop table"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-08", "change": "Registered at V0 so the registry gate can fail push runs on main; contested because the six wired integrations answer it with five incompatible truth conditions (availability, org-wide restriction, admin enrollment coverage, admin enforcement, one-policy permission), over different populations and with different phishing-resistant method sets."}
+  ]
+}

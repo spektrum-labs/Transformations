@@ -1,0 +1,43 @@
+{
+  "name": "isSmsAuthenticationDisabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every enforced, MFA-requiring JumpCloud authentication policy has an explicit mfaFactors list and none of them lists SMS_OTP. False when an enforced MFA-requiring policy lists SMS_OTP. A policy using \"All Enabled\" factors cannot show whether SMS is allowed and is not measured.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enforced (not disabled, not monitor-only, action allow) authentication policies that require MFA",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "every enforced MFA-requiring policy has an explicit factor list and none lists SMS_OTP",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34",
+      "name": "JumpCloud"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/identity-and-access-management/jumpcloud/isSmsAuthenticationDisabled.py: module docstring Verdict block"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered at V0 so the registry gate can fail push runs on main; proposed, single emitter. No enforced MFA-requiring policy is not measured, by the file's own rule."
+    }
+  ]
+}
