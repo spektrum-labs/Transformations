@@ -1,10 +1,10 @@
 """
-Transformation: isComplianceAPIEnabled
+Transformation: isAccessTransparencyEnabled
 Vendor: Anthropic  |  Category: Artificial Intelligence
-Products: Claude, Claude Compliance API
-Evaluates: The organization's Compliance API Activity Feed is enabled and readable,
-providing a six-year audit trail.
-API Source: listComplianceActivities (GET /v1/compliance/activities?limit=1)
+Product: Claude Compliance API
+Evaluates: Access Transparency is in place, so the vendor's own access to the
+organization's data is recorded and reported to the customer.
+API Source: getEffectiveOrganizationSettings (GET /v1/compliance/organizations/{uuid}/settings)
 """
 import json
 from datetime import datetime
@@ -83,7 +83,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 METADATA = {
-    "transformationId": "isComplianceAPIEnabled",
+    "transformationId": "isAccessTransparencyEnabled",
     "vendor": "Anthropic",
     "category": "Artificial Intelligence",
 }
@@ -187,7 +187,7 @@ def api_not_enabled(data):
 def unknown_response(validation, reason, recommendation, input_summary):
     """Not evaluated: the value is None and dataCollection.status is "error"."""
     return create_response(
-        result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+        result={"isAccessTransparencyEnabled": UNKNOWN, "evaluable": False},
         validation=validation,
         fail_reasons=[reason],
         recommendations=[recommendation],
@@ -212,73 +212,112 @@ def refusal_response(validation, data, what):
     )
 
 
-def activity_items(data):
-    """The Activity Feed records as a list, or None when the body holds no list."""
+TRUE_WORDS = ("true", "enabled", "on")
+FALSE_WORDS = ("false", "disabled", "off")
+
+
+def strict_bool(value):
+    """True / False for an unambiguous boolean, else None (never bool(value))."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in TRUE_WORDS:
+            return True
+        if word in FALSE_WORDS:
+            return False
+    return None
+
+
+def settings_rows(data):
+    """The effective-settings rows as a list, or None when the body has no rows list."""
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("data", "activities"):
+        for key in ("data", "settings"):
             if isinstance(data.get(key), list):
                 return data[key]
     return None
 
 
+def settings_map(rows):
+    """Reduce the effective-settings rows to {name: value}.
+
+    Anthropic omits a setting the organization's administrators cannot change, so a
+    missing name means "not controllable here", never "off". Callers distinguish
+    absent from False with the MISSING sentinel.
+    """
+    out = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("name") is not None:
+            out[row["name"]] = row.get("value", MISSING)
+    return out
+
+
+SETTING = "access_transparency_enabled"
+
+
 def evaluate(input):
     data, validation = extract_input(input)
-    # Token-Service navigates into the response's "data" key (codeexecutor
-    # navigation_keys), so this transform usually receives the bare navigated
-    # value. Accept that, the returnSpec-mapped dict, and the raw API body.
-    if api_not_enabled(data):
-        return create_response(
-            result={"isComplianceAPIEnabled": False, "evaluable": True},
-            validation=validation,
-            fail_reasons=[
-                "Anthropic answered that the Compliance API is not enabled for this organization, "
-                "so no audit trail of Claude activity is being recorded."
-            ],
-            recommendations=["The primary owner enables the Compliance API at claude.ai > Organization settings > API."],
-            input_summary={"endpointReachable": True, "httpStatus": 400},
-            metadata=METADATA,
-        )
-    refused = refusal_response(validation, data, "Compliance API Activity Feed")
+    refused = refusal_response(validation, data, "organization settings")
     if refused:
         return refused
 
-    items = activity_items(data)
-    if not items:
+    rows = settings_rows(data)
+    if not rows:
         return unknown_response(
             validation,
-            "The Activity Feed returned no records, so it could not be shown that the Compliance "
-            "API is recording for this organization. An empty page is not evidence either way.",
-            "Confirm the Compliance API is enabled at claude.ai > Organization settings > API and "
-            "that the key carries read:compliance_activities, then re-run the evaluation.",
-            {"activityCount": 0},
+            "The effective organization settings response contained no settings rows, so "
+            "Access Transparency was not read.",
+            "Confirm the Compliance Access Key and Organization ID, then re-run the evaluation.",
+            {"settingsReported": 0},
         )
 
-    newest = items[0] if isinstance(items[0], dict) else {}
-    created_at = newest.get("created_at") or ""
-    activity_type = newest.get("type") or ""
+    settings = settings_map(rows)
+    raw = settings.get(SETTING, MISSING)
+    if raw is MISSING:
+        return unknown_response(
+            validation,
+            "The settings response did not include '" + SETTING + "'. A missing row means the "
+            "setting was not reported, never that it is off, so Access Transparency is not evaluated.",
+            "Re-run the evaluation; if the row stays missing, attest this control manually.",
+            {"settingsReported": len(settings), "settingPresent": False},
+        )
 
+    enabled = strict_bool(raw)
+    if enabled is None:
+        return unknown_response(
+            validation,
+            "The '" + SETTING + "' row has a value that is not a boolean (" + repr(raw) +
+            "), so Access Transparency is not evaluated.",
+            "Report this to the Spektrum integrations team with the raw API response.",
+            {"settingsReported": len(settings), "settingPresent": True, "valueReadable": False},
+        )
+
+    summary = {"settingsReported": len(settings), "accessTransparencyEnabled": enabled}
+    if enabled:
+        return create_response(
+            result={"isAccessTransparencyEnabled": True, "evaluable": True},
+            validation=validation,
+            pass_reasons=[
+                "The '" + SETTING + "' setting was read and is true: the vendor's access to "
+                "this organization's data is recorded and reported to the organization."
+            ],
+            input_summary=summary,
+            metadata=METADATA,
+        )
     return create_response(
-        result={
-            "isComplianceAPIEnabled": True,
-            "evaluable": True,
-            "activityCount": len(items),
-            "mostRecentActivityAt": created_at,
-            "mostRecentActivityType": activity_type,
-        },
+        result={"isAccessTransparencyEnabled": False, "evaluable": True},
         validation=validation,
-        pass_reasons=[
-            "The Compliance API Activity Feed is live and readable; the most recent record is a '" +
-            str(activity_type) + "' event at " + str(created_at) +
-            ". Activity records are retained for six years."
+        fail_reasons=[
+            "The '" + SETTING + "' setting was read and is false: the vendor's access to this "
+            "organization's data is not reported to the organization."
         ],
-        input_summary={"activityCount": len(items), "mostRecentActivityType": activity_type},
-        additional_findings=[
-            "Only the record count and the newest record's timestamp and type are retained by this "
-            "transformation. The actor block (email address, IP address, user agent) present in the "
-            "raw response is deliberately discarded."
+        recommendations=[
+            "Ask your account team about enrolling in Access Transparency. Note that turning the "
+            "Compliance API off also stops Access Transparency event delivery."
         ],
+        input_summary=summary,
         metadata=METADATA,
     )
 
@@ -289,7 +328,7 @@ def transform(input):
     except Exception as exc:  # never raise into the pipeline
         message = "Transformation raised an unexpected error, so the control is not evaluated: " + str(exc)
         return create_response(
-            result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+            result={"isAccessTransparencyEnabled": UNKNOWN, "evaluable": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
             api_errors=[message],
