@@ -4,7 +4,7 @@
   "generated_by": "tools/check_criteria_registry.py --emit-allowlist",
   "how_to_shrink": "register the key (contracts/criteria-registry/keys/<key>.json) with what is evidenced and \"unknown\" for what is not, or stop emitting it. Never add to this list by hand.",
   "count": {
-    "unregistered": 1860,
+    "unregistered": 1858,
     "type": 0
   },
   "unregistered": [
@@ -1633,7 +1633,6 @@
     "safeguards/mfa/pingfederate/ismfaenforced_admins.py::isMFAEnforcedForAdmins",
     "safeguards/mobile-security/lookout/isCorporateOwned.py::isCorporateOwned",
     "safeguards/mobile-security/lookout/isDeviceEncrypted.py::isDeviceEncrypted",
-    "safeguards/mobile-security/lookout/isMdmManaged.py::isMdmManaged",
     "safeguards/mobile-security/lookout/isMdmManaged.py::mdmManagedDeviceCount",
     "safeguards/mobile-security/lookout/isMdmManaged.py::sampledDeviceCount",
     "safeguards/mobile-security/lookout/isMdmManaged.py::totalDeviceCount",
@@ -1643,7 +1642,6 @@
     "safeguards/mobile-security/lookout/managedSoftwareUpdateComplianceState.py::secureCount",
     "safeguards/mobile-security/lookout/managedSoftwareUpdateComplianceState.py::unknownCount",
     "safeguards/mobile-security/microsoft-intune/deviceCompliancePercentage.py::deviceCompliancePercentage",
-    "safeguards/mobile-security/microsoft-intune/isMdmManaged.py::isMdmManaged",
     "safeguards/mobile-security/microsoft-intune/isPasscodeCompliant.py::isPasscodeCompliant",
     "safeguards/networksecurity/cisco-secure-access/hasNetworkTunnelsConfigured.py::hasNetworkTunnelsConfigured",
     "safeguards/networksecurity/cisco-umbrella/hasnetworktunnelsconfigured.py::hasNetworkTunnelsConfigured",

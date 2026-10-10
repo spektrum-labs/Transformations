@@ -1,0 +1,42 @@
+{
+  "name": "isMdmManaged",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when at least one mobile device is reported by the device management tool and every mobile device it reports is enrolled and managed; false when a reported mobile device is not managed or none is reported.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "mobile devices (iOS, iPadOS, Android) that the device management tool itself lists; devices not enrolled in the tool are invisible to it",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete device list in which at least one mobile device is present and every mobile device shows a managed or enrolled state in a field the vendor documents; an unreadable list or state is not measured.",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Endpoint Security",
+    "Mobile Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/ninjaone-endpoint-management/isMdmManaged.py",
+    "safeguards/mobile-security/microsoft-intune/isMdmManaged.py",
+    "safeguards/mobile-security/lookout/isMdmManaged.py",
+    "NinjaOne public API v2: GET /v2/devices-detailed (nodeClass, approvalStatus)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-09",
+      "change": "Registered with the first NinjaOne implementation (synthetic-fixture tests only; field names confirmed against a read-only device list, but no tenant body replayed through the transform, so V0). Intune and Lookout already emit this key."
+    }
+  ]
+}
