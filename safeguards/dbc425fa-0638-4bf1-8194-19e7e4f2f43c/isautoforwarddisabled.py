@@ -42,8 +42,8 @@ Verdict:
          list (nextPageToken or a truncation marker on any wrapper level, or in paginationStats), records
          that are not Policy API records, a complete Gmail list with no auto_forwarding policy at all, a
          list with no Gmail setting at all (the read cannot be shown to cover Gmail), a top-level org unit
-         that cannot be identified, or an auto-forwarding policy whose org unit, value or precedence cannot be
-         read where it decides the verdict.
+         that cannot be identified, or any auto-forwarding policy whose org unit, value or precedence cannot be
+         read, even one another policy outranks (fail-closed: an unreadable policy is never skipped).
 
 Does not prove: forwarding a user set up before the setting was turned off, or admin routing and compliance
 rules that forward mail, which this setting does not carry.
