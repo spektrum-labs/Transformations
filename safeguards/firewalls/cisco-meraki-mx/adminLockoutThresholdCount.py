@@ -113,8 +113,10 @@ def transform(input):
             "Enable account lockout after failed Dashboard login attempts in Organization > "
             "Settings > Login security, and set accountLockoutAttempts to a bounded value (e.g. 5)."
         )
-        if threshold is None:
-            threshold = 0
+        # Lockout not enforced (or no bounded attempt count): the effective threshold is 0
+        # ("no lockout"), even if the dashboard still holds a stale attempt count, so a
+        # bundle range check on this value cannot pass on a setting that is switched off.
+        threshold = 0
 
     if api_errors:
         result = {"adminLockoutThresholdCount": None, "enforceAccountLockout": None}
