@@ -72,20 +72,22 @@ def transform(input):
     data = data if isinstance(data, dict) else {}
 
     enforce_2fa = data.get("enforceTwoFactorAuth")
-    has_field = "enforceTwoFactorAuth" in data
+    api_errors = []
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if not has_field:
-        fail_reasons.append(
-            "Response did not include an 'enforceTwoFactorAuth' field, so organization-wide 2FA enforcement could not be confirmed."
+    if not isinstance(enforce_2fa, bool):
+        # Empty body, vendor error body or field absent: nothing was measured (None plus a
+        # dataCollection error), never a fail.
+        api_errors.append(
+            "Response did not include a boolean 'enforceTwoFactorAuth' field, so organization-wide 2FA enforcement could not be confirmed."
         )
         recommendations.append(
             "Verify connectivity to the organization loginSecurity endpoint and confirm the API key has organization-read permissions."
         )
-        is_enforced = False
+        is_enforced = None
     elif enforce_2fa is True:
         pass_reasons.append(
             "Organization loginSecurity setting enforceTwoFactorAuth=true, confirming two-factor authentication is required for all Dashboard administrator logins."
@@ -102,7 +104,7 @@ def transform(input):
 
     result = {
         "isTwoFactorAuthEnforced": is_enforced,
-        "enforceTwoFactorAuth": enforce_2fa,
+        "enforceTwoFactorAuth": enforce_2fa if isinstance(enforce_2fa, bool) else None,
     }
 
     return create_response(
@@ -117,4 +119,5 @@ def transform(input):
             "vendor": "Cisco Meraki MX",
             "category": "firewalls",
         },
+        api_errors=api_errors,
     )

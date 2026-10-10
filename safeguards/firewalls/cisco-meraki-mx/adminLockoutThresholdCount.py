@@ -72,8 +72,14 @@ def transform(input):
     data = data if isinstance(data, dict) else {}
 
     enforce_lockout = data.get("enforceAccountLockout")
-    if enforce_lockout is None:
-        enforce_lockout = False
+    api_errors = []
+    if not isinstance(enforce_lockout, bool):
+        # Empty body, vendor error body or field absent: nothing was measured (None plus a
+        # dataCollection error), never a fail.
+        api_errors.append(
+            "Response did not include a boolean 'enforceAccountLockout' field, so the account "
+            "lockout setting could not be confirmed."
+        )
 
     raw_attempts = data.get("accountLockoutAttempts")
 
@@ -89,7 +95,11 @@ def transform(input):
     fail_reasons = []
     recommendations = []
 
-    if enforce_lockout and threshold is not None and threshold > 0:
+    if api_errors:
+        recommendations.append(
+            "Verify connectivity to the organization loginSecurity endpoint and confirm the API key has organization-read permissions."
+        )
+    elif enforce_lockout and threshold is not None and threshold > 0:
         pass_reasons.append(
             f"Organization login security enforces account lockout (enforceAccountLockout=true) "
             f"with accountLockoutAttempts={threshold}, a bounded failed-login threshold."
@@ -106,10 +116,13 @@ def transform(input):
         if threshold is None:
             threshold = 0
 
-    result = {
-        "adminLockoutThresholdCount": threshold if threshold is not None else 0,
-        "enforceAccountLockout": bool(enforce_lockout),
-    }
+    if api_errors:
+        result = {"adminLockoutThresholdCount": None, "enforceAccountLockout": None}
+    else:
+        result = {
+            "adminLockoutThresholdCount": threshold if threshold is not None else 0,
+            "enforceAccountLockout": bool(enforce_lockout),
+        }
 
     input_summary = {
         "enforceAccountLockout": enforce_lockout,
@@ -130,4 +143,5 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         metadata=metadata,
+        api_errors=api_errors,
     )
