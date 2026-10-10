@@ -23,6 +23,7 @@ def load(name):
 SSO = load("isSSOEnabled")
 LOCK = load("adminLockoutThresholdCount")
 TFA = load("isTwoFactorAuthEnforced")
+IDLE = load("isAdminIdleTimeoutEnforced")
 
 EMPTY_BODIES = [
     {},
@@ -61,8 +62,10 @@ def test_explicit_false_is_a_real_fail():
     out = SSO.transform({"enabled": False})
     assert out["transformedResponse"]["isSSOEnabled"] is False
     assert collection(out)["status"] == "success"
+    # Lockout switched off: effective threshold is 0 even when a stale attempt count is stored,
+    # so a bundle range check (1 to 5) cannot pass on it.
     out = LOCK.transform({"enforceAccountLockout": False, "accountLockoutAttempts": 5})
-    assert out["transformedResponse"]["adminLockoutThresholdCount"] == 5
+    assert out["transformedResponse"]["adminLockoutThresholdCount"] == 0
     assert out["transformedResponse"]["enforceAccountLockout"] is False
     assert collection(out)["status"] == "success"
     out = TFA.transform({"enforceTwoFactorAuth": False})
@@ -75,3 +78,25 @@ def test_explicit_true_passes():
     out = LOCK.transform({"enforceAccountLockout": True, "accountLockoutAttempts": 5})
     assert out["transformedResponse"]["adminLockoutThresholdCount"] == 5
     assert TFA.transform({"enforceTwoFactorAuth": True})["transformedResponse"]["isTwoFactorAuthEnforced"] is True
+
+
+@pytest.mark.parametrize("body", [{}, {"vendorErrorAsResponse": {"status": 403}}, {"enforceIdleTimeout": None}])
+def test_idle_timeout_unusable_body_is_none_with_collection_error(body):
+    out = IDLE.transform(body)
+    assert out["transformedResponse"]["isAdminIdleTimeoutEnforced"] is None
+    assert collection(out)["status"] == "error" and collection(out)["errors"]
+
+
+def test_idle_timeout_explicit_values():
+    out = IDLE.transform({"enforceIdleTimeout": False, "idleTimeoutMinutes": []})
+    assert out["transformedResponse"]["isAdminIdleTimeoutEnforced"] is False
+    assert collection(out)["status"] == "success"
+    out = IDLE.transform({"enforceIdleTimeout": True, "idleTimeoutMinutes": 15})
+    assert out["transformedResponse"]["isAdminIdleTimeoutEnforced"] is True
+
+
+def test_lockout_unbounded_reports_zero():
+    for body in ({"enforceAccountLockout": False, "accountLockoutAttempts": []},
+                 {"enforceAccountLockout": True, "accountLockoutAttempts": []}):
+        out = LOCK.transform(body)
+        assert out["transformedResponse"]["adminLockoutThresholdCount"] == 0
