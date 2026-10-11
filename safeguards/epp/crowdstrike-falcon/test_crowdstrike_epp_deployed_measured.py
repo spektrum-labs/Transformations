@@ -187,11 +187,24 @@ def test_nothing_read_is_unevaluated(payload):
 
 # ---------------------------------------------------------------- the real captured fixtures (read only)
 
-def test_real_complete_host_list_is_measured_and_discriminates():
+# The real capture was taken on 2026-09-25. The transform judges a host by last_seen against the wall clock,
+# so replayed today it would count every host as dark. The capture is therefore judged as of its capture time.
+CAPTURE_TIME = datetime(2026, 9, 25, 12, 0, 0)
+
+
+class CaptureTimeDatetime(datetime):
+    @classmethod
+    def utcnow(cls):
+        return CAPTURE_TIME
+
+
+def test_real_complete_host_list_is_measured_and_discriminates(monkeypatch):
     real = json.loads((HERE / "fixtures" / "falcon_hosts_sensor_update_real_2026-09-25.json").read_text())
+    monkeypatch.setattr(EPP, "datetime", CaptureTimeDatetime)
     result, info = assert_measured(real, False)
     assert 0 < result["sensorDeploymentPercentage"] < EPP.DEPLOYED_THRESHOLD
     assert info["transformation"]["inputSummary"]["notReportingDevices"] > 0
+    monkeypatch.undo()
     for record in real["resources"]:
         record["last_seen"] = ago()
     assert_measured(real, True)
