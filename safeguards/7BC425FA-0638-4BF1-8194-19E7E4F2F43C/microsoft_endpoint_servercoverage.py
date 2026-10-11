@@ -9,11 +9,12 @@ Eligibility matches microsoft_endpoint_oneclick.py: not excluded, onboardingStat
 InsufficientInfo. A server is an eligible machine whose osPlatform names a server.
 Value: round(100 * onboarded servers / eligible servers); the pass bar lives in the requirement.
 
-No onboarded machine at all (a readable inventory that is empty, or in which nothing is onboarded): 0, with
-the reason "Defender for Endpoint is connected and has 0 onboarded devices, so it protects no server". The
-tool is connected and verifiably protects nothing, a finding for this tool.
+Eligible machines but none onboarded: 0, with the reason "Defender for Endpoint is connected and has 0
+onboarded devices, so it protects no server", a finding for this tool.
 
-Not evaluated (dataCollection error, value None): an error or unrecognised body, an inventory that
+Not evaluated (dataCollection error, value None): an error or unrecognised body, an inventory with no
+eligible machine at all ("Defender has no onboarded devices"; an empty result is never a fail, the
+onboard-or-disconnect hint is guidance only), an inventory that
 still carries @odata.nextLink (pages left unread), or an inventory whose onboarded machines include no
 server (the organisation may have no server, so there is no server coverage to measure).
 """
@@ -107,7 +108,7 @@ def measure(machines):
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
     onboarded = [machine for machine in eligible if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
     coverage = round(100 * len(protected_servers) / len(servers)) if servers else None
-    if coverage is None and not onboarded:
+    if coverage is None and eligible and not onboarded:
         coverage = 0
     return {
         "serverCoveragePercentage": coverage,
@@ -125,6 +126,13 @@ def transform(input):
             raise ValueError("Input validation failed")
         result = measure(read_inventory(data))
         errors = []
+        if result["eligibleDevices"] == 0:
+            return create_response(
+                result, validation, errors=["Defender has no onboarded devices"], summary=dict(result),
+                recommendations=[
+                "Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, Settings > "
+                "Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint "
+                "tool protects them"])
         if result["serverCoveragePercentage"] is None:
             errors.append("The MDE inventory holds no server; there is no server coverage to measure")
         line = f"{result['onboardedServerCount']} of {result['totalServerCount']} servers onboarded to MDE"
