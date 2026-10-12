@@ -104,10 +104,13 @@ CASES = {
     "isBackupLoggingEnabled": (HIST, True, {"keepAllsessions": False, "keeponlyLast": 1}, False),
 }
 
-FALLBACK_NONE = {"failedBackupJobsCount", "staleProtectionJobsCount", "backupSuccessRatePercentage", "localStorageUtilizationPercentage"}
-
 NOTHING = [{}, None, "{}", "", "not json", [], {"statusCode": 401, "error": "Unauthorized"},
-           {"error": True, "errorType": "connection_error", "statusCode": 503}, {"results": [], "limit": 10000}]
+           {"error": True, "errorType": "connection_error", "statusCode": 503}]
+EMPTY_PAGE = {"results": [], "limit": 10000}
+# A well-formed, fully read, empty page is a measured "none configured" for the files that read
+# a list of jobs or repositories; the files that read one settings object cannot use it at all.
+EMPTY_PAGE_MEASURED = {"isBackupEnabled", "isBackupEncrypted", "isBackupImmutable", "isDataLockComplianceModeEnabled",
+                       "isExternalTargetEncryptionAES256"}
 
 
 def test_every_file_has_cases():
@@ -126,9 +129,10 @@ def test_pass_and_flip(key):
 
 @pytest.mark.parametrize("key", sorted(CASES))
 def test_fail_closed(key):
-    empty = None if key in FALLBACK_NONE else False
+    # Nothing here proves anything, so every criterion is not measured: None, never a graded False.
     for body in NOTHING:
-        assert value(key, body) == empty, body
+        assert value(key, body) is None, body
+    assert value(key, EMPTY_PAGE) is (False if key in EMPTY_PAGE_MEASURED else None)
 
 
 @pytest.mark.parametrize("key", sorted(k for k in CASES if isinstance(CASES[k][0], dict) and
@@ -137,7 +141,7 @@ def test_unread_page_is_refused(key):
     good = copy.deepcopy(CASES[key][0])
     target = good["jobs"] if "jobs" in good else good
     target["_links"]["next"] = {"href": "/v8/Jobs?offset=10000&limit=10000"}
-    assert value(key, good) == (None if key in FALLBACK_NONE else False)
+    assert value(key, good) is None
 
 
 def test_session_filters_not_applied_are_refused():
