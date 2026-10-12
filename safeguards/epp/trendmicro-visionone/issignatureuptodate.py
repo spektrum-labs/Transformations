@@ -35,7 +35,8 @@ from datetime import datetime
 
 VENDOR = "Trend Micro"
 #: dataCollection.errorCode for a value the vendor does not expose (Worry-Free managed agents report no
-#: policy, status, isolation or component version to Vision One). Set only then, never on an API error.
+#: policy, status, isolation or component version to Vision One). Set only when EVERY unmeasured endpoint is
+#: Worry-Free managed, never on an API error and never when another manager or no agent is the cause.
 VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
 CATEGORY = "Endpoint Security"
 
@@ -156,6 +157,16 @@ def failure(criteria_key, fail_value, error):
 CURRENT = ("latestVersion", "controlledLatestVersion")
 
 
+def worry_free_managed(endpoint):
+    """True when the endpoint's protection agent is managed by Worry-Free Business Security, which sends no policy,
+    status, isolation or component version to Vision One. An endpoint with no agent block, a sensor-only placeholder
+    or another manager (Apex One, Server & Workload Protection) is not, so a hidden value there is another cause."""
+    agent = sub(endpoint, "eppAgent")
+    if agent is None:
+        return False
+    return "worry-free" in str(agent.get("protectionManager") or "").lower()
+
+
 def transform(input):
     criteriaKey = "isSignatureUpToDate"
     try:
@@ -165,6 +176,7 @@ def transform(input):
         agents = 0
         stale = []
         unknown = []
+        unknown_other = 0
         for e in endpoints:
             agent = sub(e, "eppAgent")
             if agent is None:
@@ -173,6 +185,8 @@ def transform(input):
             version = agent.get("componentVersion")
             if version in (None, "", "unknownVersions"):
                 unknown.append(endpoint_name(e))
+                if not worry_free_managed(e):
+                    unknown_other = unknown_other + 1
             elif version not in CURRENT:
                 stale.append(endpoint_name(e) + " (" + str(version) + ")")
         value = agents > 0 and len(stale) == 0
@@ -199,6 +213,6 @@ def transform(input):
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
                                recommendations=recommendations, input_summary=summary,
                                api_errors=(fail_reasons if value is None else None),
-                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0) else None))
+                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0 and unknown_other == 0) else None))
     except Exception as e:
         return failure(criteriaKey, False, e)

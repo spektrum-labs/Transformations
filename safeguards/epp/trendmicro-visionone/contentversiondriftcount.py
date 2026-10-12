@@ -39,7 +39,8 @@ def criteria_unmeasured(result):
 
 VENDOR = "Trend Micro"
 #: dataCollection.errorCode for a value the vendor does not expose (Worry-Free managed agents report no
-#: policy, status, isolation or component version to Vision One). Set only then, never on an API error.
+#: policy, status, isolation or component version to Vision One). Set only when EVERY unmeasured endpoint is
+#: Worry-Free managed, never on an API error and never when another manager or no agent is the cause.
 VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
 CATEGORY = "Endpoint Security"
 
@@ -173,6 +174,16 @@ def has_protection_agent(endpoint):
     return bool(str(agent.get("version") or "").strip() or str(agent.get("protectionManager") or "").strip())
 
 
+def worry_free_managed(endpoint):
+    """True when the endpoint's protection agent is managed by Worry-Free Business Security, which sends no policy,
+    status, isolation or component version to Vision One. An endpoint with no agent block, a sensor-only placeholder
+    or another manager (Apex One, Server & Workload Protection) is not, so a hidden value there is another cause."""
+    agent = sub(endpoint, "eppAgent")
+    if agent is None:
+        return False
+    return "worry-free" in str(agent.get("protectionManager") or "").lower()
+
+
 def transform(input):
     criteriaKey = "contentVersionDriftCount"
     try:
@@ -181,6 +192,7 @@ def transform(input):
             return failed
         outdated = []
         unknown = []
+        unknown_other = 0
         current = 0
         for e in endpoints:
             if not has_protection_agent(e):
@@ -192,6 +204,8 @@ def transform(input):
                 outdated.append(endpoint_name(e))
             else:
                 unknown.append(endpoint_name(e))
+                if not worry_free_managed(e):
+                    unknown_other = unknown_other + 1
         measured = current + len(outdated) + len(unknown)
         value = len(outdated) if (measured > 0 and len(unknown) == 0) else None
         summary = {"totalEndpoints": len(endpoints), "agentsMeasured": measured, "agentsCurrent": current,
@@ -216,6 +230,6 @@ def transform(input):
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
                                recommendations=recommendations, input_summary=summary,
                                api_errors=(fail_reasons if value is None else None),
-                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0) else None))
+                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0 and unknown_other == 0) else None))
     except Exception as e:
         return failure(criteriaKey, None, e)

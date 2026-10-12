@@ -103,3 +103,78 @@ def test_other_none_reasons_carry_no_code():
     out = run("contentversiondriftcount", [placeholder])
     assert out["transformedResponse"]["contentVersionDriftCount"] is None
     assert "errorCode" not in collection(out)
+
+
+# The code names ONE cause: Worry-Free managed agents hide the value. A hidden value from any other manager, from
+# no manager name, from an endpoint with no agent block, or from a sensor-only placeholder has some other cause
+# (a role that cannot see it, an agent that is offline), and must not be labelled as the vendor not exposing it.
+APEX = "Trend Micro Apex One as a Service"
+NOT_WORRY_FREE = [
+    ("iseppenabledforcriticalsystems", "isEPPEnabledForCriticalSystems",
+     [ep("s1", kind="server", manager=APEX, status="unknown")]),
+    ("isolatedendpointcount", "isolatedEndpointCount", [ep("a", manager=APEX)]),
+    ("contentversiondriftcount", "contentVersionDriftCount", [ep("a", manager=APEX, comp="unknownVersions")]),
+    ("issignatureuptodate", "isSignatureUpToDate", [ep("a", manager=APEX, comp="unknownVersions")]),
+    ("endpointoperationalstatusunprotectedcount", "endpointOperationalStatusUnprotectedCount",
+     [ep("a", manager=APEX, status="unknown")]),
+]
+
+
+def assert_none_without_code(out, key, label):
+    assert out["transformedResponse"][key] is None, label
+    dc = collection(out)
+    assert dc["status"] == "error" and dc["errors"], label
+    assert "errorCode" not in dc, label
+
+
+def test_unknown_agent_of_another_manager_carries_no_code():
+    for name, key, items in NOT_WORRY_FREE:
+        assert_none_without_code(run(name, items), key, name)
+
+
+def test_unknown_agent_with_no_manager_name_carries_no_code():
+    for name, key, items in NOT_WORRY_FREE:
+        unnamed = [dict(i, eppAgent=dict(i["eppAgent"], protectionManager="")) for i in items]
+        assert_none_without_code(run(name, unnamed), key, name)
+
+
+def test_one_worry_free_and_one_other_unknown_agent_carries_no_code():
+    # The label would be wrong for the second agent, so the collection carries none.
+    for (name, key, wf_items), (_n, _k, other_items) in zip(
+            [h for h in HIDDEN if h[0] != "iseppconfigured"], NOT_WORRY_FREE):
+        assert_none_without_code(run(name, wf_items[:1] + other_items), key, name)
+
+
+def test_worry_free_unknown_beside_a_measured_other_manager_still_carries_the_code():
+    mixed = [
+        ("iseppenabledforcriticalsystems", "isEPPEnabledForCriticalSystems",
+         [ep("s1", kind="server", manager=APEX, status="on"), ep("s2", kind="server", status="unknown")]),
+        ("isolatedendpointcount", "isolatedEndpointCount", [ep("a", manager=APEX, isolation="off"), ep("b")]),
+        ("contentversiondriftcount", "contentVersionDriftCount",
+         [ep("a", manager=APEX, comp="latestVersion"), ep("b", comp="unknownVersions")]),
+        ("issignatureuptodate", "isSignatureUpToDate",
+         [ep("a", manager=APEX, comp="latestVersion"), ep("b", comp="unknownVersions")]),
+        ("endpointoperationalstatusunprotectedcount", "endpointOperationalStatusUnprotectedCount",
+         [ep("a", manager=APEX, status="on"), ep("b", status="unknown")]),
+    ]
+    for name, key, items in mixed:
+        out = run(name, items)
+        assert out["transformedResponse"][key] is None, name
+        assert collection(out)["errorCode"] == CODE, name
+
+
+def test_endpoint_without_an_agent_block_carries_no_code_for_isolation():
+    bare = {"agentGuid": "x", "endpointName": "x", "type": "desktop"}
+    assert_none_without_code(run("isolatedendpointcount", [bare]), "isolatedEndpointCount", "isolatedendpointcount")
+
+
+def test_sensor_only_placeholder_carries_no_code_in_every_file():
+    placeholder = {"agentGuid": "p", "endpointName": "p", "type": "server", "eppAgent": {"status": "unknown"}}
+    for name, key in [("iseppenabledforcriticalsystems", "isEPPEnabledForCriticalSystems"),
+                      ("isolatedendpointcount", "isolatedEndpointCount"),
+                      ("contentversiondriftcount", "contentVersionDriftCount"),
+                      ("issignatureuptodate", "isSignatureUpToDate"),
+                      ("endpointoperationalstatusunprotectedcount", "endpointOperationalStatusUnprotectedCount")]:
+        out = run(name, [placeholder])
+        dc = collection(out)
+        assert "errorCode" not in dc, name
