@@ -59,6 +59,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 # Schedule types that meet or exceed daily frequency
 DAILY_OR_BETTER = ['daily', 'hourly']
 
+# Cap on exception text copied into a reason, so a long error cannot flood a customer-facing line
+ERROR_TEXT_LIMIT = 200
+
 
 def evaluate(data):
     """Evaluate backup frequency across all policies from Resource Graph response.
@@ -127,7 +130,7 @@ def evaluate(data):
             "policiesFailingFrequency": policies_failing_frequency
         }
     except Exception as e:
-        return {"backupFrequency": None, "error": str(e)}
+        return {"backupFrequency": None, "error": str(e)[:ERROR_TEXT_LIMIT]}
 
 
 def transform(input):
@@ -186,6 +189,6 @@ def transform(input):
         return create_response(
             result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            transformation_errors=[str(e)[:ERROR_TEXT_LIMIT]],
+            fail_reasons=[f"Transformation error: {str(e)[:ERROR_TEXT_LIMIT]}"]
         )

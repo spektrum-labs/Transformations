@@ -23,10 +23,11 @@ Failed restores are counted as evidence against, not for - a restore that
 errored did not demonstrate recoverability.
 
 Not evaluated (None, with a collection error) when the read proves no absence:
-no vault was read, or the restore jobs of at least one vault came back as an
-error (or anything but a job list) and no vault that was read shows a recent
-successful restore. A restore that did succeed is proof whatever else failed
-to read. A vault that was read and holds no restore job is a real False.
+no vault was read, or the restore jobs of at least one vault were not read in
+full (an error, anything but a job list, or a page with a next-page link) and
+no job that was read shows a recent successful restore. A restore that did
+succeed is proof whatever else failed to read. A vault that was read in full
+and holds no restore job is a real False.
 """
 
 import json
@@ -35,6 +36,8 @@ from datetime import datetime, timedelta
 SUCCESS_STATUSES = ["Completed", "CompletedWithWarnings"]
 RECENCY_DAYS = 365
 MAX_WALK_DEPTH = 6
+ERROR_TEXT_LIMIT = 200
+PAGE_LINK_KEYS = ["nextLink", "@odata.nextLink", "skipToken", "$skipToken"]
 
 
 def extract_input(input_data):
@@ -219,17 +222,44 @@ def vault_entries(node, depth):
     return None
 
 
-def entry_is_read(entry):
-    """True when one vault's answer is a restore-job list: a list of jobs, or an ARM body carrying one.
+def has_next_page(node, depth):
+    """True when a vault's answer, or the raw body nested under it, carries a next-page link or skip token.
 
-    An ARM error body, an HTTP refusal, text, null and an empty object are not a job list. Such a vault's
-    restore history was not read, so it says nothing about whether a restore ran there.
+    Such a page is the first of several: a restore job on a later page was not read, so the page proves no absence.
+    """
+    if depth > MAX_WALK_DEPTH or not isinstance(node, dict):
+        return False
+    for key in PAGE_LINK_KEYS:
+        if node.get(key):
+            return True
+    for key in ["apiResponse", "data"]:
+        if key in node and has_next_page(node[key], depth + 1):
+            return True
+    return False
+
+
+def is_job_record(entry):
+    """True when an entry under restoreJobResults is a restore job itself, not one vault's answer."""
+    return isinstance(entry, dict) and isinstance(entry.get("properties"), dict)
+
+
+def entry_is_read(entry):
+    """True when one vault's answer is a complete restore-job list: a list of job objects, or an ARM body carrying one.
+
+    Not read: an ARM error body, an HTTP refusal, text, null, an empty object, an empty list (what a failed call
+    leaves behind when the response is defaulted), a list holding anything but job objects, and a list that has a
+    next page. Such a vault's restore history was not read in full, so it says nothing about whether a restore ran there.
     """
     if isinstance(entry, list):
+        if len(entry) == 0:
+            return False
+        for item in entry:
+            if not is_job_record(item) or refused(item, 0):
+                return False
         return True
     if not isinstance(entry, dict):
         return False
-    if refused(entry, 0):
+    if refused(entry, 0) or has_next_page(entry, 0):
         return False
     return job_collection_seen(entry, 0)
 
@@ -308,9 +338,15 @@ def transform(input):
         entries = vault_entries(data, 0)
         vaults_read = 0
         vaults_not_read = 0
+        flat_list_counted = False
         if entries is not None:
             for entry in entries:
-                if entry_is_read(entry):
+                if is_job_record(entry):
+                    # job objects listed directly under restoreJobResults are one vault's job list
+                    if not flat_list_counted:
+                        flat_list_counted = True
+                        vaults_read = vaults_read + 1
+                elif entry_is_read(entry):
                     vaults_read = vaults_read + 1
                 else:
                     vaults_not_read = vaults_not_read + 1
@@ -329,6 +365,9 @@ def transform(input):
                     fail_reasons=["isBackupTested not evaluated: no vault was read"],
                     input_summary={"vaultsRead": 0, "vaultsNotRead": 0}
                 )
+        elif has_next_page(data, 0):
+            # a single restore-job list that has a next page: the rest of it was not read
+            vaults_not_read = 1
 
         found = {}
         collect_restore_jobs(data, found, 0)
@@ -395,11 +434,11 @@ def transform(input):
                     result={criteriaKey: None},
                     validation=validation,
                     api_errors=["isBackupTested not evaluated: the restore jobs of " + counts
-                                + " vaults could not be read, and none of the vaults that were read shows a "
+                                + " vaults could not be read in full, and none of the jobs that were read shows a "
                                 "successful restore in the last " + str(RECENCY_DAYS) + " days"],
                     recommendations=["Confirm the principal can read backup jobs on every Recovery Services "
                                      "vault, then re-run the query."],
-                    fail_reasons=["isBackupTested not evaluated: " + counts + " vaults could not be read"],
+                    fail_reasons=["isBackupTested not evaluated: " + counts + " vaults could not be read in full"],
                     additional_findings=findings,
                     input_summary={
                         "vaultsRead": vaults_read,
@@ -408,8 +447,8 @@ def transform(input):
                         "recencyWindowDays": RECENCY_DAYS
                     }
                 )
-            findings.append("The restore jobs of " + counts + " vaults were not read; this verdict rests on "
-                            "the vaults that were read")
+            findings.append("The restore jobs of " + counts + " vaults were not read in full; this verdict rests on "
+                            "the jobs that were read")
 
         pass_reasons = []
         fail_reasons = []
@@ -450,7 +489,7 @@ def transform(input):
             "unsuccessfulRestores": failed,
             "recencyWindowDays": RECENCY_DAYS
         }
-        if entries is not None:
+        if entries is not None or vaults_not_read > 0:
             summary["vaultsRead"] = vaults_read
             summary["vaultsNotRead"] = vaults_not_read
 
@@ -468,6 +507,6 @@ def transform(input):
         return create_response(
             result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=["Transformation error: " + str(e)]
+            transformation_errors=[str(e)[:ERROR_TEXT_LIMIT]],
+            fail_reasons=["Transformation error: " + str(e)[:ERROR_TEXT_LIMIT]]
         )
