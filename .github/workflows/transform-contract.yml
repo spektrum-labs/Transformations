@@ -113,6 +113,14 @@ jobs:
       - name: Every transform must compile in the production sandbox
         run: python tools/check_sandbox_compile.py
 
+      # The same question as the step above, asked with the sandbox the pipeline uses at
+      # run time (tools/restricted_sandbox.py mirrors it). Main's workflow runs this one,
+      # so develop runs it too. Listed files in contracts/sandbox-compile-allowlist.json
+      # are reported and do not fail the run; the list may only shrink. RestrictedPython
+      # is installed by the sandbox step above.
+      - name: Every transform must compile in the sandbox the pipeline uses
+        run: python tools/check_sandbox_compiles.py
+
       # The mirror of the fourth contract. The fourth asks whether a None
       # verdict reaches the evaluator as not-evaluated. This asks the prior question: when
       # a transform catches its OWN exception, does it report that on a channel the

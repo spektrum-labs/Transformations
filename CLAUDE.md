@@ -69,7 +69,7 @@ def _parse_input(input):
 ### Run checks locally
 
 - `pip install -r requirements-test.txt` (pytest, pydantic, RestrictedPython), then run what CI runs from the repo root: `python tools/check_fail_closed.py`, `python tools/check_discriminates.py`, `python tools/check_none_not_evaluated.py`, `python tools/check_sandbox_compile.py`, `python tools/check_test_floor.py` (each has a `--self-test`). Do not edit `check_test_floor.py` in a feature PR.
-- CI also runs `python tools/probe_failure_channel.py` and `python tools/check_no_self_answer.py` (each has a `--self-test`), and `python tools/check_public_hygiene.py --base <ref>`, which reads only the lines your change adds and fails on internal wording, naming file:line. Where you would label a set of customers, write "environment A / environment B", "fleet" or "tenant A / tenant B".
+- CI also runs `python tools/check_sandbox_compiles.py`, `python tools/probe_failure_channel.py` and `python tools/check_no_self_answer.py` (the last two have a `--self-test`), and `python tools/check_public_hygiene.py --base <ref>`, which reads only the lines your change adds and fails on internal wording, naming file:line. Where you would label a set of customers, write "environment A / environment B", "fleet" or "tenant A / tenant B".
 - Try a transform on a sample: `python local_tester.py <transform.py> <sample.json>`.
 - Transforms run under RestrictedPython in production: no `re.compile` or `getattr`-style escapes, standard library only. Fail closed: a criterion is only `True` from a body that shows it is satisfied.
 
