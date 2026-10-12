@@ -14,8 +14,13 @@ reported in the evidence, not judged.
 
 Rule (fail closed): true only when at least one gmail.email_attachment_safety policy is returned and EVERY one of them
 (Google returns one per org unit or group that sets it) has all required fields "True". A missing
-field, a missing policy or the string "False" fails. A Google error or unreadable body is reported as
-a data-collection error (unevaluated), never as a pass.
+field, a policy with a required field off, or a complete list that carries no policy for this setting
+is false: those are measured.
+
+Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never Failed):
+a Google error or refusal, a missing scope, a body that is not JSON or not a policy list, an empty
+policy list, a list with no policy record in it, a list still carrying nextPageToken in which no policy
+is off yet (more pages could hold one), and this transform's own exception.
 """
 
 import json
@@ -26,6 +31,21 @@ SETTING_TYPE = "gmail.email_attachment_safety"
 REQUIRED_FIELDS = ['enableAttachmentWithScriptsProtection']
 CONTROL = "Script-attachment protection"
 ADVICE = "In Admin console > Apps > Google Workspace > Gmail > Safety > Attachments, turn on protection against attachments with scripts from untrusted senders"
+
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isMacroBlockingEnabled',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 
 def extract_input(input_data):
@@ -49,6 +69,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -104,7 +130,28 @@ def vendor_error(data):
             return "HTTP %s" % code
     except (TypeError, ValueError):
         pass
+    if str(data.get("status", "")).lower() == "error":
+        return str(data.get("message") or "Integration error")
     return None
+
+
+def is_truncated(body):
+    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    marker = body.get("paginationTruncated")
+    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
+
+
+def unmeasured(reason, validation, summary=None):
+    """The read could not answer: key None and a dataCollection error, so it shows as Not evaluated."""
+    return create_response(
+        result={CRITERIA_KEY: None},
+        validation=validation,
+        api_errors=[reason],
+        fail_reasons=["Not measured: " + reason],
+        input_summary=summary
+    )
 
 
 def is_true(value):
@@ -126,16 +173,16 @@ def transform(input):
         if error is None and not isinstance(data, (dict, list)):
             error = "Response is not a policy list"
         if error is not None:
-            return create_response(
-                result={CRITERIA_KEY: False},
-                validation=validation,
-                api_errors=[error],
-                fail_reasons=["Not measured: " + error]
-            )
+            return unmeasured(error, validation)
 
-        policies = data if isinstance(data, list) else data.get("policies", [])
+        policies = data if isinstance(data, list) else data.get("policies")
         if not isinstance(policies, list):
-            policies = []
+            return unmeasured("No policies list in the response: the Gmail settings read cannot be shown to have run",
+                              validation)
+        if not [p for p in policies if isinstance(p, dict)]:
+            return unmeasured("No Gmail policies were returned: an empty list cannot be told apart from a read "
+                              "that returned nothing", validation)
+        truncated = is_truncated(data)
 
         matched = []
         for policy in policies:
@@ -165,6 +212,12 @@ def transform(input):
             })
 
         result_value = len(matched) > 0 and compliant == len(matched)
+        if truncated and (len(matched) == 0 or result_value):
+            # More pages exist. A policy that is off already decides False; nothing read so far can prove
+            # True, or prove that no policy for this setting exists.
+            return unmeasured("The policy list was truncated (nextPageToken present) before every %s policy was "
+                              "read; %s not evaluated across all org units" % (SETTING_TYPE, CONTROL), validation,
+                              {"gmailPolicies": len(policies), "matchingPolicies": len(matched)})
         pass_reasons = []
         fail_reasons = []
         recommendations = []
@@ -190,7 +243,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={CRITERIA_KEY: False},
+            result={CRITERIA_KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: %s" % str(e)]

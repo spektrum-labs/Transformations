@@ -22,10 +22,15 @@ Rule (fail closed). True only when at least one of these is proven:
     and either an assignment uses DOMAIN_WIDE_SAML_IF_ENABLED or no assignments are returned
     (tenants that never used SSO profiles report the legacy profile only through the feed).
 SSO_OFF, a SAML assignment whose profile is missing or has no https sign-in URL, and
-DOMAIN_WIDE_SAML_IF_ENABLED with the legacy profile off all fail. A Google error, a missing
-scope ("scope not granted"), or an unreadable body is a data-collection error (unevaluated),
-never a pass. A truncated assignment list (nextPageToken) that has not already proven SSO is
-unevaluated.
+DOMAIN_WIDE_SAML_IF_ENABLED with the legacy profile off all fail (false, measured). So does a
+tenant whose assignments, profiles and legacy organization profile were read and show no SSO.
+
+Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never
+Failed): a Google error or refusal, a missing scope ("scope not granted"), a body that is not JSON
+or carries no SSO data, a truncated assignment list (nextPageToken) that has not already proven
+SSO, a legacy feed that reports no enableSSO, a DOMAIN_WIDE_SAML_IF_ENABLED assignment whose
+organization profile could not be read, no assignment, no profile and no readable organization
+profile at all (nothing was read that could show SSO is off), and this transform's own exception.
 
 Previously: bool(str(value)) was true for "false" (FP-07), and only the legacy feed was read.
 Does not judge: which users are covered (org unit and group targets are reported, not weighed).
@@ -33,6 +38,21 @@ Does not judge: which users are covered (org unit and group targets are reported
 
 import json
 from datetime import datetime, timezone
+
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isSSOEnabled',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 CRITERIA_KEY = "isSSOEnabled"
 REQUIRED_SCOPE = ("https://www.googleapis.com/auth/cloud-identity.inboundsso.readonly (SSO profiles) "
@@ -60,6 +80,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -178,7 +204,7 @@ def find_dict_with(data, key, depth=0):
 
 
 def not_measured(reason, validation, recommendation=None, result_extra=None):
-    result = {CRITERIA_KEY: False}
+    result = {CRITERIA_KEY: None}
     for k in (result_extra or {}):
         result[k] = result_extra[k]
     return create_response(
@@ -254,6 +280,9 @@ def evaluate_cloud_identity(data, validation):
     profiles = profiles_body.get("inboundSamlSsoProfiles") or []
     if not isinstance(assignments, list) or not isinstance(profiles, list):
         return not_measured("inbound SSO response could not be read", validation)
+    if (assignments and not [a for a in assignments if isinstance(a, dict)]) or \
+            (profiles and not [p for p in profiles if isinstance(p, dict)]):
+        return not_measured("inbound SSO records could not be read", validation)
     truncated = bool(assignments_body.get("nextPageToken"))
 
     profile_hosts = {}
@@ -269,7 +298,11 @@ def evaluate_cloud_identity(data, validation):
     if legacy_body is not None:
         props, legacy_error = read_legacy(legacy_body)
         if props is not None:
-            legacy_on, legacy_raw, legacy_host = legacy_state(props)
+            if props.get("enablesso") is None:
+                legacy_error = "SSO settings feed did not report enableSSO"
+            else:
+                legacy_on, legacy_raw, legacy_host = legacy_state(props)
+    legacy_read = legacy_body is not None and legacy_error is None
 
     effective = []
     findings = []
@@ -309,6 +342,13 @@ def evaluate_cloud_identity(data, validation):
                "legacyEnableSSO": legacy_raw, "truncated": truncated}
     if not result_value and truncated:
         return not_measured("SSO assignment list was truncated before SSO was found", validation, result_extra={})
+    if not result_value and domain_wide and not legacy_read:
+        # The assignment defers to the organization profile, and that profile could not be read.
+        return not_measured("an assignment uses the organization SSO profile, which could not be read (%s)"
+                            % (legacy_error or "no organization SSO profile was returned"), validation)
+    if not result_value and not assignments and not profiles and not legacy_read:
+        return not_measured("no SSO assignments, no SAML SSO profiles and no readable organization SSO profile "
+                            "were returned; nothing was read that could show SSO is off", validation)
     if result_value:
         return create_response(result={CRITERIA_KEY: True}, validation=validation,
                                pass_reasons=["SSO is on: " + "; ".join(effective[:5])],
@@ -326,6 +366,10 @@ def evaluate_legacy(data, validation):
     if error is not None:
         return not_measured(error, validation, "Check the Google service account's access to the SSO settings feed and re-evaluate")
     result_value, enabled_raw, host = legacy_state(props)
+    if enabled_raw is None:
+        # A feed that never says whether SSO is on cannot show that it is off.
+        return not_measured("SSO settings feed did not report enableSSO", validation,
+                            "Check the Google service account's access to the SSO settings feed and re-evaluate")
     findings = [
         {"metric": "enableSSO", "value": str(enabled_raw).strip().lower() == "true", "reason": "reported %r" % enabled_raw},
         {"metric": "samlSignonUri", "value": bool(host), "reason": host or "not set"},
@@ -334,9 +378,7 @@ def evaluate_legacy(data, validation):
         return create_response(result={CRITERIA_KEY: True}, validation=validation,
                                pass_reasons=["SAML SSO is enabled for the domain with identity provider %s" % host],
                                additional_findings=findings, input_summary={"enableSSO": enabled_raw, "identityProviderHost": host})
-    if enabled_raw is None:
-        reason = "SSO settings feed did not report enableSSO; SSO not proven"
-    elif str(enabled_raw).strip().lower() != "true":
+    if str(enabled_raw).strip().lower() != "true":
         reason = "SAML SSO is not enabled (enableSSO=%r)" % enabled_raw
     else:
         reason = "enableSSO is true but no https samlSignonUri is configured"
@@ -367,7 +409,7 @@ def transform(input):
         return evaluate_legacy(data, validation)
     except Exception as e:
         return create_response(
-            result={CRITERIA_KEY: False},
+            result={CRITERIA_KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: %s" % str(e)]
