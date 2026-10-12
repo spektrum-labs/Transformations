@@ -45,10 +45,13 @@ CASES = [
     ('nohighfindings', ('noHighFindings',), 'empty_dict', lambda: {}),
     ('nohighfindings', ('noHighFindings',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
     ('nohighfindings', ('noHighFindings',), 'poisoned', lambda: Poisoned()),
-    ('exploitedfindingscount', ('exploitedFindingsCount',), 'empty_list', lambda: {"vulnerabilities": []}),
-    ('isasmenabled', ('isASMEnabled',), 'empty_list', lambda: {"domains": []}),
-    ('nocriticalfindings', ('noCriticalFindings',), 'empty_list', lambda: {"risks": []}),
-    ('nohighfindings', ('noHighFindings',), 'empty_list', lambda: {"risks": []}),
+    ('isasmenabled', ('isASMEnabled',), 'empty_list_no_count', lambda: {"domains": []}),
+    ('exploitedfindingscount', ('exploitedFindingsCount',), 'empty_list_contradicting_count',
+     lambda: {"vulnerabilities": [], "total_results": 3}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'empty_list_contradicting_count',
+     lambda: {"risks": [], "total_results": 3}),
+    ('nohighfindings', ('noHighFindings',), 'empty_list_contradicting_count',
+     lambda: {"risks": [], "total_results": 3}),
 ]
 
 

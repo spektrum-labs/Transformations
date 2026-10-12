@@ -24,42 +24,41 @@ def criteria_unmeasured(result):
     return len(present) > 0 and all(result[k] is None for k in present)
 
 
-#: Keys under which a body can state how many records the vendor holds, and keys that point at a further page.
-COUNT_KEYS = ("total", "count", "total_count", "totalCount", "total_results", "totalResults")
+#: The one count the vendor's public API spec documents (on the domain list). The risk and vulnerability
+#: lists document no count.
+COUNT_KEY = "total_results"
 NEXT_PAGE_KEYS = ("next_page_token", "nextPageToken", "next_page", "next")
 
 
-def states_zero(data):
-    """True when the body itself states a count of 0 and no further page follows.
+def empty_list_is_complete(data, count_documented):
+    """True when an empty list is a real, complete answer rather than a failed or cut-off read.
 
-    An empty list alone is not a read: a failed or cut-off call can give one. A real zero is a body
-    that says so, with a whole number 0 (not a bool or text) under a count key, on the last page.
-    A count key that holds anything else contradicts the empty list.
+    Never when the body carries an error marker or points at a further page, or when it states a
+    count that is not a whole number 0 (a bool or text count, or a count above 0).
+    Where the vendor documents a count for the endpoint (count_documented), the body must state it
+    as 0. Where it documents none, the empty list on the last page is the vendor's own answer for
+    an account with nothing to report.
     """
     if not isinstance(data, dict):
+        return False
+    if data.get("error") or data.get("errors"):
         return False
     for k in NEXT_PAGE_KEYS:
         if data.get(k):
             return False
-    zero_stated = False
-    for k in COUNT_KEYS:
-        v = data.get(k)
-        if v is None:
-            continue
-        if isinstance(v, int) and not isinstance(v, bool) and v == 0:
-            zero_stated = True
-        else:
-            return False
-    return zero_stated
+    count = data.get(COUNT_KEY)
+    if count is None:
+        return not count_documented
+    return isinstance(count, int) and not isinstance(count, bool) and count == 0
 
 
 def transform_unmarked(input):
     """
     True when at least one domain is active and has been scanned: UpGuard is monitoring the
     organisation's external surface. False when no active domain has been scanned, and on an empty list
-    only when the body states a count of 0.
+    only when the body states total_results as 0 (the vendor documents that count) on the last page.
     None (not evaluated) when the body has no domains list, holds no object record, is an empty list that
-    states no count of 0, or cannot be read.
+    does not state a count of 0, or cannot be read.
     """
     key = "isASMEnabled"
 
@@ -90,8 +89,8 @@ def transform_unmarked(input):
             return {key: None, "reason": "Response has no domains list (the /domains call did not run)"}
         if data["domains"] and not any(isinstance(d, dict) for d in data["domains"]):
             return {key: None, "reason": "Domain list holds no object record"}
-        if not data["domains"] and not states_zero(data):
-            return {key: None, "reason": "Domain list is empty and the response does not state a count of 0, so it is not read as no monitored domain"}
+        if not data["domains"] and not empty_list_is_complete(data, True):
+            return {key: None, "reason": "Domain list is empty and the response does not state a count of 0 on its last page, so it is not read as no monitored domain"}
         scanned = [d for d in data["domains"] if isinstance(d, dict) and d.get("active") is True and d.get("scanned_at")]
         if scanned:
             return {key: True, "reason": "Active domains are being scanned", "scannedDomains": len(scanned), "domainCount": len(data["domains"])}
