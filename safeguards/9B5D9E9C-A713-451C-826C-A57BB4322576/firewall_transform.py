@@ -13,8 +13,11 @@ of that name in the body is never read.
 isFirewallEnabled and isFirewallConfigured are answered from the two policy layers (internet firewall, WAN network). A
 layer is read only when its policy object is there and its enabled flag is a boolean or the text "true" or "false"
 (any case, any spacing); any other value (a number, "maybe", null, a list) leaves the layer unread, and an unread layer
-contributes no rules. When neither layer was read both answers are None with a data-collection error. A failed
-validation and an exception answer None for all three keys with a data-collection error.
+contributes no rules. Only a measured read may answer False. isFirewallEnabled is the AND of the two layers: True with
+an unread layer is None, False with an unread layer is the measured False. isFirewallConfigured is the OR: a rule seen
+in a read layer is True, and no rule with an unread layer (or a rules value that is not a list, which is skipped) is
+None. Neither layer read: both None with a data-collection error. A failed validation and an exception answer None for
+all three keys with a data-collection error.
 """
 
 import json
@@ -80,8 +83,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 AUDIT_FEED_NOT_READ = "Audit feed was missing or could not be read, so firewall logging was not evaluated"
-LAYERS_NOT_READ = ("No firewall policy layer (internet firewall or WAN network) could be read, so firewall enabled "
-                   "and firewall configured were not evaluated")
+LAYERS_NOT_READ = ("A firewall policy layer (internet firewall or WAN network) could not be read, so a firewall answer "
+                   "that needs it was not evaluated")
 VALIDATION_FAILED = "Input validation failed, so no firewall answer was evaluated"
 PROCESSING_FAILED = "The firewall response could not be processed, so no firewall answer was evaluated"
 MAX_ERROR_TEXT = 200
@@ -131,6 +134,8 @@ def transform(input):
     is_wan_network_enabled = False
     internet_layer_read = False
     wan_layer_read = False
+    internet_rules_read = False
+    wan_rules_read = False
     internet_firewall_rules = []
     wan_network_rules = []
 
@@ -191,8 +196,11 @@ def transform(input):
                             if internet_flag is not None:
                                 internet_layer_read = True
                                 is_internet_firewall_enabled = internet_flag
-                                if 'rules' in firewall_policy:
-                                    internet_firewall_rules_raw = firewall_policy['rules']
+                                # No rules key is no rules. A rules value that is not a list (null, text) leaves the
+                                # layer's rules unread: they are skipped, and the layer never answers False for Configured.
+                                internet_firewall_rules_raw = firewall_policy['rules'] if 'rules' in firewall_policy else []
+                                if isinstance(internet_firewall_rules_raw, list):
+                                    internet_rules_read = True
                                     for rule in internet_firewall_rules_raw:
                                         if 'rule' in rule and 'name' in rule['rule']:
                                             internet_firewall_rules.append(rule['rule']['name'])
@@ -209,8 +217,9 @@ def transform(input):
                             if wan_flag is not None:
                                 wan_layer_read = True
                                 is_wan_network_enabled = wan_flag
-                                if 'rules' in wan_network_policy:
-                                    wan_network_rules_raw = wan_network_policy['rules']
+                                wan_network_rules_raw = wan_network_policy['rules'] if 'rules' in wan_network_policy else []
+                                if isinstance(wan_network_rules_raw, list):
+                                    wan_rules_read = True
                                     for rule in wan_network_rules_raw:
                                         if 'rule' in rule and 'name' in rule['rule']:
                                             wan_network_rules.append(rule['rule']['name'])
@@ -229,13 +238,20 @@ def transform(input):
                     if fetched_count is not None:
                         is_firewall_logging_enabled = fetched_count > 0
 
-        # Enabled and Configured are measured only when at least one policy layer was read. Neither read: None.
+        # Only a measured read may answer False. Enabled is the AND of the two layers: a layer read as disabled makes it
+        # False, both read and enabled make it True, and an unread layer beside an enabled one leaves it None.
+        # Configured is the OR: a rule seen in a read layer makes it True, no rule with both layers' rules read makes it
+        # False, and no rule with a layer or its rules unread leaves it None.
         is_firewall_enabled_final = None
+        if (internet_layer_read and not is_internet_firewall_enabled) or (wan_layer_read and not is_wan_network_enabled):
+            is_firewall_enabled_final = False
+        elif internet_layer_read and wan_layer_read:
+            is_firewall_enabled_final = True
         is_firewall_configured = None
-        layers_read = internet_layer_read or wan_layer_read
-        if layers_read:
-            is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
-            is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
+        if len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0:
+            is_firewall_configured = True
+        elif internet_rules_read and wan_rules_read:
+            is_firewall_configured = False
 
         additional_findings = []
 
@@ -249,7 +265,7 @@ def transform(input):
         else:
             api_errors.append(AUDIT_FEED_NOT_READ)
 
-        if not layers_read:
+        if is_firewall_enabled_final is None or is_firewall_configured is None:
             api_errors.append(LAYERS_NOT_READ)
 
         # Additional finding: isFirewallEnabled (none when it was not evaluated)

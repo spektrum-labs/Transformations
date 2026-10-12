@@ -10,7 +10,11 @@ Rules, all on the Cato firewall answers (isFirewallLoggingEnabled, isFirewallEna
 3. isFirewallEnabled and isFirewallConfigured are answered from the two policy layers (internet firewall, WAN network).
    A layer is read only when its policy object is there and its enabled flag is a boolean or the text "true"/"false"
    (any case, any spacing). Any other enabled value (a number, "maybe", "yes", null, a list) leaves the layer unread; an
-   unread layer contributes no rules. When neither layer was read both answers are None with a data-collection error.
+   unread layer contributes no rules. Only a measured read may answer False: isFirewallEnabled is the AND of the two
+   layers (True with an unread layer is None, False with an unread layer is the measured False) and isFirewallConfigured
+   is the OR (a rule seen in a read layer is True, no rule with an unread layer is None). A rules value that is not a
+   list (null, text, a number, an object) is skipped, leaves that layer's rules unread and never raises, so a measured
+   logging answer survives; a missing rules key is no rules. Neither layer read: both None with a data-collection error.
 4. A failed validation and an exception give None for all three keys with a data-collection error whose text does not
    claim anything about the audit feed; the exception text taken from the failure is capped at 200 characters.
 Synthetic data only."""
@@ -252,9 +256,6 @@ READ_LAYERS = [
     ("internet disabled", {"firewall": internet(False), "wanNetwork": wan(True)}, False, True),
     ("wan disabled", {"firewall": internet(True), "wanNetwork": wan(False)}, False, True),
     ("both disabled, no rules", {"firewall": internet(False, ()), "wanNetwork": wan(False, ())}, False, False),
-    ("only the internet layer, enabled", {"firewall": internet(True)}, False, True),
-    ("only the wan layer, enabled", {"wanNetwork": wan(True)}, False, True),
-    ("only the internet layer, disabled with no rules", {"firewall": internet(False, ())}, False, False),
     ("internet enabled as text", {"firewall": internet("true"), "wanNetwork": wan("TRUE")}, True, True),
     ("internet enabled as text with spaces", {"firewall": internet(" True "), "wanNetwork": wan(" true")}, True, True),
     ("internet disabled as text", {"firewall": internet("false"), "wanNetwork": wan(True)}, False, True),
@@ -293,16 +294,17 @@ def test_an_enabled_flag_that_is_not_a_boolean_leaves_both_layers_unread(tx, nam
 
 @pytest.mark.parametrize("name,flag", UNREADABLE_FLAGS, ids=[c[0] for c in UNREADABLE_FLAGS])
 def test_an_unreadable_flag_is_never_read_as_enabled(tx, name, flag):
-    # The old reader took any truthy value ("false", "maybe", 2) as True. One layer unreadable, the other enabled:
-    # the unreadable layer adds nothing and the firewall is not reported enabled.
-    for body in (dict({"firewall": internet(flag), "wanNetwork": wan(True)}, **feed()),
-                 dict({"firewall": internet(True), "wanNetwork": wan(flag)}, **feed())):
-        for shape in shapes(body):
-            out = tx(shape)
-            assert value(out, ENABLED) is not True
-            assert value(out, ENABLED) is not None  # the other layer was read
-            assert len(out["transformedResponse"]["internetFirewallRules"]
-                       + out["transformedResponse"]["wanNetworkRules"]) == 1
+    # The old reader took any truthy value ("false", "maybe", 2) as True. An unreadable layer is unread: beside an
+    # enabled layer the answer is None, beside a disabled layer it is the measured False, and it adds no rules.
+    for read, want_enabled in ((True, None), (False, False)):
+        for body in (dict({"firewall": internet(flag), "wanNetwork": wan(read)}, **feed()),
+                     dict({"firewall": internet(read), "wanNetwork": wan(flag)}, **feed())):
+            for shape in shapes(body):
+                out = tx(shape)
+                assert value(out, ENABLED) is want_enabled
+                assert value(out, CONFIGURED) is True  # the read layer carries one rule
+                assert len(out["transformedResponse"]["internetFirewallRules"]
+                           + out["transformedResponse"]["wanNetworkRules"]) == 1
 
 
 def test_the_text_false_is_a_disabled_layer_not_an_enabled_one(tx):
@@ -318,6 +320,142 @@ def test_a_layer_with_no_enabled_key_is_unread(tx):
     assert value(out, ENABLED) is None
     assert value(out, CONFIGURED) is None
     assert out["transformedResponse"]["internetFirewallRules"] == []
+
+
+STATES = {"true": True, "false": False}
+
+
+def build(internet_state, wan_state, rules):
+    """A body with each layer true (enabled), false (disabled), absent (key missing) or garbage (unreadable flag)."""
+    names = ("rule-one",) if rules else ()
+    out = {}
+    for key, make, state in (("firewall", internet, internet_state), ("wanNetwork", wan, wan_state)):
+        if state == "absent":
+            continue
+        out[key] = make("maybe" if state == "garbage" else STATES[state], names)
+    out.update(feed())
+    return out
+
+
+# (internet, wan, rules in the layers that were read, isFirewallEnabled, isFirewallConfigured)
+THREE_VALUED = [
+    # a layer read True plus an unread layer: enabled is not proven, a rule seen still proves configured
+    ("true", "absent", True, None, True),
+    ("true", "garbage", True, None, True),
+    ("absent", "true", True, None, True),
+    ("garbage", "true", True, None, True),
+    ("true", "absent", False, None, None),
+    ("garbage", "true", False, None, None),
+    # a layer read False plus an unread layer: the measured False for enabled; configured needs a rule or both read
+    ("false", "absent", True, False, True),
+    ("false", "garbage", True, False, True),
+    ("absent", "false", True, False, True),
+    ("garbage", "false", True, False, True),
+    ("false", "absent", False, False, None),
+    ("false", "garbage", False, False, None),
+    ("absent", "false", False, False, None),
+    ("garbage", "false", False, False, None),
+    # both read
+    ("true", "true", True, True, True),
+    ("true", "true", False, True, False),
+    ("true", "false", True, False, True),
+    ("true", "false", False, False, False),
+    ("false", "true", False, False, False),
+    ("false", "false", False, False, False),
+    ("false", "false", True, False, True),
+    # neither read
+    ("absent", "absent", True, None, None),
+    ("garbage", "garbage", True, None, None),
+    ("absent", "garbage", False, None, None),
+    ("garbage", "absent", False, None, None),
+]
+
+
+@pytest.mark.parametrize("internet_state,wan_state,rules,enabled,configured", THREE_VALUED,
+                         ids=["%s+%s%s" % (c[0], c[1], "+rules" if c[2] else "") for c in THREE_VALUED])
+def test_only_a_measured_read_may_answer_false(tx, internet_state, wan_state, rules, enabled, configured):
+    for shape in shapes(build(internet_state, wan_state, rules)):
+        out = tx(shape)
+        assert value(out, ENABLED) is enabled
+        assert value(out, CONFIGURED) is configured
+        assert value(out, KEY) is True  # the feed was read
+        if enabled is None or configured is None:
+            assert collection(out)["status"] == "error"
+            assert collection(out)["errors"]
+        else:
+            assert collection(out)["status"] == "success"
+            assert collection(out)["errors"] == []
+
+
+MISSING = object()
+
+
+def layer(kind, enabled, rules):
+    """A policy layer ("internetFirewall" or "wanNetwork") with the rules value exactly as given (MISSING omits the key)."""
+    policy = {"enabled": enabled}
+    if rules is not MISSING:
+        policy["rules"] = rules
+    return {"data": {"policy": {kind: {"policy": policy}}}}
+
+
+ONE_RULE = [{"rule": {"name": "rule-one"}}]
+NOT_A_LIST = [("null", None), ("text", "rules"), ("a number", 3), ("true", True), ("an object", {"rule": {"name": "r"}}),
+              ("empty text", "")]
+
+# (internet rules, wan rules, isFirewallEnabled, isFirewallConfigured); both layers are read and enabled
+RULES_CASES = [
+    ("rules not a list beside a rule seen", None, ONE_RULE, True, True),
+    ("rules seen beside rules not a list", ONE_RULE, "text", True, True),
+    ("rules not a list beside no rules", None, [], True, None),
+    ("no rules beside rules not a list", [], 5, True, None),
+    ("rules not a list on both", None, None, True, None),
+    ("a missing rules key beside no rules is no rules", MISSING, [], True, False),
+    ("a missing rules key on both is no rules", MISSING, MISSING, True, False),
+    ("a missing rules key beside rules not a list", MISSING, None, True, None),
+    ("a missing rules key beside a rule seen", MISSING, ONE_RULE, True, True),
+]
+
+
+@pytest.mark.parametrize("name,internet_rules,wan_rules,enabled,configured", RULES_CASES, ids=[c[0] for c in RULES_CASES])
+def test_a_rules_value_that_is_not_a_list_leaves_the_rules_unread(tx, name, internet_rules, wan_rules, enabled, configured):
+    body = dict({"firewall": layer("internetFirewall", True, internet_rules),
+                 "wanNetwork": layer("wanNetwork", True, wan_rules)}, **feed())
+    shapes_to_try = [body]
+    if MISSING not in (internet_rules, wan_rules):
+        shapes_to_try = list(shapes(body))
+    for shape in shapes_to_try:
+        out = tx(shape)
+        assert value(out, KEY) is True  # the feed was read: a rules value never nulls the logging answer
+        assert value(out, ENABLED) is enabled
+        assert value(out, CONFIGURED) is configured
+        if configured is None:
+            assert collection(out)["status"] == "error"
+            assert collection(out)["errors"]
+        else:
+            assert collection(out)["status"] == "success"
+
+
+@pytest.mark.parametrize("name,rules", NOT_A_LIST, ids=[c[0] for c in NOT_A_LIST])
+def test_a_rules_value_that_is_not_a_list_never_raises_or_names_rules(tx, name, rules):
+    body = dict({"firewall": layer("internetFirewall", True, rules), "wanNetwork": layer("wanNetwork", False, ONE_RULE)},
+                **feed())
+    for shape in shapes(body):
+        out = tx(shape)
+        assert out["additionalInfo"]["transformation"]["errors"] == []
+        assert value(out, KEY) is True
+        assert value(out, ENABLED) is False  # the wan layer was read as disabled
+        assert value(out, CONFIGURED) is True  # a rule was seen on the wan layer
+        assert out["transformedResponse"]["internetFirewallRules"] == []
+        assert out["transformedResponse"]["wanNetworkRules"] == ["rule-one"]
+
+
+def test_a_layer_with_rules_not_a_list_is_still_a_read_layer_for_enabled(tx):
+    body = dict({"firewall": layer("internetFirewall", True, None), "wanNetwork": layer("wanNetwork", True, ONE_RULE)},
+                **feed())
+    assert value(tx(body), ENABLED) is True
+    body = dict({"firewall": layer("internetFirewall", False, None)}, **feed())
+    assert value(tx(body), ENABLED) is False
+    assert value(tx(body), CONFIGURED) is None
 
 
 NO_LAYER_BODIES = [
@@ -391,7 +529,7 @@ class Boom(dict):
 
 def test_an_exception_answers_none_for_every_key(tx):
     for bad in ("not json", {"firewall": [1, 2]}, {"firewall": "also not json"}, {"wanNetwork": 7},
-                {"firewall": {"data": {"policy": {"internetFirewall": {"policy": {"enabled": True, "rules": 5}}}}}}):
+                {"firewall": {"data": {"policy": {"internetFirewall": {"policy": {"enabled": True, "rules": [5]}}}}}}):
         out = tx(bad)
         assert_nothing_evaluated(out)
         assert "Audit feed" not in " ".join(collection(out)["errors"])
