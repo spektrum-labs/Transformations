@@ -115,26 +115,45 @@ def transform_unmarked(input):
         return marker_error(body)
 
     def records_total(body):
-        """The vendor's recordsNumber as an int, else None."""
+        """The vendor's recordsNumber as a whole number, else None. None also covers a total that is
+        stated but cannot be read (see total_unreadable)."""
         env = body.get("responseEnvelope")
-        if isinstance(env, dict):
-            try:
-                return int(str(env.get("recordsNumber")).strip())
-            except Exception:
-                return None
+        value = env.get("recordsNumber") if isinstance(env, dict) else None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isdecimal():
+                return int(digits)
         return None
 
+    def total_unreadable(body):
+        """True when the vendor states a recordsNumber that cannot be read as a whole number, so
+        whether the page is complete is unknown. A missing, null or blank total states nothing."""
+        env = body.get("responseEnvelope")
+        value = env.get("recordsNumber") if isinstance(env, dict) else None
+        if value is None or (isinstance(value, str) and value.strip().lower() in ("", "none", "null")):
+            return False
+        return records_total(body) is None
+
     def more_pages(body):
-        """True when the response says records remain beyond this page: a scrollId that is not
-        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the
-        page. A partial page cannot prove a total."""
+        """"more" when the response says records remain beyond this page: a scrollId that is not
+        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
+        "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
+        is complete. "" when the page is complete. Anything but "" cannot prove a total."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
-                return True
+                return "more"
         total = records_total(body)
-        return total is not None and total > len(body["responseData"])
+        if total is not None and total > len(body["responseData"]):
+            return "more"
+        if total_unreadable(body):
+            return "unknown"
+        return ""
 
     try:
         if isinstance(input, bytes):
@@ -160,7 +179,14 @@ def transform_unmarked(input):
             return create_response(None, fail_reasons=[reason], api_errors=[reason],
                                    input_summary=dict(summary, unreadableEntries=unreadable))
         count = len(entries)
-        if more_pages(body):
+        partial = more_pages(body)
+        if partial == "unknown":
+            # the vendor states a total that cannot be read: nobody knows whether this page is complete
+            reason = ("The vendor's record total could not be read, so whether the page is complete is unknown "
+                      "and the allow-list count is not proven")
+            return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                                   input_summary=dict(summary, recordsNumberUnreadable=True))
+        if partial:
             # One page of several. Only a total the vendor states, larger than the page, is a count;
             # the page length is a lower bound and is never reported as the total.
             total = records_total(body)

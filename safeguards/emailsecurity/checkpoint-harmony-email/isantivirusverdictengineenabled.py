@@ -118,32 +118,53 @@ def transform(input):
         return marker_error(body)
 
     def records_total(body):
-        """The vendor's recordsNumber as an int, else None."""
+        """The vendor's recordsNumber as a whole number, else None. None also covers a total that is
+        stated but cannot be read (see total_unreadable)."""
         env = body.get("responseEnvelope")
-        if isinstance(env, dict):
-            try:
-                return int(str(env.get("recordsNumber")).strip())
-            except Exception:
-                return None
+        value = env.get("recordsNumber") if isinstance(env, dict) else None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 0 else None
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isdecimal():
+                return int(digits)
         return None
 
+    def total_unreadable(body):
+        """True when the vendor states a recordsNumber that cannot be read as a whole number, so
+        whether the page is complete is unknown. A missing, null or blank total states nothing."""
+        env = body.get("responseEnvelope")
+        value = env.get("recordsNumber") if isinstance(env, dict) else None
+        if value is None or (isinstance(value, str) and value.strip().lower() in ("", "none", "null")):
+            return False
+        return records_total(body) is None
+
     def more_pages(body):
-        """True when the response says records remain beyond this page: a scrollId that is not
-        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the
-        page. A partial page cannot prove an absence."""
+        """"more" when the response says records remain beyond this page: a scrollId that is not
+        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
+        "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
+        is complete. "" when the page is complete. Anything but "" cannot prove an absence."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
-                return True
+                return "more"
         total = records_total(body)
-        return total is not None and total > len(body["responseData"])
+        if total is not None and total > len(body["responseData"]):
+            return "more"
+        if total_unreadable(body):
+            return "unknown"
+        return ""
 
     def unproven(what, summary, partial, unreadable):
         """No verdict: `what` rests on records that were not read, because the response is one page
         of several (partial) or holds entries that could not be read (unreadable). Fixed text."""
         causes = []
-        if partial:
+        if partial == "unknown":
+            causes.append("the vendor's record total could not be read, so the response may be a partial page")
+        elif partial:
             causes.append("the response is a partial page (the vendor reports more records than it returned)")
         if unreadable:
             causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
@@ -151,7 +172,9 @@ def transform(input):
         reason = "; ".join(causes)
         reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
-                               input_summary=dict(summary, partialPage=partial, unreadableEntries=unreadable))
+                               input_summary=dict(summary, partialPage=(partial == "more"),
+                                                  recordsNumberUnreadable=(partial == "unknown"),
+                                                  unreadableEntries=unreadable))
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""

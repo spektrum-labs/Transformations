@@ -18,6 +18,16 @@ or the counter-example, so a result that rests on an absence reads None, a match
 already seen keeps its verdict, and a count reads None. A missing, blank or "None" field is a
 readable empty one.
 
+THE TOTAL RULE. A recordsNumber that is stated but cannot be read as a whole number (text that is not
+digits, a negative number, a boolean, a list, an object) means nobody knows whether the page is
+complete. It is treated like a partial page: an absence verdict and a total are None, a match or a
+negative already seen keeps its verdict (the count stays None). A missing, null, blank or "None"
+total states nothing and the page is judged by its scrollId alone.
+
+THE FIELD-TYPE RULE. A type or saas field that a check matches on and that holds something other than
+text (a number, a boolean, a list, an object) is an unreadable entry, not "no match". A missing,
+null or blank field is a readable empty one.
+
 WRAPPER ERRORS. An error marker (error, errors, or an HTTP status of 400 or more in status,
 statusCode or status_code) on any wrapper around the response body makes the result None, exactly
 as it does on the body itself. A status code written as text ("401", " 403 ") counts like the
@@ -629,3 +639,161 @@ def test_open_quarantined_count_is_not_evaluated_with_an_unreadable_entry(bad, f
 def test_open_quarantined_entity_payload_that_does_not_parse_is_not_evaluated():
     assert_not_evaluated(run(QUARANTINE, envelope([dict(pending(), entityPayload=BAD_JSON)])))
     assert_measured(run(QUARANTINE, envelope([dict(pending(), entityPayload=json.dumps(pending()["entityPayload"]))])), 1)
+
+
+# --- a record total that is stated but cannot be read: completeness is unknown -------------------------
+
+BAD_TOTALS = ["many", "abc", "12abc", "1.5", "-3", "0x10", "1e3", "3 000", True, False, [], {}, ["5"], {"n": 5},
+              -1, 2.5, SENTINEL]
+ABSENT_TOTALS = [None, "", "   ", "None", "null"]
+
+
+def raw_total_body(records, raw, scroll=""):
+    return {"responseEnvelope": {"requestId": "r", "responseCode": 200, "responseText": "",
+                                 "recordsNumber": raw, "scrollId": scroll},
+            "responseData": records}
+
+
+def total_forms():
+    return [
+        ("plain", lambda recs, raw: raw_total_body(recs, raw)),
+        ("wrapped", lambda recs, raw: {"apiResponse": raw_total_body(recs, raw)}),
+        ("json text", lambda recs, raw: json.dumps(raw_total_body(recs, raw))),
+    ]
+
+
+def bad_total_cases():
+    for name in PRESENCE_CHECKS:
+        for raw in BAD_TOTALS:
+            for label, make in total_forms():
+                yield pytest.param(name, raw, make, id=name + "-" + repr(raw) + "-" + label)
+
+
+@pytest.mark.parametrize("name,raw,make", list(bad_total_cases()))
+def test_unreadable_total_without_a_match_is_not_evaluated(name, raw, make):
+    assert_not_evaluated(run(name, make(PRESENCE_CHECKS[name][2], raw)))
+    assert_not_evaluated(run(name, make([], raw)))
+
+
+@pytest.mark.parametrize("name,raw,make", list(bad_total_cases()))
+def test_unreadable_total_beside_a_match_keeps_the_match(name, raw, make):
+    out = run(name, make(PRESENCE_CHECKS[name][1], raw))
+    assert_measured(out, True)
+    assert out["additionalInfo"]["evaluation"]["passReasons"]
+
+
+@pytest.mark.parametrize("name", sorted(PRESENCE_CHECKS))
+def test_the_unreadable_total_reason_says_so(name):
+    out = run(name, raw_total_body(PRESENCE_CHECKS[name][2], "many"))
+    text = " ".join(out["additionalInfo"]["evaluation"]["failReasons"] + out["additionalInfo"]["dataCollection"]["errors"])
+    assert "total could not be read" in text
+
+
+@pytest.mark.parametrize("name", sorted(PRESENCE_CHECKS))
+@pytest.mark.parametrize("raw", ABSENT_TOTALS, ids=repr)
+def test_a_missing_or_blank_total_states_nothing_and_the_page_is_complete(name, raw):
+    assert_measured(run(name, raw_total_body(PRESENCE_CHECKS[name][2], raw)), False)
+    assert_measured(run(name, raw_total_body(PRESENCE_CHECKS[name][1], raw)), True)
+
+
+@pytest.mark.parametrize("name", sorted(PRESENCE_CHECKS))
+@pytest.mark.parametrize("raw", ["1", " 1 ", 1, "001"], ids=repr)
+def test_a_readable_total_equal_to_the_page_is_complete(name, raw):
+    page = PRESENCE_CHECKS[name][2][:1]
+    assert len(page) == 1
+    assert_measured(run(name, raw_total_body(page, raw)), False)
+
+
+@pytest.mark.parametrize("raw", BAD_TOTALS, ids=repr)
+@pytest.mark.parametrize("flabel,make", total_forms(), ids=[f[0] for f in total_forms()])
+def test_move_audit_unreadable_total_cannot_prove_every_action_is_complete(raw, flabel, make):
+    assert_not_evaluated(run(MOVE, make(GOOD_MOVES, raw)))
+    assert_not_evaluated(run(MOVE, make(NO_MOVES, raw)))
+    assert_not_evaluated(run(MOVE, make([], raw)))
+    # a gap already seen is a proven negative; no unread page can close it
+    assert_measured(run(MOVE, make(BAD_MOVES, raw)), False)
+
+
+@pytest.mark.parametrize("raw", BAD_TOTALS, ids=repr)
+@pytest.mark.parametrize("flabel,make", total_forms(), ids=[f[0] for f in total_forms()])
+def test_allow_list_count_is_not_evaluated_with_an_unreadable_total(raw, flabel, make):
+    assert_not_evaluated(run(ALLOW, make(ENTRIES, raw)))
+    assert_not_evaluated(run(ALLOW, make([], raw)))
+    assert_not_evaluated(run(ALLOW, raw_total_body(ENTRIES, raw, scroll="tok")))
+
+
+@pytest.mark.parametrize("raw", BAD_TOTALS, ids=repr)
+@pytest.mark.parametrize("flabel,make", total_forms(), ids=[f[0] for f in total_forms()])
+def test_open_quarantined_count_is_not_evaluated_with_an_unreadable_total(raw, flabel, make):
+    assert_not_evaluated(run(QUARANTINE, make([pending(), pending()], raw)))
+    assert_not_evaluated(run(QUARANTINE, make([], raw)))
+    assert_not_evaluated(run(QUARANTINE, raw_total_body([pending()], raw, scroll="tok")))
+
+
+@pytest.mark.parametrize("raw", ABSENT_TOTALS, ids=repr)
+def test_counts_with_a_missing_or_blank_total_keep_the_page_count(raw):
+    assert_measured(run(ALLOW, raw_total_body(ENTRIES, raw)), len(ENTRIES))
+    assert_measured(run(ALLOW, raw_total_body([], raw)), 0)
+    assert_measured(run(QUARANTINE, raw_total_body([pending(), pending()], raw)), 2)
+    assert_measured(run(QUARANTINE, raw_total_body([], raw)), 0)
+
+
+# --- a type or saas field that is not text is an unreadable entry ---------------------------------------
+
+# file -> the field it matches on
+MATCH_FIELD = {
+    "isaccounttakeoverdetectionenabled": "type",
+    "isantiphishingenabled": "type",
+    "isclouddataleakpreventionenabled": "type",
+    "isshadowitdiscoveryenabled": "type",
+    "islinkedo365accountactive": "saas",
+    "isemailsecurityloggingenabled": "type",
+}
+NON_TEXT_FIELD_VALUES = [7, 0, True, False, 1.5, ["x"], {"v": "x"}]
+
+
+def field_cases():
+    for name, field in MATCH_FIELD.items():
+        for bad in NON_TEXT_FIELD_VALUES:
+            for label, make in readable_forms():
+                yield pytest.param(name, field, bad, make, id=name + "-" + repr(bad) + "-" + label)
+
+
+@pytest.mark.parametrize("name,field,bad,make", list(field_cases()))
+def test_a_non_text_match_field_is_not_evaluated_without_a_match(name, field, bad, make):
+    record = ev(**{field: bad})
+    assert_not_evaluated(run(name, make([record])))
+    assert_not_evaluated(run(name, make(PRESENCE_CHECKS[name][2] + [record])))
+
+
+@pytest.mark.parametrize("name,field,bad,make", list(field_cases()))
+def test_a_non_text_match_field_beside_a_match_keeps_the_match(name, field, bad, make):
+    assert_measured(run(name, make(PRESENCE_CHECKS[name][1] + [ev(**{field: bad})])), True)
+
+
+@pytest.mark.parametrize("name", sorted(MATCH_FIELD))
+def test_a_non_text_match_field_on_a_partial_page_is_still_not_evaluated(name):
+    field = MATCH_FIELD[name]
+    assert_not_evaluated(run(name, envelope(PRESENCE_CHECKS[name][2] + [ev(**{field: 7})], scroll="tok")))
+
+
+@pytest.mark.parametrize("name", sorted(MATCH_FIELD))
+def test_the_non_text_match_field_reason_says_so(name):
+    out = run(name, envelope(PRESENCE_CHECKS[name][2] + [ev(**{MATCH_FIELD[name]: 7})]))
+    text = " ".join(out["additionalInfo"]["evaluation"]["failReasons"] + out["additionalInfo"]["dataCollection"]["errors"])
+    assert "could not be read" in text
+
+
+@pytest.mark.parametrize("name", sorted(MATCH_FIELD))
+@pytest.mark.parametrize("empty", [None, "", "   "], ids=repr)
+def test_a_missing_or_blank_match_field_is_a_readable_non_match(name, empty):
+    field = MATCH_FIELD[name]
+    expected = False
+    out = run(name, envelope([ev(**{field: empty})]))
+    if name == "isemailsecurityloggingenabled":
+        # a record with no type is not a logged event, but it is a readable one
+        assert_measured(out, expected)
+    else:
+        assert_measured(out, expected)
+    gone = {k: v for k, v in ev().items() if k != field}
+    assert_measured(run(name, envelope([gone])), expected)
