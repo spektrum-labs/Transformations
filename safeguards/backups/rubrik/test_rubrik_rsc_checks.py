@@ -326,7 +326,7 @@ RCS_AZURE_NODE = {"id": "t3", "name": "rcv-azure", "targetType": "RCS_AZURE", "i
 
 
 def test_rcs_vault_without_encryption_field_is_not_evaluated_not_a_gap():
-    # RSC reports no encryptionType for RCS/Azure/Glacier targets: the encryption cannot be read, which is not a finding.
+    # RSC reports no encryptionType for RCS/Azure/Glacier targets: the encryption cannot be read, which is Not evaluated, not a gap.
     b = flip(TGT, lambda d: d["targets"]["nodes"].__setitem__(0, dict(RCS_AZURE_NODE)))
     assert value("isAirGappedStorageEnabled", b) is True
     for key in ("isCloudTierEncryptionEnabled", "isExternalTargetEncryptionAES256"):

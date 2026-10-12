@@ -257,5 +257,5 @@ def evaluate(input):
     if gaps:
         return fail(validation, "Encryption is not evidenced for every active cloud archival location: " + "; ".join(gaps) + ".", None, summary, value=False)
     if unread:
-        return fail(validation, "Encryption could not be read for: " + "; ".join(unread) + ". This is not a finding; the control's state is unknown.", None, summary)
+        return fail(validation, "Encryption could not be read for: " + "; ".join(unread) + ". The control's state is unknown, so this is Not evaluated, not a gap.", None, summary)
     return ok(validation, True, "All " + str(len(cloud)) + " active cloud archival locations report an encryption type.", summary)
