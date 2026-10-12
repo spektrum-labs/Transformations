@@ -8,6 +8,7 @@ Fails closed: an empty, error or unrecognised body proves nothing.
 A partial page (a non-empty responseEnvelope.scrollId, or a recordsNumber above the page) is never
 counted as the whole list: the count is the vendor's own recordsNumber when that total is larger than
 the page, and None (Not evaluated) when it is not, since the page length is only a lower bound.
+An entry that is not an object cannot be read and is never skipped: the count is None.
 """
 
 import json
@@ -151,6 +152,13 @@ def transform_unmarked(input):
         records = body["responseData"]
         entries = [r for r in records if isinstance(r, dict)]
         summary = {"allowListEntries": len(entries)}
+        unreadable = len(records) - len(entries)
+        if unreadable:
+            # an entry that cannot be read may be an allow-list exception: the count is not proven
+            reason = (str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                      " in the response could not be read, so the allow-list count is not proven")
+            return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                                   input_summary=dict(summary, unreadableEntries=unreadable))
         count = len(entries)
         if more_pages(body):
             # One page of several. Only a total the vendor states, larger than the page, is a count;

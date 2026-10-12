@@ -1,4 +1,4 @@
-"""Check Point Harmony Email & Collaboration: partial pages, wrapper errors and string status codes.
+"""Check Point Harmony Email & Collaboration: partial pages, unreadable entries, wrapper errors, string status codes.
 
 THE PAGINATION RULE. A transform is handed ONE page of a paged vendor answer. When the response
 says records remain (a non-empty responseEnvelope.scrollId, or a recordsNumber larger than the
@@ -10,6 +10,13 @@ page) the page is partial, and every result that rests on ABSENCE reads None (No
 A match already seen on the page still proves a presence check (True stays True). A negative that
 an item already seen proves (a message-move action that lacks its audit fields) stays False. A
 count is the vendor's own recordsNumber total when that total is larger than the page, else None.
+
+THE UNREADABLE-ENTRY RULE. An entry that cannot be read is never skipped: an entry that is not an
+object, or a field that should hold JSON (entitySecurityResults, entityPayload, emailLinks,
+actions) and does not parse, or an action that is not an object. The unread entry may be the match
+or the counter-example, so a result that rests on an absence reads None, a match or a negative
+already seen keeps its verdict, and a count reads None. A missing, blank or "None" field is a
+readable empty one.
 
 WRAPPER ERRORS. An error marker (error, errors, or an HTTP status of 400 or more in status,
 statusCode or status_code) on any wrapper around the response body makes the result None, exactly
@@ -436,3 +443,189 @@ def test_spf_probe_without_markers_still_reads_the_record():
     assert_measured(run(SPF, good_body(SPF)), True)
     assert_measured(run(SPF, {"result": good_body(SPF)}), True)
     assert_measured(run(SPF, dict(good_body(SPF), SPF="v=spf1 include:spf.protection.outlook.com ~all")), False)
+
+
+# --- unreadable entries are never skipped --------------------------------------------------------------
+
+# Entries that are not objects. confirmedLicensePurchased reads a list of text scopes, so for it only
+# a non-text entry is unreadable (a text entry that is not a scope is a readable non-scope).
+NON_OBJECT_ENTRIES = ["garbled", None, 7, ["x"], True]
+NON_TEXT_ENTRIES = [None, 7, ["x"], {"scope": "farm1:tenant1"}, True]
+
+
+def garbled_for(name):
+    return NON_TEXT_ENTRIES if name == "confirmedlicensepurchased" else NON_OBJECT_ENTRIES
+
+
+def readable_forms():
+    return [
+        ("plain", lambda recs: envelope(recs)),
+        ("wrapped", lambda recs: {"apiResponse": envelope(recs)}),
+        ("json text", lambda recs: json.dumps(envelope(recs))),
+    ]
+
+
+def unreadable_cases():
+    for name in PRESENCE_CHECKS:
+        for bad in garbled_for(name):
+            for label, make in readable_forms():
+                yield pytest.param(name, bad, make, id=name + "-" + repr(bad) + "-" + label)
+
+
+@pytest.mark.parametrize("name,bad,make", list(unreadable_cases()))
+def test_unreadable_entry_without_a_match_is_not_evaluated(name, bad, make):
+    # alone, and beside a readable record that does not match: either may hide the match
+    assert_not_evaluated(run(name, make([bad])))
+    assert_not_evaluated(run(name, make(PRESENCE_CHECKS[name][2] + [bad])))
+
+
+@pytest.mark.parametrize("name,bad,make", list(unreadable_cases()))
+def test_unreadable_entry_beside_a_match_keeps_the_match(name, bad, make):
+    out = run(name, make(PRESENCE_CHECKS[name][1] + [bad]))
+    assert_measured(out, True)
+    assert out["additionalInfo"]["evaluation"]["passReasons"]
+
+
+@pytest.mark.parametrize("name", sorted(PRESENCE_CHECKS))
+def test_the_unreadable_reason_says_so(name):
+    out = run(name, envelope(PRESENCE_CHECKS[name][2] + [garbled_for(name)[0]]))
+    text = " ".join(out["additionalInfo"]["evaluation"]["failReasons"] + out["additionalInfo"]["dataCollection"]["errors"])
+    assert "could not be read" in text
+
+
+@pytest.mark.parametrize("name", sorted(PRESENCE_CHECKS))
+def test_an_unreadable_entry_on_a_partial_page_is_still_not_evaluated(name):
+    assert_not_evaluated(run(name, envelope(PRESENCE_CHECKS[name][2] + [garbled_for(name)[0]], scroll="tok")))
+
+
+# A field that should hold JSON text and does not parse is an unreadable entry too.
+BAD_JSON = "{not json"
+
+
+def entity_with(**fields):
+    base = entity()
+    base.update(fields)
+    return base
+
+
+BAD_ENTITY_FIELDS = {
+    "isantivirusverdictengineenabled": [
+        ("entitySecurityResults", lambda: entity_with(entitySecurityResults=BAD_JSON)),
+        ("entitySecurityResults list", lambda: entity_with(entitySecurityResults=["x"])),
+        ("entityInfo", lambda: entity_with(entityInfo=BAD_JSON)),
+    ],
+    "isclicktimeurlrewriteenabled": [
+        ("entitySecurityResults", lambda: dict(entity(links=LINK), entitySecurityResults=BAD_JSON)),
+        ("entityPayload", lambda: dict(entity(links=LINK), entityPayload=BAD_JSON)),
+        ("entityPayload list", lambda: dict(entity(links=LINK), entityPayload=["x"])),
+        ("emailLinks", lambda: dict(entity(links=LINK),
+                                    entityPayload={"attachmentCount": "1", "emailLinks": "[not json"})),
+        ("emailLinks object", lambda: dict(entity(links=LINK),
+                                           entityPayload={"attachmentCount": "1", "emailLinks": {"a": 1}})),
+    ],
+    "ispostdeliveryquarantineenabled": [
+        ("actions text", lambda: ev(actions=BAD_JSON)),
+        ("actions object", lambda: ev(actions={"actionType": "quarantine_email"})),
+        ("action entry", lambda: ev(actions=["garbled"])),
+        ("action entry none", lambda: ev(actions=[None])),
+    ],
+    "isemailsecurityloggingenabled": [
+        ("actions text", lambda: ev(actions=BAD_JSON)),
+        ("actions object", lambda: ev(actions={"actionType": "quarantine_email"})),
+        ("action entry", lambda: ev(actions=["garbled"])),
+    ],
+}
+
+
+def bad_field_cases():
+    for name, items in BAD_ENTITY_FIELDS.items():
+        for label, make in items:
+            yield pytest.param(name, make, id=name + "-" + label)
+
+
+@pytest.mark.parametrize("name,make", list(bad_field_cases()))
+def test_unparseable_field_without_a_match_is_not_evaluated(name, make):
+    assert_not_evaluated(run(name, envelope([make()])))
+    assert_not_evaluated(run(name, envelope(PRESENCE_CHECKS[name][2] + [make()])))
+
+
+@pytest.mark.parametrize("name,make", list(bad_field_cases()))
+def test_unparseable_field_beside_a_match_keeps_the_match(name, make):
+    assert_measured(run(name, envelope(PRESENCE_CHECKS[name][1] + [make()])), True)
+
+
+# Missing, blank and "None" fields are readable and empty: a complete page still reads False.
+EMPTY_FIELDS = [None, "", "  ", "None", "null", "[]"]
+
+
+@pytest.mark.parametrize("name", ["ispostdeliveryquarantineenabled", "isemailsecurityloggingenabled", MOVE])
+@pytest.mark.parametrize("empty", EMPTY_FIELDS, ids=repr)
+def test_blank_actions_are_readable_and_empty(name, empty):
+    assert_measured(run(name, envelope([ev(actions=empty)])), False)
+    assert_measured(run(name, envelope([{k: v for k, v in ev().items() if k != "actions"}])), False)
+
+
+@pytest.mark.parametrize("empty", EMPTY_FIELDS, ids=repr)
+def test_blank_entity_fields_are_readable_and_empty(empty):
+    assert_measured(run("isantivirusverdictengineenabled", envelope([entity_with(entitySecurityResults=empty)])), False)
+    assert_measured(run("isclicktimeurlrewriteenabled",
+                        envelope([dict(entity(links=LINK), entitySecurityResults=empty)])), False)
+    assert_measured(run("isclicktimeurlrewriteenabled",
+                        envelope([dict(entity(), entityPayload=empty)])), False)
+
+
+def test_text_forms_of_objects_and_lists_are_read():
+    as_text = json.dumps
+    out = run("isantivirusverdictengineenabled",
+              envelope([entity_with(entityInfo=as_text(entity()["entityInfo"]),
+                                    entitySecurityResults=as_text(entity(av="clean")["entitySecurityResults"]))]))
+    assert_measured(out, True)
+    linked = entity(ctp="clean", links=LINK)
+    assert_measured(run("isclicktimeurlrewriteenabled",
+                        envelope([dict(linked, entityPayload=as_text(linked["entityPayload"]),
+                                       entitySecurityResults=as_text(linked["entitySecurityResults"]))])), True)
+    assert_measured(run("ispostdeliveryquarantineenabled", envelope([ev(actions=as_text([act()]))])), True)
+
+
+# --- messageMoveAuditTrailEnabled with unreadable entries ----------------------------------------------
+
+UNREADABLE_MOVE_RECORDS = [("not an object", "garbled"), ("none", None), ("actions text", ev(actions=BAD_JSON)),
+                           ("action entry", ev(actions=["garbled"]))]
+
+
+@pytest.mark.parametrize("label,bad", UNREADABLE_MOVE_RECORDS, ids=[u[0] for u in UNREADABLE_MOVE_RECORDS])
+@pytest.mark.parametrize("flabel,make", readable_forms(), ids=[f[0] for f in readable_forms()])
+def test_move_audit_unreadable_entry_cannot_prove_every_action_is_complete(label, bad, flabel, make):
+    assert_not_evaluated(run(MOVE, make(GOOD_MOVES + [bad])))
+    assert_not_evaluated(run(MOVE, make(NO_MOVES + [bad])))
+    assert_not_evaluated(run(MOVE, make([bad])))
+
+
+@pytest.mark.parametrize("label,bad", UNREADABLE_MOVE_RECORDS, ids=[u[0] for u in UNREADABLE_MOVE_RECORDS])
+def test_move_audit_gap_already_seen_stays_false_beside_an_unreadable_entry(label, bad):
+    assert_measured(run(MOVE, envelope(BAD_MOVES + [bad])), False)
+
+
+# --- counts: an unreadable entry makes the count None --------------------------------------------------
+
+@pytest.mark.parametrize("bad", NON_OBJECT_ENTRIES, ids=repr)
+@pytest.mark.parametrize("flabel,make", readable_forms(), ids=[f[0] for f in readable_forms()])
+def test_allow_list_count_is_not_evaluated_with_an_unreadable_entry(bad, flabel, make):
+    assert_not_evaluated(run(ALLOW, make([bad])))
+    assert_not_evaluated(run(ALLOW, make(ENTRIES + [bad])))
+    assert_not_evaluated(run(ALLOW, envelope(ENTRIES + [bad], scroll="tok", total=250)))
+    assert_not_evaluated(run(ALLOW, envelope(ENTRIES + [bad], total=250)))
+
+
+@pytest.mark.parametrize("bad", NON_OBJECT_ENTRIES, ids=repr)
+@pytest.mark.parametrize("flabel,make", readable_forms(), ids=[f[0] for f in readable_forms()])
+def test_open_quarantined_count_is_not_evaluated_with_an_unreadable_entry(bad, flabel, make):
+    assert_not_evaluated(run(QUARANTINE, make([bad])))
+    assert_not_evaluated(run(QUARANTINE, make([pending(), bad])))
+    assert_not_evaluated(run(QUARANTINE, envelope([pending(), bad], scroll="tok", total=250)))
+    assert_not_evaluated(run(QUARANTINE, envelope([bad], total=250)))
+
+
+def test_open_quarantined_entity_payload_that_does_not_parse_is_not_evaluated():
+    assert_not_evaluated(run(QUARANTINE, envelope([dict(pending(), entityPayload=BAD_JSON)])))
+    assert_measured(run(QUARANTINE, envelope([dict(pending(), entityPayload=json.dumps(pending()["entityPayload"]))])), 1)

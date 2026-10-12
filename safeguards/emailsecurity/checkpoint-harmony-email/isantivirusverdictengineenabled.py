@@ -15,6 +15,9 @@ verdict described above.
 One page of a paged answer is not the whole window: when the response carries a scrollId or a
 recordsNumber above the page, a match already seen still counts, but an absence is not proven, so a
 page with no match reads None (Not evaluated) and never False.
+An entry that cannot be read is never skipped: one that is not an object, or a field that should
+hold JSON and does not parse. The unread entry may hold the match, so an absence reads None; a match
+already seen keeps its verdict. A missing, blank or "None" field is a readable empty one.
 """
 
 import json
@@ -136,13 +139,19 @@ def transform(input):
         total = records_total(body)
         return total is not None and total > len(body["responseData"])
 
-    def partial_not_measured(what, summary):
-        """No verdict: the response is one page of several, so a result that rests on records not
-        read cannot be given. `what` names the claim that would need the unread pages."""
-        reason = ("The response is a partial page (the vendor reports more records than it returned), so "
-                  + what + " is not proven; nothing is measured.")
+    def unproven(what, summary, partial, unreadable):
+        """No verdict: `what` rests on records that were not read, because the response is one page
+        of several (partial) or holds entries that could not be read (unreadable). Fixed text."""
+        causes = []
+        if partial:
+            causes.append("the response is a partial page (the vendor reports more records than it returned)")
+        if unreadable:
+            causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                          " in the response could not be read")
+        reason = "; ".join(causes)
+        reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
-                               input_summary=dict(summary, partialPage=True))
+                               input_summary=dict(summary, partialPage=partial, unreadableEntries=unreadable))
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""
@@ -168,6 +177,44 @@ def transform(input):
                 acts = None
         return [a for a in acts if isinstance(a, dict)] if isinstance(acts, list) else []
 
+    def read_json(value):
+        """(parsed, readable). A missing, blank or "None" value is readable and empty (None). Text is
+        parsed as JSON and text that does not parse is not readable. Anything else is returned as is."""
+        if isinstance(value, str):
+            if text(value) == "":
+                return None, True
+            try:
+                return json.loads(value), True
+            except Exception:
+                return None, False
+        return value, True
+
+    def read_object(value):
+        """(object, readable): a dict, or JSON text holding one. A missing, blank or "None" value and
+        an empty list are readable and empty (None); any other value is not readable."""
+        parsed, readable = read_json(value)
+        if not readable:
+            return None, False
+        if parsed is None or parsed == []:
+            return None, True
+        if isinstance(parsed, dict):
+            return parsed, True
+        return None, False
+
+    def read_actions(record):
+        """(actions, readable): the action objects of an event record. A missing, blank or "None"
+        actions field is readable and empty. Text that is not JSON, a value that is not a list, or an
+        entry that is not an object makes the record not readable."""
+        acts, readable = read_json(record.get("actions"))
+        if not readable:
+            return [], False
+        if acts is None:
+            return [], True
+        if not isinstance(acts, list):
+            return [], False
+        good = [a for a in acts if isinstance(a, dict)]
+        return good, len(good) == len(acts)
+
     try:
         if isinstance(input, bytes):
             input = input.decode("utf-8")
@@ -181,13 +228,8 @@ def transform(input):
         if err:
             return not_measured(err)
         records = [r for r in body["responseData"] if isinstance(r, dict)]
-        def av_verdict(entity):
-            sr = entity.get("entitySecurityResults")
-            if isinstance(sr, str):
-                try:
-                    sr = json.loads(sr)
-                except Exception:
-                    sr = None
+        unreadable = len(body["responseData"]) - len(records)
+        def av_verdict(sr):
             if not isinstance(sr, dict):
                 return ""
             av = sr.get("av")
@@ -201,11 +243,19 @@ def transform(input):
             if isinstance(cv, dict) and text(cv.get("av")):
                 return text(cv.get("av"))
             return ""
-        entities = [r for r in records if isinstance(r.get("entityInfo"), dict) or isinstance(r.get("entitySecurityResults"), dict)]
+        entities = []
         scanned = []
         verdicts = {}
-        for e in entities:
-            v = av_verdict(e)
+        for e in records:
+            info, info_ok = read_object(e.get("entityInfo"))
+            results, results_ok = read_object(e.get("entitySecurityResults"))
+            if not (info_ok and results_ok):
+                unreadable = unreadable + 1
+                continue
+            if info is None and results is None:
+                continue
+            entities.append(e)
+            v = av_verdict(results)
             if v:
                 scanned.append(e)
                 verdicts[v.lower()] = verdicts.get(v.lower(), 0) + 1
@@ -215,8 +265,9 @@ def transform(input):
             return create_response(True, pass_reasons=[str(len(scanned)) + " of " + str(len(entities)) + " email(s) with "
                                    "attachments carry a Check Point antivirus verdict (entitySecurityResults.av)"],
                                    input_summary=summary)
-        if more_pages(body):
-            return partial_not_measured("the absence of an antivirus verdict on the emails not yet read", summary)
+        partial = more_pages(body)
+        if partial or unreadable:
+            return unproven("the absence of an antivirus verdict on the emails not yet read", summary, partial, unreadable)
         if not entities:
             return create_response(False, fail_reasons=["The entity search returned no email with attachments in the "
                                    "last 7 days, so the antivirus engine's verdicts are not evidenced"], input_summary=summary)

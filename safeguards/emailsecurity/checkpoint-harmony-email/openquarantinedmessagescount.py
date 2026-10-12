@@ -9,7 +9,8 @@ API reference, Additional Response Parameters for Email). The count is responseE
 (total matches; measured on live event queries, where it reads 10000 against a 100-record page), or
 the page length when the page is complete. When a scrollId says more pages remain, the count is the
 vendor's recordsNumber only if that total is larger than the page; otherwise the page length is only a
-lower bound and the count is None. If any returned entity does not match the filter, the
+lower bound and the count is None. An entry that is not an object cannot be read and is never
+skipped: the count is None. If any returned entity does not match the filter, the
 vendor did not apply it and the count is unreadable: None, which fails the check. No live payload
 of this method has been captured yet.
 Fails closed: an empty, error or unrecognised body proves nothing.
@@ -165,6 +166,7 @@ def transform_unmarked(input):
                 except Exception:
                     p = None
             return p if isinstance(p, dict) else None
+        unreadable = len(body["responseData"]) - len(records)
         stray = 0
         for e in records:
             p = payload(e)
@@ -184,6 +186,10 @@ def transform_unmarked(input):
             total = len(records)
         summary = {"entitiesOnFirstPage": len(records), "recordsNumber": raw_total,
                    "entitiesNotMatchingFilter": stray, "windowDays": 365}
+        if unreadable:
+            return create_response(None, fail_reasons=[str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                                   " in the response could not be read, so the count is unreadable"],
+                                   input_summary=dict(summary, unreadableEntries=unreadable))
         if stray:
             return create_response(None, fail_reasons=[str(stray) + " returned entit(y/ies) are not pending restore "
                                    "requests, so the vendor did not apply the filter; the count is unreadable"],

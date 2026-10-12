@@ -10,6 +10,9 @@ verdict described above.
 One page of a paged answer is not the whole window: when the response carries a scrollId or a
 recordsNumber above the page, a match already seen still counts, but an absence is not proven, so a
 page with no match reads None (Not evaluated) and never False.
+An entry that cannot be read is never skipped: one that is not an object, or a field that should
+hold JSON and does not parse. The unread entry may hold the match, so an absence reads None; a match
+already seen keeps its verdict. A missing, blank or "None" field is a readable empty one.
 """
 
 import json
@@ -130,13 +133,19 @@ def transform(input):
         total = records_total(body)
         return total is not None and total > len(body["responseData"])
 
-    def partial_not_measured(what, summary):
-        """No verdict: the response is one page of several, so a result that rests on records not
-        read cannot be given. `what` names the claim that would need the unread pages."""
-        reason = ("The response is a partial page (the vendor reports more records than it returned), so "
-                  + what + " is not proven; nothing is measured.")
+    def unproven(what, summary, partial, unreadable):
+        """No verdict: `what` rests on records that were not read, because the response is one page
+        of several (partial) or holds entries that could not be read (unreadable). Fixed text."""
+        causes = []
+        if partial:
+            causes.append("the response is a partial page (the vendor reports more records than it returned)")
+        if unreadable:
+            causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                          " in the response could not be read")
+        reason = "; ".join(causes)
+        reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
-                               input_summary=dict(summary, partialPage=True))
+                               input_summary=dict(summary, partialPage=partial, unreadableEntries=unreadable))
 
     try:
         if isinstance(input, bytes):
@@ -151,6 +160,7 @@ def transform(input):
         if err:
             return not_measured(err)
         records = body["responseData"]
+        unreadable = len([r for r in records if not isinstance(r, dict)])
         wanted = ("phishing", "suspicious_phishing")
         field = "type"
         matched = [r for r in records if isinstance(r, dict) and str(r.get(field) or "").lower() in wanted]
@@ -160,8 +170,9 @@ def transform(input):
             newest = max([str(r.get("eventCreated") or "") for r in matched])
             summary["newestMatchingEvent"] = newest
             return create_response(True, pass_reasons=["Harmony Email & Collaboration raised phishing detections in the last 30 days, so its anti-phishing engine is inspecting mail"], input_summary=summary)
-        if more_pages(body):
-            return partial_not_measured("the absence of a phishing detection in the window", summary)
+        partial = more_pages(body)
+        if partial or unreadable:
+            return unproven("the absence of a phishing detection in the window", summary, partial, unreadable)
         return create_response(False, fail_reasons=["No phishing or suspicious-phishing detection in the last 30 days: anti-phishing activity is not evidenced"], input_summary=summary)
     except Exception as e:
         return not_measured("The response could not be processed; nothing is measured.",

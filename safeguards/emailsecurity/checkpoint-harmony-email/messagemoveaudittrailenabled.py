@@ -15,6 +15,8 @@ One page of a paged answer is not the whole window. "Every move action carries i
 claim about records not read when the response carries a scrollId or a recordsNumber above the page, so
 a partial page reads None (Not evaluated) unless it already shows the opposite: a move action on the
 page that lacks a field stays False, because no unread page can close that gap.
+An entry that cannot be read (not an object, or an actions field that does not parse) is never skipped:
+it may be the move action with a gap, so the verdict is None unless a gap was already seen.
 """
 
 import json
@@ -136,13 +138,19 @@ def transform(input):
         total = records_total(body)
         return total is not None and total > len(body["responseData"])
 
-    def partial_not_measured(what, summary):
-        """No verdict: the response is one page of several, so a result that rests on records not
-        read cannot be given. `what` names the claim that would need the unread pages."""
-        reason = ("The response is a partial page (the vendor reports more records than it returned), so "
-                  + what + " is not proven; nothing is measured.")
+    def unproven(what, summary, partial, unreadable):
+        """No verdict: `what` rests on records that were not read, because the response is one page
+        of several (partial) or holds entries that could not be read (unreadable). Fixed text."""
+        causes = []
+        if partial:
+            causes.append("the response is a partial page (the vendor reports more records than it returned)")
+        if unreadable:
+            causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                          " in the response could not be read")
+        reason = "; ".join(causes)
+        reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
-                               input_summary=dict(summary, partialPage=True))
+                               input_summary=dict(summary, partialPage=partial, unreadableEntries=unreadable))
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""
@@ -159,14 +167,31 @@ def transform(input):
             return value
         return text(value).lower() in ("true", "1", "yes")
 
-    def action_list(record):
-        acts = record.get("actions")
-        if isinstance(acts, str):
+    def read_json(value):
+        """(parsed, readable). A missing, blank or "None" value is readable and empty (None). Text is
+        parsed as JSON and text that does not parse is not readable. Anything else is returned as is."""
+        if isinstance(value, str):
+            if text(value) == "":
+                return None, True
             try:
-                acts = json.loads(acts)
+                return json.loads(value), True
             except Exception:
-                acts = None
-        return [a for a in acts if isinstance(a, dict)] if isinstance(acts, list) else []
+                return None, False
+        return value, True
+
+    def read_actions(record):
+        """(actions, readable): the action objects of an event record. A missing, blank or "None"
+        actions field is readable and empty. Text that is not JSON, a value that is not a list, or an
+        entry that is not an object makes the record not readable."""
+        acts, readable = read_json(record.get("actions"))
+        if not readable:
+            return [], False
+        if acts is None:
+            return [], True
+        if not isinstance(acts, list):
+            return [], False
+        good = [a for a in acts if isinstance(a, dict)]
+        return good, len(good) == len(acts)
 
     try:
         if isinstance(input, bytes):
@@ -181,10 +206,14 @@ def transform(input):
         if err:
             return not_measured(err)
         records = [r for r in body["responseData"] if isinstance(r, dict)]
+        unreadable = len(body["responseData"]) - len(records)
         words = ("quarantine", "restore", "delete", "move")
         moves = []
         for r in records:
-            for a in action_list(r):
+            acts, readable = read_actions(r)
+            if not readable:
+                unreadable = unreadable + 1
+            for a in acts:
                 at = text(a.get("actionType")).lower()
                 for w in words:
                     if w in at:
@@ -202,8 +231,9 @@ def transform(input):
             return create_response(False, fail_reasons=[str(len(incomplete)) + " of " + str(len(moves)) + " message-move "
                                    "action(s) lack createTime or relatedEntityId, so the trail is not auditable"],
                                    input_summary=summary)
-        if more_pages(body):
-            return partial_not_measured("that every message-move action in the window carries its audit fields", summary)
+        partial = more_pages(body)
+        if partial or unreadable:
+            return unproven("that every message-move action in the window carries its audit fields", summary, partial, unreadable)
         if not moves:
             return create_response(False, fail_reasons=["No quarantine, restore, delete or move action appears in the "
                                    "event log for the last 30 days, so no audit trail is evidenced"], input_summary=summary)
