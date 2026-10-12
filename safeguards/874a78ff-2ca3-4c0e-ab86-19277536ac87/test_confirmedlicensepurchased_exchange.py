@@ -33,10 +33,11 @@ class ExchangeLicence(unittest.TestCase):
     def test_suspended_exchange_fails(self):
         self.assertIs(self.res({"value": [sku("EXCHANGESTANDARD", ["EXCHANGE_S_STANDARD"], status="Suspended")]}), False)
 
-    def test_empty_and_errors_fail(self):
-        self.assertIs(self.res({"value": []}), False)
-        self.assertIs(self.res({"error": {"code": "Authorization_RequestDenied"}}), False)
-        self.assertIs(self.res({}), False)
+    def test_empty_and_errors_are_not_evaluated(self):
+        # Covered in full by test_microsoft_email_unreadable_reads.py: no value beside a collection error.
+        self.assertIsNone(self.res({"value": []}))
+        self.assertIsNone(self.res({"error": {"code": "Authorization_RequestDenied"}}))
+        self.assertIsNone(self.res({}))
 
 
 class AuditLogSearchEmitsEmailLogging(unittest.TestCase):
