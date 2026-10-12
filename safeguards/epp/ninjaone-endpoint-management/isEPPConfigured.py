@@ -83,7 +83,7 @@ def http_error_status(code):
         return None
     if isinstance(code, str):
         code = code.strip()
-        code = int(code) if code.isdigit() else None
+        code = int(code) if code.isdecimal() else None
     if isinstance(code, int) and code >= 400:
         return code
     return None
