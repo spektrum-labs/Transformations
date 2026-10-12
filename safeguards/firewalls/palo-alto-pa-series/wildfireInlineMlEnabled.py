@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) and the core model names (Windows Executables, PowerShell Script 1, PowerShell Script 2) are from the CLI hierarchy and public documents and UNVERIFIED on a real device. Any listed model that is not enable gives False; a profile that lists only enabled models but not every core model, a profile name that is not in the profile reads (for example a predefined one) and an unresolved group are unknown, so the key is Not evaluated. A virtual system profile or group wins over a shared one with the same name. Cloud-delivered inline analysis settings are not read. vsys1 only.
+UNVERIFIED: Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) and the core model names (Windows Executables, PowerShell Script 1, PowerShell Script 2) are from the CLI hierarchy and public documents and UNVERIFIED on a real device. A listed model set to alert-only or disable gives False, and so does an allow rule that carries no Antivirus profile at all. Everything else that cannot be read is unknown, so the key is Not evaluated: a profile that shows no ML engine entries (the element name is unverified, so absent is never read as off), an entry with no or an unrecognised action, a profile that lists only enabled models but not every core model, a profile name that is not in the profile reads (for example a predefined one) and an unresolved group. A virtual system profile or group wins over a shared one with the same name. Cloud-delivered inline analysis settings are not read. vsys1 only.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -387,17 +387,21 @@ ML_CORE = ("Windows Executables", "PowerShell Script 1", "PowerShell Script 2")
 
 
 def ml_state(profile):
-    """'off' when no ML engine entry is listed or any listed entry is not enable (alert-only, disable,
-    unrecognised); 'unknown' when every listed entry is enable but a core model is not listed (the
-    reply may not show every model); 'on' when every listed entry is enable and the core models are listed."""
+    """'off' when a listed model is set to alert-only or disable (a value the reply states); 'unknown' when the
+    profile shows no ML engine entries (the element name is unverified, so a missing element is not read as off),
+    when a listed entry has no or an unrecognised action, or when every listed entry is enable but a core model is
+    not listed (the reply may not show every model); 'on' when every listed entry is enable and the core models are listed."""
     actions = {}
     for e in entries(profile.get("mlav-engine-filebased-enabled")):
         actions[text_of(e.get("@name")) or "?"] = text_of(e.get("mlav-policy-action"))
     if not actions:
-        return "off"
+        return "unknown"
+    for action in actions.values():
+        if action in ("alert-only", "disable"):
+            return "off"
     for action in actions.values():
         if action != "enable":
-            return "off"
+            return "unknown"
     for model in ML_CORE:
         if model not in actions:
             return "unknown"
@@ -462,7 +466,7 @@ def evaluate(data):
         return False, None, {"summary": summary, "fail": [str(len(off)) + " of " + str(len(live)) + " enabled allow rules have no Antivirus profile with the ML engine set to enable: " + name_list(off)],
                              "rec": ["Attach an Antivirus profile with the file-based ML engine action set to enable to every allow rule."]}
     if unknown:
-        return None, "security rules: " + str(len(unknown)) + " rule(s) name an Antivirus profile or group that could not be read", {"summary": summary}
+        return None, "security rules: " + str(len(unknown)) + " rule(s) name an Antivirus profile or group that could not be read or that does not show the file-based ML engine setting (the element name is unverified, so a missing setting is not read as off)", {"summary": summary}
     return True, None, {"summary": summary, "pass": ["All " + str(len(live)) + " enabled allow rules carry an Antivirus profile with the ML engine set to enable."]}
 
 KEY = "wildfireInlineMlEnabled"

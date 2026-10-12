@@ -2,7 +2,7 @@
 Transformation: isDosProtectionPolicyConfigured
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: An enabled DoS Protection rule with action protect and a bound aggregate or classified DoS profile applies to all traffic (every zone, source, destination, user and service is any), and no earlier all-traffic rule allows traffic without protection.
+Value: An enabled DoS Protection rule with action protect and a bound aggregate or classified DoS profile applies to all traffic (every zone, source, destination, user and service is any), and no earlier all-traffic rule allows traffic without protection. A protect rule limited to some zones or addresses is Not evaluated (its scope cannot be judged).
 
 Wire: getDosRules: GET {serverUrl}/api/?type=config&action=show&xpath=.../vsys/entry[@name='vsys1']/rulebase/dos/rules
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: rulebase/dos/rules/entry: action (deny, allow, protect), from, to, source, destination, source-user, service, negate-source/negate-destination and protection/(aggregate|classified)/profile names are from the CLI hierarchy. A rule counts as all-traffic only when from, to, source and destination are listed as any (and source-user and service are any or not listed) and is not negated; a rule scoped to a zone, address, user or service gives False, and an all-traffic allow rule placed before the protect rule gives False. A successful reply with no DoS rules, an empty result or an empty rules element is Not evaluated: it is also what a firewall managed from a central manager, another virtual system or a role without access returns. vsys1 only.
+UNVERIFIED: rulebase/dos/rules/entry: action (deny, allow, protect), from, to, source, destination, source-user, service, negate-source/negate-destination and protection/(aggregate|classified)/profile names are from the CLI hierarchy. A rule counts as all-traffic only when from, to, source and destination are listed as any (and source-user and service are any or not listed) and is not negated. Three answers: True for an all-traffic protect rule with a bound profile and no all-traffic allow rule ahead of it; False when no enabled protect rule with a bound profile is among the rules read, or when an all-traffic allow rule comes before any protect rule; Not evaluated when the only protect rules are limited to some zones, sources, destinations, users or services, because PAN-OS zone names are arbitrary and the key cannot tell which zone faces the internet (never False for a scoped rule). A successful reply with no DoS rules, an empty result or an empty rules element is Not evaluated: it is also what a firewall managed from a central manager, another virtual system or a role without access returns. vsys1 only.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -288,6 +288,15 @@ def run(key, title, evaluate, input):
     return respond(key, value, problem, info, title)
 
 
+def scope_problem(count):
+    return ("DoS rules: " + str(count) + " DoS Protection rule(s) with a bound profile are limited to some zones, sources, destinations, users or services; "
+            "the scope cannot be judged because zone names are arbitrary and the key cannot tell which zone faces the internet")
+
+
+def scope_rec():
+    return ["Check that the scoped DoS Protection rule(s) cover the zones that face the internet, or give the answer by attestation."]
+
+
 def evaluate(data):
     result, problem = need(data, "DoS rules")
     if problem:
@@ -307,6 +316,8 @@ def evaluate(data):
         protect = (isinstance(action, dict) and "protect" in action) or text_of(action) == "protect"
         wide = covers_all(r, ("from", "to", "source", "destination"), ("source-user", "service"))
         summary = {"dosRules": len(rules), "enabledProtectRulesScoped": scoped}
+        if allow and wide and scoped:
+            return None, scope_problem(scoped), {"summary": summary, "rec": scope_rec()}
         if allow and wide:
             return False, None, {"summary": summary, "fail": ["Rule " + name + " allows all traffic without DoS protection and sits before any rule that protects all traffic."],
                                  "rec": ["Narrow the allow rule or move it below the DoS Protection rule."]}
@@ -324,8 +335,7 @@ def evaluate(data):
         scoped = scoped + 1
     summary = {"dosRules": len(rules), "enabledProtectRulesScoped": scoped}
     if scoped:
-        return False, None, {"summary": summary, "fail": [str(scoped) + " DoS Protection rule(s) exist but each is limited to some zones, sources, destinations, users or services."],
-                             "rec": ["Add or widen a DoS Protection rule (action Protect) so it covers the traffic to protect."]}
+        return None, scope_problem(scoped), {"summary": summary, "rec": scope_rec()}
     return False, None, {"summary": summary, "fail": ["No enabled DoS rule with action protect and a bound DoS Protection profile among " + str(len(rules)) + " rules."],
                          "rec": ["Add a DoS Protection policy rule (action Protect) bound to an aggregate or classified DoS profile."]}
 

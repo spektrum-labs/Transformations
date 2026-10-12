@@ -2,7 +2,7 @@
 Transformation: sslDeepInspectionEnabled
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: An enabled SSL Forward Proxy decrypt rule with a decryption profile applies to all traffic (every zone, source, destination, user, URL category and service is any), and no earlier rule skips decryption for all traffic.
+Value: An enabled SSL Forward Proxy decrypt rule with a decryption profile applies to all traffic (every zone, source, destination, user, URL category and service is any), and no earlier rule skips decryption for all traffic. A decrypt rule limited to some zones or addresses is Not evaluated (its scope cannot be judged).
 
 Wire: getDecryptionRules: GET {serverUrl}/api/?type=config&action=show&xpath=.../vsys/entry[@name='vsys1']/rulebase/decryption/rules
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: rulebase/decryption/rules/entry: action (decrypt or no-decrypt), type/ssl-forward-proxy, profile, from, to, source, destination, source-user, category, service and negate-source/negate-destination element names are from the CLI hierarchy. A rule counts as all-traffic only when from, to, source and destination are listed as any (and source-user, category and service are any or not listed) and is not negated; a rule scoped to a zone, user, category or service gives False, and a scoped no-decrypt exception is ignored. A successful reply with no decryption rules, an empty result or an empty rules element is Not evaluated: it is also what a firewall managed from a central manager, another virtual system or a role without access returns. vsys1 only.
+UNVERIFIED: rulebase/decryption/rules/entry: action (decrypt or no-decrypt), type/ssl-forward-proxy, profile, from, to, source, destination, source-user, category, service and negate-source/negate-destination element names are from the CLI hierarchy. A rule counts as all-traffic only when from, to, source and destination are listed as any (and source-user, category and service are any or not listed) and is not negated. Three answers: True for an all-traffic decrypt rule with no all-traffic no-decrypt rule ahead of it; False when no enabled forward-proxy decrypt rule with a profile is among the rules read, or when an all-traffic no-decrypt rule comes before any decrypt rule; Not evaluated when the only decrypt rules are limited to some zones, sources, destinations, users, categories or services, because PAN-OS zone names are arbitrary and the key cannot tell which zone faces the internet (never False for a scoped rule). A scoped no-decrypt exception is ignored. A successful reply with no decryption rules, an empty result or an empty rules element is Not evaluated: it is also what a firewall managed from a central manager, another virtual system or a role without access returns. vsys1 only.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -288,6 +288,15 @@ def run(key, title, evaluate, input):
     return respond(key, value, problem, info, title)
 
 
+def scope_problem(count):
+    return ("decryption rules: " + str(count) + " SSL Forward Proxy decrypt rule(s) are limited to some zones, sources, destinations, users, categories or services; "
+            "the scope cannot be judged because zone names are arbitrary and the key cannot tell which zone faces the internet")
+
+
+def scope_rec():
+    return ["Check that the scoped decrypt rule(s) cover the zones that face the internet, or give the answer by attestation."]
+
+
 def evaluate(data):
     result, problem = need(data, "decryption rules")
     if problem:
@@ -297,7 +306,7 @@ def evaluate(data):
         return None, "decryption rules: no rules element in the reply", {}
     if not rules:
         return None, "decryption rules: the rules element has no entries (nothing the key could read)", {}
-    partial = 0
+    scoped = 0
     for r in rules:
         if yes(r.get("disabled")):
             continue
@@ -305,18 +314,19 @@ def evaluate(data):
         wide = covers_all(r, ("from", "to", "source", "destination"), ("source-user", "category", "service"))
         kind = r.get("type")
         forward = isinstance(kind, dict) and "ssl-forward-proxy" in kind
-        summary = {"decryptionRules": len(rules)}
+        summary = {"decryptionRules": len(rules), "scopedForwardProxyDecryptRules": scoped}
+        if action == "no-decrypt" and wide and scoped:
+            return None, scope_problem(scoped), {"summary": summary, "rec": scope_rec()}
         if action == "no-decrypt" and wide:
             return False, None, {"summary": summary, "fail": ["Rule " + (text_of(r.get("@name")) or "?") + " skips decryption for all traffic and sits before any rule that decrypts all traffic."],
                                  "rec": ["Narrow the no-decrypt rule to the zones, sources, destinations or categories that must not be decrypted."]}
         if action == "decrypt" and forward and text_of(r.get("profile")):
             if wide:
                 return True, None, {"summary": summary, "pass": ["Rule " + (text_of(r.get("@name")) or "?") + " decrypts all traffic with SSL Forward Proxy and a decryption profile."]}
-            partial = partial + 1
-    summary = {"decryptionRules": len(rules), "scopedForwardProxyDecryptRules": partial}
-    if partial:
-        return False, None, {"summary": summary, "fail": [str(partial) + " SSL Forward Proxy decrypt rule(s) exist but each is limited to some zones, sources, destinations, users, categories or services."],
-                             "rec": ["Add or widen a decrypt rule so outbound traffic is covered, keeping narrow no-decrypt exceptions."]}
+            scoped = scoped + 1
+    summary = {"decryptionRules": len(rules), "scopedForwardProxyDecryptRules": scoped}
+    if scoped:
+        return None, scope_problem(scoped), {"summary": summary, "rec": scope_rec()}
     return False, None, {"summary": summary, "fail": ["No enabled SSL Forward Proxy decrypt rule with a decryption profile among " + str(len(rules)) + " decryption rules."],
                          "rec": ["Add an SSL Forward Proxy decryption policy rule with a decryption profile for outbound traffic."]}
 

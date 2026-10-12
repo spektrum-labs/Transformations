@@ -511,8 +511,22 @@ def test_auto_update_false_when_threats_recurrence_is_none():
     assert value("autoUpdateSignaturesEnabled", schedule(threats={"recurring": {"none": None}})) is False
 
 
-def test_auto_update_false_when_only_other_content_is_scheduled():
-    body = schedule(**{"anti-virus": {"recurring": {"daily": {"at": "01:00", "action": "download-and-install"}}}})
+def test_auto_update_threats_element_missing_is_not_evaluated_never_false():
+    # the element name is unverified and a centrally managed schedule is not shown: absent is not "no schedule"
+    out = run("autoUpdateSignaturesEnabled", schedule(**{"anti-virus": {"recurring": {"daily": {"at": "01:00", "action": "download-and-install"}}}}))
+    assert out["transformedResponse"]["autoUpdateSignaturesEnabled"] is None
+    assert collection(out)["status"] == "error"
+    assert "not read as no schedule" in " ".join(collection(out)["errors"])
+    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+
+
+def test_auto_update_empty_schedule_section_is_not_evaluated():
+    assert_not_evaluated("autoUpdateSignaturesEnabled", ok({"update-schedule": None}))
+    assert_not_evaluated("autoUpdateSignaturesEnabled", ok({"update-schedule": {}}))
+
+
+def test_auto_update_false_when_the_threats_schedule_says_none_even_if_other_content_is_scheduled():
+    body = schedule(threats={"recurring": {"none": None}}, **{"anti-virus": {"recurring": {"daily": {"at": "01:00", "action": "download-and-install"}}}})
     assert value("autoUpdateSignaturesEnabled", body) is False
 
 
@@ -708,19 +722,19 @@ def test_programmatic_access_key_is_not_published_for_this_tool():
 
 
 # sslDeepInspectionEnabled: all-traffic scope and order matter; an empty success is Not evaluated
-def test_decryption_false_when_the_only_decrypt_rule_covers_part_of_the_traffic():
-    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", source=["192.0.2.0/24"])])) is False
+def test_decryption_not_evaluated_when_the_only_decrypt_rule_covers_part_of_the_traffic():
+    assert_not_evaluated("sslDeepInspectionEnabled", decryption_body([drule("a", source=["192.0.2.0/24"])]))
 
 
-def test_decryption_false_when_a_scoped_category_is_the_only_coverage():
-    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", category=["streaming-media"])])) is False
+def test_decryption_not_evaluated_when_a_scoped_category_is_the_only_coverage():
+    assert_not_evaluated("sslDeepInspectionEnabled", decryption_body([drule("a", category=["streaming-media"])]))
 
 
 @pytest.mark.parametrize("dims", [{"zone_from": ["dmz"]}, {"zone_to": ["untrust"]}, {"user": ["known-user"]},
                                   {"service": ["service-https"]}, {"negate_source": "yes"}, {"omit": ("from",)},
                                   {"omit": ("destination",)}])
-def test_decryption_false_when_the_decrypt_rule_does_not_cover_every_zone_user_or_service(dims):
-    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", **dims)])) is False
+def test_decryption_not_evaluated_when_the_decrypt_rule_does_not_cover_every_zone_user_or_service(dims):
+    assert_not_evaluated("sslDeepInspectionEnabled", decryption_body([drule("a", **dims)]))
 
 
 def test_decryption_true_when_every_dimension_is_any():
@@ -730,6 +744,11 @@ def test_decryption_true_when_every_dimension_is_any():
 
 def test_decryption_false_when_a_no_decrypt_for_all_traffic_comes_first():
     rules = [drule("skip", action="no-decrypt"), drule("a")]
+    assert value("sslDeepInspectionEnabled", decryption_body(rules)) is False
+
+
+def test_decryption_false_when_a_no_decrypt_for_all_traffic_comes_before_a_scoped_decrypt_rule():
+    rules = [drule("skip", action="no-decrypt"), drule("a", zone_from=["trust"], zone_to=["untrust"])]
     assert value("sslDeepInspectionEnabled", decryption_body(rules)) is False
 
 
@@ -749,15 +768,52 @@ def test_decryption_false_when_rules_exist_but_are_all_disabled():
     assert value("sslDeepInspectionEnabled", decryption_body([drule("a", disabled="yes")])) is False
 
 
+# three outcomes for decryption: all-traffic rule True, none or a wide skip first False, only scoped rules None
+def test_decryption_scoped_to_trust_and_untrust_is_not_evaluated_and_says_the_scope_cannot_be_judged():
+    out = run("sslDeepInspectionEnabled", decryption_body([drule("a", zone_from=["trust"], zone_to=["untrust"])]))
+    assert out["transformedResponse"]["sslDeepInspectionEnabled"] is None
+    assert collection(out)["status"] == "error"
+    note = " ".join(collection(out)["errors"])
+    assert "scope cannot be judged" in note and "zone names are arbitrary" in note
+    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+
+
+def test_decryption_several_scoped_rules_stay_not_evaluated_never_false():
+    rules = [drule("a", zone_from=["trust"], zone_to=["untrust"]), drule("b", zone_from=["dmz"], zone_to=["untrust"]),
+             drule("c", action="no-decrypt", category=["financial-services"])]
+    assert_not_evaluated("sslDeepInspectionEnabled", decryption_body(rules))
+
+
+def test_decryption_all_traffic_rule_after_a_scoped_rule_is_true():
+    rules = [drule("a", zone_from=["trust"], zone_to=["untrust"]), drule("b")]
+    assert value("sslDeepInspectionEnabled", decryption_body(rules)) is True
+
+
+def test_decryption_scoped_rule_then_a_wide_skip_is_not_evaluated():
+    # some traffic is decrypted by the scoped rule and the rest is skipped: which part faces the internet is unknown
+    rules = [drule("a", zone_from=["trust"], zone_to=["untrust"]), drule("skip", action="no-decrypt")]
+    assert_not_evaluated("sslDeepInspectionEnabled", decryption_body(rules))
+
+
+def test_decryption_no_decrypt_rule_among_other_rules_is_false_not_none():
+    rules = [drule("ssh", kind="ssh-proxy"), drule("nodp", profile=None), drule("exc", action="no-decrypt", category=["health"])]
+    assert value("sslDeepInspectionEnabled", decryption_body(rules)) is False
+
+
+def test_decryption_scoped_rule_that_is_disabled_does_not_make_it_not_evaluated():
+    rules = [drule("a", zone_from=["trust"], zone_to=["untrust"], disabled="yes")]
+    assert value("sslDeepInspectionEnabled", decryption_body(rules)) is False
+
+
 # isDosProtectionPolicyConfigured
-def test_dos_false_when_the_only_protect_rule_covers_one_destination():
-    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", destination=["192.0.2.10"])])) is False
+def test_dos_not_evaluated_when_the_only_protect_rule_covers_one_destination():
+    assert_not_evaluated("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", destination=["192.0.2.10"])]))
 
 
 @pytest.mark.parametrize("dims", [{"zone_from": ["dmz"]}, {"zone_to": ["dmz"]}, {"service": ["tcp-80"]},
                                   {"user": ["known-user"]}, {"negate_source": "yes"}, {"omit": ("to",)}])
-def test_dos_false_when_the_protect_rule_does_not_cover_every_zone_user_or_service(dims):
-    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", **dims)])) is False
+def test_dos_not_evaluated_when_the_protect_rule_does_not_cover_every_zone_user_or_service(dims):
+    assert_not_evaluated("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", **dims)]))
 
 
 def test_dos_true_when_every_dimension_is_any():
@@ -766,6 +822,11 @@ def test_dos_true_when_every_dimension_is_any():
 
 def test_dos_false_when_an_all_traffic_allow_rule_comes_before_the_protect_rule():
     rules = [dos_rule("exempt", action="allow", profile=False), dos_rule("p")]
+    assert value("isDosProtectionPolicyConfigured", dos_body(rules)) is False
+
+
+def test_dos_false_when_an_all_traffic_allow_rule_comes_before_a_scoped_protect_rule():
+    rules = [dos_rule("exempt", action="allow", profile=False), dos_rule("p", zone_from=["trust"], zone_to=["untrust"])]
     assert value("isDosProtectionPolicyConfigured", dos_body(rules)) is False
 
 
@@ -778,6 +839,42 @@ def test_dos_true_when_a_narrow_allow_rule_comes_first_or_the_protect_rule_does(
 @pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None}), ok({"rules": {"entry": []}})])
 def test_dos_empty_success_is_not_evaluated(body):
     assert_not_evaluated("isDosProtectionPolicyConfigured", body)
+
+
+# three outcomes for DoS: all-traffic protect rule True, none or a wide allow first False, only scoped rules None
+def test_dos_scoped_to_trust_and_untrust_is_not_evaluated_and_says_the_scope_cannot_be_judged():
+    out = run("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", zone_from=["trust"], zone_to=["untrust"])]))
+    assert out["transformedResponse"]["isDosProtectionPolicyConfigured"] is None
+    assert collection(out)["status"] == "error"
+    note = " ".join(collection(out)["errors"])
+    assert "scope cannot be judged" in note and "zone names are arbitrary" in note
+    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+
+
+def test_dos_several_scoped_rules_stay_not_evaluated_never_false():
+    rules = [dos_rule("a", zone_from=["trust"], zone_to=["untrust"]), dos_rule("b", zone_from=["dmz"], zone_to=["untrust"]),
+             dos_rule("c", action="allow", profile=False, destination=["192.0.2.50"])]
+    assert_not_evaluated("isDosProtectionPolicyConfigured", dos_body(rules))
+
+
+def test_dos_all_traffic_rule_after_a_scoped_rule_is_true():
+    rules = [dos_rule("a", zone_from=["trust"], zone_to=["untrust"]), dos_rule("b")]
+    assert value("isDosProtectionPolicyConfigured", dos_body(rules)) is True
+
+
+def test_dos_scoped_rule_then_a_wide_allow_is_not_evaluated():
+    rules = [dos_rule("a", zone_from=["trust"], zone_to=["untrust"]), dos_rule("exempt", action="allow", profile=False)]
+    assert_not_evaluated("isDosProtectionPolicyConfigured", dos_body(rules))
+
+
+def test_dos_no_protect_rule_among_other_rules_is_false_not_none():
+    rules = [dos_rule("deny", action="deny", profile=False), dos_rule("noprof", profile=False)]
+    assert value("isDosProtectionPolicyConfigured", dos_body(rules)) is False
+
+
+def test_dos_scoped_rule_that_is_disabled_does_not_make_it_not_evaluated():
+    rules = [dos_rule("a", zone_from=["trust"], zone_to=["untrust"], disabled="yes")]
+    assert value("isDosProtectionPolicyConfigured", dos_body(rules)) is False
 
 
 # restApiLoopbackRestricted: the permitted-ip list must be in the reply
@@ -859,10 +956,43 @@ def test_wildfire_ml_false_when_the_profile_only_alerts():
     assert value("wildfireInlineMlEnabled", body) is False
 
 
-def test_wildfire_ml_false_when_the_ml_engine_is_disabled_or_absent():
-    for action in ("disable", None):
-        body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": action})
-        assert value("wildfireInlineMlEnabled", body) is False
+def test_wildfire_ml_false_when_the_ml_engine_is_disabled():
+    body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": "disable"})
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_profile_without_the_ml_engine_element_is_not_evaluated_never_false():
+    # the element name is unverified: a profile that does not show it must not turn every firewall False
+    body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": None})
+    out = run("wildfireInlineMlEnabled", body)
+    assert out["transformedResponse"]["wildfireInlineMlEnabled"] is None
+    assert collection(out)["status"] == "error"
+    assert "does not show the file-based ML engine setting" in " ".join(collection(out)["errors"])
+    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+
+
+def test_wildfire_ml_profile_with_an_empty_ml_engine_element_is_not_evaluated():
+    body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": {}})
+    body["virusProfiles"] = ok({"virus": {"entry": {"@name": "av1", "mlav-engine-filebased-enabled": None}}})
+    assert_not_evaluated("wildfireInlineMlEnabled", body)
+
+
+def test_wildfire_ml_entry_without_an_action_or_with_an_unrecognised_action_is_not_evaluated():
+    for entry in ({"@name": "Windows Executables"}, {"@name": "Windows Executables", "mlav-policy-action": "sometimes"}):
+        body = ml_policy([rule("a", profiles={"virus": "av1"})])
+        body["virusProfiles"] = ok({"virus": {"entry": {"@name": "av1", "mlav-engine-filebased-enabled": {"entry": [entry]}}}})
+        assert_not_evaluated("wildfireInlineMlEnabled", body)
+
+
+def test_wildfire_ml_a_stated_alert_only_still_beats_an_unreadable_profile():
+    body = ml_policy([rule("a", profiles={"virus": "none-shown"}), rule("b", profiles={"virus": "weak"})],
+                     virus={"none-shown": None, "weak": "alert-only"})
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_a_rule_with_no_antivirus_profile_is_false_even_when_another_profile_shows_no_ml_element():
+    body = ml_policy([rule("a", profiles={"virus": "none-shown"}), rule("b")], virus={"none-shown": None})
+    assert value("wildfireInlineMlEnabled", body) is False
 
 
 def test_wildfire_ml_false_when_a_wildfire_analysis_profile_is_all_that_is_attached():
@@ -926,8 +1056,10 @@ DISCRIMINATES = {
     "isURLFilteringProfileEnabled": (lambda: policy([rule("a", profiles={"url-filtering": "p"})]), lambda: policy([rule("a")])),
     "wildfireInlineMlEnabled": (lambda: ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": "enable"}),
                                 lambda: ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": "disable"})),
-    "sslDeepInspectionEnabled": (lambda: decryption_body([drule("a")]), lambda: decryption_body([drule("a", source=["192.0.2.0/24"])])),
-    "isDosProtectionPolicyConfigured": (lambda: dos_body([dos_rule("a")]), lambda: dos_body([dos_rule("a", destination=["192.0.2.10"])])),
+    "sslDeepInspectionEnabled": (lambda: decryption_body([drule("a")]),
+                                 lambda: decryption_body([drule("skip", action="no-decrypt"), drule("a")])),
+    "isDosProtectionPolicyConfigured": (lambda: dos_body([dos_rule("a")]),
+                                        lambda: dos_body([dos_rule("exempt", action="allow", profile=False), dos_rule("a")])),
     "firmwareUpToDate": (lambda: firmware("10.2.9-h1", VERSIONS), lambda: firmware("10.2.9", VERSIONS)),
     "isContentVersionCurrent": (lambda: content(3, 3), lambda: content(90, 3)),
     "autoUpdateSignaturesEnabled": (

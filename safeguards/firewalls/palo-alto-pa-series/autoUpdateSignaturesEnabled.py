@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: update-schedule/threats/recurring/<hourly|daily|weekly|every-30-mins>/action (download-only or download-and-install) from the CLI hierarchy; the exact XML spelling of 'none' is UNVERIFIED. Schedules pushed by Panorama templates appear here only if the running configuration holds them.
+UNVERIFIED: update-schedule/threats/recurring/<hourly|daily|weekly|every-30-mins>/action (download-only or download-and-install) from the CLI hierarchy; the exact XML spelling of 'none' is UNVERIFIED. An update-schedule with no threats element is Not evaluated, never False: the element name is unverified and schedules pushed by Panorama templates appear here only if the running configuration holds them. False needs a stated finding (recurrence none, or download-only).
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -299,9 +299,8 @@ def evaluate(data):
     recurring = threats.get("recurring") if isinstance(threats, dict) else None
     if not isinstance(recurring, dict):
         if threats is None:
-            return False, None, {"summary": {"threatsScheduled": False},
-                                 "fail": ["The update schedule has no Applications-and-Threats entry."],
-                                 "rec": ["Schedule Applications-and-Threats content updates (download and install)."]}
+            return None, "update schedule: no threats element in the reply (the element name is unverified, and a schedule pushed from a central manager is not shown, so a missing element is not read as no schedule)", {
+                "rec": ["Check the Applications-and-Threats update schedule by hand, or confirm the element names against one real read-only reply."]}
         return None, "update schedule: threats has no readable recurring element", {}
     if "none" in recurring:
         return False, None, {"summary": {"threatsScheduled": False},
