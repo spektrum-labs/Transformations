@@ -186,6 +186,37 @@ def test_partial_read_is_not_evaluated(name, label, body):
     assert_not_evaluated(name, run(name, body))
 
 
+# A page total or item total that is absent (null, an empty string, a stringified null) is "no information". It never
+# counts as "complete" and it never hides another signal: a next key, a start key, a truncation marker or an item total
+# above the items returned still marks the read partial.
+ABSENT_TOTALS = [None, "", " ", "None", "null", "NULL"]
+OTHER_PARTIAL_SIGNALS = [
+    ("next key", {"nextKey": "cursor-abc"}),
+    ("next key as a number", {"nextKey": 12345}),
+    ("start key", {"fromKey": "cursor-abc"}),
+    ("truncated", {"truncated": True}),
+    ("truncated as text", {"truncated": "true"}),
+    ("item total above the items returned", {"items": "250"}),
+]
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("absent", ABSENT_TOTALS, ids=["none", "empty", "blank", "text-None", "text-null", "text-NULL"])
+@pytest.mark.parametrize("label,signal", OTHER_PARTIAL_SIGNALS, ids=[label for label, _ in OTHER_PARTIAL_SIGNALS])
+def test_an_absent_page_total_never_hides_another_partial_signal(name, absent, label, signal):
+    pages = dict({"total": absent}, **signal)
+    assert_not_evaluated(name, run(name, {"items": UNMANAGED, "pages": pages}))
+    assert_not_evaluated(name, run(name, {"items": MANAGED, "pages": pages}))
+    assert_not_evaluated(name, run(name, {"response": {"items": UNMANAGED, "pages": pages}}))
+    assert_not_evaluated(name, run(name, enveloped({"items": UNMANAGED, "pages": pages})))
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("absent", ABSENT_TOTALS, ids=["none", "empty", "blank", "text-None", "text-null", "text-NULL"])
+def test_an_absent_item_total_never_hides_a_page_total_above_one(name, absent):
+    assert_not_evaluated(name, run(name, {"items": MANY, "pages": {"total": "4", "items": absent}}))
+
+
 @pytest.mark.parametrize("name", FILES)
 def test_partial_read_reason_names_the_unread_pages_and_echoes_nothing(name):
     body = {"items": UNMANAGED, "pages": {"nextKey": "cursor-" + SENTINEL}}
