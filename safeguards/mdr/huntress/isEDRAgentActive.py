@@ -138,6 +138,8 @@ def complete_list(input, list_key, noun):
     if not isinstance(pagination, dict):
         return None, "The " + noun + " list carries no pagination block, so a complete read cannot be shown."
     items = [i for i in box[list_key] if isinstance(i, dict)]
+    if len(items) != len(box[list_key]):
+        return None, "The " + noun + " list holds entries that are not " + noun + " records, so it cannot be scored."
     if pagination.get("truncated"):
         return None, "Read stopped at the page limit (" + str(len(items)) + " " + noun + "s); a partial read is not scored."
     if str(pagination.get("next_page_token") or "").strip() not in ("", "None", "null"):
