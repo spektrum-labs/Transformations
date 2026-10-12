@@ -67,15 +67,42 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+KEY = "isImposterEmailDetectionEnabled"
+
+
+def not_measured(reason, validation):
+    """No verdict: the result is None and the data-collection status is error, so the evaluator
+    shows Not evaluated instead of a failed check. The reason is fixed text: the vendor's own error
+    message is never copied into it."""
+    return create_response(
+        result={KEY: None},
+        validation=validation,
+        fail_reasons=[reason],
+        api_errors=[reason],
+        metadata={"transformationId": KEY, "vendor": "Abnormal Security Inbound Email", "category": "emailsecurity"},
+    )
+
+
+def is_error_body(data):
+    return isinstance(data, dict) and (data.get("error") is True or bool(data.get("errors")))
+
+
+def threat_messages(data):
+    """(messages, problem): the message list of a /v1/threats/{threatId} body, or why there is none."""
+    if isinstance(data, list):
+        return data, None
+    if is_error_body(data):
+        return None, "Abnormal returned an error for the threat detail; nothing to measure."
+    if isinstance(data, dict) and isinstance(data.get("messages"), list):
+        return data.get("messages"), None
+    return None, "Abnormal returned no message list for the threat detail; nothing to measure."
+
+
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
-
-    messages = []
-    if isinstance(data, dict):
-        messages = data.get("messages") or []
-    elif isinstance(data, list):
-        messages = data
+    messages, problem = threat_messages(data)
+    if problem is not None:
+        return not_measured(problem, validation)
 
     total_messages = len(messages)
     classified_count = 0
