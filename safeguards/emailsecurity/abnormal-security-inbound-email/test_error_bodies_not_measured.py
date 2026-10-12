@@ -119,5 +119,50 @@ class WellFormedResponsesKeepTheirVerdict(unittest.TestCase):
         self.assertIs(self.verdict(VENDOR, VENDOR, []), False)
 
 
+class MalformedListItemsAreNotRecords(unittest.TestCase):
+    """Items that are not objects are never counted as records, and a non-string label is never a label."""
+
+    def run_check(self, name, body):
+        return load(name).transform(body)
+
+    def assert_not_measured(self, out, key):
+        self.assertIsNone(out["transformedResponse"][key])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_list_with_no_objects_is_not_measured(self):
+        junk = [1, "x", None, ["y"]]
+        self.assert_not_measured(self.run_check(VENDOR, {"vendorCases": junk}), VENDOR)
+        self.assert_not_measured(self.run_check(VENDOR, junk), VENDOR)
+        self.assert_not_measured(self.run_check(IMPOSTER, {"threatId": "t", "messages": junk}), IMPOSTER)
+        self.assert_not_measured(self.run_check(CAMPAIGN, {"threatId": "t", "messages": junk}), CAMPAIGN)
+
+    def test_non_object_items_are_not_counted_as_cases(self):
+        out = self.run_check(VENDOR, {"vendorCases": [1, "x", {"vendorCaseId": "1"}]})
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 1)
+
+    def test_non_object_items_are_not_counted_as_messages(self):
+        good = threat(1)
+        good["messages"] = ["x", None] + good["messages"]
+        for name in (IMPOSTER, CAMPAIGN):
+            with self.subTest(check=name):
+                out = self.run_check(name, good)
+                self.assertIs(out["transformedResponse"][name], True)
+        self.assertEqual(self.run_check(IMPOSTER, good)["transformedResponse"]["totalMessagesEvaluated"], 1)
+        self.assertEqual(self.run_check(CAMPAIGN, good)["transformedResponse"]["messageCount"], 1)
+
+    def test_non_string_labels_do_not_crash_and_do_not_classify(self):
+        for bad in (5, ["Phishing"], {"a": 1}, True):
+            with self.subTest(attackType=bad):
+                body = {"threatId": "t", "messages": [{"threatId": "t", "attackType": bad, "attackStrategy": bad,
+                                                       "impersonatedParty": bad}]}
+                out = self.run_check(IMPOSTER, body)
+                self.assertIs(out["transformedResponse"][IMPOSTER], False)
+                self.assertEqual(out["transformedResponse"]["classifiedMessages"], 0)
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+                out = self.run_check(CAMPAIGN, {"threatId": "t", "messages": [{"threatId": "t", "attackType": bad}]})
+                self.assertIs(out["transformedResponse"][CAMPAIGN], False)
+
+
 if __name__ == "__main__":
     unittest.main()
