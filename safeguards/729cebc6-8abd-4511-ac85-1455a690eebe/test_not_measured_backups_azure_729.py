@@ -283,6 +283,26 @@ def vault_with(*statuses, age=20):
     return {"value": jobs}
 
 
+NEXT_PAGE = "https://management.azure.com/subscriptions/s/restoreJobs?$skiptoken=page2"
+
+
+def paged(*statuses, key="nextLink", nested=None, age=20):
+    """One vault's first page of restore jobs with a link to the next page (or a skip token)."""
+    page = vault_with(*statuses, age=age)
+    if nested:
+        return {nested: dict(page, **{key: NEXT_PAGE})}
+    page[key] = NEXT_PAGE
+    return page
+
+
+PAGE_LINK_KEYS = ["nextLink", "@odata.nextLink", "skipToken", "$skipToken"]
+
+
+def job_list(*statuses, age=20):
+    """The jobs themselves, with no vault wrapper around them."""
+    return vault_with(*statuses, age=age)["value"]
+
+
 VAULT_READ_SHAPES = [
     ("bare", lambda body: body),
     ("enveloped", lambda body: {"data": body, "validation": {"status": "passed", "errors": [], "warnings": []}}),
@@ -303,7 +323,33 @@ VAULT_READ_NOT_MEASURED = [
     ("null_entry_beside_an_empty_vault", lambda: vault_read(vault_with(), None)),
     ("empty_entry_beside_an_empty_vault", lambda: vault_read(vault_with(), {})),
     ("entry_without_a_job_list", lambda: vault_read(vault_with(), {"value": "not a list"})),
+    # a vault answered with a first page and a link to the next: the later pages were not read
+    ("first_page_with_a_failed_restore", lambda: vault_read(paged("Failed"))),
+    ("first_page_with_no_jobs", lambda: vault_read(paged())),
+    ("first_page_with_a_stale_success", lambda: vault_read(paged("Completed", age=400))),
+    ("first_page_beside_an_empty_vault", lambda: vault_read(vault_with(), paged("Failed"))),
+    ("first_page_under_apiresponse", lambda: vault_read({"apiResponse": paged("Failed")})),
+    ("first_page_under_data", lambda: vault_read({"data": paged("Failed")})),
+    ("first_page_in_the_returnspec_shape", lambda: vault_read(
+        {"restoreJobs": job_list("Failed"), "apiResponse": paged("Failed")})),
+    # a list entry that is empty or holds an error is not a read vault (a failed call can leave [] behind)
+    ("empty_list_entry", lambda: vault_read([])),
+    ("empty_list_entry_beside_an_empty_vault", lambda: vault_read(vault_with(), [])),
+    ("list_entry_holding_an_arm_error", lambda: vault_read(vault_with(), [ARM_ERROR])),
+    ("list_entry_holding_text", lambda: vault_read(vault_with(), ["Forbidden"])),
+    ("list_entry_of_jobs_and_an_error", lambda: vault_read(vault_with(), job_list("Failed") + [ARM_ERROR])),
+    # a single restore-job list with no vault wrapper, and a next page
+    ("bare_list_with_a_next_page", lambda: paged("Failed")),
+    ("bare_empty_list_with_a_next_page", lambda: paged()),
+    ("bare_list_in_apiresponse_with_a_next_page", lambda: {"apiResponse": paged("Failed")}),
+    # job objects listed directly under restoreJobResults are one vault's list, and an error beside them is unread
+    ("flat_failed_job_beside_an_arm_error", lambda: vault_read(*(job_list("Failed") + [ARM_ERROR]))),
 ]
+for _key in PAGE_LINK_KEYS:
+    VAULT_READ_NOT_MEASURED.append(("first_page_with_" + _key, lambda _key=_key: vault_read(paged("Failed", key=_key))))
+    VAULT_READ_NOT_MEASURED.append(("first_page_with_" + _key + "_under_apiresponse",
+                                    lambda _key=_key: vault_read(paged("Failed", key=_key, nested="apiResponse"))))
+    VAULT_READ_NOT_MEASURED.append(("bare_list_with_" + _key, lambda _key=_key: paged("Failed", key=_key)))
 
 # bodies where every vault was read: a missing restore is a measured negative, a recent
 # successful one a measured positive
@@ -322,6 +368,25 @@ VAULT_READ_MEASURED = [
     ("returnspec_entry_no_jobs", lambda: vault_read({"restoreJobs": [], "apiResponse": {"value": []}}), False),
     ("returnspec_entry_success", lambda: vault_read({"restoreJobs": vault_with("Completed")["value"],
                                                      "apiResponse": vault_with("Completed")}), True),
+    # a seen success is proof even when its page has a next page, or another vault was not read
+    ("success_on_a_first_page", lambda: vault_read(paged("Completed")), True),
+    ("success_on_a_first_page_beside_an_arm_error", lambda: vault_read(paged("Completed"), ARM_ERROR), True),
+    ("success_on_a_bare_first_page", lambda: paged("Completed"), True),
+    ("success_on_a_bare_first_page_with_a_skip_token", lambda: paged("Completed", key="$skipToken"), True),
+    # an empty or null next-page link means the answer is complete
+    ("empty_next_link", lambda: vault_read(dict(vault_with(), nextLink="")), False),
+    ("null_next_link", lambda: vault_read(dict(vault_with("Failed"), nextLink=None)), False),
+    ("null_skip_token", lambda: vault_read(dict(vault_with(), skipToken=None)), False),
+    ("empty_next_link_with_a_success", lambda: vault_read(dict(vault_with("Completed"), nextLink="")), True),
+    ("bare_empty_next_link", lambda: dict(vault_with(), nextLink=""), False),
+    # a list entry of job objects is one read vault
+    ("list_entry_of_failed_jobs", lambda: vault_read(job_list("Failed")), False),
+    ("list_entry_with_a_success", lambda: vault_read(job_list("Failed", "Completed")), True),
+    # job objects listed directly under restoreJobResults are the jobs of one vault, read
+    ("flat_failed_job", lambda: vault_read(*job_list("Failed")), False),
+    ("flat_failed_jobs", lambda: vault_read(*job_list("Failed", "Failed")), False),
+    ("flat_failed_and_completed_jobs", lambda: vault_read(*job_list("Failed", "Completed")), True),
+    ("flat_stale_success", lambda: vault_read(*job_list("Completed", age=400)), False),
 ]
 
 
@@ -375,6 +440,40 @@ class RestoreJobsAreReadPerVault(unittest.TestCase):
                 self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 1)
                 self.assertTrue(any("not read" in f for f in info["evaluation"]["additionalFindings"]))
 
+    def test_a_page_with_a_next_page_counts_as_not_read_in_full(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            for shape, wrap in VAULT_READ_SHAPES:
+                with self.subTest(transform=label, shape=shape):
+                    value, info = self.verdict(path, wrap(vault_read(paged("Failed"), vault_with())))
+                    self.assertIsNone(value)
+                    errors = " ".join(info["dataCollection"]["errors"])
+                    self.assertIn("1 of 2", errors)
+                    self.assertIn("in full", errors)
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsRead"], 1)
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 1)
+
+    def test_a_success_on_a_first_page_stays_true_and_says_so(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            with self.subTest(transform=label):
+                value, info = self.verdict(path, vault_read(paged("Failed", "Completed")))
+                self.assertIs(value, True)
+                self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 1)
+                self.assertTrue(any("not read" in f for f in info["evaluation"]["additionalFindings"]))
+
+    def test_job_objects_directly_under_restore_job_results_are_one_vault(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            for shape, wrap in VAULT_READ_SHAPES:
+                with self.subTest(transform=label, shape=shape):
+                    value, info = self.verdict(path, wrap(vault_read(*job_list("Failed"))))
+                    self.assertIs(value, False)
+                    self.assertEqual(info["dataCollection"]["status"], "success")
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsRead"], 1)
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 0)
+                    value, info = self.verdict(path, wrap(vault_read(*job_list("Failed", "Completed"))))
+                    self.assertIs(value, True)
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 0)
+                    self.assertFalse(any("not read" in f for f in info["evaluation"]["additionalFindings"]))
+
     def test_a_single_arm_list_is_still_one_read_vault(self):
         """The per-vault rule leaves a bare ARM list alone: its empty list stays a measured False."""
         for label, path in IS_BACKUP_TESTED_COPIES:
@@ -383,6 +482,59 @@ class RestoreJobsAreReadPerVault(unittest.TestCase):
                     value, info = self.verdict(path, wrap({"value": []}))
                     self.assertIs(value, False)
                     self.assertEqual(info["dataCollection"]["status"], "success")
+
+
+class LongPoison(Poisoned):
+    """Like Poisoned, but the error text is 500 characters long."""
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("x" * 500)
+
+    get = __getitem__ = __contains__ = keys = items = values = __iter__ = boom
+
+
+class ErrorTextIsCapped(unittest.TestCase):
+    """An exception message copied into a reason is cut to 200 characters."""
+
+    LIMIT = 200
+    VALIDATION = {"status": "passed", "errors": [], "warnings": []}
+
+    def strings(self, node):
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, dict):
+            for value in node.values():
+                yield from self.strings(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from self.strings(value)
+
+    def assert_capped(self, out):
+        text = list(self.strings(out))
+        self.assertTrue(any("xxx" in line for line in text), "the error text should still be shown")
+        for line in text:
+            self.assertLessEqual(line.count("x"), self.LIMIT, line[:80])
+
+    def test_is_backup_tested_caps_the_error_text(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            with self.subTest(transform=label):
+                out = load_path("is_backup_tested_long", path).transform(
+                    {"data": LongPoison(), "validation": self.VALIDATION})
+                self.assertIsNone(out["transformedResponse"]["isBackupTested"])
+                self.assert_capped(out)
+
+    def test_backupfrequency_caps_the_error_text(self):
+        module = load_path("backupfrequency_long", os.path.join(AZURE, "backupfrequency.py"))
+        out = module.transform({"data": LongPoison(), "validation": self.VALIDATION})
+        self.assertIsNone(out["transformedResponse"]["backupFrequency"])
+        self.assert_capped(out)
+
+    def test_backupfrequency_evaluate_caps_the_error_text(self):
+        module = load_path("backupfrequency_long_eval", os.path.join(AZURE, "backupfrequency.py"))
+        out = module.evaluate(LongPoison())
+        self.assertIsNone(out["backupFrequency"])
+        self.assertLessEqual(out["error"].count("x"), self.LIMIT)
+        self.assertIn("xxx", out["error"])
 
 
 def policy_row(name, schedule, vault="vault-a"):
