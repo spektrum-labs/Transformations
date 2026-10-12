@@ -1,152 +1,139 @@
-"""
-Transformation: isBackupTested
-Vendor: Commvault  |  Category: Backups
-Evaluates: Whether a restore/recovery test job has been completed within the past 90 days.
-"""
+# isbackuptested.py - Commvault (Command Center REST API, webconsole/commandcenter api)
+#
+# Method: getRestoreJobs -> GET {serverUrl}/Job?jobFilter=Restore&jobCategory=Finished&completedJobLookupTime=7776000
+#         (header limit: 1000; Accept: application/json)
+# Docs:   https://documentation.commvault.com/11.40/software/rest_api_get_job.html
+#         (totalRecordsWithoutPaging; jobs[].jobSummary: jobId, jobType, status, jobStartTime; job status values
+#         Completed, Completed w/ one or more errors|warnings, Committed, Failed, Failed to Start, Killed, ...)
+# The server applies the time window and the finished-only filter. A body whose job list is shorter than
+# totalRecordsWithoutPaging (an unread page) is refused, never read as "no failures".
+#
+# Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
+
 import json
-from datetime import datetime
-
-
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
-
-
-def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None, additional_findings=None):
-    if validation is None:
-        validation = {"status": "unknown", "errors": [], "warnings": []}
-    return {
-        "transformedResponse": result,
-        "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
-            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
-            "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
-            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0", "transformationId": "isBackupTested", "vendor": "Commvault", "category": "Backups"}
-        }
-    }
-
-
-def evaluate(data):
-    """Core evaluation logic extracted from doc transform."""
-    try:
-        result = False
-        restore_jobs_found = 0
-        most_recent_date = None
-        threshold_days = 90
-
-        jobs = (
-            data.get("jobs") or
-            data.get("jobList") or
-            data.get("items") or
-            []
-        )
-
-        if not isinstance(jobs, list):
-            return {"isBackupTested": False, "reason": "No job list in response"}
-
-        COMPLETED_STATUSES = {"completed", "success", "finished"}
-        now = datetime.now(tz=timezone.utc)
-        cutoff = now - timedelta(days=threshold_days)
-
-        for job_wrapper in jobs:
-            # Job summary is typically nested under jobSummary
-            job = job_wrapper.get("jobSummary", job_wrapper)
-
-            job_type = str(job.get("jobType", job.get("operationType", ""))).lower()
-
-            # Accept any restore-type job
-            if "restore" not in job_type and "recovery" not in job_type:
-                continue
-
-            status = str(job.get("status", job.get("jobStatus", ""))).lower()
-            if not any(s in status for s in COMPLETED_STATUSES):
-                continue
-
-            # Check recency via jobStartTime (Unix timestamp)
-            start_time = job.get("jobStartTime", job.get("startTime"))
-            if start_time:
-                try:
-                    job_dt = datetime.fromtimestamp(int(start_time), tz=timezone.utc)
-                    if job_dt >= cutoff:
-                        restore_jobs_found += 1
-                        if most_recent_date is None or job_dt > most_recent_date:
-                            most_recent_date = job_dt
-                except (ValueError, TypeError, OSError):
-                    # If timestamp is unparseable, count the job anyway
-                    restore_jobs_found += 1
-
-        result = restore_jobs_found > 0
-    except Exception as e:
-        return {"isBackupTested": False, "error": str(e)}
 
 
 def transform(input):
-    criteriaKey = "isBackupTested"
+    """
+    isBackupTested = true when at least one restore job ended Completed (or with warnings) in the last 90 days:
+    a backup was actually recovered. Does not prove the restore was a planned test or covered every workload.
+    """
+    key = "isBackupTested"
+
+    def parse_input(value):
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("<"):
+                raise ValueError("XML body; the method must send Accept: application/json")
+            return json.loads(text)
+        return value
+
+    def unwrap(value, marker):
+        # Integration-Service may hand the body back under one of its envelopes.
+        for depth in range(3):
+            if not isinstance(value, dict) or marker in value:
+                break
+            moved = False
+            for wrapper in ["apiResponse", "_response_data", "response", "result"]:
+                if isinstance(value.get(wrapper), dict):
+                    value = value[wrapper]
+                    moved = True
+                    break
+            if not moved:
+                break
+        return value
+
+    def vendor_error(d):
+        """A reason string when the body is an Integration-Service or Commvault error, else None.
+        Commvault answers some failures with HTTP 200 and errorCode/errorMessage or errList."""
+        if not isinstance(d, dict):
+            return "Response is not an object"
+        if d.get("error") is True:
+            return "Integration-Service returned an error envelope"
+        code = d.get("errorCode")
+        if code not in (None, 0, "0"):
+            return "Commvault error " + str(code) + ": " + str(d.get("errorMessage") or "")
+        errs = d.get("errList")
+        if isinstance(errs, list) and len(errs) > 0:
+            return "Commvault errList: " + str(errs[0])[:200]
+        err = d.get("error")
+        if isinstance(err, dict) and err.get("errorCode") not in (None, 0, "0"):
+            return "Commvault error " + str(err.get("errorCode")) + ": " + str(err.get("errorString") or err.get("errorMessage") or "")
+        return None
+
+    def as_int(value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value.strip())
+        return None
+
+    SUCCESS = ["completed", "completed w/ one or more warnings"]
+    FAILURE = ["failed", "failed to start", "killed", "abnormal terminated cleanup",
+               "completed w/ one or more errors", "committed", "interrupted"]
+    ACTIVE = ["running", "waiting", "pending", "suspend", "suspended", "kill pending",
+              "interrupt pending", "queued", "running (cannot be verified)"]
+
+    def read_jobs(input):
+        """(summaries, None) or (None, reason). Refuses a body whose job list is shorter than
+        totalRecordsWithoutPaging: a page that was not read is not a page with no failures."""
+        data = unwrap(parse_input(input), "totalRecordsWithoutPaging")
+        problem = vendor_error(data)
+        if problem:
+            return None, problem
+        total = as_int(data.get("totalRecordsWithoutPaging"))
+        if total is None:
+            return None, "Response has no totalRecordsWithoutPaging, so it is not a Commvault job list"
+        jobs = data.get("jobs")
+        if jobs is None:
+            jobs = []
+        if not isinstance(jobs, list):
+            return None, "jobs has an unexpected shape"
+        if len(jobs) < total:
+            return None, "Read " + str(len(jobs)) + " of " + str(total) + " jobs; the remaining pages were not read"
+        rows = []
+        for j in jobs:
+            s = j.get("jobSummary") if isinstance(j, dict) else None
+            if not isinstance(s, dict):
+                return None, "A job has no jobSummary object"
+            rows.append(s)
+        return rows, None
+
+    def classify(rows):
+        """Counts finished jobs by outcome. unknown = a terminal status this check does not know."""
+        out = {"success": [], "failure": [], "active": [], "unknown": []}
+        for s in rows:
+            st = str(s.get("status") or "").strip().lower()
+            if st in SUCCESS:
+                out["success"].append(s)
+            elif st in FAILURE:
+                out["failure"].append(s)
+            elif st in ACTIVE:
+                out["active"].append(s)
+            else:
+                out["unknown"].append(s)
+        return out
+
+    def label(s):
+        sub = s.get("subclient") if isinstance(s.get("subclient"), dict) else {}
+        client = sub.get("clientName") or s.get("destClientName") or s.get("clientName") or "?"
+        name = sub.get("subclientName") or s.get("subclientName") or ""
+        return str(client) + ("/" + str(name) if name else "") + " job " + str(s.get("jobId")) + " (" + str(s.get("status")) + ")"
+
     try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        # Run core evaluation
-        eval_result = evaluate(data)
-
-        # Extract the boolean result and any extra fields
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        if result_value:
-            pass_reasons.append(f"{criteriaKey} check passed")
-            for k, v in extra_fields.items():
-                pass_reasons.append(f"{k}: {v}")
-        else:
-            fail_reasons.append(f"{criteriaKey} check failed")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Commvault configuration for {criteriaKey}")
-
-        return create_response(
-            result={criteriaKey: result_value, **extra_fields},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={criteriaKey: result_value, **extra_fields}
-        )
-
+        rows, problem = read_jobs(input)
+        if rows is None:
+            return {key: False, "reason": problem}
+        c = classify(rows)
+        ok = [s for s in c["success"] if "restore" in str(s.get("jobType") or "restore").lower()]
+        if len(ok) == 0:
+            return {key: False, "reason": "No restore job completed in the last 90 days (" + str(len(rows)) + " finished restore jobs read)"}
+        return {key: True, "reason": str(len(ok)) + " restore jobs completed in the last 90 days", "latest": label(ok[0])}
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        return {key: False, "error": str(e)}

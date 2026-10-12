@@ -3,7 +3,11 @@ Transformation: isMailboxAuditingEnabled
 Vendor: Microsoft
 Category: Email Security / Secure Score
 
-Evaluates if mailbox auditing is enabled based on Microsoft Secure Score.
+Evaluates if mailbox auditing is enabled based on Microsoft Secure Score (control exo_mailboxaudit).
+
+A failed call, an empty response or a response without the control is reported as a data-collection error
+(additionalInfo.dataCollection.status == "error"), which Token-Service renders Unevaluated, not a measured 0%.
+The email-logging criteria are answered by isauditlogsearchenabled.py (mip_search_auditlog), not by this file.
 """
 
 import json
@@ -120,6 +124,31 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+def to_number(value):
+    """Secure Score numbers arrive as numbers or as strings ("100.0"); anything else is None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def no_data(criteriaKey, message, recommendation):
+    """dataCollection.status "error" -> Token-Service reports the criterion Unevaluated, not 0%."""
+    return create_response(
+        result={criteriaKey: False},
+        validation={"status": "skipped", "errors": [], "warnings": [message]},
+        api_errors=[message],
+        fail_reasons=[message],
+        recommendations=[recommendation]
+    )
+
+
 def transform(input):
     """
     Evaluates if mailbox auditing is enabled based on Microsoft Secure Score.
@@ -142,6 +171,18 @@ def transform(input):
 
         data, validation = extract_input(input)
 
+        if not isinstance(data, dict):
+            return no_data(criteriaKey, "Microsoft Secure Score returned no data",
+                           "Verify the Microsoft Graph integration is returning Secure Score data")
+
+        if data.get("error") or data.get("statusCode") or data.get("status_code"):
+            err = data.get("error")
+            if isinstance(err, dict):
+                raw = str(err.get("code") or "") + " " + str(err.get("message") or err.get("statusCode") or "")
+            else:
+                raw = str(err or data.get("statusCode") or data.get("status_code"))
+            api_error, recommendation = parse_api_error(raw.strip(), source="Microsoft Graph Secure Score")
+            return no_data(criteriaKey, api_error, recommendation)
 
         # Check for API error (e.g., OAuth failure)
         if isinstance(data, dict) and 'PSError' in data:
@@ -155,12 +196,8 @@ def transform(input):
             )
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
-                recommendations=["Verify the Microsoft integration is configured correctly"]
-            )
+            return no_data(criteriaKey, "Input validation failed: " + "; ".join(validation.get("errors", [])),
+                           "Verify the Microsoft integration is configured correctly")
 
         pass_reasons = []
         fail_reasons = []
@@ -171,7 +208,10 @@ def transform(input):
         is_enabled = False
 
         # Process Secure Score data
-        values = data.get("value", [])
+        values = data.get("value")
+        if not isinstance(values, list) or len(values) == 0 or not isinstance(values[0], dict):
+            return no_data(criteriaKey, "Microsoft Secure Score data not available",
+                           "Verify the Microsoft Graph integration is returning Secure Score data")
         if len(values) > 0:
             control_scores = values[0].get("controlScores", [])
             matched_object_list = [i for i in control_scores if i.get('controlName') == controlName]
@@ -187,8 +227,11 @@ def transform(input):
             elif len(matched_object_list) == 1:
                 matched_object = matched_object_list[0]
 
-                score_in_percentage = matched_object.get("scoreInPercentage", 0.0)
-                is_enabled = score_in_percentage == 100.00
+                score_in_percentage = to_number(matched_object.get("scoreInPercentage"))
+                if score_in_percentage is None:
+                    return no_data(criteriaKey, f"Secure Score control '{controlName}' has no scoreInPercentage",
+                                   "Verify Microsoft Secure Score is scoring the mailbox audit control")
+                is_enabled = score_in_percentage >= 100.0
 
                 count = matched_object.get("count", 0)
                 total = matched_object.get("total", 0)
@@ -199,11 +242,8 @@ def transform(input):
                     fail_reasons.append(f"Mailbox auditing score is {score_in_percentage}% ({count}/{total} mailboxes)")
                     recommendations.append("Enable mailbox auditing for all Exchange Online mailboxes")
             else:
-                fail_reasons.append(f"No control found matching '{controlName}' in Secure Score data")
-                recommendations.append("Verify Microsoft Secure Score is collecting mailbox audit data")
-        else:
-            fail_reasons.append("Microsoft Secure Score data not available - verify API permissions")
-            recommendations.append("Verify the Microsoft Graph API integration is returning Secure Score data")
+                return no_data(criteriaKey, f"Secure Score data has no '{controlName}' control",
+                               "Verify Microsoft Secure Score is collecting mailbox audit data")
 
         result = {
             criteriaKey: is_enabled,
@@ -229,11 +269,8 @@ def transform(input):
         )
 
     except json.JSONDecodeError as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
-            fail_reasons=["Could not parse input as valid JSON"]
-        )
+        return no_data(criteriaKey, f"Invalid JSON from Microsoft Secure Score: {str(e)}",
+                       "Verify the Microsoft Graph integration is returning Secure Score data")
     except Exception as e:
         return create_response(
             result={criteriaKey: False},

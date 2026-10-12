@@ -110,6 +110,7 @@ def pct(part, whole):
 
 VENDOR = "Huntress"
 STALE_DAYS = 15
+FUTURE_SLACK_SECONDS = 86400  # a callback time more than a day ahead of now is a fault, not a callback
 
 
 def not_measured(key, problem, validation):
@@ -137,6 +138,8 @@ def complete_list(input, list_key, noun):
     if not isinstance(pagination, dict):
         return None, "The " + noun + " list carries no pagination block, so a complete read cannot be shown."
     items = [i for i in box[list_key] if isinstance(i, dict)]
+    if len(items) != len(box[list_key]):
+        return None, "The " + noun + " list holds entries that are not " + noun + " records, so it cannot be scored."
     if pagination.get("truncated"):
         return None, "Read stopped at the page limit (" + str(len(items)) + " " + noun + "s); a partial read is not scored."
     if str(pagination.get("next_page_token") or "").strip() not in ("", "None", "null"):
@@ -144,17 +147,57 @@ def complete_list(input, list_key, noun):
     return items, None
 
 
-def agent_windows(agents):
-    """(fresh, stale, undated) agents judged against the newest last_callback_at in the response."""
-    dated = [(a, parse_time(a.get("last_callback_at"))) for a in agents]
-    times = [t for a, t in dated if t is not None]
-    if not times:
-        return [], [], [a for a, t in dated]
-    newest = max(times)
-    fresh = [a for a, t in dated if t is not None and (newest - t).days <= STALE_DAYS]
-    stale = [a for a, t in dated if t is not None and (newest - t).days > STALE_DAYS]
-    undated = [a for a, t in dated if t is None]
-    return fresh, stale, undated
+def now_utc():
+    """Evaluation time as a naive UTC datetime (the same clock as evaluatedAt)."""
+    return datetime.utcnow()
+
+
+def usable_callback(agent, now):
+    """An agent's last_callback_at as a naive-UTC datetime, or None when it cannot be used.
+
+    A callback time that is more than FUTURE_SLACK_SECONDS ahead of now cannot have happened. It
+    is a clock or data fault, so it is not evidence that the agent is alive and is never used.
+    A small skew (under a day) is tolerated.
+    """
+    t = parse_time(agent.get("last_callback_at"))
+    if t is None or (t - now).total_seconds() > FUTURE_SLACK_SECONDS:
+        return None
+    return t
+
+
+def newest_callback(agents, now=None):
+    """The newest usable last_callback_at across every agent in the list, or None."""
+    now = now or now_utc()
+    times = [usable_callback(a, now) for a in agents]
+    times = [t for t in times if t is not None]
+    return max(times) if times else None
+
+
+def agent_windows(agents, now=None):
+    """(fresh, stale, undated, future) agents judged against evaluation time, not against each other.
+
+    An agent is fresh when its last_callback_at is within STALE_DAYS of now. Judging against the
+    newest callback in the response would always call the newest agent fresh, so a fleet that
+    went dark months ago would still read as active. An agent whose last_callback_at is in the
+    future is in `future` and is neither fresh nor stale: it can never make the fleet look active.
+    """
+    now = now or now_utc()
+    fresh = []
+    stale = []
+    undated = []
+    future = []
+    for a in agents:
+        t = usable_callback(a, now)
+        if t is not None:
+            if (now - t).days <= STALE_DAYS:
+                fresh.append(a)
+            else:
+                stale.append(a)
+        elif parse_time(a.get("last_callback_at")) is None:
+            undated.append(a)
+        else:
+            future.append(a)
+    return fresh, stale, undated, future
 
 
 def transform(input):
@@ -165,12 +208,13 @@ def transform(input):
         return not_measured(key, problem, validation)
     if not agents:
         return not_measured(key, "Huntress returned an empty agent list; there is no fleet to measure coverage on.", validation)
-    fresh, stale, undated = agent_windows(agents)
+    fresh, stale, undated, future = agent_windows(agents)
     value = pct(len(fresh), len(agents))
     text = (str(len(fresh)) + " of " + str(len(agents)) + " Huntress agents (" + str(value) + "%) called back within "
-            + str(STALE_DAYS) + " days of the newest callback.")
+            + str(STALE_DAYS) + " days of the evaluation time (" + str(len(future))
+            + " with a callback time in the future, ignored).")
     return create_response(
-        result={key: value, "totalAgents": len(agents), "activeAgents": len(fresh), "staleAgents": len(stale) + len(undated)},
+        result={key: value, "totalAgents": len(agents), "activeAgents": len(fresh), "staleAgents": len(stale) + len(undated) + len(future)},
         validation=validation,
         pass_reasons=[text] if value == 100.0 else [],
         fail_reasons=[] if value == 100.0 else [text],

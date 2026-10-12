@@ -14,12 +14,16 @@ All host data here is synthetic ("estate A")."""
 import importlib.util
 import json
 import pathlib
+from datetime import datetime, timedelta
 
 import pytest
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 
+
+# Fresh, so the 15-day reporting window never ages these synthetic hosts out.
+RECENT = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def load(name):
     spec = importlib.util.spec_from_file_location("cs_falcon_" + name + "_fail_closed", HERE / (name + ".py"))
@@ -34,7 +38,7 @@ EPP = load("isEPPDeployed")
 
 # ---------------------------------------------------------------- synthetic estate A, real Falcon shapes
 
-def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_seen="2026-10-02T05:00:00Z"):
+def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_seen=RECENT):
     """A host record as GET /devices/entities/devices/v2 returns it (synthetic estate A)."""
     policies = {"prevention": {"policy_id": "prev-a", "applied": True}}
     if sensor_update:
