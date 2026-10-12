@@ -4,10 +4,17 @@ Vendor: Microsoft
 Category: Email Security / DNS
 
 Evaluates if DMARC, DKIM and SPF records are properly configured for email security.
+
+Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
+error marker, a body that carries no SPF, DKIM or DMARC answer (an outage or error body from the DNS lookup, an
+empty response), malformed or unreadable input, and failed input validation. A lookup that answered and found a
+record absent is a real False.
 """
 
 import json
 from datetime import datetime
+
+RESULT_KEYS = ("isDNSConfigured", "isDMARCConfigured", "isDKIMConfigured", "isSPFConfigured")
 
 
 def extract_input(input_data):
@@ -98,6 +105,26 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+def not_evaluated(validation, api_error, fail_reason, recommendation, transformation_errors=None):
+    """No value beside an error: the None reaches the evaluator as Not evaluated through the collection error."""
+    return create_response(
+        result={key: None for key in RESULT_KEYS},
+        validation=validation,
+        transformation_errors=transformation_errors,
+        api_errors=[api_error],
+        fail_reasons=[fail_reason],
+        recommendations=[recommendation]
+    )
+
+
+def get_protocol(data, name):
+    """The SPF, DKIM or DMARC answer, whatever the key casing; None when the body does not carry it."""
+    if name in data:
+        return data.get(name)
+    lowered = {key.lower(): value for key, value in data.items() if isinstance(key, str)}
+    return lowered.get(name.lower())
+
+
 def transform(input):
     criteriaKey = "isDNSConfigured"
 
@@ -110,31 +137,39 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False, "isDMARCConfigured": False, "isDKIMConfigured": False, "isSPFConfigured": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+            return not_evaluated(
+                validation,
+                "Could not read the DNS lookup: input validation failed",
+                "Input validation failed",
+                "Re-evaluate this check once the DNS lookup succeeds"
             )
-
 
         # Check for API error (e.g., OAuth failure)
         if isinstance(data, dict) and 'PSError' in data:
-            api_error, recommendation = parse_api_error(data.get('PSError', ''), source="Microsoft 365")
-            return create_response(
-                result={criteriaKey: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=["Could not retrieve data from Microsoft 365"],
-                recommendations=[recommendation]
+            api_error, recommendation = parse_api_error(str(data.get('PSError') or ''), source="Microsoft 365")
+            return not_evaluated(
+                {"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_error,
+                "Could not retrieve data from Microsoft 365",
+                recommendation
+            )
+
+        # An outage or error body from the DNS lookup, or an empty response, carries no SPF, DKIM or DMARC answer.
+        if not isinstance(data, dict) or not any(get_protocol(data, name) is not None for name in ("SPF", "DKIM", "DMARC")):
+            return not_evaluated(
+                validation,
+                "The DNS lookup returned no SPF, DKIM or DMARC answer (error body, outage or empty response)",
+                "No DNS answer was returned, so this check could not be evaluated",
+                "Re-evaluate this check once the DNS lookup is available"
             )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        is_dmarc = bool(data.get('DMARC', False))
-        is_dkim = bool(data.get('DKIM', False))
-        is_spf = bool(data.get('SPF', False))
+        is_dmarc = bool(get_protocol(data, 'DMARC'))
+        is_dkim = bool(get_protocol(data, 'DKIM'))
+        is_spf = bool(get_protocol(data, 'SPF'))
         is_dns_configured = is_dmarc and is_dkim and is_spf
 
         additional_findings = []
@@ -213,9 +248,11 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False, "isDMARCConfigured": False, "isDKIMConfigured": False, "isSPFConfigured": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+        message = str(e)[:200]  # the text reaches the stored result, so a long one is cut
+        return not_evaluated(
+            {"status": "error", "errors": [], "warnings": []},
+            "Could not evaluate the response",
+            f"Transformation error: {message}",
+            "Re-evaluate this check once the DNS lookup succeeds",
+            transformation_errors=[message]
         )
