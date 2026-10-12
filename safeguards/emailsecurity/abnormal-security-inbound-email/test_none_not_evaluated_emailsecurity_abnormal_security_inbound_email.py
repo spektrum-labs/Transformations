@@ -43,6 +43,7 @@ CASES = [
     ('isThreatCampaignCorrelationEnabled', ('isThreatCampaignCorrelationEnabled',), 'empty body', lambda: {}),
     ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'error body', lambda: dict(ERROR_BODY)),
     ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'empty body', lambda: {}),
+    ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'zero cases', lambda: {'vendorCases': []}),
 ]
 
 

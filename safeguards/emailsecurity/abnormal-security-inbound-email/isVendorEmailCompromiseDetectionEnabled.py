@@ -70,12 +70,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 KEY = "isVendorEmailCompromiseDetectionEnabled"
 
 
-def not_measured(reason, validation):
+def not_measured(reason, validation, extra_result=None):
     """No verdict: the result is None and the data-collection status is error, so the evaluator
     shows Not evaluated instead of a failed check. The reason is fixed text: the vendor's own error
-    message is never copied into it."""
+    message is never copied into it. extra_result carries a fact that was really read (a case count
+    of zero) next to the missing verdict."""
+    result = {KEY: None}
+    if extra_result:
+        result.update(extra_result)
     return create_response(
-        result={KEY: None},
+        result=result,
         validation=validation,
         fail_reasons=[reason],
         api_errors=[reason],
@@ -169,28 +173,29 @@ def transform(input):
         return not_measured(problem, validation)
 
     case_count = len(vendor_cases)
-    is_enabled = case_count > 0
+    if case_count == 0:
+        # A successful read that lists no vendor cases. Vendor cases only exist once VEC detection has
+        # flagged something, so a quiet tenant looks exactly like a tenant with VEC switched off. The
+        # read cannot tell the two apart, so there is no verdict: Not evaluated, never False. The
+        # case count of zero was really read, so it is still reported.
+        return not_measured(
+            "Abnormal returned no vendor cases for this tenant. Vendor cases only appear once Vendor "
+            "Email Compromise (VEC) detection has flagged something, so an empty list cannot show "
+            "whether detection is on; nothing to measure.",
+            validation,
+            extra_result={"vendorCaseCount": 0},
+        )
+    is_enabled = True
 
     sample_ids = [case_id(case) for case in vendor_cases[:5]]
 
-    if is_enabled:
-        pass_reasons = [
-            f"Found {case_count} Vendor Email Compromise (VEC) case record(s) via /v1/vendor-cases "
-            f"(sample vendorCaseId values: {sample_ids}). Vendor cases are generated exclusively by "
-            "Abnormal's VEC detection module, so their presence evidences the capability is enabled."
-        ]
-        fail_reasons = []
-        recommendations = []
-    else:
-        pass_reasons = []
-        fail_reasons = [
-            "No vendor case records were returned from /v1/vendor-cases, so there is no evidence "
-            "that Vendor Email Compromise (VEC) detection has produced any detections for this tenant."
-        ]
-        recommendations = [
-            "Confirm Vendor Email Compromise detection is licensed and enabled in the Abnormal Security "
-            "console, and verify the API token has access to the vendor-cases resource."
-        ]
+    pass_reasons = [
+        f"Found {case_count} Vendor Email Compromise (VEC) case record(s) via /v1/vendor-cases "
+        f"(sample vendorCaseId values: {sample_ids}). Vendor cases are generated exclusively by "
+        "Abnormal's VEC detection module, so their presence evidences the capability is enabled."
+    ]
+    fail_reasons = []
+    recommendations = []
 
     result = {
         "isVendorEmailCompromiseDetectionEnabled": is_enabled,
