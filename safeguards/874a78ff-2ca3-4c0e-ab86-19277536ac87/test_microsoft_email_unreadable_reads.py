@@ -39,7 +39,7 @@ HELPER_503 = {"error": True, "errorType": "dns_unavailable", "status": "Error",
 GOOD_DNS = {"SPF": "v=spf1 include:spf.example.invalid -all", "DKIM": "v=DKIM1; k=rsa; p=AAAA",
             "DMARC": "v=DMARC1; p=reject", "SMTPBanner": "No banner found"}
 NO_RECORDS = {"SPF": False, "DKIM": False, "DMARC": False, "SMTPBanner": "No banner found"}
-SIGN_IN = {"id": "00000000-0000-0000-0000-000000000001", "createdDateTime": "2026-01-01T00:00:00Z",
+SIGN_IN = {"id": "sign-in-1", "createdDateTime": "2026-01-01T00:00:00Z",
            "appDisplayName": "Example App", "userPrincipalName": "user@example.invalid"}
 
 
@@ -52,6 +52,9 @@ def sku(part, plans, status="Enabled", enabled=25, provisioning="Success"):
 MAIL_SKU = sku("EXAMPLE_MAIL_PLAN", ["EXCHANGE_S_ENTERPRISE", "SHAREPOINTENTERPRISE"])
 FREE_SKU = sku("EXAMPLE_FREE_PLAN", ["EXAMPLE_VIRAL_PLAN", "EXCHANGE_S_FOUNDATION"], enabled=10000)
 UNREADABLE_ROW = {"skuPartNumber": "EXAMPLE_ROW_WITHOUT_PLANS"}
+NEXT_LINK = "https://graph.example.invalid/v1.0/page?$skiptoken=page-2"
+LINK_KEYS = ("@odata.nextLink", "odata.nextLink", "nextLink")
+PASSED = {"status": "passed", "errors": [], "warnings": []}
 
 VALIDATION_FAILED = {"data": {}, "validation": {"status": "failed", "errors": ["unexpected shape"], "warnings": []}}
 
@@ -155,6 +158,24 @@ class DnsTests(Checks):
             with self.subTest(payload=payload):
                 self.assert_not_evaluated(self.run_check(payload))
 
+    def test_a_partial_answer_is_not_evaluated(self):
+        """The lookup always answers all three keys (a record, or an explicit false when none was found), so a key
+        that is absent or null means the body is not that answer, not that the record is absent."""
+        for payload, missing in (
+            ({"SPF": GOOD_DNS["SPF"]}, ("DKIM", "DMARC")),
+            ({"DMARC": GOOD_DNS["DMARC"]}, ("SPF", "DKIM")),
+            ({"SPF": GOOD_DNS["SPF"], "DKIM": None, "DMARC": GOOD_DNS["DMARC"]}, ("DKIM",)),
+            ({"result": {"SPF": GOOD_DNS["SPF"], "DKIM": GOOD_DNS["DKIM"]}}, ("DMARC",)),
+            ({"spf": GOOD_DNS["SPF"], "dkim": GOOD_DNS["DKIM"]}, ("DMARC",)),
+            ({"SPF": False, "DKIM": False}, ("DMARC",)),
+        ):
+            with self.subTest(payload=payload):
+                response = self.run_check(payload)
+                self.assert_not_evaluated(response)
+                error = response["additionalInfo"]["dataCollection"]["errors"][0]
+                for name in missing:
+                    self.assertIn(name, error)
+
     def test_malformed_json_is_not_evaluated_with_a_transformation_error(self):
         for payload in ("Service Unavailable", "{not-json", b"\xff\xfe"):
             with self.subTest(payload=payload):
@@ -212,15 +233,30 @@ class LoggingTests(Checks):
             with self.subTest(shape=label):
                 self.assertIs(self.run_check(payload)["transformedResponse"]["isEmailSecurityLoggingEnabled"], True)
 
-    def test_an_empty_sign_in_list_is_a_measured_fail(self):
-        """The read answered with a list and the list is empty: a stated negative."""
-        for payload in ({"value": []}, {"response": {"value": []}}):
+    def test_an_empty_sign_in_list_is_not_evaluated(self):
+        """An empty list is both a tenant with no retained sign-ins and a read that was not allowed to see them, and
+        the read carries no date window that would make it a stated negative, so it proves nothing."""
+        for payload in ({"value": []}, {"response": {"value": []}}, {"data": {"value": []}, "validation": PASSED}):
             with self.subTest(payload=payload):
                 response = self.run_check(payload)
-                self.assertEqual(response["transformedResponse"], {key: False for key in LOGGING_KEYS})
-                self.assert_measured(response)
-                self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"],
-                                 ["Email security logging not enabled or no recent entries"])
+                self.assert_not_evaluated(response)
+                self.assertIn("no sign-ins", response["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_a_next_link_never_turns_an_empty_page_into_a_fail(self):
+        """A page that continues is partial: an empty one is not evidence, and an entry that was seen still proves it."""
+        for key in LINK_KEYS:
+            for label, wrap in (
+                ("top level", lambda body: body),
+                ("api response", lambda body: {"apiResponse": body}),
+                ("data", lambda body: {"data": body, "validation": PASSED}),
+                ("beside the wrapper", lambda body: dict({"response": body}, **{key: NEXT_LINK})),
+            ):
+                with self.subTest(key=key, shape=label, page="empty"):
+                    self.assert_not_evaluated(self.run_check(wrap({"value": [], key: NEXT_LINK})))
+                with self.subTest(key=key, shape=label, page="with an entry"):
+                    response = self.run_check(wrap({"value": [SIGN_IN], key: NEXT_LINK}))
+                    self.assertEqual(response["transformedResponse"], {name: True for name in LOGGING_KEYS})
+                    self.assert_measured(response)
 
     # --- Not evaluated ----------------------------------------------------------------------------------
 
@@ -323,7 +359,73 @@ class LicenceTests(Checks):
         self.assertIs(response["transformedResponse"]["confirmedLicensePurchased"], True)
         self.assert_measured(response)
 
+    def test_an_empty_or_null_next_link_counts_as_complete(self):
+        for key in LINK_KEYS:
+            for link in (None, "", False):
+                with self.subTest(key=key, link=link):
+                    response = self.run_check({"value": [FREE_SKU], key: link})
+                    self.assertEqual(response["transformedResponse"]["confirmedLicensePurchased"], False)
+                    self.assert_measured(response)
+
+    def test_a_sku_whose_status_is_not_enabled_is_a_measured_fail_without_unit_counts(self):
+        """The status alone proves the subscription is not active, so the unit count is not needed."""
+        row = {"skuPartNumber": "EXAMPLE_MAIL_PLAN", "capabilityStatus": "Suspended",
+               "servicePlans": [{"servicePlanName": "EXCHANGE_S_STANDARD", "provisioningStatus": "Success"}]}
+        response = self.run_check({"value": [row]})
+
+        self.assertEqual(response["transformedResponse"]["confirmedLicensePurchased"], False)
+        self.assert_measured(response)
+
     # --- Not evaluated ----------------------------------------------------------------------------------
+
+    def test_a_page_that_continues_is_not_a_fail_but_a_seen_mailbox_plan_still_passes(self):
+        """A mailbox plan may sit on a page that was not read, so the absence on this page proves nothing."""
+        for key in LINK_KEYS:
+            for label, wrap in (
+                ("top level", lambda body: body),
+                ("api response", lambda body: {"apiResponse": body}),
+                ("response", lambda body: {"response": body}),
+                ("data", lambda body: {"data": body, "validation": PASSED}),
+                ("beside the wrapper", lambda body: dict({"response": body}, **{key: NEXT_LINK})),
+            ):
+                with self.subTest(key=key, shape=label, page="no mailbox plan"):
+                    self.assert_not_evaluated(self.run_check(wrap({"value": [FREE_SKU], key: NEXT_LINK})))
+                with self.subTest(key=key, shape=label, page="mailbox plan seen"):
+                    response = self.run_check(wrap({"value": [FREE_SKU, MAIL_SKU], key: NEXT_LINK}))
+                    self.assertIs(response["transformedResponse"]["confirmedLicensePurchased"], True)
+                    self.assert_measured(response)
+
+    def test_an_active_looking_sku_with_unreadable_status_or_units_is_not_a_fail(self):
+        """The row carries a mailbox plan but its status or unit count cannot be read, so it may be the licence."""
+        plans = [{"servicePlanName": "EXCHANGE_S_STANDARD", "provisioningStatus": "Success"}]
+        for label, row in (
+            ("no status", {"skuPartNumber": "EXAMPLE_MAIL_PLAN", "prepaidUnits": {"enabled": 5}, "servicePlans": plans}),
+            ("blank status", {"capabilityStatus": " ", "prepaidUnits": {"enabled": 5}, "servicePlans": plans}),
+            ("status is not text", {"capabilityStatus": 1, "prepaidUnits": {"enabled": 5}, "servicePlans": plans}),
+            ("no unit counts", {"capabilityStatus": "Enabled", "servicePlans": plans}),
+            ("unit counts not an object", {"capabilityStatus": "Enabled", "prepaidUnits": 5, "servicePlans": plans}),
+            ("no enabled count", {"capabilityStatus": "Enabled", "prepaidUnits": {"suspended": 0}, "servicePlans": plans}),
+            ("null enabled count", {"capabilityStatus": "Enabled", "prepaidUnits": {"enabled": None}, "servicePlans": plans}),
+            ("enabled count is text", {"capabilityStatus": "Enabled", "prepaidUnits": {"enabled": "many"}, "servicePlans": plans}),
+            ("enabled count is a flag", {"capabilityStatus": "Enabled", "prepaidUnits": {"enabled": True}, "servicePlans": plans}),
+        ):
+            with self.subTest(case=label):
+                self.assert_not_evaluated(self.run_check({"value": [row]}))
+                self.assertIs(self.run_check({"value": [row, MAIL_SKU]})["transformedResponse"]["confirmedLicensePurchased"], True)
+
+    def test_a_plan_without_a_name_is_not_a_fail(self):
+        """A plan with no name may be the mailbox plan, so it is unreadable, not skipped."""
+        for label, plan in (
+            ("no name", {"provisioningStatus": "Success"}),
+            ("null name", {"servicePlanName": None, "provisioningStatus": "Success"}),
+            ("blank name", {"servicePlanName": "  ", "provisioningStatus": "Success"}),
+            ("name is not text", {"servicePlanName": 7, "provisioningStatus": "Success"}),
+        ):
+            with self.subTest(case=label):
+                row = sku("EXAMPLE_OTHER_PLAN", ["EXAMPLE_VIRAL_PLAN"])
+                row["servicePlans"].append(plan)
+                self.assert_not_evaluated(self.run_check({"value": [row]}))
+                self.assertIs(self.run_check({"value": [row, MAIL_SKU]})["transformedResponse"]["confirmedLicensePurchased"], True)
 
     def test_a_body_with_no_sku_rows_is_not_evaluated(self):
         for payload in (

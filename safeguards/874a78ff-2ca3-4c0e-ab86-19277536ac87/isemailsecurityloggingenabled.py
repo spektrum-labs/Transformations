@@ -5,9 +5,13 @@ Category: Email Security / Logging
 
 Evaluates if email security logging is enabled.
 
+True when the read returned at least one sign-in entry; more pages beyond it change nothing.
+
 Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
-error marker, a body that is not a sign-in list (an error body, an empty or null response), malformed or
-unreadable input, and failed input validation. A sign-in list that came back empty is a real False.
+error marker, a body that is not a sign-in list (an error body, an empty or null response), an empty sign-in
+list, malformed or unreadable input, and failed input validation. An empty list proves nothing either way: it is
+both a tenant with no retained sign-ins and a read that was not allowed to see them, and the read carries no date
+window that would make it a stated "no logs". Nothing here can prove logging is off, so there is no False.
 """
 
 import json
@@ -154,25 +158,18 @@ def transform(input):
                 "No sign-in list was returned, so this check could not be evaluated",
                 "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
             )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        is_enabled = len(logging_entries) > 0
-
-        if is_enabled:
-            pass_reasons.append(f"Email security logging is enabled with {len(logging_entries)} log entries found")
-        else:
-            fail_reasons.append("Email security logging not enabled or no recent entries")
-            recommendations.append("Enable email security logging in Microsoft 365 Security & Compliance Center")
+        if len(logging_entries) == 0:
+            return not_evaluated(
+                validation,
+                "The sign-in log read returned no sign-ins (empty list)",
+                "No sign-in was returned, so this check could not be evaluated",
+                "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
+            )
 
         return create_response(
-            result={criteriaKey: is_enabled, "isEmailLoggingEnabled": is_enabled},
+            result={criteriaKey: True, "isEmailLoggingEnabled": True},
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
+            pass_reasons=[f"Email security logging is enabled with {len(logging_entries)} log entries found"],
             input_summary={"logEntryCount": len(logging_entries)}
         )
 

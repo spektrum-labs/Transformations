@@ -12,13 +12,18 @@ email-security baseline this integration evaluates. Any subscribedSkus body with
 affirmative_signal rule) passed on free SKUs every tenant carries.
 
 Not evaluated (None, with a collection error) whenever the body does not prove the answer: a vendor or Graph
-error body, a body with no SKU rows, a row the code cannot read when no enabled mailbox plan was found elsewhere,
-malformed or unreadable input, and failed input validation. A SKU list that was read and holds no enabled
-Exchange mailbox plan is a real False.
+error body, a body with no SKU rows, a page that continues (a next-page link) or a row the code cannot read when
+no enabled mailbox plan was seen elsewhere, malformed or unreadable input, and failed input validation. A row the
+code cannot read is one without service plans, a plan without a name, or a row with a mailbox plan whose status or
+enabled unit count is missing or not readable. A SKU list that was read whole and holds no enabled Exchange
+mailbox plan is a real False. An enabled mailbox plan that was read stays True beside any of the above.
 """
 
 import json
 from datetime import datetime
+
+NEXT_LINK_KEYS = ("@odata.nextLink", "odata.nextLink", "nextLink")
+WRAPPER_KEYS = ("api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data")
 
 
 def extract_input(input_data):
@@ -121,6 +126,21 @@ def not_evaluated(validation, api_error, fail_reason, recommendation, transforma
     )
 
 
+def has_next_link(body, depth=0):
+    """True when the body, or a wrapper layer around it, carries a next-page link: the read is then partial.
+
+    An empty or null link means the read is complete."""
+    if not isinstance(body, dict) or depth > 3:
+        return False
+    for key in NEXT_LINK_KEYS:
+        if body.get(key):
+            return True
+    for key in WRAPPER_KEYS:
+        if has_next_link(body.get(key), depth + 1):
+            return True
+    return False
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
     try:
@@ -154,6 +174,7 @@ def transform(input):
                 "No subscribed SKU was returned, so the licence could not be evaluated",
                 "Verify the integration can read subscribedSkus (Organization.Read.All), then re-evaluate this check"
             )
+        partial = has_next_link(input)
         skus = [s for s in rows if isinstance(s, dict) and isinstance(s.get("servicePlans"), list)]
         unreadable = len(rows) - len(skus)
         licensed = []
@@ -164,7 +185,11 @@ def transform(input):
                 if not isinstance(plan, dict):
                     unreadable += 1
                     continue
-                name = str(plan.get("servicePlanName") or "").upper()
+                raw_name = plan.get("servicePlanName")
+                if not isinstance(raw_name, str) or raw_name.strip() == "":
+                    unreadable += 1
+                    continue
+                name = raw_name.strip().upper()
                 if not (name.startswith("EXCHANGE_S_") or name.startswith("EXCHANGE_B_")):
                     continue
                 if name == "EXCHANGE_S_FOUNDATION" or "ARCHIVE" in name:
@@ -174,17 +199,33 @@ def transform(input):
                 plans.append(name)
             if not plans:
                 continue
-            units = sku.get("prepaidUnits") if isinstance(sku.get("prepaidUnits"), dict) else {}
-            try:
-                enabled_units = int(units.get("enabled") or 0)
-            except (TypeError, ValueError):
-                enabled_units = 0
             part = str(sku.get("skuPartNumber") or sku.get("skuId") or "unknown")
-            if str(sku.get("capabilityStatus") or "").lower() == "enabled" and enabled_units > 0:
+            status = sku.get("capabilityStatus")
+            if not isinstance(status, str) or status.strip() == "":
+                unreadable += 1
+                continue
+            if status.strip().lower() != "enabled":
+                # The status alone proves the subscription is not active.
+                inactive.append(part + " (" + status.strip() + ")")
+                continue
+            units = sku.get("prepaidUnits")
+            enabled_units = units.get("enabled") if isinstance(units, dict) else None
+            if not isinstance(enabled_units, int) or isinstance(enabled_units, bool):
+                unreadable += 1
+                continue
+            if enabled_units > 0:
                 licensed.append(part)
             else:
-                inactive.append(part + " (" + str(sku.get("capabilityStatus")) + ", " + str(enabled_units) + " units)")
+                inactive.append(part + " (" + status.strip() + ", 0 units)")
         is_licensed = len(licensed) > 0
+        if not is_licensed and partial:
+            # A page that continues holds SKUs that were not read, so the absence of a mailbox plan proves nothing.
+            return not_evaluated(
+                validation,
+                "The subscribedSkus read is incomplete: more pages exist than were read",
+                "More subscribed SKU pages exist than were read, so the absence of a mailbox plan is not proven",
+                "Re-evaluate this check once every subscribedSkus page can be read"
+            )
         if not is_licensed and unreadable > 0:
             # A row or plan the code cannot read may be the mailbox plan, so its absence from the answer proves nothing.
             return not_evaluated(
@@ -198,6 +239,8 @@ def transform(input):
         recommendations = []
         if is_licensed:
             pass_reasons.append("Enabled Exchange Online subscription(s): " + ", ".join(licensed[:5]))
+            if partial or unreadable > 0:
+                pass_reasons.append("Not every subscribed SKU was read; an enabled mailbox plan that was read proves the licence")
         elif inactive:
             fail_reasons.append("Exchange Online subscriptions are present but not active: " + ", ".join(inactive[:5]))
             recommendations.append("Renew the Microsoft 365 / Exchange Online subscription")
@@ -210,7 +253,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"skuCount": len(skus), "exchangeSkusEnabled": len(licensed), "exchangeSkusInactive": len(inactive), "unreadable": unreadable}
+            input_summary={"skuCount": len(skus), "exchangeSkusEnabled": len(licensed), "exchangeSkusInactive": len(inactive), "unreadable": unreadable, "moreSkuPages": partial}
         )
     except Exception as e:
         message = str(e)[:200]  # the text reaches the stored result, so a long one is cut

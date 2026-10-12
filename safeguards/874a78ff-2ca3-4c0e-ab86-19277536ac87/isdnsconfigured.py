@@ -7,8 +7,9 @@ Evaluates if DMARC, DKIM and SPF records are properly configured for email secur
 
 Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
 error marker, a body that carries no SPF, DKIM or DMARC answer (an outage or error body from the DNS lookup, an
-empty response), malformed or unreadable input, and failed input validation. A lookup that answered and found a
-record absent is a real False.
+empty response), a body that answers only some of the three (the lookup always answers all three, with a record
+or an explicit false, so an absent or null key means the body is not that answer), malformed or unreadable input,
+and failed input validation. A lookup that answered all three and found a record absent is a real False.
 """
 
 import json
@@ -155,11 +156,27 @@ def transform(input):
             )
 
         # An outage or error body from the DNS lookup, or an empty response, carries no SPF, DKIM or DMARC answer.
-        if not isinstance(data, dict) or not any(get_protocol(data, name) is not None for name in ("SPF", "DKIM", "DMARC")):
+        if not isinstance(data, dict):
             return not_evaluated(
                 validation,
                 "The DNS lookup returned no SPF, DKIM or DMARC answer (error body, outage or empty response)",
                 "No DNS answer was returned, so this check could not be evaluated",
+                "Re-evaluate this check once the DNS lookup is available"
+            )
+        missing = [name for name in ("SPF", "DKIM", "DMARC") if get_protocol(data, name) is None]
+        if len(missing) == 3:
+            return not_evaluated(
+                validation,
+                "The DNS lookup returned no SPF, DKIM or DMARC answer (error body, outage or empty response)",
+                "No DNS answer was returned, so this check could not be evaluated",
+                "Re-evaluate this check once the DNS lookup is available"
+            )
+        if missing:
+            # The lookup answers all three keys, so an absent one is a body that is not that answer, not an absent record.
+            return not_evaluated(
+                validation,
+                "The DNS lookup answered only part of SPF, DKIM and DMARC (no answer for " + ", ".join(missing) + ")",
+                "The DNS answer was incomplete, so this check could not be evaluated",
                 "Re-evaluate this check once the DNS lookup is available"
             )
 
