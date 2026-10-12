@@ -12,6 +12,14 @@ Cloud Identity Policy API as settings/gmail.links_and_external_images.
 
 Previously this transform read a top-level "urlRewrite" field from the mail-server
 DNS tool, which never returns one, so the criterion was false for every customer.
+
+False (measured) when a link-protection policy was read and a required setting is off, or a
+policy list was read that carries no link-protection policy.
+
+Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never
+Failed): a Google error or refusal, a body that is not JSON or not a policy list, an empty policy
+list, a failed input validation, a list still carrying nextPageToken in which no policy is off yet
+(more pages could hold one), and this transform's own exception.
 """
 
 import json
@@ -22,6 +30,22 @@ SETTING_TYPE = "gmail.links_and_external_images"
 # Fields that constitute "URLs are checked before delivery". External image
 # scanning is deliberately excluded: it governs images, not links.
 REQUIRED_FIELDS = ["enableShortenerScanning", "enableAggressiveWarningsOnUntrustedLinks"]
+
+CRITERIA_KEY = "isURLRewriteEnabled"
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isURLRewriteEnabled',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 
 def extract_input(input_data):
@@ -44,6 +68,12 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -80,8 +110,51 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def vendor_error(data):
+    """Google's own error message when the body is an error envelope, else None."""
+    if data is None:
+        return "No response body"
+    if isinstance(data, str) and data.strip() == "":
+        return "Empty response body"
+    if not isinstance(data, dict):
+        return None
+    value = data.get("error")
+    if value:
+        if isinstance(value, dict):
+            return str(value.get("message") or value.get("status") or value.get("code") or value)
+        return "%s %s" % (value, data.get("message") or data.get("error_description") or "")
+    code = data.get("statusCode", data.get("status_code"))
+    try:
+        if code is not None and int(code) >= 400:
+            return "HTTP %s" % code
+    except (TypeError, ValueError):
+        pass
+    if str(data.get("status", "")).lower() == "error":
+        return str(data.get("message") or "Integration error")
+    return None
+
+
+def is_truncated(body):
+    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    marker = body.get("paginationTruncated")
+    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
+
+
+def unmeasured(reason, validation, summary=None):
+    """The read could not answer: key None and a dataCollection error, so it shows as Not evaluated."""
+    return create_response(
+        result={CRITERIA_KEY: None},
+        validation=validation,
+        api_errors=[reason],
+        fail_reasons=["Not measured: " + reason],
+        input_summary=summary
+    )
+
+
 def transform(input):
-    criteriaKey = "isURLRewriteEnabled"
+    criteriaKey = CRITERIA_KEY
 
     try:
         if isinstance(input, str):
@@ -92,23 +165,31 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unmeasured("Input validation failed", validation)
+
+        error = vendor_error(data)
+        if error is None and not isinstance(data, (dict, list)):
+            error = "Response is not a policy list"
+        if error is not None:
+            return unmeasured(error, validation)
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         additional_findings = []
 
-        policies = []
         if isinstance(data, dict):
-            policies = data.get("policies", [])
-        elif isinstance(data, list):
+            policies = data.get("policies")
+        else:
             # Token-Service can hand list-shaped API data straight through
             policies = data
+        if not isinstance(policies, list):
+            return unmeasured("No policies list in the response: the Gmail settings read cannot be shown to have run",
+                              validation)
+        if not [p for p in policies if isinstance(p, dict)]:
+            return unmeasured("No Gmail policies were returned: an empty list cannot be told apart from a read "
+                              "that returned nothing", validation)
+        truncated = is_truncated(data)
 
         # Collect every link-protection policy. Google returns one per org unit,
         # so the tenant is only covered if all of them have link checking on.
@@ -146,6 +227,12 @@ def transform(input):
             })
 
         is_url_rewrite_enabled = len(link_policies) > 0 and enabled_count == len(link_policies)
+        if truncated and (len(link_policies) == 0 or is_url_rewrite_enabled):
+            # More pages exist. A policy that is off already decides False; nothing read so far can prove
+            # True, or prove that no link-protection policy exists.
+            return unmeasured("The policy list was truncated (nextPageToken present) before every %s policy was "
+                              "read; link checking not evaluated across all org units" % SETTING_TYPE, validation,
+                              {"totalPolicies": len(policies), "linkPolicies": len(link_policies)})
 
         if is_url_rewrite_enabled:
             pass_reasons.append(
@@ -188,7 +275,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

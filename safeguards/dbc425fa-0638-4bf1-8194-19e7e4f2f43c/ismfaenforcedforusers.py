@@ -8,10 +8,15 @@ definition (maxResults=500, pageToken/nextPageToken) so every user is read.
 scope https://www.googleapis.com/auth/admin.directory.user.readonly
 
 Rule (fail closed): true only when every ACTIVE user (not suspended, not archived) has
-isEnforcedIn2Sv true, and there is at least one active user. Google sends the booleans as the
-strings "True"/"False", which are read as such. A list that still carries nextPageToken was
-truncated, so the check is not measured rather than judged on part of the tenant. A Google
-error, a missing scope or an unreadable body is also not measured.
+isEnforcedIn2Sv true, and there is at least one active user. False when a real user list was
+read and an active user is not enforced. Google sends the booleans as the strings
+"True"/"False", which are read as such.
+
+Not measured (key and counts None, dataCollection error, so Token-Service shows Not evaluated,
+never Failed): a list that still carries nextPageToken (it was truncated, so the check is not
+judged on part of the tenant), a list with no active user (every tenant has some), a Google
+error or refusal, a missing scope, a body that is not JSON or has no users list, and this
+transform's own exception.
 
 Previously: one enforced user passed the whole tenant, suspended users were counted, and a
 direct isMFAEnforcedForUsers flag in the payload was trusted. The every-active-user rule and
@@ -22,7 +27,24 @@ and the truncation rule are added here.
 import json
 from datetime import datetime, timezone
 
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isMFAEnforcedForUsers',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 CRITERIA_KEY = "isMFAEnforcedForUsers"
+#: The supporting counts a measured result carries; an unmeasured result carries them as None too.
+UNMEASURED_COUNTS = {"totalUsers": None, "mfaEnrolledUsers": None}
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/admin.directory.user.readonly"
 LIST_LIMIT = 10
 
@@ -48,6 +70,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -166,7 +194,7 @@ def find_dict_with(data, key, depth=0):
 
 
 def not_measured(reason, validation, recommendation=None, result_extra=None):
-    result = {CRITERIA_KEY: False}
+    result = {CRITERIA_KEY: None}
     for k in (result_extra or {}):
         result[k] = result_extra[k]
     return create_response(
@@ -191,7 +219,7 @@ def transform(input):
         error = vendor_error(data)
         if error is not None:
             return not_measured(error, validation, "Check Spektrum's domain-wide delegation grant and re-evaluate",
-                                result_extra={"totalUsers": 0, "mfaEnrolledUsers": 0})
+                                result_extra=UNMEASURED_COUNTS)
         body = None
         if isinstance(data, list):
             body = {"users": data}
@@ -199,17 +227,22 @@ def transform(input):
             body = find_dict_with(data, "users")
         if body is None or not isinstance(body.get("users"), list):
             return not_measured("Directory users list was not returned", validation,
-                                result_extra={"totalUsers": 0, "mfaEnrolledUsers": 0})
+                                result_extra=UNMEASURED_COUNTS)
         if body.get("nextPageToken"):
             return not_measured("Directory users list was truncated (nextPageToken present); enforcement not evaluated across all users",
-                                validation, "Enable paging on getUserMFAStatus", result_extra={"totalUsers": len(body["users"]), "mfaEnrolledUsers": 0})
+                                validation, "Enable paging on getUserMFAStatus", result_extra=UNMEASURED_COUNTS)
 
         active = [u for u in body["users"] if isinstance(u, dict) and not is_true(u.get("suspended")) and not is_true(u.get("archived"))]
         enforced = [u for u in active if is_true(u.get("isEnforcedIn2Sv"))]
         enrolled = [u for u in active if is_true(u.get("isEnrolledIn2Sv"))]
         missing = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in active if not is_true(u.get("isEnforcedIn2Sv"))]
         total = len(body["users"])
-        result_value = len(active) > 0 and len(enforced) == len(active)
+        if len(active) == 0:
+            # Every tenant has active users, so a list with none cannot be trusted: that is a read that
+            # could not answer, not a finding that enforcement is off.
+            return not_measured("No active users were returned; enforcement could not be confirmed", validation,
+                                result_extra=UNMEASURED_COUNTS)
+        result_value = len(enforced) == len(active)
         result = {CRITERIA_KEY: result_value, "totalUsers": len(active), "mfaEnrolledUsers": len(enforced)}
         summary = {"usersRead": total, "activeUsers": len(active), "enforced": len(enforced),
                    "enrolled": len(enrolled), "excludedSuspendedOrArchived": total - len(active)}
@@ -218,17 +251,14 @@ def transform(input):
                                    pass_reasons=["2-Step Verification is enforced for all %d active users (%d enrolled; %d suspended or archived users excluded)" % (
                                        len(active), len(enrolled), total - len(active))],
                                    input_summary=summary)
-        if len(active) == 0:
-            reason = "No active users were returned; enforcement could not be confirmed"
-        else:
-            shown = ", ".join(missing[:LIST_LIMIT]) + (" (and more)" if len(missing) > LIST_LIMIT else "")
-            reason = "2-Step Verification is not enforced for %d of %d active users: %s" % (len(missing), len(active), shown)
+        shown = ", ".join(missing[:LIST_LIMIT]) + (" (and more)" if len(missing) > LIST_LIMIT else "")
+        reason = "2-Step Verification is not enforced for %d of %d active users: %s" % (len(missing), len(active), shown)
         return create_response(result=result, validation=validation, fail_reasons=[reason],
                                recommendations=["Enforce 2-Step Verification for every organizational unit (Security > Authentication > 2-Step Verification)"],
                                input_summary=summary)
     except Exception as e:
         return create_response(
-            result={CRITERIA_KEY: False, "totalUsers": 0, "mfaEnrolledUsers": 0},
+            result={CRITERIA_KEY: None, "totalUsers": None, "mfaEnrolledUsers": None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: %s" % str(e)]

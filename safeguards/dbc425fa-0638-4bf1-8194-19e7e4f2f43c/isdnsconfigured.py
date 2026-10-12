@@ -4,11 +4,33 @@ Vendor: Email Security Provider
 Category: Email Security / DNS
 
 Evaluates if DMARC, DKIM and SPF records are set up properly for email authentication.
+
+Measured: a DNS lookup result that carries at least one of the DMARC, DKIM and SPF answers. A
+record the lookup reports as absent is false, so a lookup that found none of the three is false.
+
+Not measured (all four keys None and a dataCollection error, so Token-Service shows Not evaluated,
+never Failed): an error or refusal body, a body that is not JSON or not an object, an object that
+carries none of the DMARC, DKIM or SPF answers (so it is not a DNS lookup result), a failed input
+validation, and this transform's own exception.
 """
 
 import json
 import ast
 from datetime import datetime
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isDNSConfigured', 'isDMARCConfigured', 'isDKIMConfigured', 'isSPFConfigured')
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 
 def extract_input(input_data):
@@ -31,6 +53,12 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -91,6 +119,41 @@ def parse_input(input):
     raise ValueError("Input must be JSON string, bytes, or dict")
 
 
+def error_text(data):
+    """The error message when the body is an error or refusal envelope, else ''."""
+    if not isinstance(data, dict):
+        return ""
+    value = data.get("error")
+    if value:
+        if isinstance(value, dict):
+            return str(value.get("message") or value.get("status") or value.get("code") or value)
+        return "%s %s" % (value, data.get("message") or data.get("error_description") or "")
+    code = data.get("statusCode", data.get("status_code"))
+    try:
+        if code is not None and int(code) >= 400:
+            return "HTTP %s" % code
+    except (TypeError, ValueError):
+        pass
+    if str(data.get("status", "")).lower() == "error":
+        return str(data.get("message") or "Integration error")
+    return ""
+
+
+def unmeasured(reason, validation):
+    """The read could not answer: every key None and a dataCollection error says why."""
+    return create_response(
+        result={
+            "isDNSConfigured": None,
+            "isDMARCConfigured": None,
+            "isDKIMConfigured": None,
+            "isSPFConfigured": None
+        },
+        validation=validation,
+        api_errors=[reason],
+        fail_reasons=["Not measured: " + reason]
+    )
+
+
 def transform(input):
     is_dmarc_configured = False
     is_dkim_configured = False
@@ -108,16 +171,7 @@ def transform(input):
             validation = {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={
-                    "isDNSConfigured": False,
-                    "isDMARCConfigured": False,
-                    "isDKIMConfigured": False,
-                    "isSPFConfigured": False
-                },
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unmeasured("Input validation failed", validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -128,6 +182,15 @@ def transform(input):
             data = parse_input(data['response'])
         if isinstance(data, dict) and 'result' in data:
             data = parse_input(data['result'])
+
+        if not isinstance(data, dict):
+            return unmeasured("Response is not a DNS lookup result", validation)
+        problem = error_text(data)
+        if problem:
+            return unmeasured(problem, validation)
+        if not any(name in data for name in ("DMARC", "DKIM", "SPF")):
+            return unmeasured("The response carries no DMARC, DKIM or SPF answer, so it is not a DNS lookup result",
+                              validation)
 
         if isinstance(data, dict):
             is_dmarc_configured = True if data.get('DMARC', False) else False
@@ -218,10 +281,10 @@ def transform(input):
     except Exception as e:
         return create_response(
             result={
-                "isDNSConfigured": False,
-                "isDMARCConfigured": is_dmarc_configured,
-                "isDKIMConfigured": is_dkim_configured,
-                "isSPFConfigured": is_spf_configured
+                "isDNSConfigured": None,
+                "isDMARCConfigured": None,
+                "isDKIMConfigured": None,
+                "isSPFConfigured": None
             },
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],

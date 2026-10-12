@@ -4,10 +4,33 @@ Vendor: Email Security Provider
 Category: Identity / Authentication
 
 Evaluates the MFA status for users in the organization.
+
+Measured: a user list that was read (true when a user has 2-Step Verification enforced, false when
+none does), or a direct isMFAEnforcedForUsers flag in the payload.
+
+Not measured (the key and the user counts are None, with a dataCollection error, so Token-Service
+shows Not evaluated, never Failed): a refusal or error body, a body that is not JSON, no users list
+and no direct flag, an empty user list, a list that still carries nextPageToken in which no user is
+enforced yet (more pages could hold one), a failed input validation, and this transform's own
+exception.
 """
 
 import json
 from datetime import datetime
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isMFAEnforcedForUsers',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 
 def extract_input(input_data):
@@ -30,6 +53,12 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -66,6 +95,49 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def vendor_error(data):
+    """Google's own error message when the body is an error envelope, else None."""
+    if data is None:
+        return "No response body"
+    if isinstance(data, str) and data.strip() == "":
+        return "Empty response body"
+    if not isinstance(data, dict):
+        return None
+    value = data.get("error")
+    if value:
+        if isinstance(value, dict):
+            return str(value.get("message") or value.get("status") or value.get("code") or value)
+        return "%s %s" % (value, data.get("message") or data.get("error_description") or "")
+    code = data.get("statusCode", data.get("status_code"))
+    try:
+        if code is not None and int(code) >= 400:
+            return "HTTP %s" % code
+    except (TypeError, ValueError):
+        pass
+    if str(data.get("status", "")).lower() == "error":
+        return str(data.get("message") or "Integration error")
+    return None
+
+
+def is_truncated(body):
+    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    marker = body.get("paginationTruncated")
+    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
+
+
+def unmeasured(reason, validation, summary=None):
+    """The read could not answer: the key and the counts are None and a dataCollection error says why."""
+    return create_response(
+        result={"isMFAEnforcedForUsers": None, "totalUsers": None, "mfaEnrolledUsers": None},
+        validation=validation,
+        api_errors=[reason],
+        fail_reasons=["Not measured: " + reason],
+        input_summary=summary
+    )
+
+
 def transform(input):
     criteriaKey = "isMFAEnforcedForUsers"
 
@@ -78,11 +150,13 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False, "totalUsers": 0, "mfaEnrolledUsers": 0},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return unmeasured("Input validation failed", validation)
+
+        error = vendor_error(data)
+        if error is None and not isinstance(data, dict):
+            error = "Response is not a user list"
+        if error is not None:
+            return unmeasured(error, validation)
 
         pass_reasons = []
         fail_reasons = []
@@ -91,22 +165,40 @@ def transform(input):
         isMFAEnforcedForUsers = False
         total_users = 0
         mfa_enrolled_users = 0
+        measured = False
+        truncated = False
 
-        if isinstance(data, dict):
-            # Check for direct MFA flag
-            if 'isMFAEnforcedForUsers' in data:
-                isMFAEnforcedForUsers = data['isMFAEnforcedForUsers']
+        # Check for direct MFA flag
+        if data.get('isMFAEnforcedForUsers') is not None:
+            isMFAEnforcedForUsers = data['isMFAEnforcedForUsers']
+            measured = True
 
-            # Check rawResponse for user details
-            raw_data = data.get('rawResponse', data)
+        # Check rawResponse for user details
+        raw_data = data.get('rawResponse', data)
 
-            if isinstance(raw_data, dict) and 'users' in raw_data:
-                users = raw_data['users']
-                if isinstance(users, list):
+        if isinstance(raw_data, dict) and 'users' in raw_data:
+            users = raw_data['users']
+            if isinstance(users, list):
+                # A user list is the authority when there is one. An empty list, or one with no user record
+                # in it, proves nothing either way, so it also withdraws a direct flag it would have replaced.
+                records = [obj for obj in users if isinstance(obj, dict)]
+                measured = len(records) > 0
+                if measured:
                     total_users = len(users)
-                    mfa_enrolled = [obj for obj in users if 'isEnforcedIn2Sv' in obj and str(obj['isEnforcedIn2Sv']).lower() == "true"]
+                    mfa_enrolled = [obj for obj in records if 'isEnforcedIn2Sv' in obj and str(obj['isEnforcedIn2Sv']).lower() == "true"]
                     mfa_enrolled_users = len(mfa_enrolled)
                     isMFAEnforcedForUsers = mfa_enrolled_users > 0
+                    truncated = is_truncated(raw_data)
+
+        if not measured:
+            return unmeasured("No user list and no enforcement flag was read: an empty or unrecognised body cannot "
+                              "be told apart from a read that returned nothing", validation)
+        if truncated and not isMFAEnforcedForUsers:
+            # More pages exist. One enforced user already decides True; with none enforced yet, a later page
+            # could hold one.
+            return unmeasured("The user list was truncated (nextPageToken present) before an enforced user was "
+                              "found; enforcement not evaluated across all users", validation,
+                              {"totalUsers": total_users, "mfaEnrolledUsers": mfa_enrolled_users})
 
         if isMFAEnforcedForUsers:
             if total_users > 0:
@@ -136,7 +228,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False, "totalUsers": 0, "mfaEnrolledUsers": 0},
+            result={criteriaKey: None, "totalUsers": None, "mfaEnrolledUsers": None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
