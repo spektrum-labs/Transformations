@@ -113,6 +113,22 @@ def test_the_text_never_echoes_the_body():
         assert_not_evaluated(out, key)
 
 
+class _UnreadableBody(dict):
+    """A body whose every read raises with text that must never reach the result."""
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("VENDOR-DETAIL-0042")
+
+    __contains__ = get = __getitem__ = keys = items = _boom
+
+
+def test_an_unexpected_read_error_never_echoes_its_text():
+    for name, key in ALL_CHECKS:
+        out = load(name)(_UnreadableBody())
+        assert "VENDOR-DETAIL-0042" not in repr(out)
+        assert_not_evaluated(out, key)
+
+
 def test_a_measured_answer_carries_no_data_collection_error():
     for name, body, key in (("nocriticalfindings", {"risks": []}, "noCriticalFindings"),
                             ("nohighfindings", {"risks": [{"severity": "critical"}]}, "noHighFindings"),
