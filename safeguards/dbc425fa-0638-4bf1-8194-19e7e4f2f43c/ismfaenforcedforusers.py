@@ -12,9 +12,14 @@ isEnforcedIn2Sv true, and there is at least one active user. False when a real u
 read and an active user is not enforced. Google sends the booleans as the strings
 "True"/"False", which are read as such.
 
+A list that still carries nextPageToken or paginationTruncated is judged on what was read: an active
+user already seen that states enforcement is off proves False, with the counts None because they are from
+part of the tenant. Nothing read from a cut-short list can prove True.
+
 Not measured (key and counts None, dataCollection error, so Token-Service shows Not evaluated,
-never Failed): a list that still carries nextPageToken or paginationTruncated (it was truncated, so the
-check is not judged on part of the tenant), a list with no active user (every tenant has some), a Google
+never Failed): a list that still carries nextPageToken or paginationTruncated in which no active user
+states enforcement is off, a list in which no active user states it is off and some state nothing, a list
+with no active user (every tenant has some), a Google
 error or refusal, a missing scope, a body that is not JSON or has no users list, and this
 transform's own exception.
 
@@ -249,9 +254,7 @@ def transform(input):
         if body is None or not isinstance(body.get("users"), list):
             return not_measured("Directory users list was not returned", validation,
                                 result_extra=UNMEASURED_COUNTS)
-        if is_truncated(body) or is_truncated(data):
-            return not_measured("Directory users list was truncated (nextPageToken present); enforcement not evaluated across all users",
-                                validation, "Enable paging on getUserMFAStatus", result_extra=UNMEASURED_COUNTS)
+        truncated = is_truncated(body) or is_truncated(data)
 
         active = [u for u in body["users"] if isinstance(u, dict) and not is_true(u.get("suspended")) and not is_true(u.get("archived"))]
         enforced = [u for u in active if enforcement_state(u) is True]
@@ -266,6 +269,21 @@ def transform(input):
             # could not answer, not a finding that enforcement is off.
             return not_measured("No active users were returned; enforcement could not be confirmed", validation,
                                 result_extra=UNMEASURED_COUNTS)
+        if truncated:
+            # A user already seen that states enforcement is off proves False, whatever the rest of the list
+            # holds. Nothing seen can prove True, because a later page could hold a user who is not
+            # enforced. The counts come from part of the tenant, so they are None.
+            if not missing:
+                return not_measured("Directory users list was truncated (nextPageToken present) and no active user read so far "
+                                    "states 2-Step Verification is off; enforcement not evaluated across all users",
+                                    validation, "Enable paging on getUserMFAStatus", result_extra=UNMEASURED_COUNTS)
+            shown = ", ".join(missing[:LIST_LIMIT]) + (" (and more)" if len(missing) > LIST_LIMIT else "")
+            return create_response(
+                result={CRITERIA_KEY: False, "totalUsers": None, "mfaEnrolledUsers": None},
+                validation=validation,
+                fail_reasons=["2-Step Verification is not enforced for %d active users read so far: %s (the user list was cut short, so no counts are given)" % (len(missing), shown)],
+                recommendations=["Enforce 2-Step Verification for every organizational unit (Security > Authentication > 2-Step Verification)"],
+                input_summary={"truncated": True})
         if not missing and silent:
             return not_measured("%d of %d active users do not state whether 2-Step Verification is enforced, and none "
                                 "states that it is not; enforcement could not be confirmed" % (len(silent), len(active)),

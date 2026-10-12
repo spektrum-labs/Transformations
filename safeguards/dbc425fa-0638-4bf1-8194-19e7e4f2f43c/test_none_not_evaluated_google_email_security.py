@@ -388,7 +388,10 @@ SPECS = [
             ("truncated_user_list", lambda: users(ENFORCED, nextPageToken=TOKEN)),
             ("truncation_marker", lambda: users(ENFORCED, paginationTruncated=True)),
             ("truncation_marker_string", lambda: users(ENFORCED, paginationTruncated="true")),
-            ("truncation_marker_and_a_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED, paginationTruncated=True)),
+            # A user already seen can prove False, but nothing seen so far proves True, and a user that is
+            # suspended or states nothing proves nothing.
+            ("truncated_and_the_only_user_not_enforced_is_suspended", lambda: users(ENFORCED, SUSPENDED, nextPageToken=TOKEN)),
+            ("truncated_and_one_states_nothing", lambda: users(ENFORCED, NO_FIELD, nextPageToken=TOKEN)),
             ("no_users_key", lambda: {"kind": "admin#directory#users"}),
             ("users_not_a_list", lambda: {"users": "none"}),
             # A record that does not state enforcement is unknown, not "not enforced".
@@ -399,6 +402,18 @@ SPECS = [
         "measured": [
             ("an_active_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED),
              {"isMFAEnforcedForUsers": False, "totalUsers": 2, "mfaEnrolledUsers": 1}),
+            # A negative proven by a user already seen stays False when the list was cut short; the counts
+            # come from part of the tenant, so they are None.
+            ("truncated_but_an_active_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED, nextPageToken=TOKEN),
+             {"isMFAEnforcedForUsers": False, "totalUsers": None, "mfaEnrolledUsers": None}),
+            ("truncation_marker_but_an_active_user_not_enforced",
+             lambda: users(ENFORCED, NOT_ENFORCED, paginationTruncated=True),
+             {"isMFAEnforcedForUsers": False, "totalUsers": None, "mfaEnrolledUsers": None}),
+            ("truncation_marker_string_but_an_active_user_not_enforced",
+             lambda: users(NOT_ENFORCED, paginationTruncated="true"),
+             {"isMFAEnforcedForUsers": False, "totalUsers": None, "mfaEnrolledUsers": None}),
+            ("truncated_not_enforced_and_one_states_nothing", lambda: users(NOT_ENFORCED, NO_FIELD, nextPageToken=TOKEN),
+             {"isMFAEnforcedForUsers": False, "totalUsers": None, "mfaEnrolledUsers": None}),
             # One record that states not-enforced proves False, whatever the others say.
             ("one_not_enforced_and_one_states_nothing", lambda: users(NOT_ENFORCED, NO_FIELD),
              {"isMFAEnforcedForUsers": False, "totalUsers": 2, "mfaEnrolledUsers": 0}),
@@ -570,6 +585,10 @@ SPECS = [
             ("policies_not_a_list", lambda: {"policies": "none"}),
             ("truncated_list", lambda: {"policies": [app_consent("BLOCK_ALL")], "nextPageToken": TOKEN}),
             ("truncation_marker", lambda: {"policies": [app_consent("BLOCK_ALL")], "paginationTruncated": True}),
+            # Nothing seen so far states open: a later page could, and none of what was read proves True.
+            ("truncated_restricted_and_one_without_a_level",
+             lambda: {"policies": [app_consent("BLOCK_ALL"), app_consent_without_a_level("orgUnits/synthetic-a")],
+                      "nextPageToken": TOKEN}),
             # A matching policy that does not report its access level proves nothing about that policy.
             ("access_level_missing", lambda: {"policies": [app_consent_without_a_level()]}),
             ("one_restricted_and_one_without_a_level",
@@ -583,6 +602,22 @@ SPECS = [
              {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": 50.0}),
             ("block_all", lambda: {"policies": [app_consent("BLOCK_ALL")]},
              {"isAppConsentRestricted": True, "appConsentRestrictedPolicyPercentage": 100.0}),
+            # A negative proven by a policy already seen stays False when the list was cut short; the share
+            # of restricted policies is from part of the list, so it is None.
+            ("truncated_but_a_policy_states_open",
+             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED")], "nextPageToken": TOKEN},
+             {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": None}),
+            ("truncation_marker_but_a_policy_states_open",
+             lambda: {"policies": [app_consent("BLOCK_ALL"), app_consent("ACCESS_LEVEL_UNSPECIFIED", "orgUnits/synthetic-a")],
+                      "paginationTruncated": True},
+             {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": None}),
+            ("truncation_marker_string_but_a_policy_states_open",
+             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED")], "paginationTruncated": "true"},
+             {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": None}),
+            ("truncated_open_and_one_without_a_level",
+             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED"), app_consent_without_a_level("orgUnits/synthetic-a")],
+                      "nextPageToken": TOKEN},
+             {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": None}),
             # A policy that states open already proves False; the share cannot be computed while another
             # policy states nothing, so it is None.
             ("one_open_and_one_without_a_level",
