@@ -41,7 +41,7 @@ CASES = [
 ]
 
 # Every other transform in the folder: a poisoned read, an error body and an empty body are all Not
-# evaluated. test_error_body_not_evaluated.py holds the full battery.
+# evaluated. test_checkpoint_harmony_email_error_body_not_evaluated.py holds the full battery.
 for fname, fkey in [
     ('confirmedlicensepurchased', 'confirmedLicensePurchased'),
     ('isaccounttakeoverdetectionenabled', 'isAccountTakeoverDetectionEnabled'),

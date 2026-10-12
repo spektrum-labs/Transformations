@@ -9,7 +9,7 @@ bodies follow the HEC API reference response sample (Email Security API Referenc
 
 Every check gets: the real/doc body (expected verdict), a flip that must change the verdict, and
 the unreadable bodies (empty dict, None, an error envelope, a string that is not JSON). An
-unreadable body is None (Not evaluated), never False: test_error_body_not_evaluated.py holds the
+unreadable body is None (Not evaluated), never False: test_checkpoint_harmony_email_error_body_not_evaluated.py holds the
 full battery, and a well-formed response that lists nothing keeps its False."""
 import copy
 import importlib.util
