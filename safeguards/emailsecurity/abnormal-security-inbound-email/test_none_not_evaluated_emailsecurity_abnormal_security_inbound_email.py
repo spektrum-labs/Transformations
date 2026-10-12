@@ -33,8 +33,16 @@ class Poisoned(dict):
         return 1
 
 
+ERROR_BODY = {"error": True, "message": "Integration execution error: HTTP 500"}
+
 CASES = [
     ('isAntiPhishingEnabled', ('isAntiPhishingEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isImposterEmailDetectionEnabled', ('isImposterEmailDetectionEnabled',), 'error body', lambda: dict(ERROR_BODY)),
+    ('isImposterEmailDetectionEnabled', ('isImposterEmailDetectionEnabled',), 'empty body', lambda: {}),
+    ('isThreatCampaignCorrelationEnabled', ('isThreatCampaignCorrelationEnabled',), 'error body', lambda: dict(ERROR_BODY)),
+    ('isThreatCampaignCorrelationEnabled', ('isThreatCampaignCorrelationEnabled',), 'empty body', lambda: {}),
+    ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'error body', lambda: dict(ERROR_BODY)),
+    ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'empty body', lambda: {}),
 ]
 
 
