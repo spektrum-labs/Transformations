@@ -85,6 +85,24 @@ def is_error_body(data):
     return isinstance(data, dict) and (data.get("error") is True or bool(data.get("errors")))
 
 
+def objects_only(items, noun):
+    """(objects, problem): the object items of a list.
+
+    A non-empty list with no object in it proves nothing, so it is "not measured". Items that are not
+    objects are never counted as records. An empty list is passed through unchanged."""
+    objects = [x for x in items if isinstance(x, dict)]
+    if items and not objects:
+        return None, "Abnormal returned a " + noun + " list with no objects in it; nothing to measure."
+    return objects, None
+
+
+def text_of(value):
+    """The value when it is a non-blank string, else an empty string; a number or a list is not a label."""
+    if isinstance(value, str) and value.strip():
+        return value
+    return ""
+
+
 def threat_detail_problem(data):
     """Why a /v1/threats/{threatId} body proves nothing, or None when it is a threat detail."""
     if is_error_body(data):
@@ -100,18 +118,18 @@ def transform(input):
     if problem is not None:
         return not_measured(problem, validation)
     threat_id = data.get("threatId")
-    messages = data.get("messages")
+    messages, problem = objects_only(data.get("messages"), "threat message")
+    if problem is not None:
+        return not_measured(problem, validation)
 
     message_count = len(messages)
 
     same_threat_ids = 0
     analysis_fields_present = 0
     for m in messages:
-        if not isinstance(m, dict):
-            continue
         if m.get("threatId") == threat_id and threat_id:
             same_threat_ids = same_threat_ids + 1
-        if m.get("attackStrategy") or m.get("attackType") or m.get("attackedParty"):
+        if text_of(m.get("attackStrategy")) or text_of(m.get("attackType")) or text_of(m.get("attackedParty")):
             analysis_fields_present = analysis_fields_present + 1
 
     has_grouping_structure = bool(threat_id) and isinstance(messages, list) and message_count >= 1
