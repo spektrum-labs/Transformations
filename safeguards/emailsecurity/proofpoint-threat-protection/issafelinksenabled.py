@@ -25,7 +25,7 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None):
+                    api_errors=None, error_code=None):
     # A None criterion was not measured. Token-Service grades None as FAILED unless
     # dataCollection.status is "error", which needs a non-empty api_errors: carry the reason.
     if not api_errors and isinstance(result, dict) and "isSafeLinksEnabled" in result and result["isSafeLinksEnabled"] is None:
@@ -33,10 +33,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                       or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    data_collection = {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []}
+    if error_code and api_errors:
+        # Machine-readable reason beside the prose (e.g. "no_volume"): a quiet window is not a failure.
+        data_collection["errorCode"] = error_code
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": data_collection,
             "validation": validation,
             "transformation": {"status": "error" if (transformation_errors or []) else "success",
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
@@ -66,7 +70,7 @@ def evaluate(data):
     non_rewritten = url.get("messagesWithNonRewrittenUrls")
     permitted_clicks = url.get("messagesWithPermittedClicks") or 0
     if total <= 0:
-        return {"isSafeLinksEnabled": None, "reason": "No URL-bearing messages observed in the window"}
+        return {"isSafeLinksEnabled": None, "reason": "No URL-bearing messages observed in the window", "reasonCode": "no_volume"}
     if not isinstance(non_rewritten, (int, float)) or isinstance(non_rewritten, bool) or non_rewritten < 0 or non_rewritten > total:
         return {"isSafeLinksEnabled": None, "reason": "URL breakdown has no usable messagesWithNonRewrittenUrls"}
     rewritten = total - non_rewritten
@@ -97,6 +101,6 @@ def transform(input):
             fr = [res.get("reason", f"URL rewrite rate {extra.get('urlRewriteRatePct')}% is below the 95% threshold")]
         return create_response({key: value, **extra}, validation, pr, fr,
                                [] if value is not False else ["Enable URL Defense rewriting for all inbound mail flows"],
-                               {key: value, **extra})
+                               {key: value, **extra}, None, None, res.get("reasonCode"))
     except Exception as e:
         return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])
