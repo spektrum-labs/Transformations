@@ -77,8 +77,7 @@ def test_an_empty_list_that_is_not_a_complete_answer_is_not_evaluated(extra):
         assert_not_evaluated(load(name)(body), key)
 
 
-# Records that would each read as a verdict (a pass, a fail or a count) on a complete page. The same
-# records on a page that is cut off, or beside an error marker, prove nothing about the account.
+# Records that would each read as a verdict (a pass, a fail or a count) on a complete page.
 RECORDS_OF = {
     "nocriticalfindings": ([{"id": "r1", "severity": "low"}], [{"id": "r2", "severity": "critical"}]),
     "nohighfindings": ([{"id": "r1", "severity": "low"}], [{"id": "r2", "severity": "high"}]),
@@ -88,12 +87,15 @@ RECORDS_OF = {
                                [{"id": "v2", "known_exploited_vulnerability": True}]),
 }
 
-PARTIAL = [
+NEXT_PAGE = [
     {"next_page_token": "abc"},
     {"nextPageToken": "abc"},
     {"next_page": "abc"},
     {"next": "abc"},
     {"next_page_token": "abc", "total_results": 1},
+]
+
+ERRORS = [
     {"error": "boom"},
     {"error": True},
     {"errors": ["boom"]},
@@ -101,22 +103,74 @@ PARTIAL = [
 ]
 
 
-@pytest.mark.parametrize("extra", PARTIAL)
-def test_a_non_empty_page_that_is_cut_off_or_carries_an_error_is_not_evaluated(extra):
-    for name, key in ALL_CHECKS:
-        for records in RECORDS_OF[name]:
-            body = dict({LIST_OF[name]: records}, **extra)
-            assert_not_evaluated(load(name)(body), key)
+def beside(name, records, extra):
+    return dict({LIST_OF[name]: records}, **extra)
 
 
-@pytest.mark.parametrize("extra", PARTIAL)
-def test_a_cut_off_page_or_error_on_a_response_wrapper_is_not_evaluated(extra):
+def on_a_wrapper(name, records, extra):
+    """The same marker on the response wrapper, and inside it."""
+    return [dict({"apiResponse": {LIST_OF[name]: records}}, **extra),
+            {"apiResponse": dict({LIST_OF[name]: records}, **extra)}]
+
+
+@pytest.mark.parametrize("extra", ERRORS)
+def test_an_error_beside_records_is_never_read_as_a_verdict(extra):
     for name, key in ALL_CHECKS:
         for records in RECORDS_OF[name]:
-            body = dict({"apiResponse": {LIST_OF[name]: records}}, **extra)
-            assert_not_evaluated(load(name)(body), key)
-            inner = {"apiResponse": dict({LIST_OF[name]: records}, **extra)}
-            assert_not_evaluated(load(name)(inner), key)
+            for body in [beside(name, records, extra)] + on_a_wrapper(name, records, extra):
+                assert_not_evaluated(load(name)(body), key)
+
+
+# On a page that is not the last, a result that rests on ABSENCE (a pass, "none found", a total count) is
+# not evidence: the record that would change it may be on a page not read.
+ABSENCE_RECORDS = {
+    "nocriticalfindings": ([{"id": "r1", "severity": "low"}], [{"severity": "high"}, {"severity": "info"}]),
+    "nohighfindings": ([{"id": "r1", "severity": "low"}], [{"severity": "critical"}, {"severity": "info"}]),
+    "isasmenabled": ([{"hostname": "b.example", "active": False}],
+                     [{"hostname": "c.example", "active": True, "scanned_at": None}]),
+    "exploitedfindingscount": RECORDS_OF["exploitedfindingscount"],
+}
+
+
+@pytest.mark.parametrize("extra", NEXT_PAGE)
+def test_on_a_page_that_is_not_the_last_a_result_resting_on_absence_is_not_evaluated(extra):
+    for name, key in ALL_CHECKS:
+        for records in ABSENCE_RECORDS[name]:
+            for body in [beside(name, records, extra)] + on_a_wrapper(name, records, extra):
+                assert_not_evaluated(load(name)(body), key)
+
+
+@pytest.mark.parametrize("extra", NEXT_PAGE)
+def test_a_negative_proven_by_a_record_already_seen_stays_false_without_a_total(extra):
+    cases = (("nocriticalfindings", "noCriticalFindings", [{"id": "r1", "severity": "low"}, {"id": "r2", "severity": "critical"}]),
+             ("nocriticalfindings", "noCriticalFindings", [{"id": "r3", "severity": "severe"}]),
+             ("nohighfindings", "noHighFindings", [{"id": "r1", "severity": "low"}, {"id": "r2", "severity": "high"}]),
+             ("nohighfindings", "noHighFindings", [{"id": "r3", "severity": "severe"}]))
+    for name, key, records in cases:
+        for body in [beside(name, records, extra)] + on_a_wrapper(name, records, extra):
+            out = load(name)(body)
+            assert out[key] is False
+            assert "additionalInfo" not in out
+            assert "count" not in out and "riskCount" not in out   # what was seen is not a total
+
+
+@pytest.mark.parametrize("extra", NEXT_PAGE)
+def test_a_domain_seen_being_scanned_on_a_page_that_is_not_the_last_is_still_monitoring(extra):
+    records = RECORDS_OF["isasmenabled"][0]
+    for body in [beside("isasmenabled", records, extra)] + on_a_wrapper("isasmenabled", records, extra):
+        out = load("isasmenabled")(body)
+        assert out["isASMEnabled"] is True
+        assert "additionalInfo" not in out
+        assert "scannedDomains" not in out and "domainCount" not in out
+
+
+@pytest.mark.parametrize("extra", NEXT_PAGE)
+def test_an_exploited_count_on_a_page_that_is_not_the_last_is_never_reported_even_with_one_seen(extra):
+    records = RECORDS_OF["exploitedfindingscount"][1]
+    for body in [beside("exploitedfindingscount", records, extra)] + on_a_wrapper("exploitedfindingscount", records, extra):
+        out = load("exploitedfindingscount")(body)
+        assert_not_evaluated(out, "exploitedFindingsCount")
+        assert "vulnerabilityCount" not in out
 
 
 @pytest.mark.parametrize("extra", [
