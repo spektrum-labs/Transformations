@@ -12,7 +12,7 @@ tamper or real-time protection.
 Why a separate file: istamperprotectionenabled.py / isrealtimeprotectionenabled.py return true when ONE
 device is compliant ("protected > 0"), so 1943 of 2075 devices passed "real-time protection is active
 on all endpoints"; and they return false when no device is applicable (phones only, or no device
-onboarded), a fail with nothing to measure (Orion Steel, ReSRG, Atlas, Pelican on 2026-09-29).
+onboarded), a fail with nothing to measure (four live connections on 2026-09-29).
 
 Value: true only when every applicable device is compliant for that SCID; false when at least one
 applicable device is not. The compliant share is also returned as a whole-number percentage
