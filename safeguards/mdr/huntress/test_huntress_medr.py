@@ -106,6 +106,63 @@ def test_never_called_back_fleet_is_not_active():
     assert value("isEDRAgentActive", body("agents", [{"id": 1, "last_callback_at": None}, {"id": 2, "last_callback_at": None}])) is False
 
 
+# A callback time in the future is not a callback. One agent with a bad clock (or a bad field) must
+# not win the "newest callback" and hide a fleet that went dark.
+FUTURE_CASES = [
+    ("isEDRAgentActive", False),
+    ("staleAgentOfflineCount", 2),
+    ("assetInventoryCoveragePercentage", 0.0),
+]
+
+
+@pytest.mark.parametrize("key,expected", FUTURE_CASES)
+def test_future_dated_callback_does_not_hide_a_dark_fleet(key, expected):
+    fleet = [agent(1, days=200), agent(2, days=-30)]
+    assert value(key, body("agents", fleet)) == expected
+
+
+@pytest.mark.parametrize("key,expected", FUTURE_CASES)
+def test_far_future_callback_is_never_a_pass(key, expected):
+    fleet = [agent(1, days=200), agent(2, last="2099-01-01T00:00:00Z")]
+    assert value(key, body("agents", fleet)) == expected
+
+
+def test_a_fleet_of_only_future_dated_agents_is_not_active():
+    fleet = [agent(1, days=-5), agent(2, days=-400)]
+    assert value("isEDRAgentActive", body("agents", fleet)) is False
+    assert value("staleAgentOfflineCount", body("agents", fleet)) == 2
+    assert value("assetInventoryCoveragePercentage", body("agents", fleet)) == 0.0
+
+
+def test_future_dated_agent_is_ignored_next_to_a_really_active_one():
+    fleet = [agent(1, days=2), agent(2, days=-30)]
+    assert value("isEDRAgentActive", body("agents", fleet)) is True
+    assert value("staleAgentOfflineCount", body("agents", fleet)) == 1
+    assert value("assetInventoryCoveragePercentage", body("agents", fleet)) == 50.0
+
+
+def test_future_dated_agents_are_reported_and_the_read_is_still_a_measurement():
+    out = load("isEDRAgentActive")(body("agents", [agent(1, days=200), agent(2, days=-30)]))
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert out["transformedResponse"]["activeAgents"] == 0
+    assert out["transformedResponse"]["futureDatedAgents"] == 1
+    assert out["transformedResponse"]["newestCallbackAt"] is not None
+    assert "future" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_small_clock_skew_is_still_a_callback():
+    # A clock a few hours ahead is a real, recent callback; only a time more than about a day ahead is unusable.
+    skewed = [agent(1, days=-0.25)]
+    assert value("isEDRAgentActive", body("agents", skewed)) is True
+    assert value("staleAgentOfflineCount", body("agents", skewed)) == 0
+    assert value("assetInventoryCoveragePercentage", body("agents", skewed)) == 100.0
+
+
+def test_more_than_a_day_ahead_is_unusable():
+    assert value("isEDRAgentActive", body("agents", [agent(1, days=-0.9)])) is True
+    assert value("isEDRAgentActive", body("agents", [agent(1, days=-1.1)])) is False
+
+
 def test_missing_data_is_never_active():
     # Unparseable and absent timestamps are not a callback; they can never make the check pass.
     assert value("isEDRAgentActive", body("agents", [{"id": 1}, agent(2, last="not a date")])) is False
