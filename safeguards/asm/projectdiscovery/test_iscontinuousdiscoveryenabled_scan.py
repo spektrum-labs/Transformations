@@ -89,20 +89,34 @@ class FailClosed(unittest.TestCase):
         "validation failed": {"data": scan(), "validation": {"status": "failed", "errors": ["x"], "warnings": []}},
     }
 
-    def test_no_evidence_is_false_with_error(self):
+    # A scan that completed with counts that agree, but shows no discovery or is not from this evaluation, is a
+    # measured False. Every other body measured nothing and is None (Not evaluated).
+    MEASURED_FALSE = {
+        "subfinder found nothing (seed only)",
+        "seed listed twice",
+        "stale scan",
+        "no timestamp",
+        "garbage timestamp",
+        "future timestamp",
+    }
+
+    def test_no_evidence_is_none_and_a_measured_miss_is_false_with_error(self):
         for label, body in self.BODIES.items():
             with self.subTest(body=label):
                 out = run(copy.deepcopy(body))
-                self.assertIs(out["transformedResponse"][KEY], False)
-                self.assertEqual(out["transformedResponse"], {KEY: False})
+                expected = False if label in self.MEASURED_FALSE else None
+                self.assertIs(out["transformedResponse"][KEY], expected)
+                self.assertEqual(out["transformedResponse"], {KEY: expected})
                 self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
                 self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
                 self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
 
     def test_sibling_failed_scan_battery(self):
         for body in ASM.FAILED_SCANS:
             with self.subTest(body=str(body)[:60]):
-                self.assertIs(value(copy.deepcopy(body)), False)
+                self.assertIsNone(value(copy.deepcopy(body)))
 
     def test_seed_only_names_the_discovery_failure(self):
         errors = run(seed_only())["additionalInfo"]["dataCollection"]["errors"]

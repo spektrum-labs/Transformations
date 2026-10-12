@@ -15,8 +15,9 @@ scan), so a response is only ever read for the key whose severity it scanned.
 
 A scan the Integration Service has no result for (status "error" with a reason such as asm_scan_in_progress or
 asm_scan_retry_backoff) returns None for both keys, and the reason is passed on as dataCollection.errorCode, so
-a scan that is still running is not mistaken for a failed one. Any other reason is passed on too; an error
-reply with no reason reads as before.
+a scan that is still running is not mistaken for a failed one. Every error path returns None with the reason
+in dataCollection.errors, never False: any other reason, no reason, a malformed reason, an input that failed
+validation, a scan with zero or failed hosts, and an exception inside the transform.
 """
 
 import json
@@ -105,9 +106,9 @@ def capped_note(data):
 # "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
 # produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
 # asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
-# that is still running from a broken integration. Any asm_scan_ code means nothing was measured, so the
-# criterion stays None (Not evaluated), never False. A reply with any other reason keeps its answer and gains
-# the code; one with no reason, or a reason that is not a plain code, reads exactly as before.
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
 SCAN_REASON_MAX_LENGTH = 60
 SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 SCAN_REASON_TEXT = {
@@ -133,12 +134,6 @@ def scan_reason(data):
         if ch not in SCAN_REASON_CHARS:
             return None
     return reason
-
-
-def scan_not_measured(data):
-    """True when the Integration Service says no scan result exists (an asm_scan_ reason): nothing was measured."""
-    reason = scan_reason(data)
-    return reason is not None and reason.startswith("asm_scan_")
 
 
 def scan_status_problem(status, domain, reason):
@@ -169,10 +164,12 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            reason = "Input validation failed: the scan response did not match its schema, so the findings are unknown"
             return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
+                result={"noCriticalFindings": None, "noHighFindings": None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=[reason],
+                fail_reasons=[reason]
             )
 
         pass_reasons = []
@@ -197,10 +194,9 @@ def transform(input):
             else:
                 problem = scan_status_problem(scan_status, domain, reason_code)
                 scan_fail_reason = problem
-            answer = None if scan_not_measured(data) else False
             return with_error_code(
                 create_response(
-                    result={"noCriticalFindings": answer, "noHighFindings": answer},
+                    result={"noCriticalFindings": None, "noHighFindings": None},
                     validation=validation,
                     api_errors=[problem],
                     fail_reasons=[scan_fail_reason],
@@ -230,7 +226,7 @@ def transform(input):
             reason = None
         if reason:
             return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
+                result={"noCriticalFindings": None, "noHighFindings": None},
                 validation=validation,
                 api_errors=[reason],
                 fail_reasons=[reason],
@@ -337,9 +333,11 @@ def transform(input):
         )
 
     except Exception as e:
+        reason = f"Transformation error, so the findings are unknown: {str(e)}"
         return create_response(
-            result={"noCriticalFindings": False, "noHighFindings": False},
+            result={"noCriticalFindings": None, "noHighFindings": None},
             validation={"status": "error", "errors": [], "warnings": []},
+            api_errors=[reason],
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[reason]
         )

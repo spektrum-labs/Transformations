@@ -99,9 +99,9 @@ def to_int(value):
 # "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
 # produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
 # asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
-# that is still running from a broken integration. Any asm_scan_ code means nothing was measured, so the
-# criterion stays None (Not evaluated), never False. A reply with any other reason keeps its answer and gains
-# the code; one with no reason, or a reason that is not a plain code, reads exactly as before.
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
 SCAN_REASON_MAX_LENGTH = 60
 SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 SCAN_REASON_TEXT = {
@@ -127,12 +127,6 @@ def scan_reason(data):
         if ch not in SCAN_REASON_CHARS:
             return None
     return reason
-
-
-def scan_not_measured(data):
-    """True when the Integration Service says no scan result exists (an asm_scan_ reason): nothing was measured."""
-    reason = scan_reason(data)
-    return reason is not None and reason.startswith("asm_scan_")
 
 
 def scan_status_problem(status, domain, reason):
@@ -205,8 +199,9 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: None}, validation=validation,
-                                   fail_reasons=["Input validation failed"])
+            reason = "Input validation failed: the scan response did not match its schema, so the count is unknown"
+            return create_response(result={criteriaKey: None}, validation=validation, api_errors=[reason],
+                                   fail_reasons=[reason])
         problem = scan_problem(data)
         domain = (data.get("primaryDomain") or data.get("domain") or "unknown") if isinstance(data, dict) else "unknown"
         summary = {"domain": domain,
@@ -232,6 +227,7 @@ def transform(input):
             pass_reasons=[str(discovered) + " external host(s) discovered for " + str(domain)],
             input_summary=summary)
     except Exception as e:
+        reason = "Transformation error, so the count is unknown: " + str(e)
         return create_response(result={criteriaKey: None},
                                validation={"status": "error", "errors": [], "warnings": []},
-                               transformation_errors=[str(e)], fail_reasons=["Transformation error: " + str(e)])
+                               api_errors=[reason], transformation_errors=[str(e)], fail_reasons=[reason])

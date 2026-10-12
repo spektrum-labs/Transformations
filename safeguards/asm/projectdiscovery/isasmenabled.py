@@ -6,7 +6,7 @@ Evaluates: Whether external attack surface discovery and scanning ran for the pa
 Input: the runParallelASMScan response the noCriticalFindings workflow already fetches (subfinder discovery of the
 passport domain, then nuclei critical-severity templates across up to 25 discovered hosts). No extra scan.
 Fails closed: a scan that did not complete, scanned zero hosts, or reports a failed host or an error returns
-False with the reason in dataCollection.errors.
+None (Not evaluated) with the reason in dataCollection.errors, never False.
 """
 
 import json
@@ -79,9 +79,9 @@ def to_int(value):
 # "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
 # produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
 # asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
-# that is still running from a broken integration. Any asm_scan_ code means nothing was measured, so the
-# criterion stays None (Not evaluated), never False. A reply with any other reason keeps its answer and gains
-# the code; one with no reason, or a reason that is not a plain code, reads exactly as before.
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
 SCAN_REASON_MAX_LENGTH = 60
 SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 SCAN_REASON_TEXT = {
@@ -107,12 +107,6 @@ def scan_reason(data):
         if ch not in SCAN_REASON_CHARS:
             return None
     return reason
-
-
-def scan_not_measured(data):
-    """True when the Integration Service says no scan result exists (an asm_scan_ reason): nothing was measured."""
-    reason = scan_reason(data)
-    return reason is not None and reason.startswith("asm_scan_")
 
 
 def scan_status_problem(status, domain, reason):
@@ -185,17 +179,17 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation,
-                                   fail_reasons=["Input validation failed"])
+            reason = "Input validation failed: the scan response did not match its schema, so the answer is unknown"
+            return create_response(result={criteriaKey: None}, validation=validation, api_errors=[reason],
+                                   fail_reasons=[reason])
         problem = scan_problem(data)
         domain = (data.get("primaryDomain") or data.get("domain") or "unknown") if isinstance(data, dict) else "unknown"
         summary = {"domain": domain,
                    "domainsScanned": to_int(data.get("domainsScanned")) if isinstance(data, dict) else None,
                    "templatesScanned": to_int(data.get("templatesScanned")) if isinstance(data, dict) else None}
         if problem:
-            value = None if scan_not_measured(data) else False
             return with_error_code(
-                create_response(result={criteriaKey: value}, validation=validation, api_errors=[problem],
+                create_response(result={criteriaKey: None}, validation=validation, api_errors=[problem],
                                 fail_reasons=[problem], input_summary=summary),
                 scan_reason(data))
         findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
@@ -209,6 +203,7 @@ def transform(input):
                           + str(scanned) + " host(s) scanned of " + str(discovered) + " discovered"],
             input_summary=summary)
     except Exception as e:
-        return create_response(result={criteriaKey: False},
+        reason = "Transformation error, so the answer is unknown: " + str(e)
+        return create_response(result={criteriaKey: None},
                                validation={"status": "error", "errors": [], "warnings": []},
-                               transformation_errors=[str(e)], fail_reasons=["Transformation error: " + str(e)])
+                               api_errors=[reason], transformation_errors=[str(e)], fail_reasons=[reason])
