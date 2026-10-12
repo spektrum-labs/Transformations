@@ -20,7 +20,12 @@ def load(name):
     spec = importlib.util.spec_from_file_location("keepit_" + name, HERE / (name + ".py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.transform
+
+    def run(body):
+        # The boolean checks answer in the platform envelope; the count checks answer bare.
+        out = module.transform(body)
+        return out.get("transformedResponse", out)
+    return run
 
 
 def connector(i, kind="gsuite", retention=None):
@@ -227,15 +232,36 @@ def test_schedule_and_flip():
     assert t(schedule_body([attrs(backup_interval="PT4H")] * 4, product_interval=None))["isBackupTypesScheduled"] is True
     off = [attrs(), attrs(disable_auto_backup="true"), attrs(), attrs()]
     assert t(schedule_body(off))["isBackupTypesScheduled"] is False
-    assert t(schedule_body([attrs()] * 4, product_interval=None))["isBackupTypesScheduled"] is False
+    # No interval anywhere, or a flag Keepit does not document, proves nothing: not measured, never a graded False.
+    assert t(schedule_body([attrs()] * 4, product_interval=None))["isBackupTypesScheduled"] is None
     odd = [attrs(disable_auto_backup="maybe")] + [attrs()] * 3
-    assert t(schedule_body(odd))["isBackupTypesScheduled"] is False
+    assert t(schedule_body(odd))["isBackupTypesScheduled"] is None
+    # A connector stated off still fails the check even when another connector's schedule is unreadable.
+    mixed = [attrs(disable_auto_backup="true"), attrs()] + [attrs()] * 2
+    assert t(schedule_body(mixed, product_interval=None))["isBackupTypesScheduled"] is False
+
+
+def test_enabled_unstated_is_not_measured():
+    # The real listDevices body has no <enabled> on any connector: nothing is stated, so nothing is graded.
+    t = load("isbackupenabled")
+    assert t(devices(4))["isBackupEnabled"] is None
+    stated = devices(4)
+    stated["devices"]["cloud"][0]["enabled"] = "true"
+    assert t(stated)["isBackupEnabled"] is True
+    off = devices(2)
+    for c in off["devices"]["cloud"]:
+        c["enabled"] = "false"
+    assert t(off)["isBackupEnabled"] is False
+    mixed = devices(2)
+    mixed["devices"]["cloud"][0]["enabled"] = "false"
+    assert t(mixed)["isBackupEnabled"] is None
 
 
 def test_schedule_fail_closed():
     t = load("isbackuptypesscheduled")
+    # Nothing here was read in full, so the check is not measured: None, never a graded False.
     for body in FAIL_CLOSED + [devices(4)]:
-        assert t(body)["isBackupTypesScheduled"] is False, body
+        assert t(body)["isBackupTypesScheduled"] is None, body
     partial = schedule_body([attrs()] * 3)
     partial["devices"]["cloud"].append(connector(9))
-    assert t(partial)["isBackupTypesScheduled"] is False
+    assert t(partial)["isBackupTypesScheduled"] is None
