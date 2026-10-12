@@ -99,7 +99,8 @@ def test_policies():
     assert run("isBackupImmutable", dict(GROUPS, policies=[policy(mode="Administrative")])) is True
     assert run("isBackupImmutable", dict(GROUPS, policies=[policy(mode=None)])) is False
     assert run("isBackupImmutable", dict(GROUPS, policies=[policy(duration=0)])) is False
-    assert run("isBackupImmutable", dict(GROUPS, policies=[policy("other")])) is False
+    # The group's policy was not returned: the lock cannot be read, so it is not measured (was False).
+    assert run("isBackupImmutable", dict(GROUPS, policies=[policy("other")])) is None
     assert run("isBackupImmutable", {"protectionGroups": [group(0), group(1, policy="p2")], "policies": [policy(), policy("p2", mode=None)]}) is False
     assert run("isDataLockComplianceModeEnabled", POSTURE) is True
     assert run("isDataLockComplianceModeEnabled", dict(GROUPS, policies=[policy(mode="Administrative")])) is False
