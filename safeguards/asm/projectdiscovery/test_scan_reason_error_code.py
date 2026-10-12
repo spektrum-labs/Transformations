@@ -306,25 +306,144 @@ def discovery_body(**overrides):
     return {**success_body(), **overrides}
 
 
-def test_discovery_a_stale_completed_scan_stays_a_false_with_its_reason():
-    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(200)))
-    assert values == {"isContinuousDiscoveryEnabled": False}
-    assert collection(info)["errors"]
+KEY = "isContinuousDiscoveryEnabled"
+SEED_ONLY = dict(
+    domainsScanned="1", totalDiscovered="1",
+    domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}])
 
 
-def test_discovery_a_completed_scan_with_no_timestamp_stays_a_false_with_its_reason():
-    body = discovery_body()
-    del body["timestamp"]
-    values, info = run(DISCOVERY, body)
-    assert values == {"isContinuousDiscoveryEnabled": False}
-    assert collection(info)["errors"]
+def assert_graded_false(values, info, where):
+    """A measured False: graded, with its reason as a fail reason and no error on the data collection."""
+    assert values == {KEY: False}, (where, values)
+    assert collection(info)["status"] == "success", where
+    assert collection(info)["errors"] == [], where
+    assert info["transformation"]["status"] == "success", where
+    assert info["evaluation"]["failReasons"], where
 
 
-def test_discovery_a_completed_scan_that_found_nothing_beyond_the_seed_stays_a_false():
-    values, _ = run(DISCOVERY, discovery_body(
-        domainsScanned="1", totalDiscovered="1",
-        domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}]))
-    assert values == {"isContinuousDiscoveryEnabled": False}
+def assert_not_evaluated_with_error(values, info, where):
+    assert values == {KEY: None}, (where, values)
+    assert collection(info)["status"] == "error", where
+    assert collection(info)["errors"], where
+    assert info["evaluation"]["failReasons"], where
+
+
+# Case 1: a completed scan, counts that agree, no host beyond the seed, nothing wrong anywhere: a proven negative.
+def test_discovery_a_completed_scan_with_no_host_beyond_the_seed_is_a_graded_false():
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(1), **SEED_ONLY))
+    assert_graded_false(values, info, "seed only")
+    assert any("beyond the seed" in r for r in info["evaluation"]["failReasons"])
+
+
+def test_discovery_the_seed_listed_twice_is_a_graded_false():
+    values, info = run(DISCOVERY, discovery_body(
+        timestamp=stamp(1), domainsScanned="2", totalDiscovered="2",
+        domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"},
+                       {"domain": "EXAMPLE.com.", "findingsCount": 0, "status": "success"}]))
+    assert_graded_false(values, info, "seed twice")
+
+
+@pytest.mark.parametrize("error", [
+    {"errors": [{"domain": "example.com", "error": "subfinder timed out"}]},
+    {"errors": ["discovery call failed"]},
+    {"domainResults": [{"domain": "example.com", "findingsCount": 0, "status": "error"}]},
+])
+def test_discovery_completed_no_extra_host_but_an_error_on_the_discovery_call_is_none_with_its_error(error):
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(1), **{**SEED_ONLY, **error}))
+    assert_not_evaluated_with_error(values, info, error)
+
+
+@pytest.mark.parametrize("partial", [
+    # the time limit stopped the fan-out: only the seed finished, 40 hosts were discovered
+    dict(domainsScanned="1", totalDiscovered="40", domainsCapped=True, scanTimeLimited=True,
+         domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}]),
+    dict(domainsScanned="1", totalDiscovered="40", domainsCapped=True,
+         domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}]),
+    dict(domainsScanned="1", totalDiscovered="1", scanTimeLimited="true",
+         domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}]),
+])
+def test_discovery_a_partial_scan_naming_no_host_beyond_the_seed_is_none(partial):
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(1), **partial))
+    assert_not_evaluated_with_error(values, info, partial)
+
+
+def test_discovery_a_time_limited_partial_that_names_a_discovered_host_still_passes():
+    values, info = run(DISCOVERY, discovery_body(
+        timestamp=stamp(1), domainsScanned="2", totalDiscovered="40", domainsCapped=True, scanTimeLimited=True))
+    assert values[KEY] is True
+    assert collection(info)["status"] == "success"
+
+
+# Case 2: a readable timestamp older than the window. The scan is complete and consistent, so its own date proves
+# discovery has not run in the last 48 hours: a graded False, like case 1.
+@pytest.mark.parametrize("hours", [49, 200, 24 * 400])
+def test_discovery_a_readable_stale_timestamp_is_a_graded_false(hours):
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(hours)))
+    assert_graded_false(values, info, hours)
+    assert any("not from this evaluation" in r for r in info["evaluation"]["failReasons"])
+
+
+def test_discovery_a_stale_scan_with_an_error_on_the_discovery_call_is_none_with_its_error():
+    values, info = run(DISCOVERY, discovery_body(
+        timestamp=stamp(200), errors=[{"domain": "example.com", "error": "subfinder timed out"}]))
+    assert_not_evaluated_with_error(values, info, "stale with error")
+
+
+def test_discovery_the_window_edges():
+    fresh, fresh_info = run(DISCOVERY, discovery_body(timestamp=stamp(47)))
+    assert fresh[KEY] is True and collection(fresh_info)["status"] == "success"
+    stale, stale_info = run(DISCOVERY, discovery_body(timestamp=stamp(49)))
+    assert_graded_false(stale, stale_info, "49 h")
+
+
+# Case 3: a missing or garbage timestamp cannot place the scan in the window: None. A future one is garbage.
+def test_discovery_a_missing_timestamp_is_none_with_its_error():
+    for case in ("absent", "empty", "none", "blank"):
+        body = discovery_body()
+        if case == "absent":
+            del body["timestamp"]
+        else:
+            body["timestamp"] = {"empty": "", "none": None, "blank": "   "}[case]
+        values, info = run(DISCOVERY, body)
+        assert_not_evaluated_with_error(values, info, case)
+
+
+@pytest.mark.parametrize("garbage", ["yesterday", "not a date", "2026-13-45T00:00:00Z", 12345, ["2026-10-12"], {"a": 1}])
+def test_discovery_a_garbage_timestamp_is_none_with_its_error(garbage):
+    values, info = run(DISCOVERY, discovery_body(timestamp=garbage))
+    assert_not_evaluated_with_error(values, info, garbage)
+
+
+@pytest.mark.parametrize("hours_ahead", [2, 48, 24 * 30])
+def test_discovery_a_future_timestamp_is_none_with_its_error(hours_ahead):
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(-hours_ahead)))
+    assert_not_evaluated_with_error(values, info, hours_ahead)
+
+
+def test_discovery_a_timestamp_a_few_minutes_ahead_is_clock_skew_and_still_passes():
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(-0.5)))
+    assert values[KEY] is True
+    assert collection(info)["status"] == "success"
+
+
+def test_discovery_a_scan_with_no_host_beyond_the_seed_and_no_timestamp_is_none():
+    values, info = run(DISCOVERY, discovery_body(timestamp="", **SEED_ONLY))
+    assert_not_evaluated_with_error(values, info, "seed only, untimed")
+
+
+# Case 4: unchanged. An incomplete scan, or counts that disagree with the per-host results, is None.
+@pytest.mark.parametrize("disagree", [
+    dict(domainsScanned="5"),
+    dict(totalDiscovered="1"),
+    dict(totalDiscovered=None),
+    dict(domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}]),
+    dict(domainResults=None),
+    dict(primaryDomain=None),
+])
+def test_discovery_counts_that_disagree_with_the_per_host_results_are_none(disagree):
+    for extra in ({}, {"timestamp": stamp(200)}, {"timestamp": ""}):
+        values, info = run(DISCOVERY, discovery_body(**disagree, **extra))
+        assert_not_evaluated_with_error(values, info, (disagree, extra))
 
 
 @pytest.mark.parametrize("overrides", [

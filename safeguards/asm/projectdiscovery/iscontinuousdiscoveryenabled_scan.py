@@ -18,13 +18,18 @@ nuclei.py _run_asm_async_in_thread). A failed discovery therefore looks like tot
 seed in domainResults. The only positive evidence that discovery ran is a discovered host other than the seed.
 
 Fails closed, matching the sibling knownExploitedVulnCount scan gate, and never reports False for a scan that
-measured nothing. A scan that did not complete (error envelope, rate-limited 429, timeout, template-list
-fallback), scanned zero hosts or zero templates, reports a failed host or an error, carries no findings list or
-one shorter or longer than its own total, or whose host counts disagree with its own domainResults: None
-(Not evaluated), with the reason in dataCollection.errors and transformation.errors. So is an input that failed
-validation, and so is an exception inside the transform. A scan that completed with counts that agree is measured:
-False, with the same two places carrying the reason, when it discovered no host beyond the seed or has no timestamp
-within the last 48 h; otherwise True.
+measured nothing. None (Not evaluated), with the reason in dataCollection.errors and transformation.errors, for:
+a scan that did not complete (error envelope, rate-limited 429, timeout, template-list fallback), scanned zero
+hosts or zero templates, reports a failed host or an error (so an error on the discovery call), or carries no
+findings list or one shorter or longer than its own total; one whose host counts disagree with its own
+domainResults; a capped or time-limited partial that names no host beyond the seed; one with no timestamp, a
+timestamp that cannot be read or one in the future (more than an hour ahead); an input that failed validation;
+and an exception inside the transform.
+
+False, graded, is reserved for a proven negative: a scan that completed with no error anywhere, so no error touches
+the discovery evidence, and whose counts agree. It is False with the reason as a fail reason and nothing recorded as
+a data collection error, when subfinder discovered no host beyond the seed, or when its readable timestamp is older
+than 48 h (discovery has not run in the window). Otherwise True.
 A capped scan (more hosts discovered than the 25 nuclei scanned) still passes: the cap trims the nuclei step, not
 discovery, and totalDiscovered is the full subfinder count.
 """
@@ -182,6 +187,10 @@ def scan_problem(data):
     return None
 
 
+def is_true(value):
+    return value is True or str(value).strip().lower() == "true"
+
+
 def host_name(value):
     return str(value or "").strip().lower().rstrip(".")
 
@@ -209,12 +218,16 @@ def discovery_shape_problem(data):
     if (capped and discovered <= scanned) or (not capped and discovered != scanned):
         return ("Scan of " + seed + " is truncated or inconsistent: totalDiscovered " + str(discovered)
                 + " against " + str(scanned) + " scanned (domainsCapped " + str(capped) + ")")
+    if (capped or is_true(data.get("scanTimeLimited"))) and not [h for h in hosts if h != seed]:
+        return ("Scan of " + seed + " is partial (capped or stopped by its time limit) and names no host beyond the "
+                "seed among the " + str(scanned) + " it covered, so discovery cannot be read from it")
     return None
 
 
 def no_discovery_problem(data):
     """None when subfinder discovered at least one host beyond the seed domain; else the reason. Only called on
-    a scan that passed scan_problem and discovery_shape_problem, so it completed and its counts agree."""
+    a scan that passed scan_problem, discovery_shape_problem and timestamp_problem, so it completed with no error,
+    its counts agree, it was not capped or time-limited and it is dated inside the window's past or present."""
     seed = host_name(data.get("primaryDomain"))
     hosts = [host_name(r.get("domain")) for r in data.get("domainResults")]
     discovered = to_int(data.get("totalDiscovered"))
@@ -238,9 +251,30 @@ def scan_age_hours(data):
     return (datetime.utcnow() - scanned_at).total_seconds() / 3600.0
 
 
-def failed(reason, validation, summary, error_code=None, value=False):
+def timestamp_problem(data):
+    """None when the scan carries a readable timestamp that is not in the future; else the reason. A scan that
+    cannot be placed in time cannot be placed in the evaluation window, so nothing is proven about it."""
+    seed = host_name(data.get("primaryDomain"))
+    age = scan_age_hours(data)
+    if age is None:
+        return "Scan of " + seed + " carries no parseable timestamp, so it cannot be placed in the evaluation window"
+    if age < -1:
+        return ("Scan of " + seed + " carries a timestamp in the future (" + str(data.get("timestamp"))
+                + "), so it cannot be placed in the evaluation window")
+    return None
+
+
+def measured_false(reason, validation, summary):
+    """A proven negative: the scan completed with no error and its counts agree, and it shows no continuous
+    discovery. A graded False with the reason as a fail reason; nothing is recorded as a data collection error."""
+    return create_response(result={CRITERIA_KEY: False}, validation=validation, fail_reasons=[reason],
+                           input_summary=summary)
+
+
+def not_evaluated(reason, validation, summary, error_code=None):
+    """None (Not evaluated) with the reason in dataCollection.errors and transformation.errors."""
     return with_error_code(
-        create_response(result={CRITERIA_KEY: value}, validation=validation, api_errors=[reason],
+        create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
                         transformation_errors=[reason], fail_reasons=[reason], input_summary=summary),
         error_code)
 
@@ -261,21 +295,23 @@ def transform(input):
                    "domainsScanned": to_int(data.get("domainsScanned")) if isinstance(data, dict) else None,
                    "totalDiscovered": to_int(data.get("totalDiscovered")) if isinstance(data, dict) else None,
                    "templatesScanned": to_int(data.get("templatesScanned")) if isinstance(data, dict) else None}
-        # A scan that did not complete, or whose own counts disagree, measured nothing about discovery: None.
-        # One that completed with consistent counts is measured: False when it shows no host beyond the seed
-        # or is not from this evaluation (no parseable timestamp, or older than MAX_SCAN_AGE_HOURS), else True.
-        unmeasured = scan_problem(data) or discovery_shape_problem(data)
+        # Not evaluated (None, with the reason in dataCollection.errors): a scan that did not complete or reports
+        # an error, one whose own counts disagree with its per-host results or that is partial with no host
+        # beyond the seed, and one with no readable or a future timestamp.
+        unmeasured = scan_problem(data) or discovery_shape_problem(data) or timestamp_problem(data)
         if unmeasured:
-            return failed(unmeasured, validation, summary, scan_reason(data), None)
+            return not_evaluated(unmeasured, validation, summary, scan_reason(data))
+        # Proven negatives (a graded False, no error recorded): the scan completed with no error anywhere, so no
+        # error touches the discovery evidence, and it either found no host beyond the seed or is older than the
+        # window (MAX_SCAN_AGE_HOURS), so discovery has not run in it.
         no_discovery = no_discovery_problem(data)
         if no_discovery:
-            return failed(no_discovery, validation, summary)
+            return measured_false(no_discovery, validation, summary)
         age = scan_age_hours(data)
-        if age is None:
-            return failed("Scan of " + str(domain) + " carries no parseable timestamp", validation, summary)
-        if age < -1 or age > MAX_SCAN_AGE_HOURS:
-            return failed("Scan of " + str(domain) + " is not from this evaluation: timestamp "
-                          + str(data.get("timestamp")) + " is " + str(round(age, 1)) + " h old", validation, summary)
+        if age > MAX_SCAN_AGE_HOURS:
+            return measured_false("Scan of " + str(domain) + " is not from this evaluation: timestamp "
+                                  + str(data.get("timestamp")) + " is " + str(round(age, 1)) + " h old, beyond the "
+                                  + str(MAX_SCAN_AGE_HOURS) + " h window", validation, summary)
         seed = host_name(data.get("primaryDomain"))
         discovered = to_int(data.get("totalDiscovered"))
         scanned = to_int(data.get("domainsScanned"))
