@@ -10,8 +10,9 @@ Focuses on MDR-specific metrics.
 An error, refusal, empty or unreadable endpoint read is Not evaluated (every key None with a
 data-collection error), never a failed check. So is a partial read (a next-page cursor or a
 truncation marker is present), and so is a body with no endpoint list: a figure, a "none found"
-or a count taken from part of the fleet is not a total. An explicit configured flag keeps its
-own value; every other key beside it is None.
+or a count taken from part of the fleet is not a total. The configured key (isMDRConfigured) is
+derived from the endpoint list alone: Sophos documents no such field, so a flag in the body is never
+read, never kept and never overrides what the list shows.
 """
 
 import json
@@ -32,14 +33,14 @@ RESULT_KEYS = [
     "isMDRLoggingEnabled", "requiredCoveragePercentage", "requiredConfigurationPercentage",
     "isMDRConfigured",
 ]
-FLAG_KEY = "isMDRConfigured"
 STATUS_KEYS = ["status_code", "statusCode", "httpStatus", "status"]
 ERROR_REASON = "Not evaluated: Sophos returned an error instead of an endpoint list; nothing was measured."
 NO_ENDPOINTS_REASON = "Not evaluated: no endpoints returned"
 NO_LIST_REASON = "Not evaluated: no endpoint list in the response; nothing was measured."
 PARTIAL_REASON = (
-    "Not evaluated: the endpoint list has further pages that were not read, so a coverage figure "
-    "from part of the list is not a total; nothing was measured."
+    "Not evaluated: the endpoint list is only part of the fleet (it has further pages that were not read, "
+    "or it starts after the first page), so a coverage figure from part of the list is not a total; "
+    "nothing was measured."
 )
 VALIDATION_REASON = "Not evaluated: the response failed input validation; nothing was measured."
 EXCEPTION_REASON = "Not evaluated: the transformation could not read the response; nothing was measured."
@@ -87,8 +88,8 @@ def read_problem(data):
 
     A complete list of endpoints, even one with no managed endpoint, is a read that proves a
     negative and is scored as before. A list that is only part of the fleet is not (see
-    unread_pages). A body with an explicit configured flag but no endpoint list has nothing to
-    score either; kept_flag lets the flag keep its own value.
+    unread_pages). A body with no endpoint list, whatever else it carries (a configured flag
+    included), has nothing to score.
     """
     if isinstance(data, list):
         return list_problem(data)
@@ -104,20 +105,6 @@ def read_problem(data):
             return unread_pages(data, len(items))
         return NO_LIST_REASON
     return NO_LIST_REASON
-
-
-def kept_flag(data, problem):
-    """The explicit configured flag as a bool when the body states one and the only trouble is a
-    missing, empty or partial endpoint list. An error proves nothing, so no flag is kept beside
-    one. None when there is no flag to keep."""
-    if not isinstance(data, dict):
-        return None
-    if problem not in (NO_LIST_REASON, NO_ENDPOINTS_REASON, PARTIAL_REASON):
-        return None
-    value = data.get(FLAG_KEY)
-    if value is None:
-        return None
-    return bool(value)
 
 
 def page_cursor(value):
@@ -147,9 +134,11 @@ def marked_true(value):
 def unread_pages(data, item_count):
     """PARTIAL_REASON when the endpoint list may be only part of the fleet, else None.
 
-    A next-page cursor still set, a truncation marker, more items than were returned, or more
-    pages than one page of endpoints all mean the rest was not read. Anything computed from the
-    part that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
+    A next-page cursor still set, a truncation marker, more items than were returned, more pages
+    than one page of endpoints, or a page that does not start at the beginning (fromKey set) all
+    mean part of the fleet was not read. A page total above the number of items returned, with no
+    page size to compare against, cannot be a whole read either. Anything computed from the part
+    that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
     seen, so it is not reported. A full first page with no cursor is not treated as partial: a
     complete read of a large fleet looks the same.
     """
@@ -162,13 +151,19 @@ def unread_pages(data, item_count):
         return PARTIAL_REASON
     if page_cursor(pages.get("nextKey")) is not None:
         return PARTIAL_REASON
+    if page_cursor(pages.get("fromKey")) is not None:
+        return PARTIAL_REASON
     total_items = page_int(pages.get("items"))
     if total_items is not None and total_items > item_count:
         return PARTIAL_REASON
     total_pages = page_int(pages.get("total"))
     size = page_int(pages.get("size"))
-    if total_pages is not None and total_pages > 1 and size is not None and item_count <= size:
-        return PARTIAL_REASON
+    if total_pages is not None and total_pages > 1:
+        if size is None:
+            if total_pages > item_count:
+                return PARTIAL_REASON
+        elif item_count <= size:
+            return PARTIAL_REASON
     return None
 
 
@@ -246,12 +241,8 @@ def transform(input):
 
         problem = read_problem(data)
         if problem is not None:
-            unmeasured = not_measured_result()
-            flag = kept_flag(data, problem)
-            if flag is not None:
-                unmeasured[FLAG_KEY] = flag
             return create_response(
-                result=unmeasured,
+                result=not_measured_result(),
                 validation=validation,
                 fail_reasons=[problem],
                 api_errors=[problem]
@@ -267,15 +258,12 @@ def transform(input):
         # containing `items`. Handle both so counts aren't silently zeroed.
         if isinstance(data, list):
             items = data
-            explicit_configured = None
         elif isinstance(data, dict):
             items = data.get("items") or []
             if not isinstance(items, list):
                 items = []
-            explicit_configured = data.get("isMDRConfigured")
         else:
             items = []
-            explicit_configured = None
         total_endpoints = len(items)
         total_computers = 0
         total_servers = 0
@@ -454,15 +442,12 @@ def transform(input):
         coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
         coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
 
-        # "Configured" must reflect real deployment: honor an explicit flag from
-        # the API if present, otherwise require at least one MDR-covered endpoint.
-        # Previously this defaulted to True, producing a false PASS on zero data.
-        if explicit_configured is not None:
-            coverage_scores["isMDRConfigured"] = bool(explicit_configured)
-        else:
-            coverage_scores["isMDRConfigured"] = (
-                total_endpoints > 0 and coverage_scores["MDR"] > 0
-            )
+        # "Configured" must reflect real deployment, so it is derived from the endpoint list alone:
+        # at least one MDR-covered endpoint. Sophos documents no configured field, so a flag in the
+        # body is never read (it could only override what the list shows).
+        coverage_scores["isMDRConfigured"] = (
+            total_endpoints > 0 and coverage_scores["MDR"] > 0
+        )
 
         # Build pass/fail reasons
         if coverage_scores["isMDREnabled"]:
