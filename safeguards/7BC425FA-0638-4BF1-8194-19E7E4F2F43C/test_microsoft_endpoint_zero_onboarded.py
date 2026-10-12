@@ -1,7 +1,7 @@
 """Defender for Endpoint (One-Click) with an empty machine inventory is Not evaluated, never a fail.
 
 A readable inventory with no eligible machine (empty, or only excluded/unsupported records) proves nothing
-about the estate, so the one-click, isEPPConfigured, EDR and server coverage checks answer None with a dataCollection error
+about the environment, so the one-click, isEPPConfigured, EDR and server coverage checks answer None with a dataCollection error
 ("Defender has no onboarded devices"); the onboard-or-disconnect hint is guidance only. Eligible machines
 with none onboarded is still a definite result. Error bodies,
 unread pages and the advanced-hunting checks stay not evaluated. Tenants with onboarded machines keep

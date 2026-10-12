@@ -2,14 +2,14 @@
 
 Falcon reports reduced_functionality_mode as "yes" / "no". The file read only True / "true" as RFM,
 so a host reporting "yes" with an agent_version and a sensor_update policy counted as deployed and
-could carry the estate to True (a false pass).
+could carry the environment to True (a false pass).
 
 Now: "yes", "true" or True (trimmed, any case) is RFM; "no", "false" or False is not; a missing
 field (or null) does not block the host, as before. Any other value is unknown: when no host proves
 the sensor and an unknown-value host would otherwise count as deployed, the key is None with a
 dataCollection error and the reason.
 
-All host data here is synthetic ("estate A")."""
+All host data here is synthetic ("environment A")."""
 import importlib.util
 import pathlib
 from datetime import datetime, timedelta
@@ -36,11 +36,11 @@ ABSENT = object()
 
 
 def host(n, rfm="no", sensor_update=True, agent_version="7.40.21309.0"):
-    """A host record as GET /devices/entities/devices/v2 returns it (synthetic estate A)."""
+    """A host record as GET /devices/entities/devices/v2 returns it (synthetic environment A)."""
     policies = {"prevention": {"policy_id": "prev-a", "applied": True}}
     if sensor_update:
         policies["sensor_update"] = {"policy_id": "su-a", "applied": True}
-    record = {"device_id": "estate-a-dev-%04d" % n, "hostname": "estate-a-host-%04d" % n,
+    record = {"device_id": "env-a-dev-%04d" % n, "hostname": "env-a-host-%04d" % n,
               "status": "normal", "platform_name": "Windows", "device_policies": policies,
               "last_seen": RECENT}
     if rfm is not ABSENT:
@@ -175,7 +175,7 @@ def test_only_three_unknown_values_are_quoted():
     assert '"odd-2"' in reason and '"odd-3"' not in reason
 
 
-# ---------------------------------------------------------------- mixed estates
+# ---------------------------------------------------------------- mixed environments
 
 def test_mixed_estate_counts_each_spelling():
     records = ([host(i, rfm="no") for i in range(4)] + [host(10 + i, rfm="yes") for i in range(3)]

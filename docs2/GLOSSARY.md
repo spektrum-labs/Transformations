@@ -51,7 +51,7 @@ Token-Service's pre-compilation gate (`_validate_transformation_code`): it parse
 
 ## Back-merge
 
-Porting `main`'s hotfixes back into `develop` so the staging ground does not regress production fixes at the next promotion. It has effectively stopped: since the 2026-04-22 merge-base, `main` carries 81 commits `develop` lacks and 66 files on `main` hold changes `develop` is missing (`git rev-list --count origin/develop..origin/main` = 81, verified 2026-09-03) — the twin-PR habit dual-lands *some* fixes, but nobody owns the rest.
+Porting `main`'s hotfixes back into `develop` so the staging ground does not regress production fixes at the next promotion. It has effectively stopped: since the 2026-04-22 merge-base, `main` carries 81 commits `develop` lacks and 66 files on `main` hold changes `develop` is missing (`git rev-list --count origin/develop..origin/main` = 81, verified 2026-09-03) — the paired-PR habit dual-lands *some* fixes, but nobody owns the rest.
 
 *Owning doc: [13-release-and-branches.md](13-release-and-branches.md).*
 
@@ -213,7 +213,7 @@ The automated onboarding flow that generates new vendor transforms as timestampe
 > "Tested with local_tester.py" says nothing about the sandbox. local_tester runs full CPython (`main:local_tester.py:49-57`); a file using `map()`, `strptime()`, and dict-item `+=` — three documented bans — ran to green success through it on 2026-09-03. The class of bug that most often breaks production is exactly the class it cannot see.
 
 > [!WARNING]
-> Your macOS checkout hides the [dead zone](#case-sensitivity-dead-zone). The filesystem is case-insensitive, so `ls` shows one casing while production 404s on another — and case-twin files (mimecast's `isDNSConfigured.py` / `isdnsconfigured.py`, both present at the 2026-04-22 merge-base) cannot even be checked out correctly. Check casing with `git ls-tree`, never `ls`.
+> Your macOS checkout hides the [dead zone](#case-sensitivity-dead-zone). The filesystem is case-insensitive, so `ls` shows one casing while production 404s on another — and case-variant files (mimecast's `isDNSConfigured.py` / `isdnsconfigured.py`, both present at the 2026-04-22 merge-base) cannot even be checked out correctly. Check casing with `git ls-tree`, never `ls`.
 
 > [!CAUTION]
 > The repo is **public**, and that is load-bearing: Token-Service fetches with no Authorization header (token-service docs2; `src/utils/codeexecutor.py:308-309`), so the entire production compliance-evaluation logic is world-readable — and making the repo private would break every evaluation at the next cache miss.

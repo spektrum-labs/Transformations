@@ -1,7 +1,7 @@
 """
 Transformation: isWebApplicationFirewallDeployed
 Vendor: Tenable  |  Category: Attack Surface Management  |  Method: getInventory (POST /inventory, paged)
-Evaluates: a WAF or CDN is detected in front of the web estate
+Evaluates: a WAF or CDN is detected in front of the web environment
 Reads: wtech.Web Application Firewall
 API: Tenable ASM v1.0 -- asm.cloud.tenable.com/api/1.0
      (developer.tenable.com/reference/globalsearch, .../docs/asm-filtering)
@@ -64,7 +64,7 @@ def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
-    are fewer than the estate, so a count derived from them is a LOWER BOUND and says so."""
+    are fewer than all assets in scope, so a count derived from them is a LOWER BOUND and says so."""
     if isinstance(data, list):
         return data, len(data), {}, False
     if not isinstance(data, dict):
