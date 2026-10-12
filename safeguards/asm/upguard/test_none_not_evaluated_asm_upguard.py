@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the account, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -45,6 +45,10 @@ CASES = [
     ('nohighfindings', ('noHighFindings',), 'empty_dict', lambda: {}),
     ('nohighfindings', ('noHighFindings',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
     ('nohighfindings', ('noHighFindings',), 'poisoned', lambda: Poisoned()),
+    ('exploitedfindingscount', ('exploitedFindingsCount',), 'empty_list', lambda: {"vulnerabilities": []}),
+    ('isasmenabled', ('isASMEnabled',), 'empty_list', lambda: {"domains": []}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'empty_list', lambda: {"risks": []}),
+    ('nohighfindings', ('noHighFindings',), 'empty_list', lambda: {"risks": []}),
 ]
 
 
