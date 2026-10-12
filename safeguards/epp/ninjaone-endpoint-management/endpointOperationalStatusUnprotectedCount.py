@@ -265,8 +265,9 @@ def marker_set(value):
 def shows_more_rows(body, received):
     """True when a body that carries rows says there are more rows than it holds.
 
-    A next-page marker or a more-pages flag that is set, a cursor that is set, a cursor.count above the rows received, or a
-    cursor that names itself but gives no count (it cannot show the read is whole).
+    A next-page marker or a more-pages flag that is set, a cursor that is set, a cursor.count (the total the query holds)
+    above the rows received, a cursor.offset above zero (the body starts after the first row), or a cursor that names itself
+    but gives no count (it cannot show the read is whole).
     The live joined body has "cursor": [] and no marker, which is a complete read.
     """
     if not isinstance(body, dict):
@@ -278,6 +279,9 @@ def shows_more_rows(body, received):
     if isinstance(cursor, dict):
         count = count_of(cursor.get("count"))
         if count is not None and count > received:
+            return True
+        offset = count_of(cursor.get("offset"))
+        if offset is not None and offset > 0:
             return True
         if count is None and marker_set(cursor.get("name")):
             return True
@@ -398,7 +402,7 @@ def measure_unprotected(input):
                            {"deviceListRead": False})
     partial = partial_read(data, records, roster)
     if partial is not None:
-        return partial_count(key, partial, endpoint_rows(records, data, True), validation, metadata)
+        return partial_count(key, partial, validation, metadata)
     device_seen = {}
     report_rows = records
     records, scope = endpoint_rows(records, data, True)
@@ -488,26 +492,17 @@ def measure_unprotected(input):
     )
 
 
-def partial_count(key, partial, judged, validation, metadata):
-    """The count when only part of the fleet was read: not a total, so it reads None.
+def partial_count(key, partial, validation, metadata):
+    """The count when only part of the fleet was read: not a total, so it reads None, and there is no floor either.
 
-    A seen unprotected device is unprotected whatever the unread pages hold, but a floor is not a count: it can grade a pass
-    against any threshold above zero (3 seen, a limit of 5, a real count of 10). So the criterion key is None with a
-    data-collection error, and the number of seen unprotected devices is reported beside it as unprotectedCountAtLeast.
-    Devices the report does not mention are not added: on a partial read they may be on the unread rows.
+    The report holds one row per product per device and nothing says a device's rows sit together, so a device seen with no
+    running product on one page can have its running product on a page nobody read. A seen unprotected device is therefore
+    not proven unprotected, and unprotectedCountAtLeast is None. (A floor would also grade a pass against any threshold
+    above zero: 3 seen, a limit of 5, a real count of 10.) Devices the report does not mention are not counted either: on a
+    partial read they may be on the unread rows.
     """
-    rows, scope = judged
-    protected = {}
-    for rec in rows:
-        if not isinstance(rec, dict) or rec.get("deviceId") is None:
-            continue
-        if rec.get("productState") == "ON":
-            protected[rec.get("deviceId")] = True
-        elif rec.get("deviceId") not in protected:
-            protected[rec.get("deviceId")] = False
-    seen_off = [d for d, covered in protected.items() if not covered]
     return unevaluated(key, partial, validation, metadata,
-                       {"totalDevices": None, "partialRead": True, "unprotectedCountAtLeast": len(seen_off)})
+                       {"totalDevices": None, "partialRead": True, "unprotectedCountAtLeast": None})
 
 
 def parse_body(input):

@@ -265,8 +265,9 @@ def marker_set(value):
 def shows_more_rows(body, received):
     """True when a body that carries rows says there are more rows than it holds.
 
-    A next-page marker or a more-pages flag that is set, a cursor that is set, a cursor.count above the rows received, or a
-    cursor that names itself but gives no count (it cannot show the read is whole).
+    A next-page marker or a more-pages flag that is set, a cursor that is set, a cursor.count (the total the query holds)
+    above the rows received, a cursor.offset above zero (the body starts after the first row), or a cursor that names itself
+    but gives no count (it cannot show the read is whole).
     The live joined body has "cursor": [] and no marker, which is a complete read.
     """
     if not isinstance(body, dict):
@@ -278,6 +279,9 @@ def shows_more_rows(body, received):
     if isinstance(cursor, dict):
         count = count_of(cursor.get("count"))
         if count is not None and count > received:
+            return True
+        offset = count_of(cursor.get("offset"))
+        if offset is not None and offset > 0:
             return True
         if count is None and marker_set(cursor.get("name")):
             return True
