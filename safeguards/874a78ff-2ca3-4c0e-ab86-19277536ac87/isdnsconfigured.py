@@ -8,8 +8,9 @@ Evaluates if DMARC, DKIM and SPF records are properly configured for email secur
 Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
 error marker, a body that carries no SPF, DKIM or DMARC answer (an outage or error body from the DNS lookup, an
 empty response), a body that answers only some of the three (the lookup always answers all three, with a record
-or an explicit false, so an absent or null key means the body is not that answer), malformed or unreadable input,
-and failed input validation. A lookup that answered all three and found a record absent is a real False.
+text or a true/false flag, so a key that is absent, null or anything else, such as the text "false", a number, blank
+text, a list or an object, means the body is not that answer), malformed or unreadable input, and failed input
+validation. A lookup that answered all three and found a record absent (an explicit false) is a real False.
 """
 
 import json
@@ -126,6 +127,26 @@ def get_protocol(data, name):
     return lowered.get(name.lower())
 
 
+# Words a lookup or a hand-off can put where a record belongs; none of them is a record, so none is an answer.
+STAND_IN_WORDS = ("false", "true", "0", "1", "none", "null", "nil", "no", "yes", "n/a", "na", "nan", "undefined",
+                  "not found", "no banner found")
+
+
+def read_answer(value):
+    """The lookup's answer for one protocol: True or False for a real flag, True for a record text.
+
+    None when the value is neither: a stand-in word such as "false" or "0", blank text, a number, a list or an
+    object. Such a value says nothing about the record, so the read is not evaluated; it is never a record found or
+    a record absent."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text != "" and text.lower() not in STAND_IN_WORDS:
+            return True
+    return None
+
+
 def transform(input):
     criteriaKey = "isDNSConfigured"
 
@@ -163,7 +184,8 @@ def transform(input):
                 "No DNS answer was returned, so this check could not be evaluated",
                 "Re-evaluate this check once the DNS lookup is available"
             )
-        missing = [name for name in ("SPF", "DKIM", "DMARC") if get_protocol(data, name) is None]
+        answers = {name: read_answer(get_protocol(data, name)) for name in ("SPF", "DKIM", "DMARC")}
+        missing = [name for name in ("SPF", "DKIM", "DMARC") if answers[name] is None]
         if len(missing) == 3:
             return not_evaluated(
                 validation,
@@ -172,10 +194,11 @@ def transform(input):
                 "Re-evaluate this check once the DNS lookup is available"
             )
         if missing:
-            # The lookup answers all three keys, so an absent one is a body that is not that answer, not an absent record.
+            # The lookup answers all three keys with a flag or a record text, so a key that is absent, null or anything
+            # else is a body that is not that answer, not an absent record.
             return not_evaluated(
                 validation,
-                "The DNS lookup answered only part of SPF, DKIM and DMARC (no answer for " + ", ".join(missing) + ")",
+                "The DNS lookup answered only part of SPF, DKIM and DMARC (no usable answer for " + ", ".join(missing) + ")",
                 "The DNS answer was incomplete, so this check could not be evaluated",
                 "Re-evaluate this check once the DNS lookup is available"
             )
@@ -184,9 +207,9 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        is_dmarc = bool(get_protocol(data, 'DMARC'))
-        is_dkim = bool(get_protocol(data, 'DKIM'))
-        is_spf = bool(get_protocol(data, 'SPF'))
+        is_dmarc = answers['DMARC']
+        is_dkim = answers['DKIM']
+        is_spf = answers['SPF']
         is_dns_configured = is_dmarc and is_dkim and is_spf
 
         additional_findings = []

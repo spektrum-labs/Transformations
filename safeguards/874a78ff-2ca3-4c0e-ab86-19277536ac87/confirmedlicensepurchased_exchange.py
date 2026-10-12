@@ -12,7 +12,7 @@ email-security baseline this integration evaluates. Any subscribedSkus body with
 affirmative_signal rule) passed on free SKUs every tenant carries.
 
 Not evaluated (None, with a collection error) whenever the body does not prove the answer: a vendor or Graph
-error body, a body with no SKU rows, a page that continues (a next-page link) or a row the code cannot read when
+error body, a body with no SKU rows, a page that continues (a next-page link that is not null or empty) or a row the code cannot read when
 no enabled mailbox plan was seen elsewhere, malformed or unreadable input, and failed input validation. A row the
 code cannot read is one without service plans, a plan without a name, or a row with a mailbox plan whose status or
 enabled unit count is missing or not readable. A SKU list that was read whole and holds no enabled Exchange
@@ -129,11 +129,12 @@ def not_evaluated(validation, api_error, fail_reason, recommendation, transforma
 def has_next_link(body, depth=0):
     """True when the body, or a wrapper layer around it, carries a next-page link: the read is then partial.
 
-    An empty or null link means the read is complete."""
+    Only a null or empty-text link means the read is complete. Any other value (text, an object, a list, a number,
+    a flag) is a continuation that was not followed, so the read is partial."""
     if not isinstance(body, dict) or depth > 3:
         return False
     for key in NEXT_LINK_KEYS:
-        if body.get(key):
+        if key in body and body[key] is not None and body[key] != "":
             return True
     for key in WRAPPER_KEYS:
         if has_next_link(body.get(key), depth + 1):

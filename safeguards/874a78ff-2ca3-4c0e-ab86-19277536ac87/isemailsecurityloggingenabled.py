@@ -5,11 +5,12 @@ Category: Email Security / Logging
 
 Evaluates if email security logging is enabled.
 
-True when the read returned at least one sign-in entry; more pages beyond it change nothing.
+True when the read returned at least one sign-in entry (an object with at least one field); more pages beyond it
+change nothing, and entries that are null, text, numbers, lists or empty objects are not counted.
 
 Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
 error marker, a body that is not a sign-in list (an error body, an empty or null response), an empty sign-in
-list, malformed or unreadable input, and failed input validation. An empty list proves nothing either way: it is
+list, a list with no readable sign-in entry, malformed or unreadable input, and failed input validation. An empty list proves nothing either way: it is
 both a tenant with no retained sign-ins and a read that was not allowed to see them, and the read carries no date
 window that would make it a stated "no logs". Nothing here can prove logging is off, so there is no False.
 """
@@ -166,11 +167,21 @@ def transform(input):
                 "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
             )
 
+        # Only an object with at least one field is a sign-in entry; null, text, a number, a list or {} proves nothing.
+        sign_ins = [entry for entry in logging_entries if isinstance(entry, dict) and len(entry) > 0]
+        if len(sign_ins) == 0:
+            return not_evaluated(
+                validation,
+                "The sign-in log read returned no readable sign-in entry (the list holds no object with fields)",
+                "No sign-in entry could be read, so this check could not be evaluated",
+                "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
+            )
+
         return create_response(
             result={criteriaKey: True, "isEmailLoggingEnabled": True},
             validation=validation,
-            pass_reasons=[f"Email security logging is enabled with {len(logging_entries)} log entries found"],
-            input_summary={"logEntryCount": len(logging_entries)}
+            pass_reasons=[f"Email security logging is enabled with {len(sign_ins)} log entries found"],
+            input_summary={"logEntryCount": len(sign_ins)}
         )
 
     except Exception as e:

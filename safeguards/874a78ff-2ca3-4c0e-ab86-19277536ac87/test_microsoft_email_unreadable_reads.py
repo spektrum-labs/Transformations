@@ -176,6 +176,24 @@ class DnsTests(Checks):
                 for name in missing:
                     self.assertIn(name, error)
 
+    def test_a_value_that_is_neither_a_flag_nor_a_record_is_not_evaluated(self):
+        """A flag (true or false) or a record text is an answer. Sentinel words, empty text, numbers, lists and objects
+        are not, so they are neither a found record nor an absent one."""
+        for bad in ("false", "False", " FALSE ", "true", "0", "1", "", "  ", "none", "None", "null", "no", "n/a",
+                    "not found", "No banner found", 0, 1, 1.5, [], ["v=spf1 -all"], {}, {"record": "v=spf1 -all"}):
+            for name in ("SPF", "DKIM", "DMARC"):
+                with self.subTest(value=bad, key=name):
+                    response = self.run_check(dict(GOOD_DNS, **{name: bad}))
+                    self.assert_not_evaluated(response)
+                    self.assertIn(name, response["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_a_flag_or_a_record_text_is_an_answer(self):
+        for value, expected in ((True, True), (False, False), ("v=spf1 -all", True), ("p=AAAA", True)):
+            with self.subTest(value=value):
+                response = self.run_check(dict(GOOD_DNS, SPF=value))
+                self.assertIs(response["transformedResponse"]["isSPFConfigured"], expected)
+                self.assert_measured(response)
+
     def test_malformed_json_is_not_evaluated_with_a_transformation_error(self):
         for payload in ("Service Unavailable", "{not-json", b"\xff\xfe"):
             with self.subTest(payload=payload):
@@ -241,6 +259,21 @@ class LoggingTests(Checks):
                 response = self.run_check(payload)
                 self.assert_not_evaluated(response)
                 self.assertIn("no sign-ins", response["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_entries_that_are_not_sign_in_records_are_not_evaluated(self):
+        """Only an object with at least one field is a sign-in entry; a list of anything else proves nothing."""
+        for payload in ({"value": [None]}, {"value": [{}]}, {"value": ["x"]}, {"value": [1]}, {"value": [[]]},
+                        {"value": [None, {}, "x", 7]}, {"response": {"value": [{}]}}):
+            with self.subTest(payload=payload):
+                response = self.run_check(payload)
+                self.assert_not_evaluated(response)
+                self.assertIn("sign-in", response["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_a_sign_in_entry_beside_entries_that_cannot_be_read_still_passes(self):
+        response = self.run_check({"value": [None, {}, "x", SIGN_IN]})
+
+        self.assertEqual(response["transformedResponse"], {key: True for key in LOGGING_KEYS})
+        self.assert_measured(response)
 
     def test_a_next_link_never_turns_an_empty_page_into_a_fail(self):
         """A page that continues is partial: an empty one is not evidence, and an entry that was seen still proves it."""
@@ -361,11 +394,48 @@ class LicenceTests(Checks):
 
     def test_an_empty_or_null_next_link_counts_as_complete(self):
         for key in LINK_KEYS:
-            for link in (None, "", False):
+            for link in (None, ""):
                 with self.subTest(key=key, link=link):
                     response = self.run_check({"value": [FREE_SKU], key: link})
                     self.assertEqual(response["transformedResponse"]["confirmedLicensePurchased"], False)
                     self.assert_measured(response)
+
+    def test_a_link_that_is_not_empty_is_partial_whatever_its_type(self):
+        """Only null or empty text means the read is complete; any other value is a continuation it did not follow."""
+        for key in LINK_KEYS:
+            for link in ({}, [], 0, False, 1, True, " ", {"href": NEXT_LINK}, [NEXT_LINK], NEXT_LINK):
+                with self.subTest(key=key, link=link):
+                    self.assert_not_evaluated(self.run_check({"value": [FREE_SKU], key: link}))
+                    self.assertIs(self.run_check({"value": [FREE_SKU, MAIL_SKU], key: link})["transformedResponse"]["confirmedLicensePurchased"], True)
+
+    def test_a_link_beside_rows_three_wrapper_levels_deep_is_found(self):
+        body = {"response": {"result": {"apiResponse": {"value": [FREE_SKU], "@odata.nextLink": NEXT_LINK}}}}
+        self.assert_not_evaluated(self.run_check(body))
+
+        with_mail = {"response": {"result": {"apiResponse": {"value": [FREE_SKU, MAIL_SKU], "@odata.nextLink": NEXT_LINK}}}}
+        self.assertIs(self.run_check(with_mail)["transformedResponse"]["confirmedLicensePurchased"], True)
+
+    def test_a_body_wrapped_four_levels_deep_is_not_evaluated(self):
+        """The wrappers are peeled three deep; rows beyond that are unreachable, so the answer is neither True nor False."""
+        for rows in ([FREE_SKU], [MAIL_SKU], [FREE_SKU, MAIL_SKU]):
+            for link in ({}, {"@odata.nextLink": NEXT_LINK}):
+                with self.subTest(rows=len(rows), link=bool(link)):
+                    body = {"response": {"result": {"apiResponse": {"Output": dict({"value": rows}, **link)}}}}
+                    self.assert_not_evaluated(self.run_check(body))
+
+    def test_a_status_is_read_without_regard_to_case(self):
+        for status in ("enabled", "ENABLED", " Enabled "):
+            with self.subTest(status=status):
+                response = self.run_check({"value": [sku("EXAMPLE_MAIL_PLAN", ["EXCHANGE_S_STANDARD"], status=status)]})
+                self.assertIs(response["transformedResponse"]["confirmedLicensePurchased"], True)
+                self.assert_measured(response)
+
+    def test_a_status_other_than_enabled_is_inactive_even_with_units(self):
+        for status in ("Warning", "Suspended", "Deleted", "LockedOut"):
+            with self.subTest(status=status):
+                response = self.run_check({"value": [sku("EXAMPLE_MAIL_PLAN", ["EXCHANGE_S_STANDARD"], status=status, enabled=25)]})
+                self.assertEqual(response["transformedResponse"]["confirmedLicensePurchased"], False)
+                self.assert_measured(response)
 
     def test_a_sku_whose_status_is_not_enabled_is_a_measured_fail_without_unit_counts(self):
         """The status alone proves the subscription is not active, so the unit count is not needed."""
