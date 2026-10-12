@@ -89,27 +89,31 @@ class FailClosed(unittest.TestCase):
         "validation failed": {"data": scan(), "validation": {"status": "failed", "errors": ["x"], "warnings": []}},
     }
 
-    # A scan that completed with counts that agree, but shows no discovery or is not from this evaluation, is a
-    # measured False. Every other body measured nothing and is None (Not evaluated).
+    # A scan that completed with counts that agree and no error, but shows no discovery or is older than the
+    # window, is a proven negative: a graded False, with its reason as a fail reason and no error. Every other
+    # body measured nothing and is None (Not evaluated) with its error, including a missing, garbage or future
+    # timestamp.
     MEASURED_FALSE = {
         "subfinder found nothing (seed only)",
         "seed listed twice",
         "stale scan",
-        "no timestamp",
-        "garbage timestamp",
-        "future timestamp",
     }
 
-    def test_no_evidence_is_none_and_a_measured_miss_is_false_with_error(self):
+    def test_no_evidence_is_none_and_a_proven_negative_is_a_graded_false(self):
         for label, body in self.BODIES.items():
             with self.subTest(body=label):
                 out = run(copy.deepcopy(body))
                 expected = False if label in self.MEASURED_FALSE else None
                 self.assertIs(out["transformedResponse"][KEY], expected)
                 self.assertEqual(out["transformedResponse"], {KEY: expected})
-                self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
-                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
-                self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                if expected is None:
+                    self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                    self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                else:
+                    self.assertEqual(out["additionalInfo"]["transformation"]["status"], "success")
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["errors"], [])
                 self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
                 self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
 
@@ -119,8 +123,8 @@ class FailClosed(unittest.TestCase):
                 self.assertIsNone(value(copy.deepcopy(body)))
 
     def test_seed_only_names_the_discovery_failure(self):
-        errors = run(seed_only())["additionalInfo"]["dataCollection"]["errors"]
-        self.assertTrue(any("no host beyond the seed" in e for e in errors))
+        reasons = run(seed_only())["additionalInfo"]["evaluation"]["failReasons"]
+        self.assertTrue(any("no host beyond the seed" in r for r in reasons))
 
 
 class Discovered(unittest.TestCase):
