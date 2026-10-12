@@ -222,9 +222,9 @@ def findings_list(data):
     """(findings list, next_token) or (None, None)."""
     holder = find_key(data, "Findings", 6)
     if holder is not None and isinstance(holder.get("Findings"), list):
-        token = holder.get("NextToken")
+        token = holder.get("NextToken") or holder.get("nextToken")
         if not token and isinstance(data, dict):
-            token = data.get("NextToken")
+            token = data.get("NextToken") or data.get("nextToken")
         return holder["Findings"], token
     if isinstance(data, list) and data and isinstance(data[0], dict) and "Compliance" in data[0]:
         return data, None

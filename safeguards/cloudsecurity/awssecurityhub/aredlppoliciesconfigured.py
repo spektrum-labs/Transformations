@@ -13,6 +13,10 @@ integration's, an HTTP one or an AWS one), an empty, non-JSON or unrecognised bo
 list with no PASSED or FAILED status for these controls, a findings list with more pages
 (NextToken) left unread and no failing control on the pages read, and an exception. A FAILED
 finding keeps the verdict False whether or not more pages exist.
+
+The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A finding
+whose Compliance entry is not an object cannot be read: it is skipped without raising, and a result that rests on
+the absence of a failure is then None.
 """
 
 import json
@@ -62,9 +66,11 @@ def read_findings(input_data):
     data = parse_body(input_data)
     if isinstance(data, dict) and "data" in data and "validation" in data:
         data = parse_body(data["data"])
+    token = None
     for depth in range(5):
         if is_error_body(data):
             return None, None, ERROR_PROBLEM
+        token = token or page_token(data)
         if not isinstance(data, dict) or "Findings" in data:
             break
         nxt = None
@@ -78,9 +84,9 @@ def read_findings(input_data):
     if is_error_body(data):
         return None, None, ERROR_PROBLEM
     if isinstance(data, dict) and isinstance(data.get("Findings"), list):
-        return data["Findings"], data.get("NextToken"), None
+        return data["Findings"], token, None
     if isinstance(data, list) and data:
-        return data, None, None
+        return data, token, None
     return None, None, SHAPE_PROBLEM
 
 
@@ -109,12 +115,42 @@ def not_evaluated(reason, result, transformation_errors=None):
                           transformation_errors=transformation_errors)
 
 
+def page_token(data):
+    """The next-page token of a findings page: NextToken, or nextToken in lower camel case. None when there is none."""
+    if isinstance(data, dict):
+        return data.get("NextToken") or data.get("nextToken")
+    return None
+
+
+def compliance_of(finding):
+    """The Compliance object of a finding: {} when the finding has none, None when it is not an object (unreadable)."""
+    comp = finding.get("Compliance")
+    if comp is None:
+        return {}
+    return comp if isinstance(comp, dict) else None
+
+
+def unreadable_findings(findings):
+    """How many findings carry a Compliance entry that is not an object. Those findings cannot be read."""
+    count = 0
+    for f in findings:
+        if isinstance(f, dict) and compliance_of(f) is None:
+            count = count + 1
+    return count
+
+
+UNREADABLE_PROBLEM = ("A finding in the list has a Compliance entry that could not be read, and nothing on the "
+                      "findings that were read shows a failure, so a pass cannot be shown.")
+
+
 def control_status_map(findings, control_ids):
     statuses = {}
     for f in findings:
         if not isinstance(f, dict):
             continue
-        comp = f.get("Compliance") or {}
+        comp = compliance_of(f)
+        if comp is None:
+            continue
         cid = comp.get("SecurityControlId")
         if cid not in control_ids:
             continue
@@ -148,6 +184,8 @@ def transform(input):
                                  result_none)
         if next_token:
             return not_evaluated(PAGED_PROBLEM, result_none)
+        if unreadable_findings(findings):
+            return not_evaluated(UNREADABLE_PROBLEM, result_none)
         return build_response({CRITERIA_KEY: True}, pass_reasons=[PASS_TEXT])
     except Exception as error:
         return not_evaluated(RAISED_PROBLEM, result_none, transformation_errors=[str(error)[:200]])

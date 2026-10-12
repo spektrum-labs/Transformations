@@ -86,7 +86,7 @@ def active_instance_count(leg):
     instances = leg.get("Instances")
     if not isinstance(instances, list):
         return None
-    if leg.get("NextToken"):
+    if leg.get("NextToken") or leg.get("nextToken"):
         return None
     return len([i for i in instances if isinstance(i, dict) and i.get("Status") == "ACTIVE"])
 

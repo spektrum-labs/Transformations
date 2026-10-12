@@ -291,6 +291,10 @@ def test_a_passing_control_is_still_true(loader, name):
             if token is not None:
                 body["NextToken"] = token
             out = loader(name)(body)
+            if name == "unencryptedstorageresourcecount":
+                # one of three storage controls read: no failure seen is not a pass
+                assert_not_evaluated(out, NONE_KEYS[name])
+                continue
             assert verdict(out, key) == (True, "success")
             assert out["additionalInfo"]["evaluation"]["passReasons"]
     every = {"Findings": [finding(control, "PASSED") for control in controls]}
@@ -307,10 +311,11 @@ def test_a_passing_control_is_still_true(loader, name):
 def test_a_pass_from_a_partial_read_is_not_a_pass(loader, name):
     """More pages (NextToken) and nothing failing on the page read: a later page may hold the failure."""
     key = NONE_KEYS[name][0]
-    body = {"Findings": [finding(CONTROL_CHECKS[name][1][0], "PASSED")], "NextToken": "abc"}
+    passing = [finding(control, "PASSED") for control in CONTROL_CHECKS[name][1]]
+    body = {"Findings": passing, "NextToken": "abc"}
     assert_not_evaluated(loader(name)(body), NONE_KEYS[name])
     assert_not_evaluated(loader(name)({"api_response": body}), NONE_KEYS[name])
-    assert verdict(loader(name)({"Findings": body["Findings"], "NextToken": None}), key) == (True, "success")
+    assert verdict(loader(name)({"Findings": passing, "NextToken": None}), key) == (True, "success")
 
 
 @pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
@@ -339,9 +344,11 @@ def test_unencrypted_storage_counts_failing_findings(loader):
                          finding("S3.1", "FAILED")]}
     inner = t(body)["transformedResponse"]
     assert inner["unencryptedStorageResourceCount"] is False and inner["unencryptedResources"] == 2
-    paged = dict(body, NextToken="abc")
-    assert t(paged)["transformedResponse"]["unencryptedResources"] == 2
-    clean = t({"Findings": [finding("EC2.7", "PASSED"), finding("RDS.3", "PASSED")]})
+    paged = t(dict(body, NextToken="abc"))["transformedResponse"]
+    # a failure already seen keeps the verdict False, but the count of a partial read is a lower bound, never a total
+    assert paged["unencryptedStorageResourceCount"] is False
+    assert paged["unencryptedResources"] is None and paged["unencryptedResourcesAtLeast"] == 2
+    clean = t({"Findings": [finding("EC2.7", "PASSED"), finding("RDS.3", "PASSED"), finding("EFS.1", "PASSED")]})
     assert clean["transformedResponse"]["unencryptedStorageResourceCount"] is True
     assert clean["transformedResponse"]["unencryptedResources"] == 0
     assert collection(clean)["status"] == "success"
@@ -354,7 +361,9 @@ def test_critical_open_findings_counts_critical_failing_findings(loader):
                          finding("S3.2", "FAILED", "HIGH"), finding("S3.3", "PASSED", "CRITICAL")]}
     inner = t(body)["transformedResponse"]
     assert inner["criticalOpenFindingsCount"] is False and inner["openCriticalFindings"] == 2
-    assert t(dict(body, NextToken="abc"))["transformedResponse"]["openCriticalFindings"] == 2
+    paged = t(dict(body, NextToken="abc"))["transformedResponse"]
+    assert paged["criticalOpenFindingsCount"] is False
+    assert paged["openCriticalFindings"] is None and paged["openCriticalFindingsAtLeast"] == 2
     clean = t({"Findings": [finding("S3.2", "FAILED", "HIGH"), finding("S3.3", "PASSED", "CRITICAL")]})
     assert clean["transformedResponse"]["criticalOpenFindingsCount"] is True
     assert clean["transformedResponse"]["openCriticalFindings"] == 0
