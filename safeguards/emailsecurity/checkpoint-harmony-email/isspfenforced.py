@@ -8,8 +8,10 @@ True when the domain's published SPF record (1) includes a Check Point sending h
 (checkpoint-spf.com, the per-tenant macro include written by HEC SPF Management; or cpmails.com, the
 include in Check Point's Cloud SMTP Relay guide) and (2) ends in a restrictive all-mechanism (-all or
 ~all). Without the include, mail Check Point relays for the domain fails SPF; with +all, ?all or no
-all-mechanism, SPF does not restrict anything. No SPF record reads false.
-Fails closed: an empty, error or unrecognised body proves nothing.
+all-mechanism, SPF does not restrict anything. A probe that answers "no SPF record" (false, null, an
+empty string or a marker such as None or not found) reads false: that is a readable answer.
+Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised, or
+when the SPF value is neither a record nor a "no record" marker: it proves nothing, so it is never False.
 """
 
 import json
@@ -40,6 +42,13 @@ def transform(input):
                              "method": "isDNSConfigured"},
             },
         }
+
+    def not_measured(reason, transformation_errors=None):
+        """No verdict: the value is None and dataCollection.status is "error", so the evaluator
+        shows Not evaluated instead of a failed check. The reason is fixed text; exception text
+        goes under transformation errors only."""
+        return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                               transformation_errors=transformation_errors)
 
     def dns_body(data):
         """The DNS tool answers {"SPF": ..., "DKIM": ..., "DMARC": ...}, possibly wrapped in
@@ -82,16 +91,18 @@ def transform(input):
     try:
         body = dns_body(input)
         if body is None:
-            return create_response(False, fail_reasons=["No DNS probe result (SPF) in the input; nothing is proven"],
-                                   api_errors=["Unrecognised or error response"])
+            return not_measured("No readable DNS probe result (SPF) in the input; nothing is measured.")
         spf = None
         for k, v in body.items():
             if isinstance(k, str) and k.lower() == "spf":
                 spf = v
         record = spf.strip() if isinstance(spf, str) else ""
-        if not record.lower().startswith("v=spf1"):
+        no_record_markers = ("", "false", "none", "null", "no", "0", "not found", "n/a")
+        if spf is None or spf is False or (isinstance(spf, str) and record.lower() in no_record_markers):
             return create_response(False, fail_reasons=["No SPF record is published for the email domain"],
                                    input_summary={"spfRecord": str(spf)})
+        if not record.lower().startswith("v=spf1"):
+            return not_measured("The DNS probe returned an SPF value that is not an SPF record; nothing is measured.")
         terms = record.split()
         includes = [t.split(":", 1)[1].lower() for t in terms if t.lower().startswith("include:") and ":" in t]
         cp = [d for d in includes if is_domain_or_subdomain(d, "checkpoint-spf.com") or
@@ -112,4 +123,5 @@ def transform(input):
                            ", which does not restrict unlisted senders")
         return create_response(False, fail_reasons=reasons, input_summary=summary)
     except Exception as e:
-        return create_response(False, fail_reasons=["Transformation error"], transformation_errors=[str(e)])
+        return not_measured("The response could not be processed; nothing is measured.",
+                            transformation_errors=[str(e)])

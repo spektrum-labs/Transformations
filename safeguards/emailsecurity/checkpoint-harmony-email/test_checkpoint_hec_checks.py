@@ -8,7 +8,9 @@ bodies follow the HEC API reference response sample (Email Security API Referenc
 2026, 4.1 and 4.2) and are marked as such.
 
 Every check gets: the real/doc body (expected verdict), a flip that must change the verdict, and
-the fail-closed bodies (empty dict, None, an error envelope, a string that is not JSON)."""
+the unreadable bodies (empty dict, None, an error envelope, a string that is not JSON). An
+unreadable body is None (Not evaluated), never False: test_error_body_not_evaluated.py holds the
+full battery, and a well-formed response that lists nothing keeps its False."""
 import copy
 import importlib.util
 import json
@@ -81,9 +83,9 @@ def test_event_checks_real_and_flipped(name, real, flip, flipped):
 
 
 @pytest.mark.parametrize("name", [c[0] for c in EVENT_CASES])
-def test_event_checks_fail_closed(name):
+def test_event_checks_unreadable_bodies_are_not_evaluated(name):
     for body in UNREADABLE:
-        assert verdict(name, body) is False, body
+        assert verdict(name, body) is None, body
     assert verdict(name, events(records=[])) is False
 
 
@@ -133,7 +135,7 @@ def spf(record):
     (spf("v=spf1 include:checkpoint-spf.com.evil.example ~all"), False),
     (spf(False), False),
     (spf("None"), False),
-    ({}, False), (None, False), ("not json", False), ({"error": "timeout"}, False),
+    ({}, None), (None, None), ("not json", None), ({"error": "timeout"}, None),
 ])
 def test_spf_enforced(body, expected):
     assert verdict("isspfenforced", body) is expected
@@ -174,7 +176,7 @@ AV_RESULT = [{"entityId": "a", "entityType": "office365_emails_email", "payload"
     (search([entity(), entity(av=[])]), False),
     (search([entity(combined_av="None")]), False),
     (search([]), False),
-    ({}, False), (None, False), (ERROR_ENVELOPE, False), ("not json", False),
+    ({}, None), (None, None), (ERROR_ENVELOPE, None), ("not json", None),
 ])
 def test_antivirus_verdict_engine(body, expected):
     assert verdict("isantivirusverdictengineenabled", body) is expected
@@ -247,7 +249,7 @@ CTP_RESULT = [{"entityId": "a", "entityType": "office365_emails_email", "payload
     # an entity without links does not count, even with a verdict: the vendor filter is not trusted
     (search([linked(combined="clean", links=())]), False),
     (search([]), False),
-    ({}, False), (None, False), (ERROR_ENVELOPE, False), ("not json", False),
+    ({}, None), (None, None), (ERROR_ENVELOPE, None), ("not json", None),
 ])
 def test_click_time_url_rewrite(body, expected):
     assert verdict("isclicktimeurlrewriteenabled", body) is expected
@@ -276,7 +278,7 @@ def exceptions(entries):
     (exceptions([exc(sender="a@b.example"), exc()]), False),
     (exceptions([exc(link_domains="  ")]), False),
     (exceptions([]), False),
-    ({}, False), (None, False), (ERROR_ENVELOPE, False), ("not json", False),
+    ({}, None), (None, None), (ERROR_ENVELOPE, None), ("not json", None),
 ])
 def test_url_block_list(body, expected):
     assert verdict("isurlreputationblocklistenforced", body) is expected

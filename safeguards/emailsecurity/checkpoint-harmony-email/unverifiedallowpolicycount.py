@@ -72,11 +72,19 @@ def transform_unmarked(input):
         return None
 
     def envelope_error(body):
+        """Fixed reason when the response says the call failed, else None. The vendor's own
+        response text is never copied into the reason."""
         env = body.get("responseEnvelope")
         if isinstance(env, dict):
             code = env.get("responseCode")
             if code is not None and str(code) not in ("200", "0"):
-                return "HEC responseCode " + str(code) + ": " + str(env.get("responseText") or "")
+                return "Harmony Email & Collaboration answered with an error status; nothing is measured."
+        if body.get("error") or body.get("errors"):
+            return "Harmony Email & Collaboration answered with an error; nothing is measured."
+        for field in ("statusCode", "status_code"):
+            status = body.get(field)
+            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
         return None
 
     try:
