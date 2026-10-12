@@ -113,6 +113,7 @@ def transform(input):
         es_count = 0
         server_protection_count = 0
         mdr_count = 0
+        xdr_count = 0  # self-service XDR licence: information only, not MDR coverage
         network_protection_count = 0
         cloud_security_count = 0
         mobile_protection_count = 0
@@ -150,14 +151,16 @@ def transform(input):
                 server_protection_count = server_protection_count + 1
 
             # 3. MDR (Managed Detection and Response)
-            if "mtr" in assigned_products or "xdr" in assigned_products:
+            # Count only the managed-service product code ("mtr", Managed Threat Response)
+            # or an explicit mdrManaged true. The "xdr" product is the self-service XDR
+            # licence, not a managed service, so it is counted on its own as information
+            # and is never added to the MDR figure. A missing or null mdrManaged is not MDR.
+            if "mtr" in assigned_products:
                 mdr_count = mdr_count + 1
-            elif "mdrManaged" in endpoint:
-                try:
-                    if str(endpoint["mdrManaged"]).lower() != "false":
-                        mdr_count = mdr_count + 1
-                except:
-                    pass
+            elif str(endpoint.get("mdrManaged")).strip().lower() == "true":
+                mdr_count = mdr_count + 1
+            if "xdr" in assigned_products:
+                xdr_count = xdr_count + 1
 
             # 4. Network Protection
             if any("Network Threat Protection" in service_name for service_name in services):
@@ -193,6 +196,7 @@ def transform(input):
             "Endpoint Security": es_count,
             "Server Protection": server_protection_count,
             "MDR": mdr_count,
+            "XDR (self-service, information only)": xdr_count,
             "Network Protection": network_protection_count,
             "Cloud Security": cloud_security_count,
             "Mobile Protection": mobile_protection_count,
