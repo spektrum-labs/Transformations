@@ -4,7 +4,9 @@ Vendor: Check Point Harmony Email & Collaboration (Infinity Portal API)
 Method: queryShadowItEvents (POST /app/hec-api/v1.0/event/query (requestData.startDate = 30 days ago))
 
 True when at least one security event matching type in ("shadow_it",) was raised in the last 30 days. Evidence of the engine working, not a read of the policy toggle; a quiet tenant reads false.
-Fails closed: an empty, error or unrecognised body proves nothing.
+Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised:
+it proves nothing, so it is never reported as False. A readable answer that lists nothing keeps the
+verdict described above.
 """
 
 import json
@@ -34,6 +36,13 @@ def transform(input):
             },
         }
 
+    def not_measured(reason, transformation_errors=None):
+        """No verdict: the value is None and dataCollection.status is "error", so the evaluator
+        shows Not evaluated instead of a failed check. The reason is fixed text; exception text
+        goes under transformation errors only."""
+        return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                               transformation_errors=transformation_errors)
+
     def hec_body(data):
         """The HEC API answers {"responseEnvelope": {...}, "responseData": [...]}. Unwrap
         Integration-Service wrappers until that shape is found; anything else is None."""
@@ -58,11 +67,19 @@ def transform(input):
         return None
 
     def envelope_error(body):
+        """Fixed reason when the response says the call failed, else None. The vendor's own
+        response text is never copied into the reason."""
         env = body.get("responseEnvelope")
         if isinstance(env, dict):
             code = env.get("responseCode")
             if code is not None and str(code) not in ("200", "0"):
-                return "HEC responseCode " + str(code) + ": " + str(env.get("responseText") or "")
+                return "Harmony Email & Collaboration answered with an error status; nothing is measured."
+        if body.get("error") or body.get("errors"):
+            return "Harmony Email & Collaboration answered with an error; nothing is measured."
+        for field in ("statusCode", "status_code"):
+            status = body.get(field)
+            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
         return None
 
     try:
@@ -70,12 +87,11 @@ def transform(input):
             input = input.decode("utf-8")
         body = hec_body(input)
         if body is None:
-            return create_response(False, fail_reasons=["No Harmony Email & Collaboration response "
-                                   "(responseData) in the input; nothing is proven"],
-                                   api_errors=["Unrecognised or error response"])
+            return not_measured("No readable Harmony Email & Collaboration response (responseData) in the "
+                                "input; nothing is measured.")
         err = envelope_error(body)
         if err:
-            return create_response(False, fail_reasons=[err], api_errors=[err])
+            return not_measured(err)
         records = body["responseData"]
         wanted = ("shadow_it",)
         field = "type"
@@ -88,5 +104,5 @@ def transform(input):
             return create_response(True, pass_reasons=["Harmony Email & Collaboration raised Shadow IT events in the last 30 days"], input_summary=summary)
         return create_response(False, fail_reasons=["No Shadow IT event in the last 30 days: Shadow IT discovery is not evidenced"], input_summary=summary)
     except Exception as e:
-        return create_response(False, fail_reasons=["Transformation error"],
-                               transformation_errors=[str(e)])
+        return not_measured("The response could not be processed; nothing is measured.",
+                            transformation_errors=[str(e)])
