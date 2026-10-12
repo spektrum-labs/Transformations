@@ -278,11 +278,21 @@ def transform(input):
     up_to_date_count = len(up_to_date)
     unknown_count = len(unknown_status)
 
+    if total_reporting > 0 and up_to_date_count == 0 and out_of_date_count == 0:
+        # Every reporting device says "Unknown" (or any status that is neither Up-to-Date nor Out-of-Date). No product has
+        # said its signatures are current, so nothing here shows they are: Not evaluated, never a pass.
+        nothing = ("Every device reporting a definition status reports Unknown (%d of %d), and none reports Up-to-Date, so "
+                   "signature currency cannot be confirmed and this is not evaluated here." % (unknown_count, total_reporting))
+        return create_response(result=dict(scope, isSignatureUpToDate=None, totalReportingDevices=total_reporting,
+                                           outOfDateCount=0, upToDateCount=0, unknownStatusCount=unknown_count),
+                               validation=validation, api_errors=[nothing], fail_reasons=[nothing],
+                               recommendations=["Verify that the antivirus products report a definition status of Up-to-Date to NinjaOne."])
+
     # is_up_to_date is derived purely from the response payload: it is true only when
-    # at least one device reported a definitionStatus AND none of them are Out-of-Date.
+    # at least one device reported Up-to-Date AND none of them are Out-of-Date.
     # An empty/absent payload (total_reporting == 0) evaluates to False through this
     # same expression, not via a hardcoded literal.
-    is_up_to_date = (total_reporting > 0) and (out_of_date_count == 0)
+    is_up_to_date = (up_to_date_count > 0) and (out_of_date_count == 0)
 
     device_ids_out_of_date = [r.get("deviceId") for r in out_of_date]
 
