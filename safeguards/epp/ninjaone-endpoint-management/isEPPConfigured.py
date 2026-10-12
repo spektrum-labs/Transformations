@@ -198,12 +198,28 @@ def device_roster(data):
     return devices if isinstance(devices, list) else None
 
 
+def report_window_start(rows):
+    """The earliest last contact that still counts as active, the same cutoff endpoint_rows applies to report rows.
+
+    It is ACTIVE_WINDOW_DAYS before the newest usable row timestamp, or before now when that newest row is itself
+    older than the window (a dark fleet). A timestamp more than FUTURE_SLACK_SECONDS ahead of now is a fault and is
+    ignored. With no usable timestamp it is ACTIVE_WINDOW_DAYS before now.
+    """
+    now = datetime.now(timezone.utc).timestamp()
+    wall = now - ACTIVE_WINDOW_DAYS * 86400
+    stamps = [epoch(r.get("timestamp")) for r in rows if isinstance(r, dict) and r.get("deviceId") is not None]
+    stamps = [s for s in stamps if s is not None and s <= now + FUTURE_SLACK_SECONDS]
+    if not stamps or max(stamps) < wall:
+        return wall
+    return max(stamps) - ACTIVE_WINDOW_DAYS * 86400
+
+
 def devices_without_report(devices, rows):
     """Devices in the device list (workflow key "devices") that the antivirus-status report does not mention.
 
     A device the report does not mention is not shown protected: it counts in the denominator and never in
-    the numerator (missing is never a pass). Phones and tablets, and devices not seen within ACTIVE_WINDOW_DAYS
-    (or with a last contact more than a day ahead of now), are left out as in the other endpoint rules.
+    the numerator (missing is never a pass). Phones and tablets, and devices not seen within ACTIVE_WINDOW_DAYS of the
+    newest report row (or with a last contact more than a day ahead of now), are left out as in the other endpoint rules.
     `devices` is the roster from device_roster. Returns (devices counted as not covered, devices left out).
     """
     reported = set()
@@ -211,6 +227,7 @@ def devices_without_report(devices, rows):
         if isinstance(row, dict) and row.get("deviceId") is not None:
             reported.add(str(row.get("deviceId")))
     now = datetime.now(timezone.utc).timestamp()
+    window_start = report_window_start(rows)
     seen_ids = set()
     counted = 0
     left_out = 0
@@ -225,7 +242,7 @@ def devices_without_report(devices, rows):
             left_out = left_out + 1
             continue
         last_contact = epoch(device.get("lastContact"))
-        if last_contact is not None and (last_contact < now - ACTIVE_WINDOW_DAYS * 86400 or last_contact > now + 86400):
+        if last_contact is not None and (last_contact < window_start or last_contact > now + FUTURE_SLACK_SECONDS):
             left_out = left_out + 1
             continue
         counted = counted + 1
