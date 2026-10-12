@@ -12,7 +12,7 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 
-TAG = "r7atlas"
+TAG = "r7keys"
 try:
     import RestrictedPython  # noqa: F401
     spec = importlib.util.spec_from_file_location("restricted_sandbox_" + TAG, ROOT / "tools" / "restricted_sandbox.py")

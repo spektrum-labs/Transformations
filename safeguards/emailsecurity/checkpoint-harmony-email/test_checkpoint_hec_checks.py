@@ -1,4 +1,4 @@
-"""Check Point Harmony Email & Collaboration: the Atlas checks added 2026-09-25.
+"""Check Point Harmony Email & Collaboration: the checks added 2026-09-25.
 
 Four checks read queryOffice365Events, and fixtures/office365_events_real_2026-09-25.json is
 that method's REAL first page from a customer tenant (scrubbed). isSPFEnforced reads the Spektrum DNS probe;
