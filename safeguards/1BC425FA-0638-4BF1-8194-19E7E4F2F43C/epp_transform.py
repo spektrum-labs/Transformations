@@ -8,6 +8,9 @@ and assigns a score from 0 to 100 for each safeguard type.
 
 Only endpoints seen within 15 days of the newest lastSeenAt in the response are
 scored (endpoint rules 2026-09-29); the rest are reported as staleEndpointCount.
+
+An error, refusal, empty or unreadable endpoint read is Not evaluated (every key None with a
+data-collection error), never a failed check.
 """
 
 import json
@@ -15,6 +18,87 @@ from datetime import datetime, timedelta
 
 
 ACTIVE_WINDOW_DAYS = 15
+
+
+# A read that proves nothing is Not evaluated, never False. An error body, an HTTP 4xx/5xx body, a
+# failed input validation, an empty, null or unrecognised body, an empty endpoint list and an
+# exception all return every key as None with dataCollection.status "error", which the evaluator
+# shows as Not evaluated. A real endpoint list that holds no managed endpoint still reads 0 / False.
+# The reason text is fixed: the vendor's own error text is never copied into the result.
+RESULT_KEYS = [
+    "Endpoint Protection", "Endpoint Security", "Server Protection", "MDR", "Network Protection",
+    "Cloud Security", "Mobile Protection", "Email Security", "Phishing Protection",
+    "Zero Trust Network Access", "Encryption", "isEPPEnabled", "isEPPDeployed",
+    "isEPPLoggingEnabled", "isEPPEnabledForCriticalSystems", "isEDRDeployed",
+    "isEndpointSecurityEnabled", "staleEndpointCount", "isMDREnabled", "isMDRLoggingEnabled",
+    "requiredCoveragePercentage", "requiredConfigurationPercentage", "isEPPConfigured",
+    "isEPPMisconfigured",
+]
+FLAG_KEY = "isEPPConfigured"
+STATUS_KEYS = ["status_code", "statusCode", "httpStatus", "status"]
+ERROR_REASON = "Not evaluated: Sophos returned an error instead of an endpoint list; nothing was measured."
+NO_ENDPOINTS_REASON = "Not evaluated: no endpoints returned"
+NO_LIST_REASON = "Not evaluated: no endpoint list in the response; nothing was measured."
+VALIDATION_REASON = "Not evaluated: the response failed input validation; nothing was measured."
+EXCEPTION_REASON = "Not evaluated: the transformation could not read the response; nothing was measured."
+
+
+def not_measured_result():
+    result = {}
+    for key in RESULT_KEYS:
+        result[key] = None
+    return result
+
+
+def error_reason(body):
+    """A fixed-text reason when a dict is an error or refusal body, else None."""
+    if not isinstance(body, dict):
+        return None
+    if body.get("error") or body.get("errors") or body.get("vendorErrorAsResponse"):
+        return ERROR_REASON
+    for name in STATUS_KEYS:
+        code = body.get(name)
+        if isinstance(code, str) and code.strip().isdecimal():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Not evaluated: Sophos answered the endpoint read with HTTP " + str(code) + "; nothing was measured."
+    return None
+
+
+def list_problem(items):
+    """Why a list of endpoint records proves nothing, or None when it holds at least one record."""
+    if len(items) == 0:
+        return NO_ENDPOINTS_REASON
+    has_record = False
+    for entry in items:
+        if isinstance(entry, dict):
+            if entry.get("error") or entry.get("errors"):
+                return ERROR_REASON
+            has_record = True
+    if not has_record:
+        return NO_LIST_REASON
+    return None
+
+
+def read_problem(data):
+    """Why a body is not a readable endpoint list (fixed text), or None when it is one.
+
+    A complete list of endpoints, even one with no managed endpoint, is a read that proves a
+    negative and is scored as before; so is a body carrying the explicit configured flag.
+    """
+    if isinstance(data, list):
+        return list_problem(data)
+    if isinstance(data, dict):
+        reason = error_reason(data)
+        if reason is not None:
+            return reason
+        if FLAG_KEY in data:
+            return None
+        items = data.get("items")
+        if isinstance(items, list):
+            return list_problem(items)
+        return NO_LIST_REASON
+    return NO_LIST_REASON
 
 
 def parse_seen(value):
@@ -113,9 +197,19 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={"isEPPEnabled": False},
+                result=not_measured_result(),
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=[VALIDATION_REASON],
+                api_errors=[VALIDATION_REASON]
+            )
+
+        problem = read_problem(data)
+        if problem is not None:
+            return create_response(
+                result=not_measured_result(),
+                validation=validation,
+                fail_reasons=[problem],
+                api_errors=[problem]
             )
 
         pass_reasons = []
@@ -376,8 +470,9 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={"isEPPEnabled": False},
+            result=not_measured_result(),
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[EXCEPTION_REASON],
+            api_errors=[EXCEPTION_REASON]
         )
