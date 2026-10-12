@@ -56,6 +56,22 @@ def usable_row(row, need_state):
     return state is not None and str(state).strip() != ""
 
 
+def http_error_status(code):
+    """The HTTP status as a number when it is an error (400 or more), else None.
+
+    A status sent as a string ("500", " 403 ") is an error exactly like the number. A boolean, an empty or
+    non-numeric string and anything below 400 are not an error status.
+    """
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, str):
+        code = code.strip()
+        code = int(code) if code.isdecimal() else None
+    if isinstance(code, int) and code >= 400:
+        return code
+    return None
+
+
 def body_problem(input_data, data):
     """A short reason when the reply is an error rather than a measurement, else None.
 
@@ -73,8 +89,8 @@ def body_problem(input_data, data):
         err = body.get("errors") or body.get("error")
         if err:
             return "NinjaOne returned an error instead of a measurement: " + str(err)[:200]
-        code = body.get("status_code") or body.get("statusCode") or body.get("status")
-        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+        code = http_error_status(body.get("status_code") or body.get("statusCode") or body.get("status"))
+        if code is not None:
             return "NinjaOne returned HTTP " + str(code) + " instead of a measurement."
     return None
 
