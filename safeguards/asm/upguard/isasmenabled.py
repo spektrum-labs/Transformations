@@ -24,11 +24,42 @@ def criteria_unmeasured(result):
     return len(present) > 0 and all(result[k] is None for k in present)
 
 
+#: Keys under which a body can state how many records the vendor holds, and keys that point at a further page.
+COUNT_KEYS = ("total", "count", "total_count", "totalCount", "total_results", "totalResults")
+NEXT_PAGE_KEYS = ("next_page_token", "nextPageToken", "next_page", "next")
+
+
+def states_zero(data):
+    """True when the body itself states a count of 0 and no further page follows.
+
+    An empty list alone is not a read: a failed or cut-off call can give one. A real zero is a body
+    that says so, with a whole number 0 (not a bool or text) under a count key, on the last page.
+    A count key that holds anything else contradicts the empty list.
+    """
+    if not isinstance(data, dict):
+        return False
+    for k in NEXT_PAGE_KEYS:
+        if data.get(k):
+            return False
+    zero_stated = False
+    for k in COUNT_KEYS:
+        v = data.get(k)
+        if v is None:
+            continue
+        if isinstance(v, int) and not isinstance(v, bool) and v == 0:
+            zero_stated = True
+        else:
+            return False
+    return zero_stated
+
+
 def transform_unmarked(input):
     """
     True when at least one domain is active and has been scanned: UpGuard is monitoring the
-    organisation's external surface. False on an empty list or when no active domain has been scanned.
-    None (not evaluated) when the body has no domains list, holds no object record, or cannot be read.
+    organisation's external surface. False when no active domain has been scanned, and on an empty list
+    only when the body states a count of 0.
+    None (not evaluated) when the body has no domains list, holds no object record, is an empty list that
+    states no count of 0, or cannot be read.
     """
     key = "isASMEnabled"
 
@@ -59,6 +90,8 @@ def transform_unmarked(input):
             return {key: None, "reason": "Response has no domains list (the /domains call did not run)"}
         if data["domains"] and not any(isinstance(d, dict) for d in data["domains"]):
             return {key: None, "reason": "Domain list holds no object record"}
+        if not data["domains"] and not states_zero(data):
+            return {key: None, "reason": "Domain list is empty and the response does not state a count of 0, so it is not read as no monitored domain"}
         scanned = [d for d in data["domains"] if isinstance(d, dict) and d.get("active") is True and d.get("scanned_at")]
         if scanned:
             return {key: True, "reason": "Active domains are being scanned", "scannedDomains": len(scanned), "domainCount": len(data["domains"])}
