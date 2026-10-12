@@ -321,11 +321,28 @@ def test_merged_pagination_counts_as_complete():
     assert value("quorumReviewerRoleAssignedCount", b) == 2
 
 
-def test_rcs_vault_without_encryption_field_is_not_evidence_of_encryption():
-    b = flip(TGT, lambda d: d["targets"]["nodes"].__setitem__(0, {"id": "t3", "name": "rcv-azure", "targetType": "RCS_AZURE",
-                                                                   "isActive": True, "isArchived": False, "immutabilityPeriodDays": 0}))
+RCS_AZURE_NODE = {"id": "t3", "name": "rcv-azure", "targetType": "RCS_AZURE", "isActive": True, "isArchived": False,
+                  "immutabilityPeriodDays": 0}
+
+
+def test_rcs_vault_without_encryption_field_is_not_evaluated_not_a_gap():
+    # RSC reports no encryptionType for RCS/Azure/Glacier targets: the encryption cannot be read, which is Not evaluated, not a gap.
+    b = flip(TGT, lambda d: d["targets"]["nodes"].__setitem__(0, dict(RCS_AZURE_NODE)))
     assert value("isAirGappedStorageEnabled", b) is True
-    assert value("isCloudTierEncryptionEnabled", b) is False
+    for key in ("isCloudTierEncryptionEnabled", "isExternalTargetEncryptionAES256"):
+        assert_unmeasured(key, b)
+        assert status(key, b) == "error"
+
+
+def test_unread_encryption_does_not_hide_a_reported_gap():
+    # A target that reports an encryption type outside the AES-256 set is still a measured gap, even beside an unreadable one.
+    def mixed(d):
+        d["targets"]["nodes"].__setitem__(0, dict(RCS_AZURE_NODE))
+        d["targets"]["nodes"][1].update(encryptionType="UNKNOWN_ENCRYPTION_TYPE")
+    b = flip(TGT, mixed)
+    for key in ("isCloudTierEncryptionEnabled", "isExternalTargetEncryptionAES256"):
+        assert value(key, b) is False
+        assert status(key, b) == "success"
 
 
 def test_tpr_disabled_fails_both_quorum_checks():
