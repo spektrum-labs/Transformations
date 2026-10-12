@@ -7,13 +7,19 @@ Evaluates Mail Policies to check for Anti-Phishing settings including
 domain spoofing and employee name spoofing detection.
 
 Measured: a policy list that was read. isEmailSecurityEnabled is true when it holds a policy;
-isAntiPhishingEnabled is true when a policy carries the spoofing settings and none is off, and
-false when a policy was read with a spoofing setting off or none carries the settings.
+isAntiPhishingEnabled is true when a policy carries both spoofing settings and none is off, and
+false when a policy reports a spoofing setting off or a complete list carries no policy with the settings.
+A spoofing setting a policy does not report at all is not off, it is unknown (None).
 
 Not measured (both keys None and dataCollection error, so Token-Service shows Not evaluated, never
 Failed): a refusal or error body, a body that is not JSON or not a policy list, an empty policy
-list, a failed input validation, a list still carrying nextPageToken in which no spoofing setting is
-off yet (more pages could hold one), and this transform's own exception.
+list, a failed input validation, a policy that carries one spoofing setting but not the other (and none
+reports one off), a list still carrying nextPageToken (or paginationTruncated) in which no spoofing
+setting is off yet (more pages could hold one), and this transform's own exception.
+
+Counts: policyDetails is the list of spoofing settings read, a total for a complete list and None for a
+truncated one, because a list taken from part of the policies is not the whole. A False already proven by
+a setting seen stays.
 """
 
 import json
@@ -128,6 +134,11 @@ def is_truncated(body):
     return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
 
 
+def is_true(value):
+    """Cloud Identity returns booleans as the strings "True"/"False"; bool("False") is True."""
+    return value is True or str(value).strip().lower() == "true"
+
+
 def unmeasured(reason, validation, summary=None):
     """The read could not answer: every key None and a dataCollection error, so it shows as Not evaluated."""
     return create_response(
@@ -187,25 +198,40 @@ def transform(input):
 
         if len(policies) > 0:
             isEmailSecurityEnabled = True
-            pass_reasons.append(f"Email security policies configured: {len(policies)} policies")
+            if truncated:
+                pass_reasons.append("Email security policies configured (the list was cut short, so no total is given)")
+            else:
+                pass_reasons.append(f"Email security policies configured: {len(policies)} policies")
 
-        # If any of the matching values are None or False, set isAntiPhishingEnabled to False
-        if len(matching_values) > 0:
-            isAntiPhishingEnabled = True
-            for mv in matching_values:
-                for key, value in mv.items():
-                    if value is None or not bool(value):
-                        isAntiPhishingEnabled = False
-                        break
-                if not isAntiPhishingEnabled:
-                    break
+        # A spoofing setting a policy reports as off is a finding. One it does not report at all (missing or
+        # null) leaves the policy unjudged, never off.
+        any_off = False
+        any_missing = False
+        for mv in matching_values:
+            for key in filter_attributes:
+                if mv.get(key) is None:
+                    any_missing = True
+                elif not is_true(mv.get(key)):
+                    any_off = True
 
-        if truncated and (len(matching_values) == 0 or isAntiPhishingEnabled):
-            # More pages exist. A spoofing setting that is off already decides False; nothing read so far can
-            # prove True, or prove that no policy carries the settings.
+        if any_off:
+            # A setting that is off already decides False, whatever else is unread.
+            isAntiPhishingEnabled = False
+        elif truncated:
+            # More pages exist, and nothing read so far is off: a later page could hold a setting that is, or
+            # the only policy that carries the settings.
             return unmeasured("The policy list was truncated (nextPageToken present) before every policy was "
                               "read; anti-phishing not evaluated across all policies", validation,
+                              {"truncated": True})
+        elif len(matching_values) == 0:
+            # A complete list in which no policy carries the settings is a proven negative.
+            isAntiPhishingEnabled = False
+        elif any_missing:
+            return unmeasured("A policy carries a spoofing setting but not both domain and employee name spoofing "
+                              "detection, so anti-phishing cannot be judged", validation,
                               {"totalPolicies": len(policies), "antiPhishingPolicies": len(matching_values)})
+        else:
+            isAntiPhishingEnabled = True
 
         if isAntiPhishingEnabled:
             pass_reasons.append("Anti-phishing protection enabled (domain/employee spoofing detection)")
@@ -217,13 +243,13 @@ def transform(input):
             result={
                 "isEmailSecurityEnabled": isEmailSecurityEnabled,
                 "isAntiPhishingEnabled": isAntiPhishingEnabled,
-                "policyDetails": matching_values
+                "policyDetails": None if truncated else matching_values
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
+            input_summary={"truncated": True} if truncated else {
                 "totalPolicies": len(policies),
                 "antiPhishingPolicies": len(matching_values)
             }

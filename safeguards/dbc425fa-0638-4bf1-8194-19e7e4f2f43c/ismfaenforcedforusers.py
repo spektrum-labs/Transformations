@@ -13,8 +13,8 @@ read and an active user is not enforced. Google sends the booleans as the string
 "True"/"False", which are read as such.
 
 Not measured (key and counts None, dataCollection error, so Token-Service shows Not evaluated,
-never Failed): a list that still carries nextPageToken (it was truncated, so the check is not
-judged on part of the tenant), a list with no active user (every tenant has some), a Google
+never Failed): a list that still carries nextPageToken or paginationTruncated (it was truncated, so the
+check is not judged on part of the tenant), a list with no active user (every tenant has some), a Google
 error or refusal, a missing scope, a body that is not JSON or has no users list, and this
 transform's own exception.
 
@@ -168,6 +168,13 @@ def is_true(value):
     return value is True or str(value).strip().lower() == "true"
 
 
+def is_truncated(body):
+    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    return bool(str(body.get("nextPageToken") or "").strip()) or is_true(body.get("paginationTruncated"))
+
+
 def parse_time(value):
     if value is None or str(value).strip() == "":
         return None
@@ -228,7 +235,7 @@ def transform(input):
         if body is None or not isinstance(body.get("users"), list):
             return not_measured("Directory users list was not returned", validation,
                                 result_extra=UNMEASURED_COUNTS)
-        if body.get("nextPageToken"):
+        if is_truncated(body) or is_truncated(data):
             return not_measured("Directory users list was truncated (nextPageToken present); enforcement not evaluated across all users",
                                 validation, "Enable paging on getUserMFAStatus", result_extra=UNMEASURED_COUNTS)
 
@@ -236,7 +243,7 @@ def transform(input):
         enforced = [u for u in active if is_true(u.get("isEnforcedIn2Sv"))]
         enrolled = [u for u in active if is_true(u.get("isEnrolledIn2Sv"))]
         missing = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in active if not is_true(u.get("isEnforcedIn2Sv"))]
-        total = len(body["users"])
+        total = len([u for u in body["users"] if isinstance(u, dict)])
         if len(active) == 0:
             # Every tenant has active users, so a list with none cannot be trusted: that is a read that
             # could not answer, not a finding that enforcement is off.

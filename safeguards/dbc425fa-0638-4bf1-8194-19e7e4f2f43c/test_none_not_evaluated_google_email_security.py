@@ -78,13 +78,23 @@ def gmail_policy(setting_type, value, org_unit="orgUnits/synthetic-root"):
 OTHER_GMAIL = gmail_policy("gmail.mail_delegation", {"enableMailDelegation": False})
 
 
-def policy_family(name, key, setting_type, fields):
+def policy_family(name, key, setting_type, fields, counts=("policiesJudged", "policiesCompliant")):
     """The four Gmail-policy transforms and the link check share one rule: every policy for the
-    setting must have every required field on."""
+    setting must have every required field on. A policy that reports a required field off proves
+    False; a policy that does not report one proves nothing (None); a complete list with no policy
+    for the setting is a proven negative (False). Counts are exact for a complete list and None for a
+    truncated one."""
+    judged, compliant = counts
     all_on = dict((f, True) for f in fields)
     all_off = dict((f, False) for f in fields)
     one_off = dict(all_on)
     one_off[fields[0]] = False
+    string_off = dict((f, "False") for f in fields)
+    string_on = dict((f, "True") for f in fields)
+    one_missing = dict(all_on)
+    del one_missing[fields[-1]]
+    one_null = dict(all_on)
+    one_null[fields[-1]] = None
     return {
         "name": name,
         "keys": (key,),
@@ -99,17 +109,50 @@ def policy_family(name, key, setting_type, fields):
              lambda: {"policies": [gmail_policy(setting_type, all_on)], "nextPageToken": TOKEN}),
             ("truncation_marker_all_on_so_far",
              lambda: {"policies": [gmail_policy(setting_type, all_on)], "paginationTruncated": True}),
+            ("truncation_marker_string_all_on_so_far",
+             lambda: {"policies": [gmail_policy(setting_type, all_on)], "paginationTruncated": "true"}),
+            ("matching_policy_without_a_value", lambda: {"policies": [gmail_policy(setting_type, {})]}),
+            ("matching_policy_value_not_an_object", lambda: {"policies": [gmail_policy(setting_type, "none")]}),
+            ("a_required_field_missing", lambda: {"policies": [gmail_policy(setting_type, one_missing)]}),
+            ("a_required_field_null", lambda: {"policies": [gmail_policy(setting_type, one_null)]}),
+            ("one_policy_on_and_another_missing_a_field",
+             lambda: {"policies": [gmail_policy(setting_type, all_on, "orgUnits/synthetic-a"),
+                                   gmail_policy(setting_type, one_missing, "orgUnits/synthetic-b")]}),
+            ("truncated_and_a_required_field_missing",
+             lambda: {"policies": [gmail_policy(setting_type, one_missing)], "nextPageToken": TOKEN}),
         ],
         "measured": [
-            ("setting_off", lambda: {"policies": [gmail_policy(setting_type, all_off)]}, {key: False}),
+            ("setting_off", lambda: {"policies": [gmail_policy(setting_type, all_off)]},
+             {key: False, judged: 1, compliant: 0}),
             ("one_of_two_policies_off",
              lambda: {"policies": [gmail_policy(setting_type, all_on, "orgUnits/synthetic-a"),
-                                   gmail_policy(setting_type, one_off, "orgUnits/synthetic-b")]}, {key: False}),
-            ("complete_list_without_the_setting", lambda: {"policies": [OTHER_GMAIL]}, {key: False}),
+                                   gmail_policy(setting_type, one_off, "orgUnits/synthetic-b")]},
+             {key: False, judged: 2, compliant: 1}),
+            ("complete_list_without_the_setting", lambda: {"policies": [OTHER_GMAIL]},
+             {key: False, judged: 0, compliant: 0}),
             ("truncated_but_a_policy_is_off",
-             lambda: {"policies": [gmail_policy(setting_type, one_off)], "nextPageToken": TOKEN}, {key: False}),
-            ("all_on", lambda: {"policies": [gmail_policy(setting_type, all_on)]}, {key: True}),
-            ("bare_list_all_on", lambda: [gmail_policy(setting_type, all_on)], {key: True}),
+             lambda: {"policies": [gmail_policy(setting_type, one_off)], "nextPageToken": TOKEN},
+             {key: False, judged: None, compliant: None}),
+            ("truncation_marker_but_a_policy_is_off",
+             lambda: {"policies": [gmail_policy(setting_type, one_off)], "paginationTruncated": True},
+             {key: False, judged: None, compliant: None}),
+            ("truncated_with_one_policy_on_and_one_off",
+             lambda: {"policies": [gmail_policy(setting_type, all_on, "orgUnits/synthetic-a"),
+                                   gmail_policy(setting_type, one_off, "orgUnits/synthetic-b")],
+                      "nextPageToken": TOKEN},
+             {key: False, judged: None, compliant: None}),
+            ("a_field_the_string_false_reads_as_off", lambda: {"policies": [gmail_policy(setting_type, string_off)]},
+             {key: False, judged: 1, compliant: 0}),
+            ("one_policy_off_and_another_missing_a_field",
+             lambda: {"policies": [gmail_policy(setting_type, one_off, "orgUnits/synthetic-a"),
+                                   gmail_policy(setting_type, one_missing, "orgUnits/synthetic-b")]},
+             {key: False, judged: 2, compliant: 0}),
+            ("all_on", lambda: {"policies": [gmail_policy(setting_type, all_on)]},
+             {key: True, judged: 1, compliant: 1}),
+            ("all_on_as_the_string_true", lambda: {"policies": [gmail_policy(setting_type, string_on)]},
+             {key: True, judged: 1, compliant: 1}),
+            ("bare_list_all_on", lambda: [gmail_policy(setting_type, all_on)],
+             {key: True, judged: 1, compliant: 1}),
         ],
     }
 
@@ -122,6 +165,10 @@ def phishing(value, **extra):
 
 SPOOF_ON = {"detectDomainNameSpoofing": True, "detectEmployeeNameSpoofing": True}
 SPOOF_OFF = {"detectDomainNameSpoofing": False, "detectEmployeeNameSpoofing": True}
+SPOOF_STRING_OFF = {"detectDomainNameSpoofing": "False", "detectEmployeeNameSpoofing": "True"}
+SPOOF_STRING_ON = {"detectDomainNameSpoofing": "True", "detectEmployeeNameSpoofing": "true"}
+SPOOF_ONE_MISSING = {"detectDomainNameSpoofing": True}
+SPOOF_ONE_NULL = {"detectDomainNameSpoofing": None, "detectEmployeeNameSpoofing": True}
 
 
 def when(days_ago):
@@ -181,6 +228,13 @@ def sso_assignments(*items, **extra):
 
 
 NO_PROFILES = {"inboundSamlSsoProfiles": []}
+ROOT = "orgUnits/synthetic-root"
+SAML_ASSIGNMENT = {"ssoMode": "SAML_SSO", "targetOrgUnit": ROOT,
+                   "samlSsoInfo": {"inboundSamlSsoProfile": "inboundSamlSsoProfiles/synthetic-1"}}
+OIDC_ASSIGNMENT = {"ssoMode": "OIDC_SSO", "targetOrgUnit": ROOT}
+OFF_ASSIGNMENT = {"ssoMode": "SSO_OFF", "targetOrgUnit": ROOT}
+SAML_PROFILE = {"name": "inboundSamlSsoProfiles/synthetic-1",
+                "idpConfig": {"singleSignOnServiceUri": "https://idp-synthetic/sso"}}
 LEGACY_OFF = {"idpInfo": [{"@name": "enableSSO", "@value": "false"}]}
 LEGACY_NO_ENABLE = {"idpInfo": [{"@name": "samlSignonUri", "@value": "https://idp-synthetic/sso"}]}
 
@@ -189,6 +243,11 @@ def app_consent(level, org_unit="orgUnits/synthetic-root"):
     return {"type": "ADMIN", "policyQuery": {"orgUnit": org_unit},
             "setting": {"type": "settings/api_controls.unconfigured_third_party_apps",
                         "value": {"accessLevel": level}}}
+
+
+def app_consent_without_a_level(org_unit="orgUnits/synthetic-root"):
+    return {"type": "ADMIN", "policyQuery": {"orgUnit": org_unit},
+            "setting": {"type": "settings/api_controls.unconfigured_third_party_apps", "value": {}}}
 
 
 OTHER_API_CONTROL = {"type": "SYSTEM", "policyQuery": {"orgUnit": "orgUnits/synthetic-root"},
@@ -234,7 +293,8 @@ SPECS = [
     policy_family("isemailfilteringenabled", "isEmailFilteringEnabled", "gmail.enhanced_pre_delivery_message_scanning",
                   ["enableImprovedSuspiciousContentDetection"]),
     policy_family("isurlrewriteenabled", "isURLRewriteEnabled", "gmail.links_and_external_images",
-                  ["enableShortenerScanning", "enableAggressiveWarningsOnUntrustedLinks"]),
+                  ["enableShortenerScanning", "enableAggressiveWarningsOnUntrustedLinks"],
+                  counts=("linkPolicyCount", "enabledPolicyCount")),
     {
         "name": "isantiphishingenabled",
         "keys": ("isEmailSecurityEnabled", "isAntiPhishingEnabled"),
@@ -246,15 +306,27 @@ SPECS = [
              lambda: {"data": phishing(SPOOF_ON), "validation": {"status": "failed", "errors": ["x"], "warnings": []}}),
             ("truncated_list_all_on_so_far", lambda: phishing(SPOOF_ON, nextPageToken=TOKEN)),
             ("truncated_list_without_the_settings", lambda: phishing({"other": True}, nextPageToken=TOKEN)),
+            ("truncation_marker_all_on_so_far", lambda: phishing(SPOOF_ON, paginationTruncated=True)),
+            ("a_spoofing_setting_missing", lambda: phishing(SPOOF_ONE_MISSING)),
+            ("a_spoofing_setting_null", lambda: phishing(SPOOF_ONE_NULL)),
+            ("truncated_and_a_spoofing_setting_missing", lambda: phishing(SPOOF_ONE_MISSING, nextPageToken=TOKEN)),
         ],
         "measured": [
             ("a_spoofing_setting_off", lambda: phishing(SPOOF_OFF),
-             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False}),
+             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False, "policyDetails": [SPOOF_OFF]}),
             ("complete_list_without_the_settings", lambda: phishing({"other": True}),
-             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False}),
+             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False, "policyDetails": []}),
             ("truncated_but_a_setting_is_off", lambda: phishing(SPOOF_OFF, nextPageToken=TOKEN),
+             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False, "policyDetails": None}),
+            ("truncation_marker_but_a_setting_is_off", lambda: phishing(SPOOF_OFF, paginationTruncated="true"),
+             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False, "policyDetails": None}),
+            ("a_setting_the_string_false_reads_as_off", lambda: phishing(SPOOF_STRING_OFF),
+             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False}),
+            ("a_setting_off_and_another_missing", lambda: phishing({"detectDomainNameSpoofing": False}),
              {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": False}),
             ("all_on", lambda: phishing(SPOOF_ON),
+             {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": True, "policyDetails": [SPOOF_ON]}),
+            ("all_on_as_strings", lambda: phishing(SPOOF_STRING_ON),
              {"isEmailSecurityEnabled": True, "isAntiPhishingEnabled": True}),
         ],
     },
@@ -293,6 +365,9 @@ SPECS = [
             ("empty_user_list", lambda: users()),
             ("only_suspended_users", lambda: users(SUSPENDED)),
             ("truncated_user_list", lambda: users(ENFORCED, nextPageToken=TOKEN)),
+            ("truncation_marker", lambda: users(ENFORCED, paginationTruncated=True)),
+            ("truncation_marker_string", lambda: users(ENFORCED, paginationTruncated="true")),
+            ("truncation_marker_and_a_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED, paginationTruncated=True)),
             ("no_users_key", lambda: {"kind": "admin#directory#users"}),
             ("users_not_a_list", lambda: {"users": "none"}),
         ],
@@ -300,6 +375,10 @@ SPECS = [
             ("an_active_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED),
              {"isMFAEnforcedForUsers": False, "totalUsers": 2, "mfaEnrolledUsers": 1}),
             ("every_active_user_enforced", lambda: users(ENFORCED, SUSPENDED),
+             {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
+            ("marker_present_but_not_set", lambda: users(ENFORCED, paginationTruncated=False),
+             {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
+            ("blank_next_page_token", lambda: users(ENFORCED, nextPageToken=""),
              {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
         ],
     },
@@ -313,16 +392,35 @@ SPECS = [
             ("no_users_and_no_flag", lambda: {"kind": "admin#directory#users"}),
             ("failed_input_validation",
              lambda: {"data": users(ENFORCED), "validation": {"status": "failed", "errors": ["x"], "warnings": []}}),
-            ("empty_list_withdraws_a_direct_flag", lambda: {"isMFAEnforcedForUsers": True, "users": []}),
+            ("empty_list_with_a_direct_flag_on", lambda: {"isMFAEnforcedForUsers": True, "users": []}),
+            ("truncation_marker_none_enforced_yet",
+             lambda: users(NOT_ENFORCED, paginationTruncated=True)),
+            # The criterion is never read out of the body it judges: a vendor does not send it.
+            ("direct_flag_on_alone", lambda: {"isMFAEnforcedForUsers": True}),
+            ("direct_flag_off_alone", lambda: {"isMFAEnforcedForUsers": False}),
+            ("direct_flag_as_the_string_false", lambda: {"isMFAEnforcedForUsers": "false"}),
+            ("direct_flag_as_the_string_true", lambda: {"isMFAEnforcedForUsers": "True"}),
+            ("direct_flag_in_the_raw_response", lambda: {"rawResponse": {"isMFAEnforcedForUsers": True}}),
+            ("users_that_are_all_junk_beside_a_direct_flag",
+             lambda: {"isMFAEnforcedForUsers": True, "users": ["junk", 7]}),
         ],
         "measured": [
             ("no_user_enforced", lambda: users(NOT_ENFORCED),
              {"isMFAEnforcedForUsers": False, "totalUsers": 1, "mfaEnrolledUsers": 0}),
             ("one_enforced_user", lambda: users(ENFORCED, NOT_ENFORCED),
              {"isMFAEnforcedForUsers": True, "totalUsers": 2, "mfaEnrolledUsers": 1}),
+            # The verdict is proven by the user already seen; the counts come from part of the list, so
+            # they are not reported as totals.
             ("truncated_but_a_user_is_enforced", lambda: users(ENFORCED, nextPageToken=TOKEN),
+             {"isMFAEnforcedForUsers": True, "totalUsers": None, "mfaEnrolledUsers": None}),
+            ("truncation_marker_but_a_user_is_enforced", lambda: users(ENFORCED, NOT_ENFORCED, paginationTruncated=True),
+             {"isMFAEnforcedForUsers": True, "totalUsers": None, "mfaEnrolledUsers": None}),
+            ("direct_flag_ignored_when_users_are_read", lambda: dict(users(NOT_ENFORCED), isMFAEnforcedForUsers=True),
+             {"isMFAEnforcedForUsers": False, "totalUsers": 1, "mfaEnrolledUsers": 0}),
+            ("users_in_the_raw_response", lambda: {"rawResponse": users(ENFORCED)},
              {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
-            ("direct_flag_off", lambda: {"isMFAEnforcedForUsers": False}, {"isMFAEnforcedForUsers": False}),
+            ("items_that_are_not_users_are_not_counted", lambda: users(ENFORCED, "junk", 7, None, NOT_ENFORCED),
+             {"isMFAEnforcedForUsers": True, "totalUsers": 2, "mfaEnrolledUsers": 1}),
         ],
     },
     {
@@ -342,8 +440,44 @@ SPECS = [
                       "ssoProfiles": NO_PROFILES}),
             ("legacy_feed_without_enable_flag", lambda: LEGACY_NO_ENABLE),
             ("legacy_feed_without_properties", lambda: {"idpInfo": []}),
+            ("truncation_marker_on_the_assignments",
+             lambda: {"ssoAssignments": sso_assignments(OFF_ASSIGNMENT, paginationTruncated=True),
+                      "ssoProfiles": NO_PROFILES}),
+            ("truncation_marker_string_on_the_assignments",
+             lambda: {"ssoAssignments": sso_assignments(OFF_ASSIGNMENT, paginationTruncated="true"),
+                      "ssoProfiles": NO_PROFILES}),
+            # A SAML assignment whose profile is not on the page read could have its profile on the next one:
+            # that is not a finding that SSO is off.
+            ("truncated_profiles_without_the_assigned_profile",
+             lambda: {"ssoAssignments": sso_assignments(SAML_ASSIGNMENT),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [], "nextPageToken": TOKEN}}),
+            ("truncated_profiles_with_another_profile",
+             lambda: {"ssoAssignments": sso_assignments(SAML_ASSIGNMENT),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [dict(SAML_PROFILE, name="inboundSamlSsoProfiles/other")],
+                                      "nextPageToken": TOKEN}}),
+            ("truncation_marker_on_the_profiles",
+             lambda: {"ssoAssignments": sso_assignments(SAML_ASSIGNMENT),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [], "paginationTruncated": True}}),
+            ("truncated_profiles_and_sso_off_assignment",
+             lambda: {"ssoAssignments": sso_assignments(OFF_ASSIGNMENT),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [SAML_PROFILE], "nextPageToken": TOKEN}}),
+            ("truncated_profiles_and_no_assignments",
+             lambda: {"ssoAssignments": sso_assignments(),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [SAML_PROFILE], "nextPageToken": TOKEN}}),
         ],
         "measured": [
+            # The verdict is proven by an assignment already seen, so truncation elsewhere does not withdraw it.
+            ("truncated_assignments_but_oidc_found",
+             lambda: {"ssoAssignments": sso_assignments(OIDC_ASSIGNMENT, nextPageToken=TOKEN), "ssoProfiles": NO_PROFILES},
+             {"isSSOEnabled": True}),
+            ("truncated_profiles_but_the_assigned_profile_found",
+             lambda: {"ssoAssignments": sso_assignments(SAML_ASSIGNMENT),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [SAML_PROFILE], "nextPageToken": TOKEN}},
+             {"isSSOEnabled": True}),
+            ("complete_profiles_without_the_assigned_profile",
+             lambda: {"ssoAssignments": sso_assignments(SAML_ASSIGNMENT),
+                      "ssoProfiles": {"inboundSamlSsoProfiles": [dict(SAML_PROFILE, name="inboundSamlSsoProfiles/other")]}},
+             {"isSSOEnabled": False}),
             ("legacy_sso_off", lambda: LEGACY_OFF, {"isSSOEnabled": False}),
             ("assignment_off_and_organization_profile_off",
              lambda: {"ssoAssignments": sso_assignments({"ssoMode": "SSO_OFF", "targetOrgUnit": "orgUnits/synthetic-root"}),
@@ -369,6 +503,22 @@ SPECS = [
              {"isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": False}),
             ("all_records_found", lambda: {"DMARC": True, "DKIM": True, "SPF": True},
              {"isDNSConfigured": True, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": True}),
+            ("the_string_false_reads_as_not_found", lambda: {"DMARC": "False", "DKIM": "True", "SPF": "true"},
+             {"isDNSConfigured": False, "isDMARCConfigured": False, "isDKIMConfigured": True, "isSPFConfigured": True}),
+            ("record_text_is_a_found_record", lambda: {"DMARC": "v=DMARC1; p=reject", "DKIM": True, "SPF": "v=spf1 -all"},
+             {"isDNSConfigured": True, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": True}),
+        ],
+        # A key the lookup did not report is None, never False. The answer is Not evaluated for it
+        # (dataCollection error), and the keys the lookup did report keep their own values.
+        "partial": [
+            ("dkim_key_missing", lambda: {"DMARC": True, "SPF": True},
+             {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": True}),
+            ("spf_off_and_dkim_key_missing", lambda: {"DMARC": True, "SPF": False},
+             {"isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": False}),
+            ("only_dmarc_reported", lambda: {"DMARC": True},
+             {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": None}),
+            ("a_key_present_as_null", lambda: {"DMARC": True, "DKIM": None, "SPF": True},
+             {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": True}),
         ],
     },
     {
@@ -380,6 +530,13 @@ SPECS = [
             ("policies_not_a_list", lambda: {"policies": "none"}),
             ("truncated_list", lambda: {"policies": [app_consent("BLOCK_ALL")], "nextPageToken": TOKEN}),
             ("truncation_marker", lambda: {"policies": [app_consent("BLOCK_ALL")], "paginationTruncated": True}),
+            # A matching policy that does not report its access level proves nothing about that policy.
+            ("access_level_missing", lambda: {"policies": [app_consent_without_a_level()]}),
+            ("one_restricted_and_one_without_a_level",
+             lambda: {"policies": [app_consent("BLOCK_ALL"), app_consent_without_a_level("orgUnits/synthetic-a")]}),
+            ("one_open_and_one_without_a_level",
+             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED"),
+                                   app_consent_without_a_level("orgUnits/synthetic-a")]}),
         ],
         "measured": [
             ("unrestricted", lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED")]},
@@ -449,6 +606,20 @@ class GoogleEmailSecurityNotEvaluated(unittest.TestCase):
         self.assertTrue(collection["errors"])
         self.assertTrue(all(isinstance(e, str) and e.strip() for e in collection["errors"]))
 
+    def assert_partial(self, spec, body, expected):
+        """Some keys are measured and at least one is None: the None one must read Not evaluated."""
+        out = load(spec["name"]).transform(body)
+        inner = out["transformedResponse"]
+        for key in expected:
+            self.assertIn(key, inner)
+            if isinstance(expected[key], bool):
+                self.assertIs(inner[key], expected[key], "%s: %r" % (key, inner[key]))
+            else:
+                self.assertIsNone(inner[key], "%s: %r" % (key, inner[key]))
+        collection = out["additionalInfo"]["dataCollection"]
+        self.assertEqual(collection["status"], "error")
+        self.assertTrue(collection["errors"])
+
     def assert_measured(self, spec, body, expected):
         out = load(spec["name"]).transform(body)
         inner = out["transformedResponse"]
@@ -462,6 +633,12 @@ class GoogleEmailSecurityNotEvaluated(unittest.TestCase):
         collection = out["additionalInfo"]["dataCollection"]
         self.assertEqual(collection["status"], "success")
         self.assertEqual(collection["errors"], [])
+
+
+def _partial_test(spec, factory, expected):
+    def test(self):
+        self.assert_partial(spec, factory(), expected)
+    return test
 
 
 def _unmeasured_test(spec, factory):
@@ -483,6 +660,9 @@ for _spec in SPECS:
     for _label, _factory, _expected in _spec["measured"]:
         setattr(GoogleEmailSecurityNotEvaluated, "test_%s_%s_stays_measured" % (_spec["name"], _label),
                 _measured_test(_spec, _factory, _expected))
+    for _label, _factory, _expected in _spec.get("partial", []):
+        setattr(GoogleEmailSecurityNotEvaluated, "test_%s_%s_is_partly_not_evaluated" % (_spec["name"], _label),
+                _partial_test(_spec, _factory, _expected))
 
 
 class EverySpecIsComplete(unittest.TestCase):
