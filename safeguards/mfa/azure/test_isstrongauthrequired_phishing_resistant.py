@@ -36,7 +36,7 @@ def test_certificate_based_auth_passes():
 
 
 def test_email_otp_only_fails():
-    # Permasteelisa / Millar Western: email OTP only.
+    # Email OTP is the only enabled method.
     r = out(["Email"])
     assert r["isStrongAuthRequired"] is False
     assert r["enabledWeakMethods"] == ["Email OTP"]
