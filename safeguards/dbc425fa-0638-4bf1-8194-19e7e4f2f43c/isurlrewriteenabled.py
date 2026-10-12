@@ -14,12 +14,18 @@ Previously this transform read a top-level "urlRewrite" field from the mail-serv
 DNS tool, which never returns one, so the criterion was false for every customer.
 
 False (measured) when a link-protection policy was read and a required setting is off, or a
-policy list was read that carries no link-protection policy.
+complete policy list was read that carries no link-protection policy. A required setting a policy
+does not report at all is not off, it is unknown (None).
 
 Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never
 Failed): a Google error or refusal, a body that is not JSON or not a policy list, an empty policy
-list, a failed input validation, a list still carrying nextPageToken in which no policy is off yet
-(more pages could hold one), and this transform's own exception.
+list, a failed input validation, a link-protection policy that does not report a required setting (and
+none reports one off), a list still carrying nextPageToken (or paginationTruncated) in which no policy
+is off yet (more pages could hold one), and this transform's own exception.
+
+Counts: linkPolicyCount and enabledPolicyCount are totals for a complete list and None for a truncated
+one, because a count taken from part of the list is not a total. A False already proven by a policy
+seen stays.
 """
 
 import json
@@ -142,6 +148,11 @@ def is_truncated(body):
     return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
 
 
+def is_true(value):
+    """Cloud Identity returns booleans as the strings "True"/"False"; bool("False") is True."""
+    return value is True or str(value).strip().lower() == "true"
+
+
 def unmeasured(reason, validation, summary=None):
     """The read could not answer: key None and a dataCollection error, so it shows as Not evaluated."""
     return create_response(
@@ -209,30 +220,52 @@ def transform(input):
 
         enabled_count = 0
         disabled_fields = []
+        missing_fields = []
 
         for entry in link_policies:
             value = entry["value"]
-            entry_enabled = True
-            for field in REQUIRED_FIELDS:
-                if not bool(value.get(field, False)):
-                    entry_enabled = False
-                    if field not in disabled_fields:
-                        disabled_fields.append(field)
+            # A setting the policy reports as off is a finding. One it does not report at all leaves the
+            # policy unjudged (None), never off.
+            off = [f for f in REQUIRED_FIELDS if value.get(f) is not None and not is_true(value.get(f))]
+            absent = [f for f in REQUIRED_FIELDS if value.get(f) is None]
+            for field in off:
+                if field not in disabled_fields:
+                    disabled_fields.append(field)
+            for field in absent:
+                if field not in missing_fields:
+                    missing_fields.append(field)
+            entry_enabled = not off and not absent
             if entry_enabled:
                 enabled_count += 1
             additional_findings.append({
                 "metric": entry["orgUnit"],
-                "value": entry_enabled,
-                "reason": "Link checking enabled" if entry_enabled else "Link checking not fully enabled"
+                "value": False if off else (None if absent else True),
+                "reason": "Link checking not fully enabled" if off else (
+                    "Link checking settings not reported: " + ", ".join(absent) if absent else "Link checking enabled")
             })
 
-        is_url_rewrite_enabled = len(link_policies) > 0 and enabled_count == len(link_policies)
-        if truncated and (len(link_policies) == 0 or is_url_rewrite_enabled):
-            # More pages exist. A policy that is off already decides False; nothing read so far can prove
-            # True, or prove that no link-protection policy exists.
+        if disabled_fields:
+            # A policy that reports a required setting off already decides False, whatever else is unread.
+            is_url_rewrite_enabled = False
+        elif truncated:
+            # More pages exist, and nothing read so far is off: a later page could hold a policy that is, or
+            # the only link-protection policy.
             return unmeasured("The policy list was truncated (nextPageToken present) before every %s policy was "
                               "read; link checking not evaluated across all org units" % SETTING_TYPE, validation,
+                              {"truncated": True})
+        elif len(link_policies) == 0:
+            # A complete list that carries no link-protection policy is a proven negative.
+            is_url_rewrite_enabled = False
+        elif missing_fields:
+            return unmeasured("A %s policy did not report %s, so link checking cannot be judged"
+                              % (SETTING_TYPE, ", ".join(missing_fields)), validation,
                               {"totalPolicies": len(policies), "linkPolicies": len(link_policies)})
+        else:
+            is_url_rewrite_enabled = True
+
+        # Counts are totals only for a complete list; a truncated list gives a partial page, so None.
+        link_count = None if truncated else len(link_policies)
+        enabled_total = None if truncated else enabled_count
 
         if is_url_rewrite_enabled:
             pass_reasons.append(
@@ -246,10 +279,16 @@ def transform(input):
                 "Verify the Cloud Identity Policy API returns Gmail safety policies for this tenant"
             )
         else:
-            fail_reasons.append(
-                "Link checking not enabled on %d of %d org unit policies (missing: %s)"
-                % (len(link_policies) - enabled_count, len(link_policies), ", ".join(disabled_fields))
-            )
+            if truncated:
+                fail_reasons.append(
+                    "Link checking not enabled on at least one org unit policy (missing: %s); the list was cut "
+                    "short, so counts across all policies are not reported" % ", ".join(disabled_fields)
+                )
+            else:
+                fail_reasons.append(
+                    "Link checking not enabled on %d of %d org unit policies (missing: %s)"
+                    % (len(link_policies) - enabled_count, len(link_policies), ", ".join(disabled_fields))
+                )
             recommendations.append(
                 "In Admin console > Apps > Google Workspace > Gmail > Safety > Links and external "
                 "images, enable shortener scanning and aggressive warnings on untrusted links"
@@ -258,15 +297,15 @@ def transform(input):
         return create_response(
             result={
                 criteriaKey: is_url_rewrite_enabled,
-                "linkPolicyCount": len(link_policies),
-                "enabledPolicyCount": enabled_count
+                "linkPolicyCount": link_count,
+                "enabledPolicyCount": enabled_total
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             additional_findings=additional_findings,
-            input_summary={
+            input_summary={"truncated": True} if truncated else {
                 "totalPolicies": len(policies),
                 "linkPolicies": len(link_policies),
                 "enabledPolicies": enabled_count

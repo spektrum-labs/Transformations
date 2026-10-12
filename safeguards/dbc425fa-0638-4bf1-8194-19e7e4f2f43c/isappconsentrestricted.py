@@ -39,8 +39,9 @@ def transform(input):
     Not measured (both keys None and a dataCollection error, so Token-Service shows Not evaluated, never
     Failed): an error or refusal body, a body that is not JSON or not an object, no policies collection,
     an empty list, no unconfigured_third_party_apps policy in it (the setting must be shown before it can
-    be judged), a list still carrying nextPageToken (the share of restricted policies would be partial),
-    and this transform's own exception.
+    be judged), a policy that does not report its accessLevel (it proves nothing about that policy), a list
+    still carrying nextPageToken (the share of restricted policies would be partial), and this transform's
+    own exception.
 
     Does not prove: the per-app access list (apps marked trusted, limited or blocked), which this
     setting does not carry.
@@ -120,15 +121,25 @@ def evaluate(raw):
                           + str(len(policies)) + " policies read): third-party app access cannot be judged")
         return state
     restricted = 0
+    unreported = []
     for policy in found:
         value = policy["setting"].get("value") if isinstance(policy["setting"].get("value"), dict) else {}
         level = text(value.get("accessLevel")).upper()
+        if level == "":
+            # A policy that does not report its access level proves nothing about that policy.
+            query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
+            unreported.append(text(query.get("orgUnit") or query.get("group") or "customer"))
+            continue
         query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
         where = text(query.get("orgUnit") or query.get("group") or "customer") + " (" + text(policy.get("type")) + ")"
         if level in ["BLOCK_ALL", "ALLOW_SIGN_IN_ONLY"]:
             restricted = restricted + 1
         else:
-            state["open"].append("Unconfigured third-party apps allowed at " + where + ": accessLevel " + (level or "missing"))
+            state["open"].append("Unconfigured third-party apps allowed at " + where + ": accessLevel " + level)
+    if unreported:
+        state["error"] = ("An unconfigured_third_party_apps policy did not report its accessLevel (" + ", ".join(unreported[:5])
+                          + "): the share of restricted policies cannot be computed, so it was not evaluated")
+        return state
     state["total"] = len(found)
     state["restricted"] = restricted
     state["percentage"] = round(restricted * 100.0 / len(found), 1)

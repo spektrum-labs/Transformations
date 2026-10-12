@@ -27,8 +27,8 @@ tenant whose assignments, profiles and legacy organization profile were read and
 
 Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never
 Failed): a Google error or refusal, a missing scope ("scope not granted"), a body that is not JSON
-or carries no SSO data, a truncated assignment list (nextPageToken) that has not already proven
-SSO, a legacy feed that reports no enableSSO, a DOMAIN_WIDE_SAML_IF_ENABLED assignment whose
+or carries no SSO data, a truncated assignment list or SAML profile list (nextPageToken or
+paginationTruncated) that has not already proven SSO, a legacy feed that reports no enableSSO, a DOMAIN_WIDE_SAML_IF_ENABLED assignment whose
 organization profile could not be read, no assignment, no profile and no readable organization
 profile at all (nothing was read that could show SSO is off), and this transform's own exception.
 
@@ -259,6 +259,13 @@ def legacy_state(props):
     return enabled and has_idp, enabled_raw, host
 
 
+def is_truncated(body):
+    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    return bool(str(body.get("nextPageToken") or "").strip()) or is_true(body.get("paginationTruncated"))
+
+
 def host_of(url):
     parts = str(url or "").split("/")
     return parts[2] if len(parts) > 2 else ""
@@ -283,7 +290,8 @@ def evaluate_cloud_identity(data, validation):
     if (assignments and not [a for a in assignments if isinstance(a, dict)]) or \
             (profiles and not [p for p in profiles if isinstance(p, dict)]):
         return not_measured("inbound SSO records could not be read", validation)
-    truncated = bool(assignments_body.get("nextPageToken"))
+    truncated = is_truncated(assignments_body)
+    profiles_truncated = is_truncated(profiles_body)
 
     profile_hosts = {}
     for profile in profiles:
@@ -338,10 +346,16 @@ def evaluate_cloud_identity(data, validation):
         effective.append("organization SSO profile via %s (no SSO profile assignments returned)" % legacy_host)
 
     result_value = len(effective) > 0
-    summary = {"assignments": len(assignments), "samlProfiles": len(profiles), "modes": sorted(set(modes)),
-               "legacyEnableSSO": legacy_raw, "truncated": truncated}
+    any_truncated = truncated or profiles_truncated
+    summary = {"truncated": True, "legacyEnableSSO": legacy_raw} if any_truncated else {
+        "assignments": len(assignments), "samlProfiles": len(profiles), "modes": sorted(set(modes)),
+        "legacyEnableSSO": legacy_raw, "truncated": False}
     if not result_value and truncated:
         return not_measured("SSO assignment list was truncated before SSO was found", validation, result_extra={})
+    if not result_value and profiles_truncated:
+        # A SAML assignment whose profile is not on the page read could have its profile on the next one, and
+        # a profile the list does not show cannot be told apart from one on a later page.
+        return not_measured("SAML SSO profile list was truncated before SSO was found", validation, result_extra={})
     if not result_value and domain_wide and not legacy_read:
         # The assignment defers to the organization profile, and that profile could not be read.
         return not_measured("an assignment uses the organization SSO profile, which could not be read (%s)"

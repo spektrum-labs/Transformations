@@ -12,14 +12,18 @@ the one an admin can turn off: enhanced pre-delivery message scanning (extra con
 suspicious messages before they reach the inbox).
 
 Rule (fail closed): true only when at least one gmail.enhanced_pre_delivery_message_scanning policy is returned and EVERY one of them
-(Google returns one per org unit or group that sets it) has all required fields "True". A missing
-field, a policy with a required field off, or a complete list that carries no policy for this setting
-is false: those are measured.
+(Google returns one per org unit or group that sets it) has all required fields "True". A policy
+that reports a required field off, or a complete list that carries no policy for this setting, is false:
+those are measured. A required field a policy does not report at all is not off, it is unknown (None).
 
 Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never Failed):
 a Google error or refusal, a missing scope, a body that is not JSON or not a policy list, an empty
-policy list, a list with no policy record in it, a list still carrying nextPageToken in which no policy
-is off yet (more pages could hold one), and this transform's own exception.
+policy list, a list with no policy record in it, a policy that does not report a required field (and no
+policy reports one off), a list still carrying nextPageToken (or paginationTruncated) in which no policy is
+off yet (more pages could hold one), and this transform's own exception.
+
+Counts: policiesJudged and policiesCompliant are totals for a complete list and None for a truncated one,
+because a count taken from part of the list is not a total. A False already proven by a policy seen stays.
 """
 
 import json
@@ -196,27 +200,51 @@ def transform(input):
 
         findings = []
         off_fields = []
+        missing_fields = []
         compliant = 0
         for org_unit, value in matched:
-            off = [f for f in REQUIRED_FIELDS if not is_true(value.get(f))]
+            # A field the policy reports as off is a finding. A field it does not report at all is not: it
+            # leaves the policy unjudged (None), never off.
+            off = [f for f in REQUIRED_FIELDS if value.get(f) is not None and not is_true(value.get(f))]
+            absent = [f for f in REQUIRED_FIELDS if value.get(f) is None]
             for f in off:
                 if f not in off_fields:
                     off_fields.append(f)
-            if not off:
+            for f in absent:
+                if f not in missing_fields:
+                    missing_fields.append(f)
+            if not off and not absent:
                 compliant = compliant + 1
-            findings.append({
-                "metric": org_unit,
-                "value": not off,
-                "reason": "all required settings on" if not off else "off or missing: " + ", ".join(off)
-            })
+            if off:
+                state, reason = False, "off: " + ", ".join(off)
+            elif absent:
+                state, reason = None, "not reported: " + ", ".join(absent)
+            else:
+                state, reason = True, "all required settings on"
+            findings.append({"metric": org_unit, "value": state, "reason": reason})
 
-        result_value = len(matched) > 0 and compliant == len(matched)
-        if truncated and (len(matched) == 0 or result_value):
-            # More pages exist. A policy that is off already decides False; nothing read so far can prove
-            # True, or prove that no policy for this setting exists.
+        if off_fields:
+            # A policy that reports a required field off already decides False, whatever else is unread.
+            result_value = False
+        elif truncated:
+            # More pages exist, and nothing read so far is off: a later page could hold a policy that is, or
+            # the only policy for this setting.
             return unmeasured("The policy list was truncated (nextPageToken present) before every %s policy was "
                               "read; %s not evaluated across all org units" % (SETTING_TYPE, CONTROL), validation,
-                              {"gmailPolicies": len(policies), "matchingPolicies": len(matched)})
+                              {"truncated": True})
+        elif len(matched) == 0:
+            # A complete list that carries no policy for this setting is a proven negative.
+            result_value = False
+        elif missing_fields:
+            return unmeasured("A %s policy did not report %s, so %s cannot be judged" % (
+                SETTING_TYPE, ", ".join(missing_fields), CONTROL.lower()), validation,
+                {"gmailPolicies": len(policies), "matchingPolicies": len(matched)})
+        else:
+            result_value = True
+
+        # Counts are totals only for a complete list; a truncated list gives a partial page, so None.
+        judged = None if truncated else len(matched)
+        judged_compliant = None if truncated else compliant
         pass_reasons = []
         fail_reasons = []
         recommendations = []
@@ -225,19 +253,25 @@ def transform(input):
         elif len(matched) == 0:
             fail_reasons.append("No %s policy returned (%d Gmail policies read); %s not proven" % (SETTING_TYPE, len(policies), CONTROL))
             recommendations.append(ADVICE)
+        elif truncated:
+            fail_reasons.append("%s not fully on in at least one %s policy (off: %s); the list was cut short, so "
+                                "counts across all policies are not reported" % (
+                                    CONTROL, SETTING_TYPE, ", ".join(off_fields)))
+            recommendations.append(ADVICE)
         else:
             fail_reasons.append("%s not fully on in %d of %d %s policies (off: %s)" % (
                 CONTROL, len(matched) - compliant, len(matched), SETTING_TYPE, ", ".join(off_fields)))
             recommendations.append(ADVICE)
 
         return create_response(
-            result={CRITERIA_KEY: result_value, "policiesJudged": len(matched), "policiesCompliant": compliant},
+            result={CRITERIA_KEY: result_value, "policiesJudged": judged, "policiesCompliant": judged_compliant},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             additional_findings=findings,
-            input_summary={"gmailPolicies": len(policies), "matchingPolicies": len(matched), "compliant": compliant}
+            input_summary={"truncated": True} if truncated else
+                          {"gmailPolicies": len(policies), "matchingPolicies": len(matched), "compliant": compliant}
         )
 
     except Exception as e:

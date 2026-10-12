@@ -6,13 +6,18 @@ Category: Identity / Authentication
 Evaluates the MFA status for users in the organization.
 
 Measured: a user list that was read (true when a user has 2-Step Verification enforced, false when
-none does), or a direct isMFAEnforcedForUsers flag in the payload.
+none does). The criterion is never read out of the payload: a vendor does not send it, so an
+isMFAEnforcedForUsers field in the body is not evidence of anything.
 
 Not measured (the key and the user counts are None, with a dataCollection error, so Token-Service
-shows Not evaluated, never Failed): a refusal or error body, a body that is not JSON, no users list
-and no direct flag, an empty user list, a list that still carries nextPageToken in which no user is
+shows Not evaluated, never Failed): a refusal or error body, a body that is not JSON, no users list,
+an empty user list, a list that still carries nextPageToken (or paginationTruncated) in which no user is
 enforced yet (more pages could hold one), a failed input validation, and this transform's own
 exception.
+
+Counts: totalUsers and mfaEnrolledUsers count the user records of a complete list and are None for a
+truncated one, because a count taken from part of the list is not a total. One enforced user already
+proves True, so that verdict stays when the list was cut short.
 """
 
 import json
@@ -168,40 +173,40 @@ def transform(input):
         measured = False
         truncated = False
 
-        # Check for direct MFA flag
-        if data.get('isMFAEnforcedForUsers') is not None:
-            isMFAEnforcedForUsers = data['isMFAEnforcedForUsers']
-            measured = True
-
-        # Check rawResponse for user details
+        # The user list is the only evidence. The criterion itself is not read out of the body it judges.
         raw_data = data.get('rawResponse', data)
 
         if isinstance(raw_data, dict) and 'users' in raw_data:
             users = raw_data['users']
             if isinstance(users, list):
-                # A user list is the authority when there is one. An empty list, or one with no user record
-                # in it, proves nothing either way, so it also withdraws a direct flag it would have replaced.
+                # An empty list, or one with no user record in it, proves nothing either way.
                 records = [obj for obj in users if isinstance(obj, dict)]
                 measured = len(records) > 0
                 if measured:
-                    total_users = len(users)
+                    total_users = len(records)
                     mfa_enrolled = [obj for obj in records if 'isEnforcedIn2Sv' in obj and str(obj['isEnforcedIn2Sv']).lower() == "true"]
                     mfa_enrolled_users = len(mfa_enrolled)
                     isMFAEnforcedForUsers = mfa_enrolled_users > 0
-                    truncated = is_truncated(raw_data)
+                    truncated = is_truncated(raw_data) or is_truncated(data)
 
         if not measured:
-            return unmeasured("No user list and no enforcement flag was read: an empty or unrecognised body cannot "
-                              "be told apart from a read that returned nothing", validation)
+            return unmeasured("No user list was read: an empty or unrecognised body cannot be told apart from a "
+                              "read that returned nothing", validation)
         if truncated and not isMFAEnforcedForUsers:
             # More pages exist. One enforced user already decides True; with none enforced yet, a later page
             # could hold one.
             return unmeasured("The user list was truncated (nextPageToken present) before an enforced user was "
                               "found; enforcement not evaluated across all users", validation,
-                              {"totalUsers": total_users, "mfaEnrolledUsers": mfa_enrolled_users})
+                              {"truncated": True})
+
+        # Counts are totals only for a complete list; a truncated list gives a partial page, so None.
+        reported_total = None if truncated else total_users
+        reported_enrolled = None if truncated else mfa_enrolled_users
 
         if isMFAEnforcedForUsers:
-            if total_users > 0:
+            if truncated:
+                pass_reasons.append("MFA enforced for at least one user (the user list was cut short, so no counts are given)")
+            elif total_users > 0:
                 percentage = round((mfa_enrolled_users / total_users) * 100)
                 pass_reasons.append(f"MFA enforced for {mfa_enrolled_users}/{total_users} users ({percentage}%)")
             else:
@@ -213,14 +218,14 @@ def transform(input):
         return create_response(
             result={
                 criteriaKey: isMFAEnforcedForUsers,
-                "totalUsers": total_users,
-                "mfaEnrolledUsers": mfa_enrolled_users
+                "totalUsers": reported_total,
+                "mfaEnrolledUsers": reported_enrolled
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={
+            input_summary={"truncated": True} if truncated else {
                 "totalUsers": total_users,
                 "mfaEnrolledUsers": mfa_enrolled_users
             }
