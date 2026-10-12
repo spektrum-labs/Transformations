@@ -219,8 +219,8 @@ def test_empty_error_fields_beside_a_real_list_do_not_block_a_read(name):
 
 @pytest.mark.parametrize("name", FILES)
 @pytest.mark.parametrize("flag", [True, False])
-def test_explicit_configured_flag_keeps_its_reading(name, flag):
-    out = run(name, {FLAG_KEY[name]: flag})
+def test_explicit_configured_flag_beside_a_complete_list_keeps_its_reading(name, flag):
+    out = run(name, {"items": [endpoint("e1", ["endpointProtection"])], FLAG_KEY[name]: flag})
     assert out["transformedResponse"][FLAG_KEY[name]] is flag
     assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 

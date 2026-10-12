@@ -10,7 +10,10 @@ Only endpoints seen within 15 days of the newest lastSeenAt in the response are
 scored (endpoint rules 2026-09-29); the rest are reported as staleEndpointCount.
 
 An error, refusal, empty or unreadable endpoint read is Not evaluated (every key None with a
-data-collection error), never a failed check.
+data-collection error), never a failed check. So is a partial read (a next-page cursor or a
+truncation marker is present), and so is a body with no endpoint list: a figure, a "none found"
+or a count taken from part of the fleet is not a total. An explicit configured flag keeps its
+own value; every other key beside it is None.
 """
 
 import json
@@ -23,7 +26,8 @@ ACTIVE_WINDOW_DAYS = 15
 # A read that proves nothing is Not evaluated, never False. An error body, an HTTP 4xx/5xx body, a
 # failed input validation, an empty, null or unrecognised body, an empty endpoint list and an
 # exception all return every key as None with dataCollection.status "error", which the evaluator
-# shows as Not evaluated. A real endpoint list that holds no managed endpoint still reads 0 / False.
+# shows as Not evaluated, as do a partial read (pages left unread) and a body with no endpoint list.
+# A complete endpoint list that holds no managed endpoint still reads 0 / False.
 # The reason text is fixed: the vendor's own error text is never copied into the result.
 RESULT_KEYS = [
     "Endpoint Protection", "Endpoint Security", "Server Protection", "MDR", "Network Protection",
@@ -39,6 +43,10 @@ STATUS_KEYS = ["status_code", "statusCode", "httpStatus", "status"]
 ERROR_REASON = "Not evaluated: Sophos returned an error instead of an endpoint list; nothing was measured."
 NO_ENDPOINTS_REASON = "Not evaluated: no endpoints returned"
 NO_LIST_REASON = "Not evaluated: no endpoint list in the response; nothing was measured."
+PARTIAL_REASON = (
+    "Not evaluated: the endpoint list has further pages that were not read, so a coverage figure "
+    "from part of the list is not a total; nothing was measured."
+)
 VALIDATION_REASON = "Not evaluated: the response failed input validation; nothing was measured."
 EXCEPTION_REASON = "Not evaluated: the transformation could not read the response; nothing was measured."
 
@@ -81,10 +89,12 @@ def list_problem(items):
 
 
 def read_problem(data):
-    """Why a body is not a readable endpoint list (fixed text), or None when it is one.
+    """Why a body is not a complete, readable endpoint list (fixed text), or None when it is one.
 
     A complete list of endpoints, even one with no managed endpoint, is a read that proves a
-    negative and is scored as before; so is a body carrying the explicit configured flag.
+    negative and is scored as before. A list that is only part of the fleet is not (see
+    unread_pages). A body with an explicit configured flag but no endpoint list has nothing to
+    score either; kept_flag lets the flag keep its own value.
     """
     if isinstance(data, list):
         return list_problem(data)
@@ -92,13 +102,80 @@ def read_problem(data):
         reason = error_reason(data)
         if reason is not None:
             return reason
-        if FLAG_KEY in data:
-            return None
         items = data.get("items")
         if isinstance(items, list):
-            return list_problem(items)
+            problem = list_problem(items)
+            if problem is not None:
+                return problem
+            return unread_pages(data, len(items))
         return NO_LIST_REASON
     return NO_LIST_REASON
+
+
+def kept_flag(data, problem):
+    """The explicit configured flag as a bool when the body states one and the only trouble is a
+    missing, empty or partial endpoint list. An error proves nothing, so no flag is kept beside
+    one. None when there is no flag to keep."""
+    if not isinstance(data, dict):
+        return None
+    if problem not in (NO_LIST_REASON, NO_ENDPOINTS_REASON, PARTIAL_REASON):
+        return None
+    value = data.get(FLAG_KEY)
+    if value is None:
+        return None
+    return bool(value)
+
+
+def page_cursor(value):
+    """A pagination cursor, or None. Stored replays stringify null as "None" or "null"."""
+    if value is None or value is False:
+        return None
+    text = str(value).strip()
+    if text.lower() in ("", "none", "null", "false"):
+        return None
+    return text
+
+
+def page_int(value):
+    """An integer page field, or None. Stored replays stringify numbers."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def marked_true(value):
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def unread_pages(data, item_count):
+    """PARTIAL_REASON when the endpoint list may be only part of the fleet, else None.
+
+    A next-page cursor still set, a truncation marker, more items than were returned, or more
+    pages than one page of endpoints all mean the rest was not read. Anything computed from the
+    part that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
+    seen, so it is not reported. A full first page with no cursor is not treated as partial: a
+    complete read of a large fleet looks the same.
+    """
+    if marked_true(data.get("truncated")):
+        return PARTIAL_REASON
+    pages = data.get("pages")
+    if not isinstance(pages, dict):
+        return None
+    if marked_true(pages.get("truncated")):
+        return PARTIAL_REASON
+    if page_cursor(pages.get("nextKey")) is not None:
+        return PARTIAL_REASON
+    total_items = page_int(pages.get("items"))
+    if total_items is not None and total_items > item_count:
+        return PARTIAL_REASON
+    total_pages = page_int(pages.get("total"))
+    size = page_int(pages.get("size"))
+    if total_pages is not None and total_pages > 1 and size is not None and item_count <= size:
+        return PARTIAL_REASON
+    return None
 
 
 def parse_seen(value):
@@ -205,8 +282,12 @@ def transform(input):
 
         problem = read_problem(data)
         if problem is not None:
+            unmeasured = not_measured_result()
+            flag = kept_flag(data, problem)
+            if flag is not None:
+                unmeasured[FLAG_KEY] = flag
             return create_response(
-                result=not_measured_result(),
+                result=unmeasured,
                 validation=validation,
                 fail_reasons=[problem],
                 api_errors=[problem]
