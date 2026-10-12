@@ -13,8 +13,9 @@ findings list that carries no PASSED or FAILED control status (0 of 0 is not a s
 list with more pages (NextToken) left unread (the controls on later pages are not in the score),
 and an exception. A readable list with controls and none passing is a real 0.
 
-The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A finding
-whose Compliance entry is not an object cannot be read; it is skipped without raising and the score is None.
+The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A list entry
+that is not an object, or a finding whose Compliance entry is not an object, cannot be read; it is skipped without
+raising and the score is None.
 """
 
 import json
@@ -129,10 +130,10 @@ def compliance_of(finding):
 
 
 def unreadable_findings(findings):
-    """How many findings carry a Compliance entry that is not an object. Those findings cannot be read."""
+    """How many list entries cannot be read: an entry that is not an object, or a finding whose Compliance entry is not an object."""
     count = 0
     for f in findings:
-        if isinstance(f, dict) and compliance_of(f) is None:
+        if not isinstance(f, dict) or compliance_of(f) is None:
             count = count + 1
     return count
 

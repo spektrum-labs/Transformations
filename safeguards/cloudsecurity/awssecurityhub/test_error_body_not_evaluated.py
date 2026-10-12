@@ -291,8 +291,8 @@ def test_a_passing_control_is_still_true(loader, name):
             if token is not None:
                 body["NextToken"] = token
             out = loader(name)(body)
-            if name == "unencryptedstorageresourcecount":
-                # one of three storage controls read: no failure seen is not a pass
+            if len(controls) > 1:
+                # one of several controls read: no failure seen is not a pass
                 assert_not_evaluated(out, NONE_KEYS[name])
                 continue
             assert verdict(out, key) == (True, "success")
@@ -326,13 +326,22 @@ def test_findings_for_other_controls_prove_nothing_about_this_one(loader, name):
 
 
 @pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
-def test_multi_control_checks_pass_on_the_controls_that_are_present(loader):
-    assert verdict(loader("areadminaccountsseparate")({"Findings": [finding("IAM.1", "PASSED")]}),
-                   "areAdminAccountsSeparate") == (True, "success")
+def test_multi_control_checks_need_every_control(loader):
+    admin = loader("areadminaccountsseparate")
+    dlp = loader("aredlppoliciesconfigured")
+    # one control with a status and the other unread is not a pass
+    assert_not_evaluated(admin({"Findings": [finding("IAM.1", "PASSED")]}), NONE_KEYS["areadminaccountsseparate"])
+    assert_not_evaluated(admin({"Findings": [finding("IAM.4", "PASSED")]}), NONE_KEYS["areadminaccountsseparate"])
+    assert_not_evaluated(dlp({"Findings": [finding("Macie.2", "PASSED")]}), NONE_KEYS["aredlppoliciesconfigured"])
+    assert_not_evaluated(dlp({"Findings": [finding("Macie.1", "PASSED")]}), NONE_KEYS["aredlppoliciesconfigured"])
+    # every control read and passing is True
+    both = {"Findings": [finding("IAM.1", "PASSED"), finding("IAM.4", "PASSED")]}
+    assert verdict(admin(both), "areAdminAccountsSeparate") == (True, "success")
+    # a failing control keeps the verdict False, whether or not the other one was read
     mixed = {"Findings": [finding("IAM.1", "PASSED"), finding("IAM.4", "FAILED")]}
-    assert verdict(loader("areadminaccountsseparate")(mixed), "areAdminAccountsSeparate") == (False, "success")
-    assert verdict(loader("aredlppoliciesconfigured")({"Findings": [finding("Macie.2", "PASSED")]}),
-                   "areDLPPoliciesConfigured") == (True, "success")
+    assert verdict(admin(mixed), "areAdminAccountsSeparate") == (False, "success")
+    alone = {"Findings": [finding("IAM.4", "FAILED")]}
+    assert verdict(admin(alone), "areAdminAccountsSeparate") == (False, "success")
 
 
 # --- unencryptedStorageResourceCount and criticalOpenFindingsCount ---------------------------
@@ -418,7 +427,6 @@ LICENSE_CASES = [
     ("no licences", {"licenses": []}, False),
     ("inactive", {"active": False}, False),
     ("disabled", {"enabled": False}, False),
-    ("empty subscription", {"subscription": ""}, False),
 ]
 
 

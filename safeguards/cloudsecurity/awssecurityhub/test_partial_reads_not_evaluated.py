@@ -268,3 +268,143 @@ def test_a_finding_with_no_compliance_entry_is_just_not_counted(loader):
     # No Compliance at all is a finding that is not a control finding; it is not an unreadable one.
     out = loader(CRITICAL)({"Findings": passing_findings(CRITICAL) + [{"Severity": {"Label": "LOW"}}]})
     assert out["transformedResponse"]["criticalOpenFindingsCount"] is True
+
+
+# --- a list entry that is not an object cannot be read either ---------------------------------
+
+NOT_OBJECTS = ["garbled", 7, None, ["IAM.1"], True]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("bad", NOT_OBJECTS, ids=[repr(b) for b in NOT_OBJECTS])
+def test_a_list_entry_that_is_not_an_object_beside_passes_is_not_a_pass(loader, name, bad):
+    out = loader(name)({"Findings": passing_findings(name) + [bad]})
+    not_evaluated(out, name)
+    out = loader(name)({"Findings": [bad] + passing_findings(name)})
+    not_evaluated(out, name)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("bad", NOT_OBJECTS, ids=[repr(b) for b in NOT_OBJECTS])
+def test_only_entries_that_are_not_objects_is_not_evaluated(loader, name, bad):
+    not_evaluated(loader(name)({"Findings": [bad, bad]}), name)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", sorted(CONTROL_CHECKS))
+def test_an_entry_that_is_not_an_object_beside_a_failure_stays_false(loader, name):
+    control = CONTROL_CHECKS[name][1][0]
+    out = loader(name)({"Findings": ["garbled", finding(control, "FAILED")]})
+    assert out["transformedResponse"][KEYS[name]] is False
+    assert collection(out)["status"] == "success"
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_counts_beside_an_entry_that_is_not_an_object_are_lower_bounds(loader):
+    crit = loader(CRITICAL)({"Findings": CRITICAL_FINDINGS + ["garbled"]})["transformedResponse"]
+    assert crit["criticalOpenFindingsCount"] is False
+    assert crit["openCriticalFindings"] is None and crit["openCriticalFindingsAtLeast"] == 2
+    unenc = loader("unencryptedstorageresourcecount")({"Findings": UNENCRYPTED_FINDINGS + [None]})["transformedResponse"]
+    assert unenc["unencryptedResources"] is None and unenc["unencryptedResourcesAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_an_empty_object_is_not_an_unreadable_finding(loader):
+    # {} is an object with no Compliance entry: a finding about nothing we read, not an unreadable one.
+    out = loader(CRITICAL)({"Findings": passing_findings(CRITICAL) + [{}]})
+    assert out["transformedResponse"]["criticalOpenFindingsCount"] is True
+
+
+# --- checks that read several controls need a status for every one ----------------------------
+
+MULTI = {"areadminaccountsseparate": ["IAM.1", "IAM.4"], "aredlppoliciesconfigured": ["Macie.1", "Macie.2"]}
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", sorted(MULTI))
+def test_one_control_passing_and_the_other_unread_is_not_a_pass(loader, name):
+    for read in MULTI[name]:
+        out = loader(name)({"Findings": [finding(read, "PASSED")]})
+        not_evaluated(out, name)
+        unread = [c for c in MULTI[name] if c != read][0]
+        assert unread in " ".join(collection(out)["errors"])
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", sorted(MULTI))
+def test_every_control_passing_is_true_and_a_failure_beside_an_unread_control_is_false(loader, name):
+    out = loader(name)({"Findings": [finding(c, "PASSED") for c in MULTI[name]]})
+    assert out["transformedResponse"][KEYS[name]] is True
+    out = loader(name)({"Findings": [finding(MULTI[name][1], "FAILED")]})
+    assert out["transformedResponse"][KEYS[name]] is False
+
+
+# --- confirmedLicensePurchased ----------------------------------------------------------------
+
+LICENCE = "confirmedlicensepurchased"
+LICENCE_KEY = "confirmedLicensePurchased"
+
+
+def licence_not_evaluated(out):
+    assert out["transformedResponse"][LICENCE_KEY] is None
+    assert collection(out)["status"] == "error" and collection(out)["errors"]
+    assert out["additionalInfo"]["evaluation"]["passReasons"] == []
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("key", ["NextToken", "nextToken"])
+def test_licence_findings_count_with_a_next_page_token_is_a_lower_bound(loader, key):
+    findings = [finding("IAM.4", "PASSED"), finding("IAM.5", "PASSED")]
+    for body in ({"Findings": findings, key: "abc"}, {"api_response": {"Findings": findings}, key: "abc"},
+                 {"api_response": {"result": {"Findings": findings}, key: "abc"}}):
+        inner = loader(LICENCE)(body)["transformedResponse"]
+        assert inner[LICENCE_KEY] is True
+        assert inner["findingsCount"] is None
+        assert inner["findingsCountAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_licence_findings_count_without_a_token_is_a_total(loader):
+    inner = loader(LICENCE)({"Findings": [finding("IAM.4", "PASSED")], "NextToken": None})["transformedResponse"]
+    assert inner["findingsCount"] == 1 and "findingsCountAtLeast" not in inner
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("wrapper", ["api_response", "response", "result", "apiResponse", "Output"])
+def test_licence_reads_every_wrapper_key(loader, wrapper):
+    assert loader(LICENCE)({wrapper: {"subscription": "enterprise"}})["transformedResponse"][LICENCE_KEY] is True
+    assert loader(LICENCE)({wrapper: {"licenses": []}})["transformedResponse"][LICENCE_KEY] is False
+    licence_not_evaluated(loader(LICENCE)({wrapper: {"error": "denied"}}))
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_licence_reads_nested_wrappers_and_an_error_inside_them(loader):
+    assert loader(LICENCE)({"api_response": {"result": {"Findings": []}}})["transformedResponse"][LICENCE_KEY] is True
+    assert loader(LICENCE)({"Output": {"response": {"sku": "SH-1"}}})["transformedResponse"][LICENCE_KEY] is True
+    licence_not_evaluated(loader(LICENCE)({"api_response": {"result": {"statusCode": 500}}}))
+    licence_not_evaluated(loader(LICENCE)({"api_response": {"nothing": "here"}}))
+
+
+EMPTY_FIELDS = [{"subscription": None}, {"subscription": ""}, {"subscription": "  "}, {"subscription": {}},
+                {"sku": None}, {"sku": ""}, {"license": None}, {"license": []},
+                {"active": None}, {"enabled": None},
+                {"subscription": None, "licenses": []}, {"sku": "", "license": None}]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("body", EMPTY_FIELDS, ids=[repr(b) for b in EMPTY_FIELDS])
+def test_licence_field_that_is_null_or_empty_is_not_evaluated(loader, body):
+    licence_not_evaluated(loader(LICENCE)(body))
+    licence_not_evaluated(loader(LICENCE)({"api_response": body}))
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_licence_empty_field_does_not_hide_a_real_licence_or_a_real_no(loader):
+    assert loader(LICENCE)({"subscription": None, "sku": "SH-1"})["transformedResponse"][LICENCE_KEY] is True
+    assert loader(LICENCE)({"subscription": None, "licenses": [{"id": 1}]})["transformedResponse"][LICENCE_KEY] is True
+    assert loader(LICENCE)({"subscription": None, "Findings": []})["transformedResponse"][LICENCE_KEY] is True
+    assert loader(LICENCE)({"licenses": []})["transformedResponse"][LICENCE_KEY] is False
+    assert loader(LICENCE)({"active": False})["transformedResponse"][LICENCE_KEY] is False
+    assert loader(LICENCE)({"enabled": False, "subscription": None})["transformedResponse"][LICENCE_KEY] is False
