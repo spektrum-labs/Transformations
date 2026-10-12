@@ -7,10 +7,12 @@ Evaluates if DMARC, DKIM and SPF records are properly configured for email secur
 
 Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
 error marker, a body that carries no SPF, DKIM or DMARC answer (an outage or error body from the DNS lookup, an
-empty response), a body that answers only some of the three (the lookup always answers all three, with a record
-text or a true/false flag, so a key that is absent, null or anything else, such as the text "false", a number, blank
-text, a list or an object, means the body is not that answer), malformed or unreadable input, and failed input
-validation. A lookup that answered all three and found a record absent (an explicit false) is a real False.
+empty response), a body that answers only some of the three, malformed or unreadable input, and failed input
+validation. The lookup always answers all three keys, with a true/false flag or that protocol's record text (SPF
+starts with v=spf1, DMARC with v=DMARC1, DKIM contains v=DKIM1 or starts with p=), so a key that is absent, null or
+anything else (the text "false" or "error", the record of another protocol, a number, blank text, a list, an
+object) means the body is not that answer. A lookup that answered all three and found a record absent (an explicit
+false) is a real False.
 """
 
 import json
@@ -127,23 +129,27 @@ def get_protocol(data, name):
     return lowered.get(name.lower())
 
 
-# Words a lookup or a hand-off can put where a record belongs; none of them is a record, so none is an answer.
-STAND_IN_WORDS = ("false", "true", "0", "1", "none", "null", "nil", "no", "yes", "n/a", "na", "nan", "undefined",
-                  "not found", "no banner found")
+def is_record_text(name, text):
+    """True only when the text is the record form of the protocol it sits under (compared in lower case)."""
+    if name == "SPF":
+        return text.startswith("v=spf1")
+    if name == "DMARC":
+        return text.startswith("v=dmarc1")
+    if name == "DKIM":
+        return "v=dkim1" in text or text.startswith("p=")
+    return False
 
 
-def read_answer(value):
-    """The lookup's answer for one protocol: True or False for a real flag, True for a record text.
+def read_answer(name, value):
+    """The lookup's answer for one protocol: True or False for a real flag, True for that protocol's record text.
 
-    None when the value is neither: a stand-in word such as "false" or "0", blank text, a number, a list or an
-    object. Such a value says nothing about the record, so the read is not evaluated; it is never a record found or
-    a record absent."""
+    None for anything else: a word such as "error", "missing" or "false", blank text, the record of another protocol,
+    a number, a list or an object. Such a value says nothing about the record, so the read is not evaluated; it is
+    never a record found or a record absent."""
     if isinstance(value, bool):
         return value
-    if isinstance(value, str):
-        text = value.strip()
-        if text != "" and text.lower() not in STAND_IN_WORDS:
-            return True
+    if isinstance(value, str) and is_record_text(name, value.strip().lower()):
+        return True
     return None
 
 
@@ -184,7 +190,7 @@ def transform(input):
                 "No DNS answer was returned, so this check could not be evaluated",
                 "Re-evaluate this check once the DNS lookup is available"
             )
-        answers = {name: read_answer(get_protocol(data, name)) for name in ("SPF", "DKIM", "DMARC")}
+        answers = {name: read_answer(name, get_protocol(data, name)) for name in ("SPF", "DKIM", "DMARC")}
         missing = [name for name in ("SPF", "DKIM", "DMARC") if answers[name] is None]
         if len(missing) == 3:
             return not_evaluated(

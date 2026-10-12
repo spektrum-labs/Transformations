@@ -177,21 +177,42 @@ class DnsTests(Checks):
                     self.assertIn(name, error)
 
     def test_a_value_that_is_neither_a_flag_nor_a_record_is_not_evaluated(self):
-        """A flag (true or false) or a record text is an answer. Sentinel words, empty text, numbers, lists and objects
-        are not, so they are neither a found record nor an absent one."""
+        """A flag (true or false) or the protocol's own record text is an answer. Words such as "error" or "missing",
+        stand-in words, empty text, numbers, lists and objects are not, so they are neither a record found nor one
+        absent."""
         for bad in ("false", "False", " FALSE ", "true", "0", "1", "", "  ", "none", "None", "null", "no", "n/a",
-                    "not found", "No banner found", 0, 1, 1.5, [], ["v=spf1 -all"], {}, {"record": "v=spf1 -all"}):
+                    "not found", "No banner found", "error", "Error", "timeout", "missing", "unknown",
+                    "not configured", "no record", "No DKIM record found.", "present", "configured", "example",
+                    0, 1, 1.5, [], ["v=spf1 -all"], {}, {"record": "v=spf1 -all"}):
             for name in ("SPF", "DKIM", "DMARC"):
                 with self.subTest(value=bad, key=name):
                     response = self.run_check(dict(GOOD_DNS, **{name: bad}))
                     self.assert_not_evaluated(response)
                     self.assertIn(name, response["additionalInfo"]["dataCollection"]["errors"][0])
 
-    def test_a_flag_or_a_record_text_is_an_answer(self):
-        for value, expected in ((True, True), (False, False), ("v=spf1 -all", True), ("p=AAAA", True)):
-            with self.subTest(value=value):
-                response = self.run_check(dict(GOOD_DNS, SPF=value))
-                self.assertIs(response["transformedResponse"]["isSPFConfigured"], expected)
+    def test_a_record_of_another_protocol_is_not_an_answer(self):
+        """The text counts only when it is the record form of the key it sits under."""
+        records = {"SPF": GOOD_DNS["SPF"], "DKIM": GOOD_DNS["DKIM"], "DMARC": GOOD_DNS["DMARC"]}
+        for name in records:
+            for other, record in records.items():
+                if other == name:
+                    continue
+                with self.subTest(key=name, record_of=other):
+                    response = self.run_check(dict(GOOD_DNS, **{name: record}))
+                    self.assert_not_evaluated(response)
+                    self.assertIn(name, response["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_a_flag_or_the_protocols_own_record_text_is_an_answer(self):
+        for name, value, expected in (
+            ("SPF", True, True), ("SPF", False, False), ("DKIM", True, True), ("DMARC", False, False),
+            ("SPF", "v=spf1 -all", True), ("SPF", "  V=SPF1 include:spf.example.invalid ~all  ", True),
+            ("DMARC", "V=DMARC1; p=reject", True), ("DMARC", "  v=dmarc1; p=none", True),
+            ("DKIM", "v=DKIM1; k=rsa; p=AAAA", True), ("DKIM", "k=rsa; V=DKIM1; p=AAAA", True), ("DKIM", "p=AAAA", True),
+            ("DKIM", "  P=AAAA", True),
+        ):
+            with self.subTest(key=name, value=value):
+                response = self.run_check(dict(GOOD_DNS, **{name: value}))
+                self.assertIs(response["transformedResponse"]["is%sConfigured" % name], expected)
                 self.assert_measured(response)
 
     def test_malformed_json_is_not_evaluated_with_a_transformation_error(self):
