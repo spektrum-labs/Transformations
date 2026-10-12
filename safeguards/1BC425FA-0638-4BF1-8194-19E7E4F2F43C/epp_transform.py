@@ -142,8 +142,10 @@ def unread_pages(data, item_count):
 
     A next-page cursor still set, a truncation marker, more items than were returned, more pages
     than one page of endpoints, or a page that does not start at the beginning (fromKey set) all
-    mean part of the fleet was not read. A page total above the number of items returned, with no
-    page size to compare against, cannot be a whole read either. Anything computed from the part
+    mean part of the fleet was not read. More than one page (pages.total above 1) is partial unless
+    pages.items says how many items the whole list holds and that is exactly the number returned (a
+    body whose pages were joined): a page total says nothing about how many items a page holds, so it
+    cannot show the list is whole, with or without a page size. Anything computed from the part
     that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
     seen, so it is not reported. A full first page with no cursor is not treated as partial: a
     complete read of a large fleet looks the same.
@@ -163,13 +165,8 @@ def unread_pages(data, item_count):
     if total_items is not None and total_items > item_count:
         return PARTIAL_REASON
     total_pages = page_int(pages.get("total"))
-    size = page_int(pages.get("size"))
-    if total_pages is not None and total_pages > 1:
-        if size is None:
-            if total_pages > item_count:
-                return PARTIAL_REASON
-        elif item_count <= size:
-            return PARTIAL_REASON
+    if total_pages is not None and total_pages > 1 and total_items != item_count:
+        return PARTIAL_REASON
     return None
 
 

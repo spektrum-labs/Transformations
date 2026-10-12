@@ -7,8 +7,10 @@ from it is not a total: the answer rests on endpoints nobody has seen. Every key
 with a data-collection error instead.
 
 A page that does not start at the beginning (pages.fromKey set) is also only part of the fleet.
-A page count above the number of items returned, with no page size to compare, cannot be a whole
-read either.
+More than one page (pages.total above 1) is only part of the fleet too, unless pages.items says how
+many items the whole list holds and that is exactly the number returned (a body whose pages were joined).
+A page total says nothing about how many items a page holds, so page 1 of 4 is partial with or without
+a page size, and so is a page total of 2 beside 2 items when nothing says those are all the items.
 
 A body that carries only a configured flag has no endpoint list, so every key is None. The configured
 keys (isMDRConfigured, isEPPConfigured) are derived from the endpoint list alone; Sophos documents no such
@@ -58,6 +60,7 @@ def enveloped(body):
 
 MANAGED = [endpoint("e1", ["endpointProtection", "mtr"])]
 UNMANAGED = [endpoint("e1", ["endpointProtection"]), endpoint("e2", ["endpointProtection"], mdrManaged=False)]
+MANY = [endpoint("e%d" % n, ["endpointProtection"]) for n in range(100)]
 
 PARTIAL_BODIES = [
     ("next key with a managed endpoint seen",
@@ -74,6 +77,14 @@ PARTIAL_BODIES = [
     ("more pages reported than present", {"items": UNMANAGED, "pages": {"size": "500", "total": "3"}}),
     ("total pages above the items returned, no page size", {"items": UNMANAGED, "pages": {"total": "3"}}),
     ("total as a number above the items returned, no page size", {"items": UNMANAGED, "pages": {"total": 250}}),
+    ("page 1 of 4, a full page of items, no size", {"items": MANY, "pages": {"total": "4"}}),
+    ("page 1 of 4, total as a number, no size", {"items": MANY, "pages": {"total": 4}}),
+    ("page 1 of 4 with a size", {"items": MANY, "pages": {"size": "100", "total": "4"}}),
+    ("pages above one with no item total (merged pages)", {"items": UNMANAGED, "pages": {"size": "1", "maxSize": "1", "total": "2"}}),
+    ("page total equal to the items returned, no item total", {"items": UNMANAGED, "pages": {"total": "2"}}),
+    ("pages above one with an item total below the items returned", {"items": UNMANAGED, "pages": {"total": "4", "items": "1"}}),
+    ("pages above one, wrapped", {"response": {"items": MANY, "pages": {"total": "4"}}}),
+    ("pages above one, enveloped", enveloped({"items": MANY, "pages": {"total": "4"}})),
     ("a page that does not start at the beginning", {"items": UNMANAGED, "pages": {"fromKey": "cursor-abc", "size": "2"}}),
     ("a later page with no further cursor", {"items": UNMANAGED, "pages": {"fromKey": "cursor-abc", "nextKey": None}}),
     ("a later page with a numeric key", {"items": UNMANAGED, "pages": {"fromKey": 777}}),
@@ -97,8 +108,11 @@ COMPLETE_BODIES = [
     ("truncated stringified false", {"items": UNMANAGED, "pages": {"truncated": "false"}}),
     ("one page of one", {"items": UNMANAGED, "pages": {"size": "2", "total": "1"}}),
     ("item total matches", {"items": UNMANAGED, "pages": {"size": "2", "items": "2"}}),
-    ("merged pages", {"items": UNMANAGED, "pages": {"size": "1", "maxSize": "1", "total": "2"}}),
-    ("page total equal to the items returned, no size", {"items": UNMANAGED, "pages": {"total": "2"}}),
+    ("joined pages whose item total matches", {"items": UNMANAGED, "pages": {"size": "1", "maxSize": "1", "total": "2", "items": "2"}}),
+    ("joined pages whose item total matches, no size", {"items": UNMANAGED, "pages": {"total": "2", "items": "2"}}),
+    ("joined pages whose item total matches, as numbers", {"items": UNMANAGED, "pages": {"total": 2, "items": 2}}),
+    ("joined pages whose item total matches, enveloped", enveloped({"items": UNMANAGED, "pages": {"total": "2", "items": "2"}})),
+    ("joined pages of 100 whose item total matches", {"items": MANY, "pages": {"total": "4", "items": "100"}}),
     ("page total of one, no size", {"items": UNMANAGED, "pages": {"total": "1"}}),
     ("start key null", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": None}}),
     ("start key stringified none", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "None"}}),
