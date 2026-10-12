@@ -158,7 +158,7 @@ def evaluate(data):
     if n:
         return False, extras, [], [f"{n} asset(s) ranked high"], ['Remediate or archive the high-ranked assets in ASM'], []
     if partial:
-        return False, extras, [], [f"no high-ranked asset among the {len(assets)} of {total} assets scanned -- too few to claim that no findings exist in scope"], ['Widen the inventory page window so all assets in scope is scanned'], []
+        return False, extras, [], [f"no high-ranked asset among the {len(assets)} of {total} assets scanned -- too few to claim that no findings exist in scope"], ['Widen the inventory page window so all assets in scope are scanned'], []
     return True, extras, [f"no asset(s) ranked high across all {len(assets)} asset(s)"], [], [], []
 
 

@@ -273,7 +273,7 @@ def transform(input):
     if api_errors:
         fail_reasons.append("Not measured: " + "; ".join(api_errors))
         recommendations.append(
-            "Verify the CrowdStrike API credentials (Hosts: Read) and that the device method pages through the "
+            "Verify the CrowdStrike API credentials (Hosts: Read) and that the device method pages through "
             "all assets in scope, then re-run the scan."
         )
     elif result_value:
