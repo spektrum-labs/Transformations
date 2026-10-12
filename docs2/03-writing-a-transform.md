@@ -225,7 +225,7 @@ Three casing rules, and they are not the same rule:
 
 The numbered flow, then the same loop as a diagram. Assume the criteria key is `isMFAEnforcedForUsers` for vendor Acme in category `mfa`.
 
-1. **Pick the directory**: `safeguards/mfa/acme/` — lowercase category, lowercase vendor. First check [04 — the catalog](04-catalog.md) for an existing dir (and for paired directories: `iam/` vs `identity-and-access-management/`, UUID dir vs category dir — adding to the copy production doesn't fetch is a silent no-op).
+1. **Pick the directory**: `safeguards/mfa/acme/` — lowercase category, lowercase vendor. First check [04 — the catalog](04-catalog.md) for an existing dir (and for paired directories: `iam/` vs `identity-and-access-management/`, UUID dir vs category dir — adding a file to the directory of the pair that production doesn't fetch is a silent no-op).
 2. **Name the file** `ismfaenforcedforusers.py` — the criteria key, lowercased, no underscores.
 3. **Start from a modern envelope file**: copy the structure of `main:safeguards/compliancemanagement/knowbe4/phishingclickrate.py` (standard helpers) and the logic discipline of `main:safeguards/cloudsecurity/awssecurityhub/isguarddutyenabled.py`. Strip phishingclickrate's `strptime` date parsing. Never start from a legacy bare-dict file.
 4. **Inline the helpers**: `extract_input` (the dominant variant, verbatim) and `create_response`, editing only the embedded `transformationId`/`vendor`/`category` metadata. Add a module-level `CRITERIA_KEY = "isMFAEnforcedForUsers"` constant and use it everywhere the key appears.
