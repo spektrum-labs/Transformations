@@ -9,8 +9,9 @@ of those fields and shows no licence (an empty licences list, an inactive or dis
 
 Not evaluated (None, dataCollection status "error"), never False: an error body (this integration's,
 an HTTP one or an AWS one), an empty, non-JSON or unrecognised body (none of the fields above), a
-subscription, SKU, licence or active/enabled field that is present but null or empty (it does not say
-whether a licence exists), and an exception. The reason text is fixed; the vendor's own error text is
+subscription, SKU or licence field that is present but null or empty, an active or enabled field that is not
+a real boolean or the text "true" or "false" (blank, an empty list or object, a number, "no", "disabled": it does
+not clearly say whether a licence exists), and an exception. The reason text is fixed; the vendor's own error text is
 never copied into the result.
 
 The body may sit inside api_response, response, result, apiResponse or Output wrappers, to a depth of five.
@@ -32,6 +33,8 @@ SINGLE_FIELDS = ["subscription", "sku", "license"]
 ERROR_PROBLEM = "The Security Hub call returned an error, so there is nothing to measure."
 SHAPE_PROBLEM = "The response carries no subscription, licence or findings field, so there is nothing to measure."
 RAISED_PROBLEM = "The Security Hub response could not be processed, so no verdict can be given."
+UNCLEAR_FLAG_PROBLEM = ("The active or enabled field in the response is not a clear true or false, so it does not say "
+                        "whether a licence exists.")
 EMPTY_FIELD_PROBLEM = ("A subscription, SKU, licence or active/enabled field in the response is empty, so it does not say "
                        "whether a licence exists.")
 
@@ -95,6 +98,19 @@ def empty_value(value):
     return False
 
 
+def flag_state(flag):
+    """True or False for a real boolean or the text "true" / "false" (any case, blanks trimmed); None for anything else."""
+    if isinstance(flag, bool):
+        return flag
+    if isinstance(flag, str):
+        text = flag.strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+    return None
+
+
 def usable(value):
     """True for a value that shows something: not null, not an empty or blank string or collection, not false or zero."""
     return bool(value) and not empty_value(value)
@@ -120,6 +136,8 @@ def unwrap(input_data):
         if nxt is None:
             break
         data = nxt
+    # The loop reads levels 0-4; the page it ends on (level 5 when five wrappers were opened) has its token read here.
+    token = token or page_token(data)
     if is_error_body(data):
         return None, None, ERROR_PROBLEM
     if not isinstance(data, dict):
@@ -191,10 +209,10 @@ def transform(input):
             license_purchased = True
             license_details["licenses"] = body["licenses"]
         elif "active" in body or "enabled" in body:
-            flag = body.get("active") if "active" in body else body.get("enabled")
-            if flag is None:
-                return not_evaluated(EMPTY_FIELD_PROBLEM)
-            license_purchased = bool(flag)
+            state = flag_state(body.get("active") if "active" in body else body.get("enabled"))
+            if state is None:
+                return not_evaluated(UNCLEAR_FLAG_PROBLEM)
+            license_purchased = state
             license_details["status"] = "active" if license_purchased else "inactive"
         # AWS Security Hub specific - check if findings exist (service is enabled)
         elif isinstance(body.get("Findings"), list):
