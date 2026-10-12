@@ -72,13 +72,15 @@ class TestNinjaOneAntivirusRules:
     path = NINJA / "requiredCoveragePercentage.py"
 
     def test_stale_row_is_left_out(self):
-        body = {"results": [av_row(1, "Defender", "ON", 1), av_row(2, "Defender", "OFF", 20)]}
+        body = {"results": [av_row(1, "Defender", "ON", 1), av_row(2, "Defender", "OFF", 20)],
+                "devices": [{"id": 1, "nodeClass": "WINDOWS_WORKSTATION"}, {"id": 2, "nodeClass": "WINDOWS_WORKSTATION"}]}
         result = out(self.path, body)
         assert result["requiredCoveragePercentage"] == 100
         assert result["devicesLeftOutStale"] == 1
 
     def test_dark_fleet_is_not_evaluated(self):
-        body = {"results": [av_row(1, "Defender", "ON", 30), av_row(2, "Defender", "ON", 31)]}
+        body = {"results": [av_row(1, "Defender", "ON", 30), av_row(2, "Defender", "ON", 31)],
+                "devices": [{"id": 1, "nodeClass": "WINDOWS_WORKSTATION"}, {"id": 2, "nodeClass": "WINDOWS_WORKSTATION"}]}
         result = out(self.path, body)
         assert result["requiredCoveragePercentage"] is None
         assert result["fleetDark"] is True

@@ -161,6 +161,61 @@ def endpoint_rows(rows, data, mac_unreadable, need_state=True):
     return kept, scope
 
 
+def device_roster(data):
+    """The device list riding beside the report (workflow key "devices") as a list, or None when it is absent or unreadable.
+
+    The list is the roster the result is measured against. A missing key, a value that is not a list, an error
+    reply (an error or errors field, or an HTTP status of 400 or more) and a wrapper with no list inside are all
+    unreadable. A well-formed empty list is readable.
+    """
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(devices, dict):
+        if devices.get("error") or devices.get("errors"):
+            return None
+        if http_error_status(devices.get("status_code") or devices.get("statusCode") or devices.get("status")) is not None:
+            return None
+        for key in ("data", "results"):
+            if isinstance(devices.get(key), list):
+                return devices.get(key)
+        return None
+    return devices if isinstance(devices, list) else None
+
+
+def devices_without_report(devices, rows):
+    """Devices in the device list (workflow key "devices") that the antivirus-status report does not mention.
+
+    A device the report does not mention is not shown protected: it counts against the result and never for it
+    (missing is never a pass). Phones and tablets, and devices not seen within ACTIVE_WINDOW_DAYS (or with a
+    last contact more than a day ahead of now), are left out as in the other endpoint rules. `rows` is every
+    report row before the endpoint rules run, so a device whose rows were left out is not also counted as missing.
+    `devices` is the roster from device_roster. Returns (devices counted as not covered, devices left out).
+    """
+    reported = set()
+    for row in rows:
+        if isinstance(row, dict) and row.get("deviceId") is not None:
+            reported.add(str(row.get("deviceId")))
+    now = datetime.now(timezone.utc).timestamp()
+    seen_ids = set()
+    counted = 0
+    left_out = 0
+    for device in devices:
+        if not isinstance(device, dict) or device.get("id") is None:
+            continue
+        device_id = str(device.get("id"))
+        if device_id in reported or device_id in seen_ids:
+            continue
+        seen_ids.add(device_id)
+        if str(device.get("nodeClass") or "").upper() in MOBILE_NODE_CLASSES:
+            left_out = left_out + 1
+            continue
+        last_contact = epoch(device.get("lastContact"))
+        if last_contact is not None and (last_contact < now - ACTIVE_WINDOW_DAYS * 86400 or last_contact > now + 86400):
+            left_out = left_out + 1
+            continue
+        counted = counted + 1
+    return counted, left_out
+
+
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -250,7 +305,12 @@ def measure_unprotected(input):
                            {"totalDevicesReported": 0})
 
     device_protected = {}
+    roster = device_roster(data)
+    if roster is None:
+        return unevaluated(key, "The NinjaOne device list was not returned or could not be read, so devices the antivirus-status report does not mention cannot be counted and this is not evaluated here.", validation, metadata,
+                           {"deviceListRead": False})
     device_seen = {}
+    report_rows = records
     records, scope = endpoint_rows(records, data, True)
     if scope["devicesReported"] and not scope["devicesJudged"]:
         nothing = ("Every device in the antivirus-status report was left out (stale, phone or tablet, without a readable product state, or a Mac "
@@ -273,10 +333,13 @@ def measure_unprotected(input):
             if device_id not in device_protected:
                 device_protected[device_id] = False
 
-    total_devices = len(device_seen)
+    # A device in the device list that the report does not mention is not shown protected: it counts as unprotected.
+    missing, missing_left_out = devices_without_report(roster, report_rows)
+    reporting = len(device_seen)
+    total_devices = reporting + missing
     unprotected_ids = [d for d, protected in device_protected.items() if not protected]
-    unprotected_count = len(unprotected_ids)
-    protected_count = total_devices - unprotected_count
+    unprotected_count = len(unprotected_ids) + missing
+    protected_count = reporting - len(unprotected_ids)
 
     sample_ids = unprotected_ids[:10]
 
@@ -301,6 +364,8 @@ def measure_unprotected(input):
                 "Investigate and remediate unprotected devices: reinstall or re-enable the endpoint protection "
                 "agent and confirm productState reports 'ON'."
             )
+            if missing:
+                fail_reasons.append("%d devices in the device list have no antivirus-status row, so they count as unprotected." % missing)
         else:
             pass_reasons.append(
                 f"All {total_devices} devices report at least one AV/EPP product with productState='ON'."
@@ -309,13 +374,18 @@ def measure_unprotected(input):
     result = {
         **scope,
         "endpointOperationalStatusUnprotectedCount": unprotected_count,
-        "totalDevicesReported": total_devices,
+        "totalDevicesReported": reporting,
+        "totalDevices": total_devices,
         "protectedDeviceCount": protected_count,
+        "devicesNotInReport": missing,
+        "devicesNotInReportLeftOut": missing_left_out,
+        "deviceListRead": True,
     }
 
     input_summary = {
         "recordsInResponse": len(records),
-        "totalDevicesReported": total_devices,
+        "totalDevicesReported": reporting,
+        "totalDevices": total_devices,
         "unprotectedDeviceCount": unprotected_count,
     }
 
