@@ -236,7 +236,7 @@ class AadAdminPhishResistantTests(unittest.TestCase):
             with self.subTest(body=str(body)[:80]):
                 self.assert_unevaluated(body)
 
-    # Conditional Access: no admin requirement for a phishing-resistant strength -> False (master's ruling)
+    # Conditional Access: a complete read with no admin requirement for a phishing-resistant strength -> False
     def assert_fails(self, body):
         res = self.run_t(body)
         self.assertIs(res["transformedResponse"][KEY], False)
@@ -246,7 +246,7 @@ class AadAdminPhishResistantTests(unittest.TestCase):
         return res
 
     def test_ca_narrowed_strengths_that_do_not_target_admin_roles_fail(self):
-        # estate A: four enabled policies with the phishing-resistant strength, each for one user, one group, one
+        # four enabled policies with the phishing-resistant strength, each for one user, one group, one
         # application or one place only; none includes all users or an administrator role
         for_one_user = ca_policy(users=["11111111-1111-1111-1111-111111111111"], exclude_users=[])
         for_one_group = with_groups(ca_policy(exclude_users=[]), ["22222222-2222-2222-2222-222222222222"])
@@ -257,7 +257,7 @@ class AadAdminPhishResistantTests(unittest.TestCase):
         self.assert_fails(ca_body(for_one_user, for_one_group, for_one_app, for_one_place))
 
     def test_ca_built_in_mfa_strength_only_fails(self):
-        # estate B: the enabled strength is the built-in "Multifactor authentication" one (push, SMS and others
+        # the enabled strength is the built-in "Multifactor authentication" one (push, SMS and others
         # next to the resistant ones), for every user and every admin role
         mfa_strength = ["password,microsoftAuthenticatorPush", "password,sms", "password,voice", "fido2",
                         "windowsHelloForBusiness", "x509CertificateMultiFactor"]
@@ -265,13 +265,13 @@ class AadAdminPhishResistantTests(unittest.TestCase):
                                   ca_policy(roles=list(ADMIN_ROLE_IDS), combos=mfa_strength)))
 
     def test_ca_no_strength_policy_fails(self):
-        # estate C: policies exist, none with an authentication strength (plain MFA and a block policy)
+        # policies exist, none with an authentication strength (plain MFA and a block policy)
         plain_mfa = ca_policy(users=["All"], strength=None, builtin=["mfa"])
         block = ca_policy(users=["All"], strength=None, builtin=["block"])
         self.assert_fails(ca_body(plain_mfa, block))
 
     def test_ca_only_a_disabled_or_report_only_policy_fails(self):
-        # estate D: the one resistant-strength admin policy is off, or only reports
+        # the one resistant-strength admin policy is off, or only reports
         self.assert_fails(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), state="disabled")))
         self.assert_fails(ca_body(ca_policy(users=["All"], state="enabledForReportingButNotEnforced")))
 
@@ -285,8 +285,8 @@ class AadAdminPhishResistantTests(unittest.TestCase):
         other = ca_policy(users=["11111111-1111-1111-1111-111111111111"], exclude_users=[])
         self.assertIs(self.value(ca_body(other, covered)), True)
 
-    def test_ca_estate_e_error_or_forbidden_is_not_evaluated(self):
-        # estate E: the policy call was refused (HTTP 403); the stored body is an error, never a list of policies
+    def test_ca_error_or_forbidden_is_not_evaluated(self):
+        # the policy call was refused (HTTP 403); the stored body is an error, never a list of policies
         for body in ({"error": {"code": "Authorization_RequestDenied", "message": "Insufficient privileges"}},
                      {"error": "HTTP 403: Forbidden", "statusCode": 403},
                      {"PSError": "Response status code does not indicate success: 403 (Forbidden)."},
@@ -304,6 +304,45 @@ class AadAdminPhishResistantTests(unittest.TestCase):
         odd_roles = ca_policy(roles=list(ADMIN_ROLE_IDS))
         odd_roles["conditions"]["users"]["includeRoles"] = "not-a-list"
         self.assert_unevaluated(ca_body(ca_policy(users=["All"], strength=None, builtin=["mfa"]), odd_roles))
+
+    def test_ca_a_policy_with_a_missing_or_unknown_state_is_not_a_fail(self):
+        # a body with no state (a $select that dropped it), a null state or a state this code does not know could
+        # be an enforced policy: that is a partial read, never an absence
+        for state in (None, "", "somethingNew", "Enabled "):
+            with self.subTest(state=state):
+                p = ca_policy(roles=list(ADMIN_ROLE_IDS))
+                if state is None:
+                    p.pop("state")
+                else:
+                    p["state"] = state
+                self.assert_unevaluated(ca_body(p))
+                self.assert_unevaluated(ca_body(ca_policy(users=["All"], strength=None, builtin=["mfa"]), p))
+
+    def test_ca_a_policy_with_no_grant_controls_in_the_body_is_not_a_fail(self):
+        # a $select body that drops grantControls cannot show what the policy requires
+        p = ca_policy(roles=list(ADMIN_ROLE_IDS))
+        p.pop("grantControls")
+        self.assert_unevaluated(ca_body(p))
+        self.assert_unevaluated(ca_body(ca_policy(users=["All"], strength=None, builtin=["mfa"]), p))
+
+    def test_ca_a_session_only_policy_with_null_grant_controls_is_not_an_admin_requirement(self):
+        # Graph returns grantControls: null for a policy that only sets session controls: nothing is required
+        p = ca_policy(users=["All"])
+        p["grantControls"] = None
+        self.assert_fails(ca_body(p))
+
+    def test_ca_disabled_and_report_only_states_are_skipped_in_any_case(self):
+        self.assert_fails(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), state="Disabled")))
+        self.assert_fails(ca_body(ca_policy(roles=list(ADMIN_ROLE_IDS), state="enabledForReportingButNotEnforced")))
+
+    def test_ca_a_count_that_does_not_match_the_list_is_not_a_fail(self):
+        body = ca_body(ca_policy(users=["All"], strength=None, builtin=["mfa"]))
+        body["@odata.count"] = 2
+        self.assert_unevaluated(body)
+        body["@odata.count"] = 1
+        self.assert_fails(body)
+        body["@odata.count"] = "1"
+        self.assert_fails(body)
 
     def test_ca_paged_list_is_never_a_fail(self):
         paged = ca_body(ca_policy(users=["All"], strength=None, builtin=["mfa"]))

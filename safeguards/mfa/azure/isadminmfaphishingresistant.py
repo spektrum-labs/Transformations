@@ -16,6 +16,9 @@ phishing-resistant method. Three Graph bodies are understood; each answers only 
    enabled policy requires a phishing-resistant strength for administrator roles: policies whose strength is not
    phishing-resistant, that can be satisfied another way (an OR grant), that are off or report-only, or that cover
    only named users, groups or places and not all users or an administrator role, are not an admin requirement.
+   Only the states "disabled" and "enabledForReportingButNotEnforced" are skipped as off; a policy with no state,
+   another state, or no grantControls in the body is a partial read (None), and so is a response whose
+   @odata.count differs from the number of policies listed.
    None when an enabled phishing-resistant policy does target administrators (all users or an administrator role)
    but only partly (some roles, some apps or places, an excluded group, role or more than two users): that neither
    proves nor rules out coverage. None too for an empty list, an error, a 403 or anything unreadable.
@@ -235,6 +238,8 @@ def from_methods_policy(data, validation):
 
 RESISTANT_COMBINATIONS = ["fido2", "windowshelloforbusiness", "x509certificatemultifactor"]
 MAX_EXCLUDED_USERS = 2
+# The only two states that mean a policy does not enforce anything.
+OFF_STATES = ("disabled", "enabledforreportingbutnotenforced")
 # Microsoft Entra "Require phishing-resistant multifactor authentication for administrators" template roles
 ADMIN_ROLES = {
     "62e90394-69f5-4237-9190-012177145e10": "Global Administrator",
@@ -338,7 +343,7 @@ def narrowing(conditions):
 
 
 
-def from_ca_policies(policies, validation):
+def from_ca_policies(policies, validation, expected_count=None):
     if not policies:
         return unevaluated("The Conditional Access policy list is empty; it is not evidence either way", validation)
     covered, used, unknown, findings, excluded, touching = set(), [], [], [], set(), []
@@ -346,7 +351,12 @@ def from_ca_policies(policies, validation):
     for policy in policies:
         if not isinstance(policy, dict):
             return unevaluated("The Conditional Access policy list holds an entry that is not a policy", validation)
-        if str(policy.get("state") or "").lower() != "enabled":
+        policy_state = str(policy.get("state") or "").lower()
+        if policy_state in OFF_STATES:
+            continue
+        if policy_state != "enabled" or "grantControls" not in policy:
+            # no state, an unknown state, or a body that dropped grantControls: a partial read, not an absence
+            unknown.append(name_of(policy))
             continue
         state = strength_state(policy.get("grantControls"))
         if state == "unknown":
@@ -415,6 +425,10 @@ def from_ca_policies(policies, validation):
                           "strength (FIDO2, Windows Hello for Business or multi-factor certificate only) for every "
                           "administrator role: " + ", ".join(used[:5])])
     if not touching and not unknown:
+        listed = as_number(expected_count, None)
+        if isinstance(listed, (int, float)) and listed != len(policies):
+            return unevaluated("The Conditional Access policy list has " + str(len(policies)) + " entries but the "
+                               "response reports " + str(listed) + ", so it is a partial read", validation, summary)
         return create_response(
             result={CRITERIA_KEY: False}, validation=validation, input_summary=summary,
             additional_findings=findings,
@@ -485,7 +499,7 @@ def transform(input):
             if data.get("@odata.nextLink"):
                 return unevaluated("The Conditional Access policy list carries a next-page link, so it is partial",
                                    validation)
-            return from_ca_policies(values, validation)
+            return from_ca_policies(values, validation, data.get("@odata.count"))
         return from_secure_score(data, validation)
     except Exception as e:
         return unevaluated("Transformation error: " + str(e)[:200])
