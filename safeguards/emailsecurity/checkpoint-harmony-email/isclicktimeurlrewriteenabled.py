@@ -17,6 +17,9 @@ verdict described above.
 One page of a paged answer is not the whole window: when the response carries a scrollId or a
 recordsNumber above the page, a match already seen still counts, but an absence is not proven, so a
 page with no match reads None (Not evaluated) and never False.
+An entry that cannot be read is never skipped: one that is not an object, or a field that should
+hold JSON and does not parse. The unread entry may hold the match, so an absence reads None; a match
+already seen keeps its verdict. A missing, blank or "None" field is a readable empty one.
 """
 
 import json
@@ -138,13 +141,19 @@ def transform(input):
         total = records_total(body)
         return total is not None and total > len(body["responseData"])
 
-    def partial_not_measured(what, summary):
-        """No verdict: the response is one page of several, so a result that rests on records not
-        read cannot be given. `what` names the claim that would need the unread pages."""
-        reason = ("The response is a partial page (the vendor reports more records than it returned), so "
-                  + what + " is not proven; nothing is measured.")
+    def unproven(what, summary, partial, unreadable):
+        """No verdict: `what` rests on records that were not read, because the response is one page
+        of several (partial) or holds entries that could not be read (unreadable). Fixed text."""
+        causes = []
+        if partial:
+            causes.append("the response is a partial page (the vendor reports more records than it returned)")
+        if unreadable:
+            causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                          " in the response could not be read")
+        reason = "; ".join(causes)
+        reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
-                               input_summary=dict(summary, partialPage=True))
+                               input_summary=dict(summary, partialPage=partial, unreadableEntries=unreadable))
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""
@@ -170,6 +179,44 @@ def transform(input):
                 acts = None
         return [a for a in acts if isinstance(a, dict)] if isinstance(acts, list) else []
 
+    def read_json(value):
+        """(parsed, readable). A missing, blank or "None" value is readable and empty (None). Text is
+        parsed as JSON and text that does not parse is not readable. Anything else is returned as is."""
+        if isinstance(value, str):
+            if text(value) == "":
+                return None, True
+            try:
+                return json.loads(value), True
+            except Exception:
+                return None, False
+        return value, True
+
+    def read_object(value):
+        """(object, readable): a dict, or JSON text holding one. A missing, blank or "None" value and
+        an empty list are readable and empty (None); any other value is not readable."""
+        parsed, readable = read_json(value)
+        if not readable:
+            return None, False
+        if parsed is None or parsed == []:
+            return None, True
+        if isinstance(parsed, dict):
+            return parsed, True
+        return None, False
+
+    def read_actions(record):
+        """(actions, readable): the action objects of an event record. A missing, blank or "None"
+        actions field is readable and empty. Text that is not JSON, a value that is not a list, or an
+        entry that is not an object makes the record not readable."""
+        acts, readable = read_json(record.get("actions"))
+        if not readable:
+            return [], False
+        if acts is None:
+            return [], True
+        if not isinstance(acts, list):
+            return [], False
+        good = [a for a in acts if isinstance(a, dict)]
+        return good, len(good) == len(acts)
+
     try:
         if isinstance(input, bytes):
             input = input.decode("utf-8")
@@ -183,21 +230,8 @@ def transform(input):
         if err:
             return not_measured(err)
         records = [r for r in body["responseData"] if isinstance(r, dict)]
-        def as_obj(value):
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except Exception:
-                    return None
-            return value
-        def has_links(entity):
-            p = as_obj(entity.get("entityPayload"))
-            if not isinstance(p, dict):
-                return False
-            links = as_obj(p.get("emailLinks"))
-            return isinstance(links, list) and len([l for l in links if text(l)]) > 0
-        def ctp_verdict(entity):
-            sr = as_obj(entity.get("entitySecurityResults"))
+        unreadable = len(body["responseData"]) - len(records)
+        def ctp_verdict(sr):
             if not isinstance(sr, dict):
                 return ""
             cv = sr.get("combinedVerdict")
@@ -211,11 +245,28 @@ def transform(input):
                     if isinstance(item, dict) and (text(item.get("verdict")) or text(item.get("statusCode"))):
                         return text(item.get("verdict")) or text(item.get("statusCode"))
             return ""
-        linked = [r for r in records if has_links(r)]
+        linked = []
         scanned = 0
         verdicts = {}
-        for e in linked:
-            v = ctp_verdict(e)
+        for e in records:
+            payload, payload_ok = read_object(e.get("entityPayload"))
+            if not payload_ok:
+                unreadable = unreadable + 1
+                continue
+            links = None
+            if isinstance(payload, dict):
+                links, links_ok = read_json(payload.get("emailLinks"))
+                if not links_ok or not (links is None or isinstance(links, list)):
+                    unreadable = unreadable + 1
+                    continue
+            if not (isinstance(links, list) and len([l for l in links if text(l)]) > 0):
+                continue
+            linked.append(e)
+            results, results_ok = read_object(e.get("entitySecurityResults"))
+            if not results_ok:
+                unreadable = unreadable + 1
+                continue
+            v = ctp_verdict(results)
             if v:
                 scanned = scanned + 1
                 verdicts[v.lower()] = verdicts.get(v.lower(), 0) + 1
@@ -224,8 +275,9 @@ def transform(input):
         if scanned:
             return create_response(True, pass_reasons=[str(scanned) + " of " + str(len(linked)) + " email(s) with links "
                                    "carry a click-time protection verdict"], input_summary=summary)
-        if more_pages(body):
-            return partial_not_measured("the absence of a click-time verdict on the linked emails not yet read", summary)
+        partial = more_pages(body)
+        if partial or unreadable:
+            return unproven("the absence of a click-time verdict on the linked emails not yet read", summary, partial, unreadable)
         if not linked:
             return create_response(False, fail_reasons=["The entity search returned no email with links in the last "
                                    "7 days, so click-time URL protection is not evidenced"], input_summary=summary)

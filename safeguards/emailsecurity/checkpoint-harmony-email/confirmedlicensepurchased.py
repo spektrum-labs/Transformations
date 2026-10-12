@@ -10,6 +10,9 @@ verdict described above.
 One page of a paged answer is not the whole window: when the response carries a scrollId or a
 recordsNumber above the page, a match already seen still counts, but an absence is not proven, so a
 page with no match reads None (Not evaluated) and never False.
+An entry that cannot be read is never skipped: one that is not an object, or a field that should
+hold JSON and does not parse. The unread entry may hold the match, so an absence reads None; a match
+already seen keeps its verdict. A missing, blank or "None" field is a readable empty one.
 """
 
 import json
@@ -130,13 +133,19 @@ def transform(input):
         total = records_total(body)
         return total is not None and total > len(body["responseData"])
 
-    def partial_not_measured(what, summary):
-        """No verdict: the response is one page of several, so a result that rests on records not
-        read cannot be given. `what` names the claim that would need the unread pages."""
-        reason = ("The response is a partial page (the vendor reports more records than it returned), so "
-                  + what + " is not proven; nothing is measured.")
+    def unproven(what, summary, partial, unreadable):
+        """No verdict: `what` rests on records that were not read, because the response is one page
+        of several (partial) or holds entries that could not be read (unreadable). Fixed text."""
+        causes = []
+        if partial:
+            causes.append("the response is a partial page (the vendor reports more records than it returned)")
+        if unreadable:
+            causes.append(str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                          " in the response could not be read")
+        reason = "; ".join(causes)
+        reason = reason[:1].upper() + reason[1:] + ", so " + what + " is not proven; nothing is measured."
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
-                               input_summary=dict(summary, partialPage=True))
+                               input_summary=dict(summary, partialPage=partial, unreadableEntries=unreadable))
 
     try:
         if isinstance(input, bytes):
@@ -151,13 +160,15 @@ def transform(input):
         if err:
             return not_measured(err)
         records = body["responseData"]
+        unreadable = len([s for s in records if not isinstance(s, str)])
         scopes = [s for s in records if isinstance(s, str) and len(s.split(":")) == 2 and s.split(":")[1]]
         summary = {"scopes": len(scopes), "recordsReturned": len(records)}
         if scopes:
             return create_response(True, pass_reasons=["The Harmony Email & Collaboration API accepted this "
                                    "key and returned " + str(len(scopes)) + " tenant scope(s)"], input_summary=summary)
-        if more_pages(body):
-            return partial_not_measured("the absence of a tenant scope in the unread records", summary)
+        partial = more_pages(body)
+        if partial or unreadable:
+            return unproven("the absence of a tenant scope in the unread records", summary, partial, unreadable)
         return create_response(False, fail_reasons=["The scopes call returned no tenant scope: no active "
                                "Harmony Email & Collaboration tenant is evidenced"], input_summary=summary)
     except Exception as e:
