@@ -29,18 +29,28 @@ COUNT_KEY = "total_results"
 NEXT_PAGE_KEYS = ("next_page_token", "nextPageToken", "next_page", "next")
 
 
-def read_is_partial(levels):
-    """True when the body, or a wrapper around it, carries an error marker or points at a further page.
+def read_has_error(levels):
+    """True when the body, or a wrapper around it, carries an error marker.
 
-    Such a body proves nothing about the account whatever the length of its list: a cut-off page holds
-    only some of the records, and a body with an error beside the list is not the vendor's answer. It is
-    checked before any verdict is read, so a pass, a fail or a count is never taken from it.
+    A body with an error beside the list is not the vendor's answer, so nothing is read from it.
+    """
+    for level in levels:
+        if isinstance(level, dict) and (level.get("error") or level.get("errors")):
+            return True
+    return False
+
+
+def read_has_next_page(levels):
+    """True when the body, or a wrapper around it, points at a further page.
+
+    A page that is not the last holds only some of the records. A result that rests on ABSENCE (a pass,
+    "none found", a total count) is not evidence there: the record that would change it may be on a
+    page that was not read. A negative proven by a record already seen still holds, but what was seen
+    is not a total, so no count is reported with it.
     """
     for level in levels:
         if not isinstance(level, dict):
             continue
-        if level.get("error") or level.get("errors"):
-            return True
         for k in NEXT_PAGE_KEYS:
             if level.get(k):
                 return True
@@ -48,7 +58,7 @@ def read_is_partial(levels):
 
 
 def empty_list_is_complete(data, count_documented):
-    """True when an empty list (on a body read_is_partial has already cleared) is a real answer.
+    """True when an empty list (on a body with no error and no next page) is a real answer.
 
     Never when it states a count that is not a whole number 0 (a bool or text count, or a count above 0).
     Where the vendor documents a count for the endpoint (count_documented), the body must state it
@@ -69,11 +79,11 @@ def transform_unmarked(input):
 
     Waived risks still count: a waiver is an accepted risk, not a closed one.
     False when any risk carries a severity outside the documented enum (it could be critical).
-    None (not evaluated) before any verdict is read when the body, or a wrapper around it, carries an error
-    marker or points at a further page, whatever the length of its list (a cut-off page holds only some
-    of the records). Also None when the body has no risks list, holds no object record, is an empty list
-    with a count above 0, or cannot be read. The vendor documents no count for this list, so an empty
-    list on the last page is a clean account.
+    None (not evaluated) when the body, or a wrapper around it, carries an error marker. On a page that is not
+    the last (a next-page token), a result that rests on absence is not evidence: None when no critical risk was
+    seen, and False without a total when one was (a risk already seen proves the negative). Also None when
+    the body has no risks list, holds no object record, is an empty list with a count above 0, or cannot be
+    read. The vendor documents no count for this list, so an empty list on the last page is a clean account.
     """
     key = "noCriticalFindings"
     documented = ["info", "low", "medium", "high", "critical"]
@@ -107,12 +117,13 @@ def transform_unmarked(input):
         data, levels = unwrap(parse(input), "risks")
         if not isinstance(data, dict) or not isinstance(data.get("risks"), list):
             return {key: None, "reason": "Response has no risks list (the /risks call did not run)"}
-        if read_is_partial(levels):
-            return {key: None, "reason": "The response carries an error marker or points at a further page, so the list is not a complete answer and is not evaluated"}
+        if read_has_error(levels):
+            return {key: None, "reason": "The response carries an error marker, so it is not evaluated"}
+        more = read_has_next_page(levels)
         if data["risks"] and not any(isinstance(r, dict) for r in data["risks"]):
             return {key: None, "reason": "Risk list holds no object record"}
-        if not data["risks"] and not empty_list_is_complete(data, False):
-            return {key: None, "reason": "Risk list is empty but the response is not a complete answer (an error marker, a next page, or a count above 0), so it is not read as no open risks"}
+        if not data["risks"] and (more or not empty_list_is_complete(data, False)):
+            return {key: None, "reason": "Risk list is empty but the response is not a complete answer (a next page, or a count above 0), so it is not read as no open risks"}
         hits = 0
         for r in data["risks"]:
             sev = str((r.get("severity") if isinstance(r, dict) else "") or "").strip().lower()
@@ -120,8 +131,12 @@ def transform_unmarked(input):
                 return {key: False, "reason": "A risk has an undocumented severity", "severity": sev}
             if sev == "critical":
                 hits = hits + 1
+        if hits and more:
+            return {key: False, "reason": "An open critical risk was seen on a page that is not the last, so the total is not known"}
         if hits:
             return {key: False, "reason": "Open critical risks detected", "count": hits, "riskCount": len(data["risks"])}
+        if more:
+            return {key: None, "reason": "No critical risk was seen, but the page is not the last, so it is not read as no open critical risks"}
         return {key: True, "reason": "No open critical risks", "riskCount": len(data["risks"])}
     except Exception:
         return {key: None, "error": "The response could not be read, so it was not evaluated."}
