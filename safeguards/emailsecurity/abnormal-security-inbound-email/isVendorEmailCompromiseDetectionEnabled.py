@@ -87,6 +87,17 @@ def is_error_body(data):
     return isinstance(data, dict) and (data.get("error") is True or bool(data.get("errors")))
 
 
+def objects_only(items, noun):
+    """(objects, problem): the object items of a list.
+
+    A non-empty list with no object in it proves nothing, so it is "not measured". Items that are not
+    objects are never counted as records. An empty list is passed through unchanged."""
+    objects = [x for x in items if isinstance(x, dict)]
+    if items and not objects:
+        return None, "Abnormal returned a " + noun + " list with no objects in it; nothing to measure."
+    return objects, None
+
+
 def vendor_cases_of(data):
     """(cases, problem): the case list of a /v1/vendor-cases body, or why there is none.
 
@@ -106,6 +117,8 @@ def vendor_cases_of(data):
 def transform(input):
     data, validation = extract_input(input)
     vendor_cases, problem = vendor_cases_of(data)
+    if problem is None:
+        vendor_cases, problem = objects_only(vendor_cases, "vendor case")
     if problem is not None:
         return not_measured(problem, validation)
 
@@ -115,7 +128,7 @@ def transform(input):
     sample_ids = []
     if isinstance(vendor_cases, list):
         for case in vendor_cases[:5]:
-            if isinstance(case, dict) and case.get("vendorCaseId") is not None:
+            if case.get("vendorCaseId") is not None:
                 sample_ids.append(case.get("vendorCaseId"))
 
     if is_enabled:
