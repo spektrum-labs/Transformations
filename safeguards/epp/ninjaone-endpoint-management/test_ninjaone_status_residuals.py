@@ -146,3 +146,43 @@ def test_a_string_error_status_on_the_device_list_makes_it_unreadable(code):
     out = run("isEPPConfigured", b)
     assert value("isEPPConfigured", out) is None
     assert not_evaluated(out)
+
+
+# 3. a status made of characters that look like digits but that int() cannot read
+# str.isdigit() is True for these (superscripts, circled digits); int() raises ValueError on them. A status such as
+# this is not an HTTP error status, so it must neither raise out of transform nor be read as an error.
+NON_DECIMAL_DIGITS = ["²", "³", "⁵⁰⁰", "①", " ² "]
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("field", ["status", "statusCode", "status_code"])
+@pytest.mark.parametrize("code", NON_DECIMAL_DIGITS)
+def test_a_status_of_non_decimal_digits_does_not_raise_and_is_not_an_error(name, field, code):
+    out = run(name, body([row(1), row(2)], **{field: code}))
+    assert value(name, out) is not None
+    assert not not_evaluated(out)
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("code", NON_DECIMAL_DIGITS)
+def test_a_status_of_non_decimal_digits_inside_a_wrapper_does_not_raise(name, code):
+    out = run(name, {"apiResponse": body([row(1), row(2)], status=code)})
+    assert value(name, out) is not None
+    assert not not_evaluated(out)
+
+
+@pytest.mark.parametrize("code", NON_DECIMAL_DIGITS)
+def test_a_status_of_non_decimal_digits_on_the_device_list_does_not_raise(code):
+    b = body([row(1), row(2)])
+    b["devices"] = {"data": b["devices"], "status": code}
+    out = run("isEPPConfigured", b)
+    assert value("isEPPConfigured", out) is not None
+    assert not not_evaluated(out)
+
+
+@pytest.mark.parametrize("name", FILES)
+def test_a_status_written_in_other_decimal_digits_is_read_as_the_number(name):
+    """Arabic-Indic digits are decimal digits: this is 500, an error."""
+    out = run(name, body([row(1), row(2)], status="٥٠٠"))
+    assert value(name, out) is None
+    assert not_evaluated(out)
