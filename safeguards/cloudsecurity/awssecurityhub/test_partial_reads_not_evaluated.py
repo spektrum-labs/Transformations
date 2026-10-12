@@ -408,3 +408,84 @@ def test_licence_empty_field_does_not_hide_a_real_licence_or_a_real_no(loader):
     assert loader(LICENCE)({"licenses": []})["transformedResponse"][LICENCE_KEY] is False
     assert loader(LICENCE)({"active": False})["transformedResponse"][LICENCE_KEY] is False
     assert loader(LICENCE)({"enabled": False, "subscription": None})["transformedResponse"][LICENCE_KEY] is False
+
+
+# --- a token on the page that sits five wrappers down is still read ---------------------------
+
+def nest(inner, levels, key="api_response"):
+    for _ in range(levels):
+        inner = {key: inner}
+    return inner
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("levels", [0, 1, 2, 3, 4, 5])
+@pytest.mark.parametrize("token_key", ["NextToken", "nextToken"])
+def test_a_token_on_the_page_at_any_wrapper_depth_is_read(loader, name, levels, token_key):
+    page = {"Findings": passing_findings(name), token_key: "abc"}
+    not_evaluated(loader(name)(nest(page, levels)), name)
+    not_evaluated(loader(name)(nest(page, levels, "Output")), name)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("levels", [4, 5])
+def test_a_complete_page_at_depth_four_and_five_still_answers(loader, name, levels):
+    page = {"Findings": passing_findings(name)}
+    out = loader(name)(nest(page, levels))
+    assert collection(out)["status"] == "success"
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_a_lower_bound_count_survives_a_token_five_wrappers_down(loader):
+    page = {"Findings": CRITICAL_FINDINGS, "NextToken": "abc"}
+    inner = loader(CRITICAL)(nest(page, 5))["transformedResponse"]
+    assert inner["criticalOpenFindingsCount"] is False
+    assert inner["openCriticalFindings"] is None and inner["openCriticalFindingsAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("levels", [0, 1, 2, 3, 4, 5])
+def test_licence_token_on_the_page_at_any_wrapper_depth_is_read(loader, levels):
+    page = {"Findings": [finding("IAM.4", "PASSED"), finding("IAM.5", "PASSED")], "nextToken": "abc"}
+    inner = loader(LICENCE)(nest(page, levels))["transformedResponse"]
+    assert inner[LICENCE_KEY] is True
+    assert inner["findingsCount"] is None and inner["findingsCountAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("levels", [4, 5])
+def test_licence_complete_page_at_depth_four_and_five_keeps_its_total(loader, levels):
+    page = {"Findings": [finding("IAM.4", "PASSED")]}
+    inner = loader(LICENCE)(nest(page, levels))["transformedResponse"]
+    assert inner["findingsCount"] == 1 and "findingsCountAtLeast" not in inner
+
+
+# --- the active / enabled flag says something only when it is a clear true or false -----------
+
+CLEAR_FLAGS = [(True, True), (False, False), ("true", True), ("false", False), (" True ", True), ("FALSE", False)]
+UNCLEAR_FLAGS = ["", "  ", [], {}, "no", "yes", "disabled", "enabled", "active", "inactive", 0, 1, 2.5, ["true"], {"a": 1}, "0", "1"]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("field", ["active", "enabled"])
+@pytest.mark.parametrize("flag,expected", CLEAR_FLAGS, ids=[repr(c[0]) for c in CLEAR_FLAGS])
+def test_licence_flag_that_is_clear_gives_its_verdict(loader, field, flag, expected):
+    out = loader(LICENCE)({field: flag})
+    assert out["transformedResponse"][LICENCE_KEY] is expected
+    assert collection(out)["status"] == "success"
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("field", ["active", "enabled"])
+@pytest.mark.parametrize("flag", UNCLEAR_FLAGS, ids=[repr(f) for f in UNCLEAR_FLAGS])
+def test_licence_flag_that_is_not_a_clear_true_or_false_is_not_evaluated(loader, field, flag):
+    licence_not_evaluated(loader(LICENCE)({field: flag}))
+    licence_not_evaluated(loader(LICENCE)({"api_response": {field: flag}}))
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_licence_unclear_flag_does_not_hide_a_real_licence(loader):
+    assert loader(LICENCE)({"active": "disabled", "sku": "SH-1"})["transformedResponse"][LICENCE_KEY] is True
+    assert loader(LICENCE)({"enabled": "no", "licenses": [{"id": 1}]})["transformedResponse"][LICENCE_KEY] is True

@@ -80,6 +80,8 @@ def read_findings(input_data):
         if nxt is None:
             break
         data = nxt
+    # The loop reads levels 0-4; the page it ends on (level 5 when five wrappers were opened) has its token read here.
+    token = token or page_token(data)
     if is_error_body(data):
         return None, None, ERROR_PROBLEM
     if isinstance(data, dict) and isinstance(data.get("Findings"), list):
