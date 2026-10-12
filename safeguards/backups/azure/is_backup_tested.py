@@ -346,6 +346,10 @@ def transform(input):
                     vaults_read = vaults_read + 1
                 else:
                     vaults_not_read = vaults_not_read + 1
+            if flat_list_counted and has_next_page(data, 0):
+                # the flat job list has a next page: only its first page was read, so that vault was not read in full
+                vaults_read = vaults_read - 1
+                vaults_not_read = vaults_not_read + 1
             if len(entries) == 0:
                 # The vault list is a Resource Graph read: zero vaults is equally "there are none"
                 # and "they are in a subscription this principal cannot read", so no restore

@@ -344,12 +344,22 @@ VAULT_READ_NOT_MEASURED = [
     ("bare_list_in_apiresponse_with_a_next_page", lambda: {"apiResponse": paged("Failed")}),
     # job objects listed directly under restoreJobResults are one vault's list, and an error beside them is unread
     ("flat_failed_job_beside_an_arm_error", lambda: vault_read(*(job_list("Failed") + [ARM_ERROR]))),
+    # job objects directly under restoreJobResults plus a next-page link: only the first page was read
+    ("flat_failed_job_with_a_next_link", lambda: dict(vault_read(*job_list("Failed")), nextLink=NEXT_PAGE)),
+    ("flat_failed_jobs_with_a_next_link", lambda: dict(vault_read(*job_list("Failed", "Failed")), nextLink=NEXT_PAGE)),
+    ("flat_stale_success_with_a_next_link", lambda: dict(vault_read(*job_list("Completed", age=400)), nextLink=NEXT_PAGE)),
+    ("flat_failed_job_with_a_next_link_under_apiresponse",
+     lambda: {"apiResponse": dict(vault_read(*job_list("Failed")), nextLink=NEXT_PAGE)}),
+    ("flat_failed_job_with_a_next_link_under_data",
+     lambda: {"data": dict(vault_read(*job_list("Failed")), nextLink=NEXT_PAGE)}),
 ]
 for _key in PAGE_LINK_KEYS:
     VAULT_READ_NOT_MEASURED.append(("first_page_with_" + _key, lambda _key=_key: vault_read(paged("Failed", key=_key))))
     VAULT_READ_NOT_MEASURED.append(("first_page_with_" + _key + "_under_apiresponse",
                                     lambda _key=_key: vault_read(paged("Failed", key=_key, nested="apiResponse"))))
     VAULT_READ_NOT_MEASURED.append(("bare_list_with_" + _key, lambda _key=_key: paged("Failed", key=_key)))
+    VAULT_READ_NOT_MEASURED.append(("flat_failed_job_with_" + _key,
+                                    lambda _key=_key: dict(vault_read(*job_list("Failed")), **{_key: NEXT_PAGE})))
 
 # bodies where every vault was read: a missing restore is a measured negative, a recent
 # successful one a measured positive
@@ -387,6 +397,11 @@ VAULT_READ_MEASURED = [
     ("flat_failed_jobs", lambda: vault_read(*job_list("Failed", "Failed")), False),
     ("flat_failed_and_completed_jobs", lambda: vault_read(*job_list("Failed", "Completed")), True),
     ("flat_stale_success", lambda: vault_read(*job_list("Completed", age=400)), False),
+    # a flat list whose success was seen stays True even with a next page; an empty or null link is complete
+    ("flat_success_with_a_next_link", lambda: dict(vault_read(*job_list("Failed", "Completed")), nextLink=NEXT_PAGE), True),
+    ("flat_failed_job_with_an_empty_next_link", lambda: dict(vault_read(*job_list("Failed")), nextLink=""), False),
+    ("flat_failed_job_with_a_null_next_link", lambda: dict(vault_read(*job_list("Failed")), nextLink=None), False),
+    ("flat_failed_job_with_a_null_skip_token", lambda: dict(vault_read(*job_list("Failed")), skipToken=None), False),
 ]
 
 
@@ -473,6 +488,23 @@ class RestoreJobsAreReadPerVault(unittest.TestCase):
                     self.assertIs(value, True)
                     self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 0)
                     self.assertFalse(any("not read" in f for f in info["evaluation"]["additionalFindings"]))
+
+    def test_a_flat_list_with_a_next_link_is_not_read_in_full(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            for shape, wrap in VAULT_READ_SHAPES:
+                with self.subTest(transform=label, shape=shape):
+                    body = dict(vault_read(*job_list("Failed")), nextLink=NEXT_PAGE)
+                    value, info = self.verdict(path, wrap(body))
+                    self.assertIsNone(value)
+                    self.assertEqual(info["dataCollection"]["status"], "error")
+                    self.assertIn("1 of 1", " ".join(info["dataCollection"]["errors"]))
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsRead"], 0)
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 1)
+                    body = dict(vault_read(*job_list("Failed", "Completed")), nextLink=NEXT_PAGE)
+                    value, info = self.verdict(path, wrap(body))
+                    self.assertIs(value, True)
+                    self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 1)
+                    self.assertTrue(any("not read" in f for f in info["evaluation"]["additionalFindings"]))
 
     def test_a_single_arm_list_is_still_one_read_vault(self):
         """The per-vault rule leaves a bare ARM list alone: its empty list stays a measured False."""
