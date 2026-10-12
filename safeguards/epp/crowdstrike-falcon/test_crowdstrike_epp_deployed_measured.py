@@ -8,7 +8,7 @@ Now a host counts as deployed when it has an agent_version, is not in Reduced Fu
 checked in within ACTIVE_WINDOW_DAYS; mobile hosts are left out; isEPPDeployed holds when that share
 reaches DEPLOYED_THRESHOLD. A host-ID list, a partial read and an all-mobile read are Unevaluated.
 
-All host data built here is synthetic ("estate E"); the real fixtures are only read, never copied."""
+All host data built here is synthetic ("environment E"); the real fixtures are only read, never copied."""
 import importlib.util
 import json
 import pathlib
@@ -35,7 +35,7 @@ def ago(days=0, hours=1):
 
 
 def host(n, last_seen=None, rfm="no", agent_version="7.40.21309.0", product="Workstation", platform="Windows"):
-    record = {"device_id": "estate-e-dev-%04d" % n, "platform_name": platform, "product_type_desc": product,
+    record = {"device_id": "environment-e-dev-%04d" % n, "platform_name": platform, "product_type_desc": product,
               "status": "normal", "reduced_functionality_mode": rfm, "last_seen": last_seen or ago()}
     if agent_version is not None:
         record["agent_version"] = agent_version
@@ -169,7 +169,7 @@ def test_host_id_list_is_unevaluated():
     assert_unevaluated(body(ids), "not that its sensor is reporting")
 
 
-@pytest.mark.parametrize("partial", [{"total": 900}, {"total": "900"}, {"next": "estate-e-next"},
+@pytest.mark.parametrize("partial", [{"total": 900}, {"total": "900"}, {"next": "environment-e-next"},
                                      {"truncated": True}])
 def test_partial_read_is_unevaluated_even_when_every_host_read_reports(partial):
     assert_unevaluated(body([host(i) for i in range(10)], **partial), "partial")

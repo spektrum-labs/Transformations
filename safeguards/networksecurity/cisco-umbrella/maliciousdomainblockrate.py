@@ -88,7 +88,7 @@ CRITERIA_KEY = "maliciousDomainBlockRate"
 # Umbrella tags each reporting category with a type; "security" marks the threat
 # categories. Two security categories are advisory rather than confirmed-malicious
 # and are commonly allowed on purpose, so counting them would understate a
-# correctly configured estate.
+# correctly configured environment.
 ADVISORY_CATEGORIES = ("dynamicdns", "newlyseendomains")
 
 
