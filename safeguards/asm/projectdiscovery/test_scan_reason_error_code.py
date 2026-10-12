@@ -466,3 +466,52 @@ def test_discovery_a_fresh_complete_scan_still_passes():
     values, info = run(DISCOVERY, discovery_body(timestamp=stamp(1)))
     assert values["isContinuousDiscoveryEnabled"] is True
     assert collection(info)["status"] == "success"
+
+
+# vulnerabilityScanFrequency: a timestamp that cannot place the scan in time measured nothing, so it is None with
+# its error, never False. A stale one (readable, more than 7 days old) is still a graded False.
+FREQUENCY = "vulnerabilityscanfrequency.py"
+FREQUENCY_KEY = "vulnerabilityScanFrequency"
+
+
+def frequency_body(timestamp="absent"):
+    body = success_body()
+    if timestamp == "absent":
+        del body["timestamp"]
+    else:
+        body["timestamp"] = timestamp
+    return body
+
+
+@pytest.mark.parametrize("timestamp", ["absent", "", None, "   ", "yesterday", "not a date", "2026-13-45T00:00:00Z",
+                                       1760000000, 1760000000.5, ["2026-10-12"], {"a": 1}])
+def test_frequency_a_missing_or_unparseable_timestamp_is_none_with_its_error(timestamp):
+    values, info = run(FREQUENCY, frequency_body(timestamp))
+    assert values == {FREQUENCY_KEY: None}, (timestamp, values)
+    assert collection(info)["status"] == "error"
+    assert collection(info)["errors"]
+    assert info["evaluation"]["failReasons"]
+
+
+@pytest.mark.parametrize("hours_ahead", [2, 48, 24 * 30])
+def test_frequency_a_future_timestamp_is_none_with_its_error(hours_ahead):
+    values, info = run(FREQUENCY, frequency_body(stamp(-hours_ahead)))
+    assert values == {FREQUENCY_KEY: None}, (hours_ahead, values)
+    assert collection(info)["status"] == "error"
+    assert collection(info)["errors"]
+    assert info["evaluation"]["failReasons"]
+
+
+def test_frequency_a_timestamp_a_few_minutes_ahead_is_clock_skew_and_reads_as_today():
+    values, info = run(FREQUENCY, frequency_body(stamp(-0.5)))
+    assert values[FREQUENCY_KEY] is True
+    assert values["daysSinceLastScan"] == 0
+    assert collection(info)["status"] == "success"
+
+
+@pytest.mark.parametrize("hours,expected", [(1, True), (24 * 7, True), (24 * 8 + 1, False), (24 * 30, False)])
+def test_frequency_a_readable_timestamp_in_the_past_is_still_a_graded_answer(hours, expected):
+    values, info = run(FREQUENCY, frequency_body(stamp(hours)))
+    assert values[FREQUENCY_KEY] is expected, (hours, values)
+    assert collection(info)["status"] == "success"
+    assert collection(info)["errors"] == []

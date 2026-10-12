@@ -101,7 +101,8 @@ class Measured(unittest.TestCase):
         self.assertIs(value("vulnerabilityscanfrequency", scan()), True)
         old = (datetime.utcnow() - timedelta(days=9)).isoformat()
         self.assertIs(value("vulnerabilityscanfrequency", scan(timestamp=old)), False)
-        self.assertIs(value("vulnerabilityscanfrequency", scan(timestamp="")), False)
+        # No readable timestamp: the scan cannot be placed in time, so Not evaluated, not False.
+        self.assertIsNone(value("vulnerabilityscanfrequency", scan(timestamp="")))
 
     def test_critical_count_flips(self):
         self.assertEqual(value("criticalvulnerabilitycount", scan(totalDiscovered="2")), 0)
