@@ -91,7 +91,7 @@ def evaluate(data):
     Cloud's serverproperties returns only tenant structure -- branch_offices,
     domains, custom_groups. The licence fields the on-premise edition exposes
     (product_name, license_type, license_expiry) are absent, so the proof here
-    is that an authenticated call returns a provisioned estate: a tenant that
+    is that an authenticated call returns a provisioned environment: a tenant that
     serves branch offices and domains is a live, paid subscription.
     """
     try:

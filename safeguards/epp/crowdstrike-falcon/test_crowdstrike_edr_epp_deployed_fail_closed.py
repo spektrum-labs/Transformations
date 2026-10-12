@@ -11,7 +11,7 @@ before, and a partial read that already shows a streaming sensor still answers T
 cannot undo a host that was read). isEPPDeployed is now a measured share of reporting hosts (see
 test_crowdstrike_epp_deployed_measured.py): a host-ID list and every partial read are Unevaluated.
 
-All host data here is synthetic ("estate A")."""
+All host data here is synthetic ("environment A")."""
 import importlib.util
 import json
 import pathlib
@@ -37,10 +37,10 @@ EDR = load("isEDRDeployed")
 EPP = load("isEPPDeployed")
 
 
-# ---------------------------------------------------------------- synthetic estate A, real Falcon shapes
+# ---------------------------------------------------------------- synthetic environment A, real Falcon shapes
 
 def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_seen=RECENT):
-    """A host record as GET /devices/entities/devices/v2 returns it (synthetic estate A)."""
+    """A host record as GET /devices/entities/devices/v2 returns it (synthetic environment A)."""
     policies = {"prevention": {"policy_id": "prev-a", "applied": True}}
     if sensor_update:
         policies["sensor_update"] = {"policy_id": "su-a", "applied": True, "uninstall_protection": "ENABLED"}

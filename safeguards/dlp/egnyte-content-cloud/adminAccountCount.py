@@ -3,7 +3,7 @@ Transformation: adminAccountCount
 Vendor: Egnyte Content Cloud  |  Category: Data Security
 Source: GET /pubapi/v2/users, reading userType per active account
 Measures: how many active accounts hold the Administrator role, and what share of the
-estate that is. Administrators can change permissions on any folder and read any file.
+environment that is. Administrators can change permissions on any folder and read any file.
 """
 import json
 import re

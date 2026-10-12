@@ -8,7 +8,7 @@ Now a host counts as deployed when it has an agent_version, is not in Reduced Fu
 checked in within ACTIVE_WINDOW_DAYS; mobile hosts are left out; isEPPDeployed holds when that share
 reaches DEPLOYED_THRESHOLD. A host-ID list, a partial read and an all-mobile read are Unevaluated.
 
-All host data built here is synthetic ("estate E"); the real fixtures are only read, never copied."""
+All host data built here is synthetic ("environment E"); the real fixtures are only read, never copied."""
 import importlib.util
 import json
 import pathlib

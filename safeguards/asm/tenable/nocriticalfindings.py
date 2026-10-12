@@ -64,7 +64,7 @@ def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
-    are fewer than the estate, so a count derived from them is a LOWER BOUND and says so."""
+    are fewer than all assets in scope, so a count derived from them is a LOWER BOUND and says so."""
     if isinstance(data, list):
         return data, len(data), {}, False
     if not isinstance(data, dict):
@@ -140,7 +140,7 @@ def evaluate(data):
 
     The key asserts "there are no critical findings", so it returns a bool and the
     bundle grades it `isEquals true`. The count stays in `extras.count`, where it is
-    detail rather than the verdict. Returning the integer here made a clean estate
+    detail rather than the verdict. Returning the integer here made a clean result
     (0) read as false against that operator -- the criterion could never pass.
 
     A partial scan cannot carry the claim. Seeing no critical asset in 2 of 5000 is
@@ -151,7 +151,7 @@ def evaluate(data):
     if not assets:
         # `read_assets` always returns a list, so an unreadable body arrives here as [] --
         # not as the non-list this used to guard against. Scanning nothing is not the
-        # same as scanning an estate and finding nothing clean, and the difference is
+        # same as scanning the assets in scope and finding nothing clean, and the difference is
         # the whole claim. Empty is False, whether the body was junk or the inventory
         # is genuinely bare; `isASMEnabled` is the key that reports an empty inventory.
         return False, {"count": None, "assetsScanned": 0, "inventoryTotal": total}, [], \
