@@ -35,8 +35,8 @@ def test_strong_method_enabled_passes():
 
 
 def test_microsoft_authenticator_alone_is_not_phishing_resistant():
-    # J.J. 2 Oct 2026 02:35 ET: push / phone sign-in is phishable. Crown, Flagstone Foods, Marcal, Packaging
-    # Exchange, Thunder Bay, Trebron and US Farathane passed on Authenticator alone.
+    # Push / phone sign-in is phishable, so Authenticator alone is not phishing resistant. Several live
+    # tenants had passed on it alone.
     assert strong(methods(["MicrosoftAuthenticator", "Sms"])) is False
     out = STRONG.transform(methods(["MicrosoftAuthenticator", "Email", "Sms", "Voice"]))
     assert out["transformedResponse"]["enabledStrongMethods"] == []
@@ -46,7 +46,7 @@ def test_microsoft_authenticator_alone_is_not_phishing_resistant():
 
 
 def test_fido2_alongside_phishable_methods_still_passes():
-    # The 14 tenants with FIDO2 enabled (e.g. Infraservices: Fido2, MicrosoftAuthenticator, TemporaryAccessPass).
+    # Several tenants have FIDO2 enabled (e.g. one with Fido2, MicrosoftAuthenticator, TemporaryAccessPass).
     tap = {"id": "TemporaryAccessPass", "state": "enabled"}
     out = STRONG.transform(methods(["Fido2", "MicrosoftAuthenticator"], extra=[tap]))
     assert out["transformedResponse"]["isStrongAuthRequired"] is True
