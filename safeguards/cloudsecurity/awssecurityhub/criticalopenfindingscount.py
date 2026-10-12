@@ -14,9 +14,10 @@ finding keeps the verdict False whether or not more pages exist, but with more p
 cannot be read, the count of open critical findings is None and criticalOpenFindingsAtLeast reports the number
 seen (a lower bound, never a total).
 
-The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A finding
-whose Compliance entry is not an object, or a FAILED finding whose severity label cannot be read, cannot be read: it
-is skipped without raising, and a result that rests on the absence of a failure is then None.
+The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A list entry
+that is not an object, a finding whose Compliance entry is not an object, or a FAILED finding whose severity label
+cannot be read, cannot be read: it is skipped without raising, and a result that rests on the absence of a failure
+is then None.
 """
 
 import json
@@ -131,10 +132,10 @@ def compliance_of(finding):
 
 
 def unreadable_findings(findings):
-    """How many findings carry a Compliance entry that is not an object. Those findings cannot be read."""
+    """How many list entries cannot be read: an entry that is not an object, or a finding whose Compliance entry is not an object."""
     count = 0
     for f in findings:
-        if isinstance(f, dict) and compliance_of(f) is None:
+        if not isinstance(f, dict) or compliance_of(f) is None:
             count = count + 1
     return count
 
@@ -178,6 +179,7 @@ def transform(input):
         unreadable = 0
         for f in findings:
             if not isinstance(f, dict):
+                unreadable = unreadable + 1
                 continue
             comp = compliance_of(f)
             if comp is None:

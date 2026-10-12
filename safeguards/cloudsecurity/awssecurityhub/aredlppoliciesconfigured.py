@@ -5,18 +5,18 @@ Mapping: Macie.1 (Amazon Macie enabled) and Macie.2 (automated sensitive data
 discovery enabled), AWS's managed sensitive-data discovery service.
 
 Evaluates AWS Security Hub control(s) Macie.1, Macie.2 from the getSecurityHubComplianceAWS
-findings. A control passes unless it has a FAILED finding; the criterion passes only when
-every checked control that is present is passing.
+findings. A control fails when it has a FAILED finding; the criterion passes only when
+every checked control has a PASSED finding and none is failing.
 
 Not evaluated (None, dataCollection status "error"), never False: an error body (this
 integration's, an HTTP one or an AWS one), an empty, non-JSON or unrecognised body, a findings
-list with no PASSED or FAILED status for these controls, a findings list with more pages
+list with no PASSED or FAILED status for at least one of these controls (and no failing control), a findings list with more pages
 (NextToken) left unread and no failing control on the pages read, and an exception. A FAILED
 finding keeps the verdict False whether or not more pages exist.
 
-The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A finding
-whose Compliance entry is not an object cannot be read: it is skipped without raising, and a result that rests on
-the absence of a failure is then None.
+The next-page token is read as NextToken or nextToken, on the findings page or on any wrapper around it. A list entry
+that is not an object, or a finding whose Compliance entry is not an object, cannot be read: it is skipped without
+raising, and a result that rests on the absence of a failure is then None.
 """
 
 import json
@@ -131,10 +131,10 @@ def compliance_of(finding):
 
 
 def unreadable_findings(findings):
-    """How many findings carry a Compliance entry that is not an object. Those findings cannot be read."""
+    """How many list entries cannot be read: an entry that is not an object, or a finding whose Compliance entry is not an object."""
     count = 0
     for f in findings:
-        if isinstance(f, dict) and compliance_of(f) is None:
+        if not isinstance(f, dict) or compliance_of(f) is None:
             count = count + 1
     return count
 
@@ -178,9 +178,10 @@ def transform(input):
         failed = [cid for cid in CONTROL_IDS if statuses.get(cid) == "FAILED"]
         if failed:
             return build_response({CRITERIA_KEY: False}, fail_reasons=[FAIL_TEXT + ", ".join(failed)])
-        if not statuses:
-            return not_evaluated("The Security Hub findings carry no status for " + ", ".join(CONTROL_IDS)
-                                 + ": the control was not evaluated in what was returned, so no verdict can be given.",
+        unread = [cid for cid in CONTROL_IDS if cid not in statuses]
+        if unread:
+            return not_evaluated("The Security Hub findings carry no status for " + ", ".join(unread)
+                                 + ": not every checked control was evaluated in what was returned, so no verdict can be given.",
                                  result_none)
         if next_token:
             return not_evaluated(PAGED_PROBLEM, result_none)
