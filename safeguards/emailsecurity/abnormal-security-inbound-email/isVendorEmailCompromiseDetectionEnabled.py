@@ -114,22 +114,64 @@ def vendor_cases_of(data):
     return None, "Abnormal returned no vendor case list; nothing to measure."
 
 
+def case_id(item):
+    """The vendorCaseId of a real vendor case record, or None.
+
+    A real record is an object that carries its own case id: a non-empty string or a number. An error
+    object, an empty object or an object without an id is not a case."""
+    if not isinstance(item, dict):
+        return None
+    value = item.get("vendorCaseId")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, (int, float)):
+        # NaN and Infinity (a JSON body can carry them) are numbers but not case ids.
+        if value == value and abs(value) != float("inf"):
+            return value
+    return None
+
+
+def validation_failed(validation):
+    """True when the input validation says the body is not the expected shape."""
+    status = validation.get("status") if isinstance(validation, dict) else None
+    return isinstance(status, str) and status.strip().lower() in ["failed", "error"]
+
+
+def has_next_page(data):
+    """True when the body says another page of cases follows."""
+    if not isinstance(data, dict):
+        return False
+    for name in ["nextPageNumber", "nextPageToken"]:
+        token = data.get(name)
+        if token is not None and token is not False and token != "":
+            return True
+    return False
+
+
 def transform(input):
     data, validation = extract_input(input)
+    if not isinstance(validation, dict):
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    if validation_failed(validation):
+        return not_measured("Abnormal's vendor cases failed input validation; nothing to measure.", validation)
     vendor_cases, problem = vendor_cases_of(data)
     if problem is None:
         vendor_cases, problem = objects_only(vendor_cases, "vendor case")
+    if problem is None and vendor_cases:
+        vendor_cases = [case for case in vendor_cases if case_id(case) is not None]
+        if not vendor_cases:
+            problem = "Abnormal returned a vendor case list with no case record (vendorCaseId) in it; nothing to measure."
+    if problem is None and not vendor_cases and has_next_page(data):
+        problem = "Abnormal returned an empty first page of vendor cases and says another page follows; nothing to measure."
     if problem is not None:
         return not_measured(problem, validation)
 
-    case_count = len(vendor_cases) if isinstance(vendor_cases, list) else 0
+    case_count = len(vendor_cases)
     is_enabled = case_count > 0
 
-    sample_ids = []
-    if isinstance(vendor_cases, list):
-        for case in vendor_cases[:5]:
-            if case.get("vendorCaseId") is not None:
-                sample_ids.append(case.get("vendorCaseId"))
+    sample_ids = [case_id(case) for case in vendor_cases[:5]]
 
     if is_enabled:
         pass_reasons = [
