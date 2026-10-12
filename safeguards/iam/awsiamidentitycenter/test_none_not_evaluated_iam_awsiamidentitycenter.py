@@ -33,7 +33,18 @@ class Poisoned(dict):
         return 1
 
 
+AWS_DENIED = {"__type": "AccessDeniedException", "message": "User is not authorized to perform: sso:ListInstances"}
+
 CASES = [
+    ('isssoenabled', ('isSSOEnabled',), 'empty_dict', lambda: {}),
+    ('isssoenabled', ('isSSOEnabled',), 'aws_denied', lambda: dict(AWS_DENIED)),
+    ('isssoenabled', ('isSSOEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isrbacimplemented', ('isRBACImplemented',), 'empty_dict', lambda: {}),
+    ('isrbacimplemented', ('isRBACImplemented',), 'aws_denied', lambda: dict(AWS_DENIED)),
+    ('isrbacimplemented', ('isRBACImplemented',), 'poisoned', lambda: Poisoned()),
+    ('istrustedapplicationprotectionenabled', ('isTrustedApplicationProtectionEnabled',), 'empty_dict', lambda: {}),
+    ('istrustedapplicationprotectionenabled', ('isTrustedApplicationProtectionEnabled',), 'aws_denied', lambda: dict(AWS_DENIED)),
+    ('istrustedapplicationprotectionenabled', ('isTrustedApplicationProtectionEnabled',), 'poisoned', lambda: Poisoned()),
     ('authtypesallowed', ('authTypesAllowed',), 'empty_dict', lambda: {}),
     ('authtypesallowed', ('authTypesAllowed',), 'poisoned', lambda: Poisoned()),
     ('unprovisionedpermissionsetscount', ('unprovisionedPermissionSetsCount',), 'empty_dict', lambda: {}),
