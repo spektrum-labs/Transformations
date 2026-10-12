@@ -2,8 +2,8 @@
 
 Duo answers a missing Admin API permission with HTTP 403 {"stat": "FAIL", "code": 40301,
 "message": "Access forbidden"}. getDuoSettings needs "Grant settings"; getAdmins needs
-"Grant administrators - Read". When the method opts in, the refusal reaches the transformation as
-{"vendorErrorAsResponse": {"status", "bodyContains", "body"}}. These three checks must report it (authTypesAllowed reads Policies v2 now and has its own refusal tests in
+"Grant administrators - Read"; the authentication log methods need "Grant read log". When the method opts in, the refusal reaches the transformation as
+{"vendorErrorAsResponse": {"status", "bodyContains", "body"}}. These checks must report it (authTypesAllowed reads Policies v2 now and has its own refusal tests in
 test_duo_authtypes_allowed_policies.py)
 Unevaluated (every value None, dataCollection error), name the permission only for 403/40301, and
 never return False or a pass.
@@ -28,12 +28,19 @@ ADMINS_OK = {"stat": "OK", "response": [
     {"admin_id": "A2", "name": "Bob", "role": "Help Desk", "webauthncredentials": [{"x": 1}]},
 ]}
 
+AUTH_LOGS_OK = {"stat": "OK", "response": [
+    {"txid": "t1", "timestamp": 1790000000, "username": "u1", "factor": "duo_push", "result": "success"},
+    {"txid": "t2", "timestamp": 1790000100, "username": "u2", "factor": "passcode", "result": "denied"},
+]}
+
 # file, criteria key, required permission, healthy payload, healthy value
 CASES = [
     ("confirmPasswordPolicyEnforced", "confirmPasswordPolicyEnforced", "Grant settings", SETTINGS_OK, True),
     ("superAdminMfaEnrollmentPercentage", "superAdminMfaEnrollmentPercentage",
      "Grant administrators - Read", ADMINS_OK, 100.0),
     ("isrbacimplemented", "isRBACImplemented", "Grant administrators - Read", ADMINS_OK, True),
+    ("isiamloggingenabled", "isIAMLoggingEnabled", "Grant read log", AUTH_LOGS_OK, True),
+    ("hasAuthenticationLogAPIAccess", "hasAuthenticationLogAPIAccess", "Grant read log", AUTH_LOGS_OK, True),
 ]
 
 
