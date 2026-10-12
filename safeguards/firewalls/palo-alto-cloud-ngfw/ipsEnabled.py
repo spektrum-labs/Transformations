@@ -8,13 +8,12 @@ Integration-Service workflow getNgfwRulestackPosture, legs:
   rulestackList <- listRulestacks:    GET /v1/config/rulestacks
   rulestacks    <- describeRulestack: GET /v1/config/rulestacks/{name}, per running rulestack
 
-Value: True when the RUNNING configuration of every rulestack a firewall uses has Profiles.VulnerabilityProfile
-set to one of ['custom', 'BestPractice']; False when any of them is ['None'].
-A rulestack with no running vulnerability protection (IPS) profile has the profile set to None.
-
-Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped,
-empty, unrecognised or possibly cut-off read, a firewall with no rulestack, a rulestack with no
-running configuration (never committed) or a profile value outside the reference's enum is null.
+Value: None (Not evaluated) on every read. The reference allows only custom or BestPractice for
+VulnerabilityProfile and defaults it to BestPractice, so a vendor reply can never show IPS is off
+and "attached" would always be True. The key answers only after the read itself fails or after a
+read that can be both True and False replaces this one. A refused (401/403), expired-token,
+error-shaped, empty, unrecognised or possibly cut-off read, a rulestack with no running
+configuration, or no firewall is null with the specific reason.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageRulestacks and
 ManageNGFW). How a read asks for the running configuration is UNVERIFIED (see the method notes).
@@ -131,12 +130,18 @@ def list_problem(listing, label):
 
 
 def bound_rulestack_names(top):
-    """(names, problem): the rulestack each firewall uses, de-duplicated, in order."""
+    """(names, problem): every rulestack (local and global) the firewalls use, de-duplicated, in order.
+    The firewall list and the per-firewall reads must agree: a listed firewall nobody read is not
+    a smaller estate."""
     listing = top.get("firewallList")
+    listed = None
     if listing is not None:
         problem = list_problem(listing, "firewall list")
         if problem:
             return None, problem
+        entries = listing["Response"].get("Firewalls")
+        if isinstance(entries, list):
+            listed = [text_of(entry.get("FirewallName")) if isinstance(entry, dict) else "" for entry in entries]
     problem = top_problem(top, "firewalls")
     if problem:
         return None, problem
@@ -146,6 +151,7 @@ def bound_rulestack_names(top):
     if not firewalls:
         return None, "firewalls: the account has no firewall, so there is nothing to measure"
     names = []
+    read = []
     for resp in firewalls:
         problem = response_problem(resp, "firewall read")
         if problem:
@@ -153,11 +159,19 @@ def bound_rulestack_names(top):
         fw = resp["Response"].get("Firewall")
         if not isinstance(fw, dict):
             return None, "firewall read: no Firewall object in the answer"
-        name = text_of(fw.get("RuleStackName")) or text_of(fw.get("GlobalRuleStackName"))
-        if not name:
+        read.append(text_of(fw.get("FirewallName")))
+        bound = [text_of(fw.get("RuleStackName")), text_of(fw.get("GlobalRuleStackName"))]
+        bound = [name for name in bound if name]
+        if not bound:
             return None, "firewall read: the firewall names no rulestack"
-        if name not in names:
-            names.append(name)
+        for name in bound:
+            if name not in names:
+                names.append(name)
+    if listed is not None:
+        missing = [name for name in listed if not name or name not in read]
+        if missing:
+            return None, ("firewall list: " + str(len(missing)) + " listed firewall(s) have no read of their own, "
+                          "so the rulestacks in use are not fully known")
     return names, None
 
 
@@ -197,32 +211,9 @@ def load_profiles(input):
     return running_profiles(top, names)
 
 
-def combine(results):
-    """results: list of (True | False | None, reason). Any False wins; else any None is unreadable."""
-    off = [r for flag, r in results if flag is False]
-    if off:
-        return False, off
-    unread = [r for flag, r in results if flag is None]
-    if unread:
-        return None, unread
-    return True, []
-
-
 KEY = "ipsEnabled"
-FIELD = "VulnerabilityProfile"
-ON = ('custom', 'BestPractice')
-OFF = ('None',)
-
-
-def judge(name, profiles):
-    value = text_of(profiles.get(FIELD))
-    if value in ON:
-        return True, ""
-    if value in OFF:
-        return False, "rulestack " + name + ": no vulnerability protection (IPS) profile is attached"
-    if not value:
-        return None, "rulestack " + name + ": the running configuration does not say VulnerabilityProfile"
-    return None, "rulestack " + name + ": unrecognised VulnerabilityProfile value"
+REASON = ("the vendor reference allows only custom or BestPractice for VulnerabilityProfile and defaults it "
+          "to BestPractice, so a read cannot show IPS is off or on; not evaluated until a read can")
 
 
 def transform(input):
@@ -230,15 +221,7 @@ def transform(input):
         profiles, problem = load_profiles(input)
         if problem:
             return build_response({KEY: None}, errors=[problem], transform_id=KEY)
-        results = [judge(name, profiles[name]) for name in profiles]
-        value, reasons = combine(results)
-        summary = {"rulestacks": len(profiles)}
-        if value is None:
-            return build_response({KEY: None}, errors=reasons[:5], summary=summary, transform_id=KEY)
-        if value is False:
-            return build_response({KEY: False}, fail_reasons=reasons, summary=summary,
-                                  recommendations=["Attach a vulnerability protection profile to the rulestack and commit it."], transform_id=KEY)
-        return build_response({KEY: True}, pass_reasons=["Vulnerability protection profile attached on " + str(len(profiles)) + " rulestack(s)"],
-                              summary=summary, transform_id=KEY)
+        return build_response({KEY: None}, errors=[REASON], summary={"rulestacks": len(profiles)},
+                              transform_id=KEY)
     except Exception as error:
         return build_response({KEY: None}, errors=[str(error)[:300]], transform_id=KEY)

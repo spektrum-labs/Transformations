@@ -7,12 +7,16 @@ Integration-Service workflow getNgfwDecryptionCertificates, leg used:
                   once per running rulestack, for the rulestack's outbound trust certificate
 
 Value: True when every certificate object read has a running CertificateSignerArn that is an
-AWS Secrets Manager secret (arn:<partition>:secretsmanager:...); False when one points anywhere
-else or names no signer. The reference says certificate objects are stored in AWS Secrets Manager.
+AWS Secrets Manager secret (arn:<partition>:secretsmanager:...); False when one names a signer
+that is anywhere else. The reference says certificate objects are stored in AWS Secrets Manager.
+The certificate read is the rulestack's outbound trust certificate, so the answer speaks for that
+certificate, not for every certificate in the account.
 
 Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped, empty,
 unrecognised or possibly cut-off read, a failed per-certificate read, a certificate object with no
-running configuration, or no certificate configured at all (nothing was measured) is null.
+running configuration, a running configuration with no CertificateSignerArn (the field is optional
+in every certificate answer, and the reference does not say absent means "held elsewhere"), or no
+certificate configured at all (nothing was measured) is null.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageCertificateObjects).
 """
@@ -144,7 +148,8 @@ def judge(resp):
     if len(parts) >= 6 and parts[0] == "arn" and parts[2] == "secretsmanager" and parts[5]:
         return True, ""
     if not arn:
-        return False, "certificate " + name + ": no secret reference, so it is not held in a secrets manager"
+        return None, ("certificate " + name + ": the running configuration returned no CertificateSignerArn, "
+                      "and the reference does not say that means it is held outside a secrets manager")
     return False, "certificate " + name + ": signer is not an AWS Secrets Manager secret"
 
 

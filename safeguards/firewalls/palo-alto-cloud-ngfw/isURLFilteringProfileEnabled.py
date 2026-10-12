@@ -131,12 +131,18 @@ def list_problem(listing, label):
 
 
 def bound_rulestack_names(top):
-    """(names, problem): the rulestack each firewall uses, de-duplicated, in order."""
+    """(names, problem): every rulestack (local and global) the firewalls use, de-duplicated, in order.
+    The firewall list and the per-firewall reads must agree: a listed firewall nobody read is not
+    a smaller estate."""
     listing = top.get("firewallList")
+    listed = None
     if listing is not None:
         problem = list_problem(listing, "firewall list")
         if problem:
             return None, problem
+        entries = listing["Response"].get("Firewalls")
+        if isinstance(entries, list):
+            listed = [text_of(entry.get("FirewallName")) if isinstance(entry, dict) else "" for entry in entries]
     problem = top_problem(top, "firewalls")
     if problem:
         return None, problem
@@ -146,6 +152,7 @@ def bound_rulestack_names(top):
     if not firewalls:
         return None, "firewalls: the account has no firewall, so there is nothing to measure"
     names = []
+    read = []
     for resp in firewalls:
         problem = response_problem(resp, "firewall read")
         if problem:
@@ -153,11 +160,19 @@ def bound_rulestack_names(top):
         fw = resp["Response"].get("Firewall")
         if not isinstance(fw, dict):
             return None, "firewall read: no Firewall object in the answer"
-        name = text_of(fw.get("RuleStackName")) or text_of(fw.get("GlobalRuleStackName"))
-        if not name:
+        read.append(text_of(fw.get("FirewallName")))
+        bound = [text_of(fw.get("RuleStackName")), text_of(fw.get("GlobalRuleStackName"))]
+        bound = [name for name in bound if name]
+        if not bound:
             return None, "firewall read: the firewall names no rulestack"
-        if name not in names:
-            names.append(name)
+        for name in bound:
+            if name not in names:
+                names.append(name)
+    if listed is not None:
+        missing = [name for name in listed if not name or name not in read]
+        if missing:
+            return None, ("firewall list: " + str(len(missing)) + " listed firewall(s) have no read of their own, "
+                          "so the rulestacks in use are not fully known")
     return names, None
 
 

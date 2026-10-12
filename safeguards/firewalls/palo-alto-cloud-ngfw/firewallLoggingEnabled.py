@@ -6,14 +6,16 @@ Integration-Service workflow getNgfwLogProfiles, legs:
   firewallList <- listFirewalls:          GET /v1/config/ngfirewalls
   logProfiles  <- getFirewallLogProfile:  GET /v1/config/ngfirewalls/{name}/logprofile, per firewall
 
-Value: True when every firewall's log profile has a non-blank LogDestination for BOTH the TRAFFIC
-and the THREAT log type; False when any firewall lacks either. Decryption logs only matter where
-decryption is on, so they are not required here.
+Value: True when every firewall's log profile has a non-blank LogDestination for each of the
+TRAFFIC, THREAT and DECRYPTION log types (the vendor's enum spells the last one DESCRYPTION; both
+spellings count); False when a firewall's log profile lists destinations and lacks one of them. The
+bundle names all three.
 
 Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped, empty,
-unrecognised or possibly cut-off read, a log profile answer that does not even name the firewall,
-a failed per-firewall read, or no firewall is null. One firewall that is not logging makes the
-answer False even if another could not be read.
+unrecognised or possibly cut-off read, a log profile answer with no LogDestinationConfigs or an
+empty list (the reference does not say the field is absent when no log profile is set, so absence
+is not "not logging"), a failed per-firewall read, or no firewall is null. One firewall that is
+not logging makes the answer False even if another could not be read.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageLogProfiles).
 """
@@ -129,7 +131,7 @@ def list_problem(listing, label):
 
 
 KEY = "firewallLoggingEnabled"
-REQUIRED = ("TRAFFIC", "THREAT")
+REQUIRED = (("TRAFFIC",), ("THREAT",), ("DECRYPTION", "DESCRYPTION"))
 
 
 def judge(resp):
@@ -139,11 +141,11 @@ def judge(resp):
         return None, problem
     data = resp["Response"]
     name = text_of(data.get("FirewallName"))
+    label = name or "a firewall"
     configs = data.get("LogDestinationConfigs")
-    if configs is None:
-        if name:
-            return False, "firewall " + name + ": the log profile has no log destination"
-        return None, "log profile read: the answer does not name a firewall or any destination"
+    if configs is None or (isinstance(configs, list) and not configs):
+        return None, ("firewall " + label + ": the log profile returned no LogDestinationConfigs, and the "
+                      "reference does not say that means no logging")
     if not isinstance(configs, list):
         return None, "log profile read: LogDestinationConfigs is unreadable"
     covered = []
@@ -152,8 +154,7 @@ def judge(resp):
             return None, "log profile read: a destination entry is unreadable"
         if text_of(entry.get("LogDestination")):
             covered.append(text_of(entry.get("LogType")).upper())
-    missing = [kind for kind in REQUIRED if kind not in covered]
-    label = name or "a firewall"
+    missing = [kinds[0] for kinds in REQUIRED if not [kind for kind in kinds if kind in covered]]
     if missing:
         return False, "firewall " + label + ": no log destination for " + ", ".join(missing) + " logs"
     return True, ""
@@ -183,12 +184,12 @@ def transform(input):
         summary = {"firewalls": len(profiles), "notLogging": len(off), "unreadable": len(unread)}
         if off:
             return build_response({KEY: False}, fail_reasons=off, summary=summary,
-                                  recommendations=["Configure a log destination for traffic and threat logs on each "
-                                                   "firewall's log profile."], transform_id=KEY)
+                                  recommendations=["Configure a log destination for traffic, threat and decryption "
+                                                   "logs on each firewall's log profile."], transform_id=KEY)
         if unread:
             return build_response({KEY: None}, errors=unread[:5], summary=summary, transform_id=KEY)
         return build_response({KEY: True}, pass_reasons=[
-            "Traffic and threat logs have a destination on " + str(len(profiles)) + " firewall(s)"],
+            "Traffic, threat and decryption logs have a destination on " + str(len(profiles)) + " firewall(s)"],
             summary=summary, transform_id=KEY)
     except Exception as error:
         return build_response({KEY: None}, errors=[str(error)[:300]], transform_id=KEY)

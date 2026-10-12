@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "rulestacks used by the managed firewalls; rulestacks no firewall uses are ignored; denominator = every firewall read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of every firewall and of the rulestack list, with the list carrying its uncommitted array and none of the used rulestacks in it.",
+  "evidenceRequiredForTrue": "A complete read of every firewall (the firewall list and the per-firewall reads agree) and of the rulestack list, with the list carrying its uncommitted array, covering every local and global rulestack a firewall uses, and none of the used rulestacks in the uncommitted array.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,

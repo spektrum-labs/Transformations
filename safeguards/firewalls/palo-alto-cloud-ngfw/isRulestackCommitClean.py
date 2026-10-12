@@ -9,11 +9,15 @@ Integration-Service workflow getNgfwRulestackPosture, legs used:
 Value: True when no rulestack that a firewall uses appears in the list's RuleStackUncommitted
 array (each entry {RuleStackName, Operation: add | delete | update}); False when one does, since the
 policy a firewall enforces then differs from the last committed configuration. An uncommitted
-rulestack that no firewall uses is ignored.
+rulestack that no firewall uses is ignored. A firewall's local and global rulestack are both
+read; every one the firewall uses must appear in the list's RuleStackRunning, RuleStackCandidate or
+RuleStackUncommitted arrays, because "not in the uncommitted array" proves nothing for a rulestack
+the list does not cover (a global rulestack, or one the list missed).
 
 Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped,
 empty, unrecognised or possibly cut-off read, a list that does not carry the RuleStackUncommitted
-array at all (the read was not asked for it), or no firewall is null.
+array at all (the read was not asked for it), a firewall in the firewall list with no read of its
+own, a rulestack in use that the rulestack list does not cover, or no firewall is null.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageRulestacks).
 """
@@ -129,12 +133,18 @@ def list_problem(listing, label):
 
 
 def bound_rulestack_names(top):
-    """(names, problem): the rulestack each firewall uses, de-duplicated, in order."""
+    """(names, problem): every rulestack (local and global) the firewalls use, de-duplicated, in order.
+    The firewall list and the per-firewall reads must agree: a listed firewall nobody read is not
+    a smaller estate."""
     listing = top.get("firewallList")
+    listed = None
     if listing is not None:
         problem = list_problem(listing, "firewall list")
         if problem:
             return None, problem
+        entries = listing["Response"].get("Firewalls")
+        if isinstance(entries, list):
+            listed = [text_of(entry.get("FirewallName")) if isinstance(entry, dict) else "" for entry in entries]
     problem = top_problem(top, "firewalls")
     if problem:
         return None, problem
@@ -144,6 +154,7 @@ def bound_rulestack_names(top):
     if not firewalls:
         return None, "firewalls: the account has no firewall, so there is nothing to measure"
     names = []
+    read = []
     for resp in firewalls:
         problem = response_problem(resp, "firewall read")
         if problem:
@@ -151,11 +162,19 @@ def bound_rulestack_names(top):
         fw = resp["Response"].get("Firewall")
         if not isinstance(fw, dict):
             return None, "firewall read: no Firewall object in the answer"
-        name = text_of(fw.get("RuleStackName")) or text_of(fw.get("GlobalRuleStackName"))
-        if not name:
+        read.append(text_of(fw.get("FirewallName")))
+        bound = [text_of(fw.get("RuleStackName")), text_of(fw.get("GlobalRuleStackName"))]
+        bound = [name for name in bound if name]
+        if not bound:
             return None, "firewall read: the firewall names no rulestack"
-        if name not in names:
-            names.append(name)
+        for name in bound:
+            if name not in names:
+                names.append(name)
+    if listed is not None:
+        missing = [name for name in listed if not name or name not in read]
+        if missing:
+            return None, ("firewall list: " + str(len(missing)) + " listed firewall(s) have no read of their own, "
+                          "so the rulestacks in use are not fully known")
     return names, None
 
 
@@ -179,6 +198,17 @@ def uncommitted_names(top):
     return names, None
 
 
+def listed_names(top):
+    """The rulestack names the list covers: running and candidate arrays (plain names)."""
+    out = set()
+    response = top["rulestackList"]["Response"]
+    for field in ("RuleStackRunning", "RuleStackCandidate"):
+        values = response.get(field)
+        if isinstance(values, list):
+            out.update(text_of(v) for v in values if isinstance(v, str) and text_of(v))
+    return out
+
+
 def transform(input):
     try:
         data = parse(input)
@@ -194,6 +224,14 @@ def transform(input):
             return build_response({KEY: None}, errors=[problem], transform_id=KEY)
         dirty = [name for name in names if name in pending]
         summary = {"rulestacks": len(names), "uncommittedRulestacks": len(dirty)}
+        if not dirty:
+            covered = listed_names(top) | set(pending)
+            absent = [name for name in names if name not in covered]
+            if absent:
+                return build_response({KEY: None}, errors=[
+                    "rulestack list: " + str(len(absent)) + " rulestack(s) a firewall uses are not covered by "
+                    "the list (a global rulestack, or one the list missed), so pending changes were not read"],
+                    summary=summary, transform_id=KEY)
         if dirty:
             return build_response({KEY: False}, fail_reasons=[
                 "rulestack " + name + " has changes that are not committed" for name in dirty],

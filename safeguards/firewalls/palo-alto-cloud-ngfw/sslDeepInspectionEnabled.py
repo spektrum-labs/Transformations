@@ -6,14 +6,13 @@ Integration-Service workflow getNgfwRulestackPosture (firewalls, then each runni
   firewalls   <- describeFirewall:  GET /v1/config/ngfirewalls/{name}
   rulestacks  <- describeRulestack: GET /v1/config/rulestacks/{name}
 
-Value: True when the RUNNING configuration of every rulestack a firewall uses names an
-Profiles.OutboundTrustCertificate (the certificate the firewall re-signs decrypted outbound
-traffic with); False when any of them names none. A named certificate is the configuration that
-turns outbound decryption on; it does not show that a security rule selects traffic for it.
-
-Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped,
-empty, unrecognised or possibly cut-off read, a firewall with no rulestack, a rulestack with no
-running configuration, or a Profiles object with no readable profile at all is null.
+Value: None (Not evaluated) on every read. An Profiles.OutboundTrustCertificate shows that a
+decryption certificate was chosen, not that any security rule selects traffic for decryption, and
+decryption rules are not read, so "certificate named" would be True without evidence that anything
+is decrypted. The key answers only after a read that can be both True and False replaces this one.
+A refused (401/403), expired-token, error-shaped, empty, unrecognised or possibly cut-off read,
+a firewall with no rulestack, a rulestack with no running configuration, or a Profiles object with
+no readable profile is null with the specific reason.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageRulestacks).
 """
@@ -129,12 +128,18 @@ def list_problem(listing, label):
 
 
 def bound_rulestack_names(top):
-    """(names, problem): the rulestack each firewall uses, de-duplicated, in order."""
+    """(names, problem): every rulestack (local and global) the firewalls use, de-duplicated, in order.
+    The firewall list and the per-firewall reads must agree: a listed firewall nobody read is not
+    a smaller estate."""
     listing = top.get("firewallList")
+    listed = None
     if listing is not None:
         problem = list_problem(listing, "firewall list")
         if problem:
             return None, problem
+        entries = listing["Response"].get("Firewalls")
+        if isinstance(entries, list):
+            listed = [text_of(entry.get("FirewallName")) if isinstance(entry, dict) else "" for entry in entries]
     problem = top_problem(top, "firewalls")
     if problem:
         return None, problem
@@ -144,6 +149,7 @@ def bound_rulestack_names(top):
     if not firewalls:
         return None, "firewalls: the account has no firewall, so there is nothing to measure"
     names = []
+    read = []
     for resp in firewalls:
         problem = response_problem(resp, "firewall read")
         if problem:
@@ -151,11 +157,19 @@ def bound_rulestack_names(top):
         fw = resp["Response"].get("Firewall")
         if not isinstance(fw, dict):
             return None, "firewall read: no Firewall object in the answer"
-        name = text_of(fw.get("RuleStackName")) or text_of(fw.get("GlobalRuleStackName"))
-        if not name:
+        read.append(text_of(fw.get("FirewallName")))
+        bound = [text_of(fw.get("RuleStackName")), text_of(fw.get("GlobalRuleStackName"))]
+        bound = [name for name in bound if name]
+        if not bound:
             return None, "firewall read: the firewall names no rulestack"
-        if name not in names:
-            names.append(name)
+        for name in bound:
+            if name not in names:
+                names.append(name)
+    if listed is not None:
+        missing = [name for name in listed if not name or name not in read]
+        if missing:
+            return None, ("firewall list: " + str(len(missing)) + " listed firewall(s) have no read of their own, "
+                          "so the rulestacks in use are not fully known")
     return names, None
 
 
@@ -195,28 +209,11 @@ def load_profiles(input):
     return running_profiles(top, names)
 
 
-def combine(results):
-    """results: list of (True | False | None, reason). Any False wins; else any None is unreadable."""
-    off = [r for flag, r in results if flag is False]
-    if off:
-        return False, off
-    unread = [r for flag, r in results if flag is None]
-    if unread:
-        return None, unread
-    return True, []
-
-
 KEY = "sslDeepInspectionEnabled"
 KNOWN = ("AntiSpywareProfile", "AntiVirusProfile", "FileBlockingProfile", "VulnerabilityProfile",
          "URLFilteringProfile", "OutboundTrustCertificate", "OutboundUnTrustCertificate")
-
-
-def judge(name, profiles):
-    if not [field for field in KNOWN if field in profiles]:
-        return None, "rulestack " + name + ": the running Profiles object has no readable profile"
-    if text_of(profiles.get("OutboundTrustCertificate")):
-        return True, ""
-    return False, "rulestack " + name + ": no outbound trust certificate is set, so outbound decryption is off"
+REASON = ("an outbound trust certificate shows a decryption certificate was chosen, not that any traffic is "
+          "decrypted (decryption rules are not read); not evaluated until a read can show it")
 
 
 def transform(input):
@@ -224,18 +221,12 @@ def transform(input):
         profiles, problem = load_profiles(input)
         if problem:
             return build_response({KEY: None}, errors=[problem], transform_id=KEY)
-        results = [judge(name, profiles[name]) for name in profiles]
-        value, reasons = combine(results)
-        summary = {"rulestacks": len(profiles)}
-        if value is None:
-            return build_response({KEY: None}, errors=reasons[:5], summary=summary, transform_id=KEY)
-        if value is False:
-            return build_response({KEY: False}, fail_reasons=reasons, summary=summary,
-                                  recommendations=["Set an outbound trust certificate on the rulestack and commit it so "
-                                                   "encrypted outbound traffic is decrypted and inspected."],
-                                  transform_id=KEY)
-        return build_response({KEY: True}, pass_reasons=["Outbound decryption certificate set on "
-                                                          + str(len(profiles)) + " rulestack(s)"],
-                              summary=summary, transform_id=KEY)
+        for name in profiles:
+            if not [field for field in KNOWN if field in profiles[name]]:
+                return build_response({KEY: None}, errors=[
+                    "rulestack " + name + ": the running Profiles object has no readable profile"],
+                    transform_id=KEY)
+        return build_response({KEY: None}, errors=[REASON], summary={"rulestacks": len(profiles)},
+                              transform_id=KEY)
     except Exception as error:
         return build_response({KEY: None}, errors=[str(error)[:300]], transform_id=KEY)

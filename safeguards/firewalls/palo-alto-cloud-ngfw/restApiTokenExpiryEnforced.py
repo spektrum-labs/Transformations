@@ -6,14 +6,13 @@ Integration-Service method describeProgrammaticAccess:
   GET /v1/mgmt/tokens ("Describe programmatic access")
   -> {"Response": {"Enabled": bool, "MaxExpiryTime": int}, "ResponseStatus": {"ErrorCode": 0}}
 
-Value: True when the tenant states a MaxExpiryTime between 1 and 1440 (the reference's own
-ceiling, 24 hours if the unit is minutes; the unit is not stated in the reference) for the
-programmatic-access tokens it issues; False when the ceiling is zero, negative or above 1440.
-This is the tenant-wide ceiling on token lifetime, not a read of any one token.
-
-Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped,
-empty or unrecognised read, a ceiling that is not a whole number, programmatic access reported
-disabled (no token is issued, so nothing was measured) is null.
+Value: None (Not evaluated) on every read. The reference bounds the tenant ceiling MaxExpiryTime
+to 480 through 1440 (the unit is not stated), so every value the vendor can return is inside that
+range and "bounded" would always be True. This is the tenant-wide ceiling on token lifetime, not a
+read of any one token. The key answers only after a read that can be both True and False replaces
+this one. A refused (401/403), expired-token, error-shaped, empty or unrecognised read, programmatic
+access reported disabled (no token is issued), or a ceiling that is not a whole number is null with
+the specific reason.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageAPITokens). Whether this
 route accepts the programmatic-access token or needs the AWS SigV4 signature is UNVERIFIED.
@@ -130,7 +129,8 @@ def list_problem(listing, label):
 
 
 KEY = "restApiTokenExpiryEnforced"
-CEILING = 1440
+REASON = ("the vendor reference bounds MaxExpiryTime to 480 through 1440, so any value it can return is inside "
+          "that range and cannot show expiry is not enforced; not evaluated until a read can")
 
 
 def transform(input):
@@ -152,15 +152,7 @@ def transform(input):
         if isinstance(ceiling, bool) or not isinstance(ceiling, int):
             return build_response({KEY: None}, errors=["MaxExpiryTime is missing or not a whole number"],
                                   transform_id=KEY)
-        summary = {"maxExpiryTime": ceiling}
-        if ceiling < 1 or ceiling > CEILING:
-            return build_response({KEY: False}, fail_reasons=[
-                "the tenant's token expiry ceiling is " + str(ceiling) + ", outside 1 to " + str(CEILING)],
-                summary=summary,
-                recommendations=["Lower the programmatic access token expiry ceiling for the tenant."],
-                transform_id=KEY)
-        return build_response({KEY: True}, pass_reasons=[
-            "Programmatic access tokens expire within the tenant ceiling of " + str(ceiling)],
-            summary=summary, transform_id=KEY)
+        return build_response({KEY: None}, errors=[REASON], summary={"maxExpiryTime": ceiling},
+                              transform_id=KEY)
     except Exception as error:
         return build_response({KEY: None}, errors=[str(error)[:300]], transform_id=KEY)

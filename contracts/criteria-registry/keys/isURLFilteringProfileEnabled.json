@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "running rulestack configurations used by the managed firewalls; denominator = every rulestack a firewall uses",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of every firewall and of the running configuration of each rulestack it uses, each showing a URL filtering profile other than none.",
+  "evidenceRequiredForTrue": "A complete read of every firewall (the firewall list and the per-firewall reads agree) and of the running configuration of each local and global rulestack it uses, each showing a URL filtering profile other than none.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
