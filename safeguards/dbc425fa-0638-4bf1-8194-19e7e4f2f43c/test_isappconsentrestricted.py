@@ -83,8 +83,19 @@ class AppConsentTests(unittest.TestCase):
                      {"error": {"code": 403, "message": "Request had insufficient authentication scopes.", "status": "PERMISSION_DENIED"}}]:
             self.assert_not_evaluated(body)
 
-    def test_truncated_list_is_not_evaluated(self):
+    def test_truncated_list_with_an_open_policy_already_seen_stays_false(self):
+        # The policy read so far states third-party apps are open: later pages cannot change that, so the answer is
+        # still No, but with no percentage because the list was not read in full.
         data = copy.deepcopy(REAL)
+        data["result"]["apiResponse"]["nextPageToken"] = "next-page"
+        out = self.out(data)
+        self.assertIs(out[KEY], False)
+        self.assertIsNone(out["appConsentRestrictedPolicyPercentage"])
+
+    def test_truncated_list_with_only_restricted_policies_is_not_evaluated(self):
+        # Later pages could still hold an open policy, so nothing seen so far proves the control.
+        data = copy.deepcopy(REAL)
+        data["result"]["apiResponse"]["policies"][2]["setting"]["value"]["accessLevel"] = "BLOCK_ALL"
         data["result"]["apiResponse"]["nextPageToken"] = "next-page"
         self.assert_not_evaluated(data)
 

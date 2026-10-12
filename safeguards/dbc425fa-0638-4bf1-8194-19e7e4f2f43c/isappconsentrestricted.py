@@ -37,14 +37,16 @@ def transform(input):
     False (measured) when unconfigured-third-party-apps policies were read and one is not restricted.
     When another policy did not report its accessLevel, the open policy still proves False, and the
     percentage is None because the share cannot be computed from a policy that states nothing.
+    A list still carrying nextPageToken (or paginationTruncated) is judged on what was read: a policy
+    already seen that states open proves False, with the percentage None because it is from part of the
+    list. A cut-short list in which no policy states open is not measured, since a later page could.
 
     Not measured (both keys None and a dataCollection error, so Token-Service shows Not evaluated, never
     Failed): an error or refusal body, a body that is not JSON or not an object, no policies collection,
     an empty list, no unconfigured_third_party_apps policy in it (the setting must be shown before it can
     be judged), a policy that does not report its accessLevel while no policy states open (it proves nothing
-    about that policy), a list
-    still carrying nextPageToken (the share of restricted policies would be partial), and this transform's
-    own exception.
+    about that policy), a list still carrying nextPageToken in which no policy states open (nothing read
+    can show every policy is restricted), and this transform's own exception.
 
     Does not prove: the per-app access list (apps marked trusted, limited or blocked), which this
     setting does not carry.
@@ -56,6 +58,10 @@ def transform(input):
     if state["error"] is not None:
         return respond(None, None, [], [state["error"]], {}, [], [state["error"]])
     ok = state["total"] > 0 and state["restricted"] == state["total"]
+    if state["truncated"]:
+        line = (str(len(state["open"])) + " unconfigured third-party app policies allow access; the policy list was cut "
+                "short, so the rest were not read")
+        return respond(False, state["percentage"], [], [line] + state["open"][:10], state["inputSummary"], [])
     line = (str(state["restricted"]) + " of " + str(state["total"])
             + " unconfigured third-party app policies restrict access (BLOCK_ALL or ALLOW_SIGN_IN_ONLY)")
     if state["unreported"]:
@@ -101,7 +107,8 @@ def error_in(data):
 
 def evaluate(raw):
     data = parse(raw)
-    state = {"error": None, "total": 0, "restricted": 0, "unreported": 0, "percentage": 0, "open": [], "inputSummary": {}}
+    state = {"error": None, "total": 0, "restricted": 0, "unreported": 0, "truncated": False, "percentage": 0,
+             "open": [], "inputSummary": {}}
     problem = error_in(data)
     if problem is not None:
         state["error"] = problem
@@ -110,10 +117,9 @@ def evaluate(raw):
     if not isinstance(policies, list):
         state["error"] = "No policies collection in the response: the API controls read cannot be shown to have run"
         return state
-    if text(data.get("nextPageToken")) or truthy(data.get("paginationTruncated")):
-        state["error"] = ("The policy list was truncated (nextPageToken present): the share of restricted "
-                          "unconfigured third-party app policies cannot be computed from part of the list")
-        return state
+    truncated = bool(text(data.get("nextPageToken"))) or truthy(data.get("paginationTruncated"))
+    truncated_error = ("The policy list was truncated (nextPageToken present) and no policy read so far states "
+                       "third-party app access is open: later pages could, and part of the list cannot show it is restricted")
     found = []
     for policy in policies:
         if not isinstance(policy, dict):
@@ -122,8 +128,9 @@ def evaluate(raw):
         if text(setting.get("type")).endswith("api_controls.unconfigured_third_party_apps"):
             found.append(policy)
     if not found:
-        state["error"] = ("No api_controls.unconfigured_third_party_apps policy was returned ("
-                          + str(len(policies)) + " policies read): third-party app access cannot be judged")
+        state["error"] = truncated_error if truncated else (
+            "No api_controls.unconfigured_third_party_apps policy was returned ("
+            + str(len(policies)) + " policies read): third-party app access cannot be judged")
         return state
     restricted = 0
     unreported = []
@@ -141,6 +148,17 @@ def evaluate(raw):
             restricted = restricted + 1
         else:
             state["open"].append("Unconfigured third-party apps allowed at " + where + ": accessLevel " + level)
+    if truncated:
+        # A policy already seen that states open proves False, whatever the rest of the list holds. Nothing
+        # seen can prove restricted, because a later page could hold an open policy. The share and the totals
+        # come from part of the list, so they are None.
+        if not state["open"]:
+            state["error"] = truncated_error
+            return state
+        state["truncated"] = True
+        state["percentage"] = None
+        state["inputSummary"] = {"truncated": True, "openPolicies": len(state["open"])}
+        return state
     if unreported and not state["open"]:
         # No policy states open and some state nothing: all-restricted cannot be shown, and neither can
         # an open policy. That is a read that could not answer.
