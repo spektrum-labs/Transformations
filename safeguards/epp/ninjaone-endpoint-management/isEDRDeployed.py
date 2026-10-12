@@ -247,7 +247,7 @@ EDR_PRODUCT_KEYWORDS = [
 ]
 
 
-def transform(input):
+def transform_report(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
     problem = body_problem(input, data)
@@ -367,3 +367,107 @@ def transform(input):
         input_summary=input_summary,
         metadata=metadata,
     )
+
+
+ANSWER_KEY = "isEDRDeployed"
+AT_LEAST_KEY = None
+
+
+def proven_by_a_seen_row(result):
+    return result.get(ANSWER_KEY) is True
+
+
+# A report that holds fewer rows than the vendor says exist is only part of the fleet. A verdict that rests on the ABSENCE
+# of a row (no Out-of-Date device, no device left off, no misconfigured device, no active product) is not proven by the
+# rows that were read, so it reads None. A verdict that a row which WAS read proves stays, with its counts left unknown.
+PARTIAL_REASON = ("The NinjaOne antivirus-status report is only part of the fleet (a cursor count or a next-page marker "
+                  "shows rows that were not read), so a verdict that rests on the rows that were not seen is not proven "
+                  "and this is not evaluated here.")
+PARTIAL_NOTE = ("The antivirus-status report is only part of the fleet. This verdict is proven by a row that was read; the "
+                "counts are unknown because the unread rows are not counted.")
+NEXT_KEYS = ("next", "nextPage", "nextToken", "nextCursor", "nextKey", "nextUrl", "nextLink", "nextOffset",
+             "next_page", "next_token", "next_cursor", "next_key", "next_url", "next_link", "next_offset")
+MORE_KEYS = ("truncated", "hasMore", "has_more", "hasNext", "has_next", "moreResults", "more_results", "more")
+
+
+def count_of(value):
+    """An integer count, or None. Stored replays stringify numbers."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def marker_set(value):
+    """True when a pagination cursor or more-pages flag carries a value. Stored replays stringify null and false."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (list, dict, tuple)):
+        return len(value) > 0
+    return str(value).strip().lower() not in ("", "none", "null", "false", "0")
+
+
+def shows_more_rows(body, received):
+    """True when a body that carries rows says there are more rows than it holds.
+
+    A next-page marker or a more-pages flag that is set, a cursor.count above the rows received, a cursor that names
+    itself but gives no count (it cannot show the read is whole), or a cursor that is a set value. The live joined body
+    has "cursor": [] and no marker, which is a complete read.
+    """
+    if not isinstance(body, dict):
+        return False
+    for key in NEXT_KEYS + MORE_KEYS:
+        if marker_set(body.get(key)):
+            return True
+    cursor = body.get("cursor")
+    if isinstance(cursor, dict):
+        count = count_of(cursor.get("count"))
+        if count is not None and count > received:
+            return True
+        if count is None and marker_set(cursor.get("name")):
+            return True
+        for key in NEXT_KEYS + MORE_KEYS:
+            if marker_set(cursor.get(key)):
+                return True
+    elif marker_set(cursor):
+        return True
+    return False
+
+
+def report_rows(data):
+    """The rows the report carries, as received."""
+    if isinstance(data, dict):
+        rows = data.get("results") or data.get("data") or []
+        return rows if isinstance(rows, list) else []
+    return data if isinstance(data, list) else []
+
+
+def partial_answer(answer, validation):
+    """The answer for a partial report: a verdict a seen row proves stays (counts unknown), any other verdict reads None."""
+    result = answer["transformedResponse"]
+    if proven_by_a_seen_row(result):
+        lower_bound = result.get(AT_LEAST_KEY) if AT_LEAST_KEY else None
+        for name in list(result.keys()):
+            found = result.get(name)
+            if name != ANSWER_KEY and isinstance(found, int) and not isinstance(found, bool):
+                result[name] = None
+        result["partialRead"] = True
+        if AT_LEAST_KEY:
+            result[AT_LEAST_KEY + "AtLeast"] = lower_bound
+        answer["additionalInfo"]["evaluation"]["additionalFindings"] = [PARTIAL_NOTE]
+        return answer
+    return create_response(result={ANSWER_KEY: None, "partialRead": True}, validation=validation,
+                           api_errors=[PARTIAL_REASON], fail_reasons=[PARTIAL_REASON])
+
+
+def transform(input):
+    answer = transform_report(input)
+    result = answer.get("transformedResponse")
+    if not isinstance(result, dict) or result.get(ANSWER_KEY) is None:
+        return answer
+    data, validation = extract_input(input)
+    if not shows_more_rows(data, len(report_rows(data))):
+        return answer
+    return partial_answer(answer, validation)
