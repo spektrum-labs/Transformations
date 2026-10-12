@@ -144,15 +144,29 @@ def complete_list(input, list_key, noun):
     return items, None
 
 
-def agent_windows(agents):
-    """(fresh, stale, undated) agents judged against the newest last_callback_at in the response."""
+def now_utc():
+    """Evaluation time as a naive UTC datetime (the same clock as evaluatedAt)."""
+    return datetime.utcnow()
+
+
+def newest_callback(agents):
+    """The newest parseable last_callback_at across every agent in the list, or None."""
+    times = [parse_time(a.get("last_callback_at")) for a in agents]
+    times = [t for t in times if t is not None]
+    return max(times) if times else None
+
+
+def agent_windows(agents, now=None):
+    """(fresh, stale, undated) agents judged against evaluation time, not against each other.
+
+    An agent is fresh when its last_callback_at is within STALE_DAYS of now. Judging against the
+    newest callback in the response would always call the newest agent fresh, so a fleet that
+    went dark months ago would still read as active.
+    """
+    now = now or now_utc()
     dated = [(a, parse_time(a.get("last_callback_at"))) for a in agents]
-    times = [t for a, t in dated if t is not None]
-    if not times:
-        return [], [], [a for a, t in dated]
-    newest = max(times)
-    fresh = [a for a, t in dated if t is not None and (newest - t).days <= STALE_DAYS]
-    stale = [a for a, t in dated if t is not None and (newest - t).days > STALE_DAYS]
+    fresh = [a for a, t in dated if t is not None and (now - t).days <= STALE_DAYS]
+    stale = [a for a, t in dated if t is not None and (now - t).days > STALE_DAYS]
     undated = [a for a, t in dated if t is None]
     return fresh, stale, undated
 
@@ -163,12 +177,22 @@ def transform(input):
     agents, problem = complete_list(input, "agents", "agent")
     if problem is not None:
         return not_measured(key, problem, validation)
-    fresh, stale, undated = agent_windows(agents)
-    ok = len(fresh) > 0
-    text = (str(len(fresh)) + " of " + str(len(agents)) + " Huntress agents called back within " + str(STALE_DAYS)
-            + " days of the newest callback (" + str(len(stale)) + " stale, " + str(len(undated)) + " never called back).")
+    if not agents:
+        return not_measured(key, "Huntress returned an empty agent list; there is no fleet to judge.", validation)
+    now = now_utc()
+    fresh, stale, undated = agent_windows(agents, now)
+    newest = newest_callback(agents)
+    # The decision rests on the newest callback across all agents, measured against now.
+    ok = newest is not None and (now - newest).days <= STALE_DAYS
+    if newest is None:
+        text = ("None of the " + str(len(agents)) + " Huntress agents has a recorded callback, so none is active.")
+    else:
+        text = ("The newest Huntress agent callback was " + str((now - newest).days) + " days ago (limit " + str(STALE_DAYS)
+                + " days); " + str(len(fresh)) + " of " + str(len(agents)) + " agents called back within the limit ("
+                + str(len(stale)) + " stale, " + str(len(undated)) + " never called back).")
     return create_response(
-        result={key: ok, "totalAgents": len(agents), "activeAgents": len(fresh), "staleAgents": len(stale)},
+        result={key: ok, "totalAgents": len(agents), "activeAgents": len(fresh), "staleAgents": len(stale),
+                "newestCallbackAt": newest.isoformat() + "Z" if newest is not None else None},
         validation=validation,
         pass_reasons=[text] if ok else [],
         fail_reasons=[] if ok else [text],
