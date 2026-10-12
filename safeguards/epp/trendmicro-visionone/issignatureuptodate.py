@@ -34,6 +34,9 @@ from datetime import datetime
 
 
 VENDOR = "Trend Micro"
+#: dataCollection.errorCode for a value the vendor does not expose (Worry-Free managed agents report no
+#: policy, status, isolation or component version to Vision One). Set only then, never on an API error.
+VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
 CATEGORY = "Endpoint Security"
 
 
@@ -57,13 +60,16 @@ def extract_input(input_data):
 
 def create_response(criteria_key, result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None, additional_findings=None):
+                    api_errors=None, additional_findings=None, error_code=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    collection = {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []}
+    if error_code and api_errors:
+        collection["errorCode"] = error_code
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": collection,
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
@@ -192,6 +198,7 @@ def transform(input):
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
                                recommendations=recommendations, input_summary=summary,
-                               api_errors=(fail_reasons if value is None else None))
+                               api_errors=(fail_reasons if value is None else None),
+                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0) else None))
     except Exception as e:
         return failure(criteriaKey, False, e)
