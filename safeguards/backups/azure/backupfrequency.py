@@ -131,7 +131,7 @@ def evaluate(data):
 
 
 def transform(input):
-    """Evaluates whether all Azure backup policies meet daily minimum frequency."""
+    """True when at least one Azure backup policy meets daily or better frequency; the reason says how many do."""
     criteriaKey = "backupFrequency"
     try:
         if isinstance(input, str):
@@ -155,7 +155,16 @@ def transform(input):
         if result_value is None:
             fail_reasons.append(f"{criteriaKey} not evaluated: {eval_result.get('error', 'no backup policy data')}")
         elif result_value:
-            pass_reasons.append(f"All {extra_fields.get('policiesEvaluated', 0)} backup policies meet daily or better frequency")
+            # The verdict is True when at least one policy meets daily, so say how many do: "All" is
+            # true only when every policy evaluated meets it.
+            evaluated = extra_fields.get('policiesEvaluated', 0)
+            meeting = extra_fields.get('policiesMeetingFrequency', 0)
+            if not evaluated:
+                pass_reasons.append("The backup policy meets daily or better frequency")
+            elif meeting == evaluated:
+                pass_reasons.append(f"All {evaluated} backup policies meet daily or better frequency")
+            else:
+                pass_reasons.append(f"{meeting} of {evaluated} backup policies meet daily or better frequency")
         else:
             fail_reasons.append(f"{criteriaKey} check failed")
             if "error" in eval_result:

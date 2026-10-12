@@ -260,5 +260,182 @@ class ZeroResourceGraphRowsIsNotMeasured(unittest.TestCase):
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
 
+# The restore-job read is iterated once per vault, so the stored body is one ARM answer per
+# vault under restoreJobResults: {"restoreJobResults": [{"value": [...]}, {"value": [...]}]}.
+ARM_ERROR = {"error": {"code": "AuthorizationFailed",
+                       "message": "The client does not have authorization to perform this action"}}
+HTTP_FORBIDDEN = {"statusCode": 403, "message": "Forbidden"}
+IS_BACKUP_TESTED_COPIES = [
+    ("729/is_backup_tested", os.path.join(HERE, "is_backup_tested.py")),
+    ("azure/is_backup_tested", os.path.join(AZURE, "is_backup_tested.py")),
+]
+
+
+def vault_read(*entries):
+    return {"restoreJobResults": list(entries)}
+
+
+def vault_with(*statuses, age=20):
+    jobs = []
+    for index, status in enumerate(statuses):
+        jobs.append({"id": "job-" + str(index), "properties": {
+            "operation": "Restore", "status": status, "endTime": days_ago(age)}})
+    return {"value": jobs}
+
+
+VAULT_READ_SHAPES = [
+    ("bare", lambda body: body),
+    ("enveloped", lambda body: {"data": body, "validation": {"status": "passed", "errors": [], "warnings": []}}),
+    ("json_text", json.dumps),
+]
+
+# bodies where at least one vault's restore jobs were not read and no read vault shows a recent
+# successful restore: absence of a restore is not proven, so there is no verdict
+VAULT_READ_NOT_MEASURED = [
+    ("zero_vaults_read", lambda: vault_read()),
+    ("only_an_arm_error", lambda: vault_read(ARM_ERROR)),
+    ("arm_error_beside_an_empty_vault", lambda: vault_read(vault_with(), ARM_ERROR)),
+    ("arm_error_before_an_empty_vault", lambda: vault_read(ARM_ERROR, vault_with())),
+    ("arm_error_beside_a_failed_restore", lambda: vault_read(vault_with("Failed"), ARM_ERROR)),
+    ("arm_error_beside_a_stale_success", lambda: vault_read(vault_with("Completed", age=400), ARM_ERROR)),
+    ("http_refusal_beside_an_empty_vault", lambda: vault_read(vault_with(), HTTP_FORBIDDEN)),
+    ("text_entry_beside_an_empty_vault", lambda: vault_read(vault_with(), "Forbidden")),
+    ("null_entry_beside_an_empty_vault", lambda: vault_read(vault_with(), None)),
+    ("empty_entry_beside_an_empty_vault", lambda: vault_read(vault_with(), {})),
+    ("entry_without_a_job_list", lambda: vault_read(vault_with(), {"value": "not a list"})),
+]
+
+# bodies where every vault was read: a missing restore is a measured negative, a recent
+# successful one a measured positive
+VAULT_READ_MEASURED = [
+    ("one_vault_no_restore_jobs", lambda: vault_read(vault_with()), False),
+    ("two_vaults_no_restore_jobs", lambda: vault_read(vault_with(), vault_with()), False),
+    ("only_a_failed_restore", lambda: vault_read(vault_with("Failed")), False),
+    ("only_a_stale_success", lambda: vault_read(vault_with("Completed", age=400)), False),
+    ("a_recent_success", lambda: vault_read(vault_with("Completed")), True),
+    ("a_recent_success_with_warnings", lambda: vault_read(vault_with("CompletedWithWarnings")), True),
+    ("a_success_in_the_second_vault", lambda: vault_read(vault_with(), vault_with("Completed")), True),
+    # a restore that did run proves recoverability even when another vault could not be read
+    ("a_success_beside_an_arm_error", lambda: vault_read(vault_with("Completed"), ARM_ERROR), True),
+    ("a_success_beside_an_http_refusal", lambda: vault_read(HTTP_FORBIDDEN, vault_with("Completed")), True),
+    # the returnSpec shape of an entry: the job list under restoreJobs and again under apiResponse
+    ("returnspec_entry_no_jobs", lambda: vault_read({"restoreJobs": [], "apiResponse": {"value": []}}), False),
+    ("returnspec_entry_success", lambda: vault_read({"restoreJobs": vault_with("Completed")["value"],
+                                                     "apiResponse": vault_with("Completed")}), True),
+]
+
+
+class RestoreJobsAreReadPerVault(unittest.TestCase):
+    """isBackupTested grades the vaults it read and says nothing about the ones it could not.
+
+    The vault list is a Resource Graph read, so zero vaults is not a proven empty set (see
+    CONTRIBUTING.md, "Azure Resource Graph: zero rows is not a proven empty set"). A vault whose
+    restore jobs came back as an error says nothing about that vault, so "no restore job" is not
+    proven while one is unread. A restore that did succeed is proof whatever else failed to read.
+    """
+
+    def verdict(self, path, body):
+        out = load_path("is_backup_tested_vaults", path).transform(body)
+        return out["transformedResponse"]["isBackupTested"], out["additionalInfo"]
+
+    def test_a_vault_that_was_not_read_is_not_a_verdict(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            for shape, wrap in VAULT_READ_SHAPES:
+                for case, body in VAULT_READ_NOT_MEASURED:
+                    with self.subTest(transform=label, shape=shape, body=case):
+                        value, info = self.verdict(path, wrap(body()))
+                        self.assertIsNone(value)
+                        self.assertEqual(info["dataCollection"]["status"], "error")
+                        self.assertTrue(info["dataCollection"]["errors"])
+                        self.assertTrue(all(isinstance(e, str) and e for e in info["dataCollection"]["errors"]))
+
+    def test_vaults_that_were_read_are_still_graded(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            for shape, wrap in VAULT_READ_SHAPES:
+                for case, body, expected in VAULT_READ_MEASURED:
+                    with self.subTest(transform=label, shape=shape, body=case):
+                        value, info = self.verdict(path, wrap(body()))
+                        self.assertIs(value, expected)
+                        self.assertEqual(info["dataCollection"]["status"], "success")
+                        self.assertEqual(info["dataCollection"]["errors"], [])
+
+    def test_the_reason_counts_the_vaults_that_were_not_read(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            with self.subTest(transform=label):
+                _, info = self.verdict(path, vault_read(vault_with(), ARM_ERROR, HTTP_FORBIDDEN))
+                self.assertIn("2 of 3", " ".join(info["dataCollection"]["errors"]))
+                _, info = self.verdict(path, vault_read())
+                self.assertIn("no vault", " ".join(info["dataCollection"]["errors"]).lower())
+
+    def test_a_success_beside_an_unread_vault_says_so(self):
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            with self.subTest(transform=label):
+                value, info = self.verdict(path, vault_read(vault_with("Completed"), ARM_ERROR))
+                self.assertIs(value, True)
+                self.assertEqual(info["transformation"]["inputSummary"]["vaultsNotRead"], 1)
+                self.assertTrue(any("not read" in f for f in info["evaluation"]["additionalFindings"]))
+
+    def test_a_single_arm_list_is_still_one_read_vault(self):
+        """The per-vault rule leaves a bare ARM list alone: its empty list stays a measured False."""
+        for label, path in IS_BACKUP_TESTED_COPIES:
+            for shape, wrap in VAULT_READ_SHAPES:
+                with self.subTest(transform=label, shape=shape):
+                    value, info = self.verdict(path, wrap({"value": []}))
+                    self.assertIs(value, False)
+                    self.assertEqual(info["dataCollection"]["status"], "success")
+
+
+def policy_row(name, schedule, vault="vault-a"):
+    return {"name": name, "vaultName": vault, "scheduleType": schedule, "hasSchedule": schedule != ""}
+
+
+class BackupFrequencyStatesTheRealCount(unittest.TestCase):
+    """The pass reason says how many policies meet daily, never "All" when some do not."""
+
+    VALIDATION = {"status": "passed", "errors": [], "warnings": []}
+
+    def run_rows(self, rows):
+        module = load_path("backupfrequency_count", os.path.join(AZURE, "backupfrequency.py"))
+        out = module.transform({"data": {"rows": [[row] for row in rows]}, "validation": self.VALIDATION})
+        return out["transformedResponse"], out["additionalInfo"]
+
+    def test_all_policies_meeting_daily_reads_all(self):
+        result, info = self.run_rows([policy_row("p1", "Daily"), policy_row("p2", "Hourly"), policy_row("p3", "Daily")])
+        self.assertIs(result["backupFrequency"], True)
+        self.assertEqual(info["evaluation"]["passReasons"], ["All 3 backup policies meet daily or better frequency"])
+
+    def test_some_policies_meeting_daily_reads_the_count_not_all(self):
+        rows = [policy_row("p" + str(n), "Daily") for n in range(5)] + [policy_row("weekly-one", "Weekly")]
+        result, info = self.run_rows(rows)
+        # the verdict is unchanged: at least one policy meeting daily still reads True
+        self.assertIs(result["backupFrequency"], True)
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        reasons = " ".join(info["evaluation"]["passReasons"])
+        self.assertIn("5 of 6 backup policies meet daily or better frequency", reasons)
+        self.assertNotIn("All", reasons)
+        self.assertEqual(result["policiesFailingFrequency"], ["weekly-one (vault-a: weekly)"])
+
+    def test_one_policy_meeting_daily_among_many_reads_the_count(self):
+        result, info = self.run_rows([policy_row("p1", "Daily"), policy_row("p2", "Weekly"), policy_row("p3", "")])
+        self.assertIs(result["backupFrequency"], True)
+        self.assertIn("1 of 3 backup policies meet daily or better frequency", " ".join(info["evaluation"]["passReasons"]))
+
+    def test_a_single_policy_response_does_not_claim_a_count(self):
+        module = load_path("backupfrequency_single", os.path.join(AZURE, "backupfrequency.py"))
+        body = {"properties": {"schedulePolicy": {"scheduleFrequencyInMins": 1440}}}
+        out = module.transform({"data": body, "validation": self.VALIDATION})
+        self.assertIs(out["transformedResponse"]["backupFrequency"], True)
+        reasons = " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+        self.assertNotIn("All 0", reasons)
+        self.assertNotIn(" 0 ", reasons)
+
+    def test_no_policy_meeting_daily_still_fails(self):
+        result, info = self.run_rows([policy_row("p1", "Weekly"), policy_row("p2", "")])
+        self.assertIs(result["backupFrequency"], False)
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertEqual(info["evaluation"]["passReasons"], [])
+        self.assertIn("Policies not meeting daily frequency", " ".join(info["evaluation"]["failReasons"]))
+
+
 if __name__ == "__main__":
     unittest.main()
