@@ -12,7 +12,13 @@ phishing-resistant method. Three Graph bodies are understood; each answers only 
    (fido2, windowsHelloForBusiness, x509CertificateMultiFactor) for every role in Microsoft's "Require
    phishing-resistant MFA for administrators" template (or for all users), with none of those roles excluded.
    An admin who cannot satisfy that strength is blocked, not phished, so the methods policy is not needed for the
-   pass. Otherwise None: CA alone cannot show that admins use a phishable method. Never False.
+   pass. False when the list is readable (a complete read: no next page, no policy of an unreadable shape) and no
+   enabled policy requires a phishing-resistant strength for administrator roles: policies whose strength is not
+   phishing-resistant, that can be satisfied another way (an OR grant), that are off or report-only, or that cover
+   only named users, groups or places and not all users or an administrator role, are not an admin requirement.
+   None when an enabled phishing-resistant policy does target administrators (all users or an administrator role)
+   but only partly (some roles, some apps or places, an excluded group, role or more than two users): that neither
+   proves nor rules out coverage. None too for an empty list, an error, a 403 or anything unreadable.
 
 2. GET /v1.0/policies/authenticationMethodsPolicy (getAuthenticationMethodsPolicy). It shows which methods are
    allowed, never that admins must use one, so it NEVER returns True. Windows Hello for Business is not in this
@@ -335,7 +341,7 @@ def narrowing(conditions):
 def from_ca_policies(policies, validation):
     if not policies:
         return unevaluated("The Conditional Access policy list is empty; it is not evidence either way", validation)
-    covered, used, unknown, findings, excluded = set(), [], [], [], set()
+    covered, used, unknown, findings, excluded, touching = set(), [], [], [], set(), []
     all_users = False
     for policy in policies:
         if not isinstance(policy, dict):
@@ -354,15 +360,22 @@ def from_ca_policies(policies, validation):
         if narrow is None or not isinstance(users, dict):
             unknown.append(name_of(policy))
             continue
+        include_users = strings(users.get("includeUsers"))
+        include_roles = strings(users.get("includeRoles"))
+        if include_users is None or include_roles is None:
+            unknown.append(name_of(policy))
+            continue
+        if "all" not in include_users and not any(r in ADMIN_ROLES for r in include_roles):
+            # a phishing-resistant strength for named users, groups or other roles: not an administrator requirement
+            continue
+        touching.append(name_of(policy))
         if narrow:
             findings.append(name_of(policy) + " applies to some sign-ins only (" + ", ".join(narrow) + ")")
             continue
-        include_users = strings(users.get("includeUsers"))
         exclude_users = strings(users.get("excludeUsers"))
         exclude_groups = strings(users.get("excludeGroups"))
-        include_roles = strings(users.get("includeRoles"))
         exclude_roles = strings(users.get("excludeRoles"))
-        if None in (include_users, exclude_users, exclude_groups, include_roles, exclude_roles):
+        if None in (exclude_users, exclude_groups, exclude_roles):
             unknown.append(name_of(policy))
             continue
         if len(exclude_users) > MAX_EXCLUDED_USERS or exclude_groups or exclude_roles:
@@ -401,6 +414,16 @@ def from_ca_policies(policies, validation):
                            if ids else "") + "Enabled Conditional Access requires a phishing-resistant authentication "
                           "strength (FIDO2, Windows Hello for Business or multi-factor certificate only) for every "
                           "administrator role: " + ", ".join(used[:5])])
+    if not touching and not unknown:
+        return create_response(
+            result={CRITERIA_KEY: False}, validation=validation, input_summary=summary,
+            additional_findings=findings,
+            fail_reasons=["The Conditional Access policy list was read and no enabled policy requires a "
+                          "phishing-resistant authentication strength (FIDO2, Windows Hello for Business or "
+                          "multi-factor certificate only) for administrator roles"],
+            recommendations=["Add a Conditional Access policy for the administrator roles (or all users) that requires "
+                             "the built-in 'Phishing-resistant MFA' authentication strength for all cloud apps, with "
+                             "at most two emergency-access accounts excluded"])
     return unevaluated("No enabled Conditional Access policy requires a phishing-resistant authentication strength "
                        "for every administrator role (not covered: " + ", ".join(missing[:5])
                        + ("..." if len(missing) > 5 else "") + "); Conditional Access alone does not show whether "
