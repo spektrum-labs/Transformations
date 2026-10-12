@@ -5,6 +5,9 @@ Method: getAntiPhishingAllowList (GET /app/hec-api/v1.0/exceptions/whitelist)
 
 Count of anti-phishing allow-list (whitelist) exceptions. The API has no review field, so every entry counts. Unreadable input returns None, which fails the check.
 Fails closed: an empty, error or unrecognised body proves nothing.
+A partial page (a non-empty responseEnvelope.scrollId, or a recordsNumber above the page) is never
+counted as the whole list: the count is the vendor's own recordsNumber when that total is larger than
+the page, and None (Not evaluated) when it is not, since the page length is only a lower bound.
 """
 
 import json
@@ -48,49 +51,96 @@ def transform_unmarked(input):
             },
         }
 
+    def http_status(value):
+        """An HTTP status as a number: a number, or text such as "401" or " 403 ". Booleans, blank
+        or non-numeric text and any other type are None, which is not an error."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isascii() and digits.isdigit():
+                return int(digits)
+        return None
+
+    def marker_error(obj):
+        """Fixed reason when this one object says the call failed (error, errors, or an HTTP
+        status of 400 or more in status, statusCode or status_code), else None. The vendor's own
+        response text is never copied into the reason."""
+        if obj.get("error") or obj.get("errors"):
+            return "Harmony Email & Collaboration answered with an error; nothing is measured."
+        for field in ("status", "statusCode", "status_code"):
+            code = http_status(obj.get(field))
+            if code is not None and code >= 400:
+                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
+        return None
+
     def hec_body(data):
         """The HEC API answers {"responseEnvelope": {...}, "responseData": [...]}. Unwrap
-        Integration-Service wrappers until that shape is found; anything else is None."""
+        Integration-Service wrappers until that shape is found. Returns (body, error): body is
+        None when the shape is not found; error is a fixed reason when a wrapper around the body
+        carries an error marker, in which case nothing inside it is trusted."""
         for attempt in range(4):
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
                 except Exception:
-                    return None
+                    return None, None
             if not isinstance(data, dict):
-                return None
+                return None, None
             if isinstance(data.get("responseData"), list):
-                return data
+                return data, None
+            err = marker_error(data)
+            if err:
+                return None, err
             nxt = None
             for key in ("apiResponse", "response", "result", "data", "rawResponse"):
                 if isinstance(data.get(key), (dict, str)):
                     nxt = data[key]
                     break
             if nxt is None:
-                return None
+                return None, None
             data = nxt
-        return None
+        return None, None
 
     def envelope_error(body):
-        """Fixed reason when the response says the call failed, else None. The vendor's own
-        response text is never copied into the reason."""
+        """Fixed reason when the response body says the call failed, else None."""
         env = body.get("responseEnvelope")
         if isinstance(env, dict):
             code = env.get("responseCode")
             if code is not None and str(code) not in ("200", "0"):
                 return "Harmony Email & Collaboration answered with an error status; nothing is measured."
-        if body.get("error") or body.get("errors"):
-            return "Harmony Email & Collaboration answered with an error; nothing is measured."
-        for field in ("statusCode", "status_code"):
-            status = body.get(field)
-            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
+        return marker_error(body)
+
+    def records_total(body):
+        """The vendor's recordsNumber as an int, else None."""
+        env = body.get("responseEnvelope")
+        if isinstance(env, dict):
+            try:
+                return int(str(env.get("recordsNumber")).strip())
+            except Exception:
+                return None
         return None
+
+    def more_pages(body):
+        """True when the response says records remain beyond this page: a scrollId that is not
+        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the
+        page. A partial page cannot prove a total."""
+        env = body.get("responseEnvelope")
+        for holder in (env if isinstance(env, dict) else {}, body):
+            token = holder.get("scrollId")
+            if token and str(token).strip().lower() not in ("", "none", "null"):
+                return True
+        total = records_total(body)
+        return total is not None and total > len(body["responseData"])
 
     try:
         if isinstance(input, bytes):
             input = input.decode("utf-8")
-        body = hec_body(input)
+        body, err = hec_body(input)
+        if err:
+            return create_response(None, fail_reasons=[err], api_errors=[err])
         if body is None:
             return create_response(None, fail_reasons=["No Harmony Email & Collaboration response "
                                    "(responseData) in the input; nothing is proven"],
@@ -101,8 +151,20 @@ def transform_unmarked(input):
         records = body["responseData"]
         entries = [r for r in records if isinstance(r, dict)]
         summary = {"allowListEntries": len(entries)}
-        if entries:
-            return create_response(len(entries), fail_reasons=[str(len(entries)) + " anti-phishing allow-list "
+        count = len(entries)
+        if more_pages(body):
+            # One page of several. Only a total the vendor states, larger than the page, is a count;
+            # the page length is a lower bound and is never reported as the total.
+            total = records_total(body)
+            if total is None or total <= len(records):
+                return create_response(None, fail_reasons=["The response is a partial page and states no total "
+                                       "larger than the page, so the allow-list count is not proven"],
+                                       api_errors=["Partial page: the allow-list count is not proven"],
+                                       input_summary=dict(summary, partialPage=True))
+            count = total
+            summary["recordsNumber"] = total
+        if count:
+            return create_response(count, fail_reasons=[str(count) + " anti-phishing allow-list "
                                    "(whitelist) exception(s) bypass inspection; the API carries no review or "
                                    "verification field, so each one counts as unverified"], input_summary=summary)
         return create_response(0, pass_reasons=["No anti-phishing allow-list (whitelist) exception is configured"],

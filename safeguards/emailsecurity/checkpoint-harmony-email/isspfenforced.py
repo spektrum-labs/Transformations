@@ -11,7 +11,9 @@ include in Check Point's Cloud SMTP Relay guide) and (2) ends in a restrictive a
 all-mechanism, SPF does not restrict anything. A probe that answers "no SPF record" (false, null, an
 empty string or a marker such as None or not found) reads false: that is a readable answer.
 Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised, or
-when the SPF value is neither a record nor a "no record" marker: it proves nothing, so it is never False.
+when the SPF value is neither a record nor a "no record" marker, or when the answer or a wrapper around it
+carries an error marker (error, errors, or an HTTP status of 400 or more in status, statusCode or
+status_code, as a number or as text): it proves nothing, so it is never False.
 """
 
 import json
@@ -50,9 +52,36 @@ def transform(input):
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
                                transformation_errors=transformation_errors)
 
+    def http_status(value):
+        """An HTTP status as a number: a number, or text such as "401" or " 403 ". Booleans, blank
+        or non-numeric text and any other type are None, which is not an error."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isascii() and digits.isdigit():
+                return int(digits)
+        return None
+
+    def marker_error(obj):
+        """Fixed reason when this one object says the call failed (error, errors, or an HTTP
+        status of 400 or more in status, statusCode or status_code), else None. The probe's own
+        text is never copied into the reason."""
+        if obj.get("error") or obj.get("errors"):
+            return "The DNS probe answered with an error; nothing is measured."
+        for field in ("status", "statusCode", "status_code"):
+            code = http_status(obj.get(field))
+            if code is not None and code >= 400:
+                return "The DNS probe answered with an HTTP error; nothing is measured."
+        return None
+
     def dns_body(data):
         """The DNS tool answers {"SPF": ..., "DKIM": ..., "DMARC": ...}, possibly wrapped in
-        result / apiResponse / response. Anything without an SPF key is None."""
+        result / apiResponse / response. Returns (body, error): body is None when no SPF key is
+        found; error is a fixed reason when the answer or a wrapper around it carries an error
+        marker, in which case nothing inside it is trusted."""
         for attempt in range(5):
             if isinstance(data, bytes):
                 data = data.decode("utf-8")
@@ -66,19 +95,22 @@ def transform(input):
                         parsed = None
                 data = parsed
             if not isinstance(data, dict):
-                return None
+                return None, None
+            err = marker_error(data)
+            if err:
+                return None, err
             for k in data.keys():
                 if isinstance(k, str) and k.lower() == "spf":
-                    return data
+                    return data, None
             nxt = None
             for key in ("result", "apiResponse", "response", "api_response", "data", "rawResponse"):
                 if isinstance(data.get(key), (dict, str)):
                     nxt = data[key]
                     break
             if nxt is None:
-                return None
+                return None, None
             data = nxt
-        return None
+        return None, None
 
     def is_domain_or_subdomain(domain, base_domain):
         """Return True when domain is exactly base_domain or a subdomain of it."""
@@ -89,7 +121,9 @@ def transform(input):
         return d == b or d.endswith("." + b)
 
     try:
-        body = dns_body(input)
+        body, err = dns_body(input)
+        if err:
+            return not_measured(err)
         if body is None:
             return not_measured("No readable DNS probe result (SPF) in the input; nothing is measured.")
         spf = None
