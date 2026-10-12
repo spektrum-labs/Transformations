@@ -64,9 +64,9 @@ ONE_UNRESPONSIVE = dict(
 )
 
 KEYS = {
-    "isasmenabled": ("isASMEnabled", False),
+    "isasmenabled": ("isASMEnabled", None),
     "externalassetinventorycount": ("externalAssetInventoryCount", None),
-    "vulnerabilityscanfrequency": ("vulnerabilityScanFrequency", False),
+    "vulnerabilityscanfrequency": ("vulnerabilityScanFrequency", None),
     "criticalvulnerabilitycount": ("criticalVulnerabilityCount", None),
     "knownexploitedvulncount": ("knownExploitedVulnCount", None),
     "knownexploitedhighvulncount": ("knownExploitedHighVulnCount", None),
@@ -82,10 +82,11 @@ def value(name, payload):
 
 class FailClosed(unittest.TestCase):
     def test_every_key_fails_closed_on_no_evidence(self):
+        # No scan result measured nothing: every key is None (Not evaluated), never False.
         for name, (key, fail) in KEYS.items():
             for body in FAILED_SCANS:
                 with self.subTest(key=key, body=str(body)[:60]):
-                    self.assertEqual(value(name, body), fail)
+                    self.assertIsNone(value(name, body))
 
 
 class Measured(unittest.TestCase):
@@ -100,7 +101,8 @@ class Measured(unittest.TestCase):
         self.assertIs(value("vulnerabilityscanfrequency", scan()), True)
         old = (datetime.utcnow() - timedelta(days=9)).isoformat()
         self.assertIs(value("vulnerabilityscanfrequency", scan(timestamp=old)), False)
-        self.assertIs(value("vulnerabilityscanfrequency", scan(timestamp="")), False)
+        # No readable timestamp: the scan cannot be placed in time, so Not evaluated, not False.
+        self.assertIsNone(value("vulnerabilityscanfrequency", scan(timestamp="")))
 
     def test_critical_count_flips(self):
         self.assertEqual(value("criticalvulnerabilitycount", scan(totalDiscovered="2")), 0)
