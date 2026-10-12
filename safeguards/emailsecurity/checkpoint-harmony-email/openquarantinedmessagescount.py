@@ -177,6 +177,8 @@ def transform_unmarked(input):
         raw_total = text(env.get("recordsNumber"))
         if re.match(r"^[0-9]+$", raw_total):
             total = int(raw_total)
+        # a total that is stated but is not a whole number: nobody knows whether the page is complete
+        total_unreadable = raw_total != "" and total is None
         paged = bool(text(env.get("scrollId")) or text(body.get("scrollId")))
         if total is None and not paged:
             total = len(records)
@@ -184,7 +186,7 @@ def transform_unmarked(input):
         lower_bound = paged and total is not None and total <= len(body["responseData"])
         if total is not None and total < len(records):
             total = len(records)
-        summary = {"entitiesOnFirstPage": len(records), "recordsNumber": raw_total,
+        summary = {"entitiesOnFirstPage": len(records), "recordsNumber": "" if total_unreadable else raw_total,
                    "entitiesNotMatchingFilter": stray, "windowDays": 365}
         if unreadable:
             return create_response(None, fail_reasons=[str(unreadable) + (" entry" if unreadable == 1 else " entries") +
@@ -194,6 +196,10 @@ def transform_unmarked(input):
             return create_response(None, fail_reasons=[str(stray) + " returned entit(y/ies) are not pending restore "
                                    "requests, so the vendor did not apply the filter; the count is unreadable"],
                                    input_summary=summary)
+        if total_unreadable:
+            return create_response(None, fail_reasons=["The vendor's record total could not be read, so whether the "
+                                   "page is complete is unknown; the count is unreadable"],
+                                   input_summary=dict(summary, recordsNumberUnreadable=True))
         if total is None or lower_bound:
             return create_response(None, fail_reasons=["The response is paged and carries no recordsNumber above the "
                                    "page; the count is unreadable"], input_summary=summary)
