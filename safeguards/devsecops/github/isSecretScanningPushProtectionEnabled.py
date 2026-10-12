@@ -68,17 +68,38 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
+    """Secret scanning push protection on every active repository, read per repository.
+
+    Reads security_and_analysis.secret_scanning_push_protection on GET /orgs/{org}/repos.
+
+    Three outcomes:
+      * True: every active repository reports push protection enabled.
+      * False: at least one repository was READ and has push protection off.
+      * None (Not evaluated, with a data collection error): the answer could not be read.
+        That is an error or unrecognised body, an empty list, no active repository, or no
+        repository that reports the field. GitHub returns security_and_analysis only to an
+        owner, a security manager or a repository admin, so a missing block is a token that
+        cannot see it, not a repository with the feature off. A refused or empty read is not
+        a failed control; a repository that was read and is off still fails the check.
+    """
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
+    repos = None
     if isinstance(data, list):
         repos = data
     elif isinstance(data, dict):
-        repos = data.get("data") or data.get("repositories") or []
-        if not isinstance(repos, list):
-            repos = []
-    else:
+        for key in ("data", "repositories"):
+            if isinstance(data.get(key), list):
+                repos = data.get(key)
+                break
+
+    api_errors = []
+    if repos is None:
         repos = []
+        api_errors.append("The repository list response was not a list of repositories, so push protection cannot be read.")
+    elif not repos:
+        api_errors.append("The repository list response was empty, so push protection cannot be read.")
 
     active_repos = [
         r for r in repos
@@ -108,40 +129,47 @@ def transform(input):
 
     evaluated_count = len(enabled_repos) + len(disabled_repos)
 
-    if total_active == 0:
+    if repos and total_active == 0:
+        api_errors.append("No active (non-archived, non-disabled) repositories were found in the organization to read.")
+    if missing_field_repos and not disabled_repos:
+        api_errors.append(
+            f"{len(missing_field_repos)} of {total_active} active repositories did not return the "
+            "security_and_analysis.secret_scanning_push_protection field; the token may lack admin or security-manager visibility into this setting."
+        )
+
+    if disabled_repos:
         is_enabled = False
-        pass_reasons = []
-        fail_reasons = ["No active (non-archived, non-disabled) repositories were found in the organization to evaluate."]
-        recommendations = ["Verify the organization has repositories and that the token has access to security_and_analysis data."]
-    elif evaluated_count == 0:
-        is_enabled = False
-        pass_reasons = []
-        fail_reasons = [
-            f"None of the {total_active} active repositories returned a security_and_analysis.secret_scanning_push_protection field; the token may lack admin visibility into this setting."
-        ]
-        recommendations = ["Use a token with organization admin or security-manager permissions so security_and_analysis fields are populated."]
-    elif len(disabled_repos) == 0 and evaluated_count == total_active:
-        is_enabled = True
-        sample = ", ".join(enabled_repos[:5])
-        pass_reasons = [
-            f"All {evaluated_count} active repositories report security_and_analysis.secret_scanning_push_protection.status='enabled' (e.g. {sample})."
-        ]
-        fail_reasons = []
-        recommendations = []
+    elif api_errors or missing_field_repos:
+        is_enabled = None
     else:
-        is_enabled = False
+        is_enabled = True
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+    if is_enabled is None:
+        fail_reasons.append("Push protection could not be read for every active repository: " + " ".join(api_errors))
+        recommendations.append(
+            "Use a token whose owner is an organization owner or security manager, with access to all repositories, "
+            "and have an owner approve it if the organization requires approval for fine-grained tokens."
+        )
+    elif is_enabled:
+        sample = ", ".join(enabled_repos[:5])
+        pass_reasons.append(
+            f"All {evaluated_count} active repositories report security_and_analysis.secret_scanning_push_protection.status='enabled' (e.g. {sample})."
+        )
+    else:
         sample_disabled = ", ".join(disabled_repos[:5])
-        fail_reasons = [
+        fail_reasons.append(
             f"{len(disabled_repos)} of {total_active} active repositories have secret_scanning_push_protection disabled or not enabled (e.g. {sample_disabled})."
-        ]
+        )
         if missing_field_repos:
             fail_reasons.append(
                 f"{len(missing_field_repos)} active repositories did not return the security_and_analysis field at all."
             )
-        pass_reasons = []
-        recommendations = [
+        recommendations.append(
             "Enable secret scanning push protection enterprise-wide via organization security settings, or enforce it via a repository security configuration applied to all repositories."
-        ]
+        )
 
     result = {
         "isSecretScanningPushProtectionEnabled": is_enabled,
@@ -165,6 +193,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors if is_enabled is None else None,
         metadata={
             "transformationId": "isSecretScanningPushProtectionEnabled",
             "vendor": "GitHub",

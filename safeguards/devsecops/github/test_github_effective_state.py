@@ -44,7 +44,7 @@ CASES = [
      [repo("a", **SPLIT), repo("b", advanced_security="enabled"), repo("pub", private=False)], True,
      [repo("a", code_security="enabled", secret_scanning="disabled"), repo("b", advanced_security="enabled")], False),
     ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, False), False),
-    ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, True, total=150), False),
+    ("isDependabotAlertsEnabled", "isDependabotAlertsEnabled", gql(True, True), True, gql(True, True, total=150), None),
     ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [alert("resolved")], 0, [alert(), alert()], 2),
     # The definition pages to completion, so 200 (an exact multiple of 100) is the full count.
     ("openSecretScanningAlertsCount", "openSecretScanningAlertsCount", [], 0, [alert()] * 200, 200),
@@ -68,10 +68,21 @@ def test_pass_and_flip(module, key, good, good_exp, bad, bad_exp):
 BAD_BODIES = [{}, None, "{}", {"message": "Not Found"}, {"data": None, "errors": [{"message": "forbidden"}]}]
 
 
-@pytest.mark.parametrize("module", ["isAdvancedSecurityEnabled", "isDependabotAlertsEnabled"])
+BOOLEAN_MODULES = ["isAdvancedSecurityEnabled", "isDependabotAlertsEnabled", "isSecretScanningPushProtectionEnabled"]
+
+
+def collection_status(out):
+    return out["additionalInfo"]["dataCollection"]["status"]
+
+
+@pytest.mark.parametrize("module", BOOLEAN_MODULES)
 @pytest.mark.parametrize("body", BAD_BODIES)
-def test_booleans_fail_closed(module, body):
-    assert load(module).transform(body)["transformedResponse"][module] is False
+def test_booleans_unreadable_is_not_evaluated(module, body):
+    # A refused, empty or unrecognised body is a read nobody completed, not a failed control:
+    # the criterion is None and the data collection status is "error", which reads Not evaluated.
+    out = load(module).transform(body)
+    assert out["transformedResponse"][module] is None
+    assert collection_status(out) == "error"
 
 
 @pytest.mark.parametrize("module", ["openSecretScanningAlertsCount", "openCriticalDependabotAlertsCount"])
@@ -89,8 +100,8 @@ def test_dependabot_reads_the_drilled_shape_token_service_sends():
     t = load("isDependabotAlertsEnabled").transform
     assert t(drilled(gql(True, True)))["transformedResponse"]["isDependabotAlertsEnabled"] is True
     assert t(drilled(gql(True, False)))["transformedResponse"]["isDependabotAlertsEnabled"] is False
-    assert t(drilled(gql(True, True, total=150)))["transformedResponse"]["isDependabotAlertsEnabled"] is False
-    assert t({"organization": None})["transformedResponse"]["isDependabotAlertsEnabled"] is False
+    assert t(drilled(gql(True, True, total=150)))["transformedResponse"]["isDependabotAlertsEnabled"] is None
+    assert t({"organization": None})["transformedResponse"]["isDependabotAlertsEnabled"] is None
 
 
 def test_truncated_secret_count_is_flagged_as_lower_bound():
@@ -99,3 +110,53 @@ def test_truncated_secret_count_is_flagged_as_lower_bound():
     for n in (3, 200, 4900):
         tr = load("openSecretScanningAlertsCount").transform([alert()] * n)["transformedResponse"]
         assert tr["countIsLowerBound"] is False
+
+
+def pp_repo(name, status=None, private=True, archived=False):
+    sa = {} if status is None else {"secret_scanning_push_protection": {"status": status}}
+    return {"full_name": "org/" + name, "private": private, "archived": archived, "disabled": False,
+            "visibility": "private" if private else "public", "security_and_analysis": sa}
+
+
+def value(module, body):
+    out = load(module).transform(body)
+    return out["transformedResponse"][module], collection_status(out)
+
+
+def test_advanced_security_unreadable_reads_not_evaluated_but_read_failures_still_fail():
+    m = "isAdvancedSecurityEnabled"
+    assert value(m, [repo("a", **SPLIT)]) == (True, "success")
+    # An empty organization list, or only public repositories (an unapproved token sees those only).
+    assert value(m, []) == (None, "error")
+    assert value(m, [repo("pub", private=False)]) == (None, "error")
+    # The security_and_analysis block is missing: the token cannot see it.
+    blind = {"full_name": "org/blind", "private": True, "archived": False, "disabled": False,
+             "visibility": "private"}
+    assert value(m, [blind]) == (None, "error")
+    assert value(m, [repo("a", **SPLIT), blind]) == (None, "error")
+    # A repository that was read and is not covered fails, whatever else could not be read.
+    assert value(m, [repo("a", code_security="disabled", secret_scanning="disabled"), blind]) == (False, "success")
+    assert value(m, [repo("a", code_security="enabled", secret_scanning="disabled")]) == (False, "success")
+
+
+def test_push_protection_unreadable_reads_not_evaluated_but_read_failures_still_fail():
+    m = "isSecretScanningPushProtectionEnabled"
+    assert value(m, [pp_repo("a", "enabled"), pp_repo("b", "enabled")]) == (True, "success")
+    assert value(m, [pp_repo("a", "enabled"), pp_repo("old", "disabled", archived=True)]) == (True, "success")
+    assert value(m, []) == (None, "error")
+    assert value(m, [pp_repo("old", "enabled", archived=True)]) == (None, "error")
+    # No repository reports the field, or only some do and none is off.
+    assert value(m, [pp_repo("a"), pp_repo("b")]) == (None, "error")
+    assert value(m, [pp_repo("a", "enabled"), pp_repo("b")]) == (None, "error")
+    # A repository that was read with push protection off fails the check.
+    assert value(m, [pp_repo("a", "disabled")]) == (False, "success")
+    assert value(m, [pp_repo("a", "disabled"), pp_repo("b")]) == (False, "success")
+
+
+def test_dependabot_alerts_unreported_flag_reads_not_evaluated_but_read_off_still_fails():
+    m = "isDependabotAlertsEnabled"
+    assert value(m, gql(True, True)) == (True, "success")
+    assert value(m, gql(True, None)) == (None, "error")
+    assert value(m, gql()) == (None, "error")
+    assert value(m, gql(True, False)) == (False, "success")
+    assert value(m, gql(None, False)) == (False, "success")
