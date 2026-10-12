@@ -1,0 +1,40 @@
+{
+  "name": "isRulestackCommitClean",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The firewall reports no pending (uncommitted) configuration changes.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the candidate configuration of the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The pending-changes check answering no.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isRulestackCommitClean.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "The reply text (yes or no) is from vendor documentation of the check pending-changes operational command and a client library that wraps it; UNVERIFIED on a real device. The candidate configuration is shared by all administrators, so this covers the whole configuration, not only the security rulebase."
+}

@@ -1,0 +1,44 @@
+{
+  "name": "adminLockoutThresholdCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of failed administrator logins before lockout (Device > Setup > Management > Authentication Settings). 0 means lockout is off.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "the global administrator lockout setting of the one firewall the credential reaches",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "The management authentication settings showing a numeric failed-attempts value.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/adminLockoutThresholdCount.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "deviceconfig/setting/management/admin-lockout/failed-attempts (0 to 10) from the CLI hierarchy. Per-authentication-profile lockout settings are not read; an absent setting is Not evaluated, not 0, because the default is not evidenced.",
+  "domain": {
+    "min": 0,
+    "max": 10
+  }
+}

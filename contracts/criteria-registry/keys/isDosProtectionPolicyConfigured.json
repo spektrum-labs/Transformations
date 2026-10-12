@@ -1,0 +1,40 @@
+{
+  "name": "isDosProtectionPolicyConfigured",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "At least one enabled DoS Protection rule has action protect and a bound aggregate or classified DoS profile.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "DoS protection rules of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A DoS rulebase read showing at least one enabled rule with action protect and a bound aggregate or classified DoS profile.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isDosProtectionPolicyConfigured.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "rulebase/dos/rules/entry: action (deny, allow, protect) and protection/(aggregate|classified)/profile names are from the CLI hierarchy; an empty DoS rulebase reads as Not evaluated, not False."
+}

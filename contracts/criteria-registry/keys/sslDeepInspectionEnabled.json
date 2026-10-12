@@ -1,0 +1,40 @@
+{
+  "name": "sslDeepInspectionEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "At least one enabled decryption rule decrypts with SSL Forward Proxy and names a decryption profile.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "decryption rules of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A decryption rulebase read showing at least one enabled SSL Forward Proxy decrypt rule that names a decryption profile.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/sslDeepInspectionEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "rulebase/decryption/rules/entry: action (decrypt or no-decrypt), type/ssl-forward-proxy and profile element names are from the CLI hierarchy; an empty decryption rulebase reads as Not evaluated, not False."
+}

@@ -1,0 +1,40 @@
+{
+  "name": "isURLFilteringProfileEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every enabled allow rule that can carry web traffic (application any, web-browsing or ssl) has a URL Filtering profile.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled allow rules whose application is any, web-browsing or ssl",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase and profile groups showing every enabled allow rule that can carry web traffic carrying a URL Filtering profile.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isURLFilteringProfileEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Which rules face the internet is not in the configuration, so the web-capable test is by application (any, web-browsing, ssl); a profile's category actions are not read. vsys1 only."
+}

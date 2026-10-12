@@ -1,0 +1,40 @@
+{
+  "name": "wildfireInlineMlEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every enabled allow rule carries a WildFire Analysis profile, directly or through a profile group. Inline ML settings are not read.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled allow rules in the rulebase of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase and profile groups showing every enabled allow rule carrying a WildFire Analysis profile (attachment only; profile content is not read).",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/wildfireInlineMlEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Only the attachment of a WildFire Analysis profile is read, not what the profile forwards or whether Inline ML is on; the key name overstates what this proves. vsys1 only."
+}

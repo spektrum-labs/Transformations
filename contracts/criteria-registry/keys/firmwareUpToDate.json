@@ -1,0 +1,40 @@
+{
+  "name": "firmwareUpToDate",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The installed PAN-OS version is at or above the newest release the update server lists for the same feature train (major.minor), hotfixes included.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The installed version and the update server's release list showing no newer release in the same feature train.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/firmwareUpToDate.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "request system software check reply shape (result/sw-updates/entry/version) is from vendor examples, UNVERIFIED on a real device; the firewall needs a path to the update server or the call errors (Not evaluated). A train that is end of life still reads as current if nothing newer is listed."
+}

@@ -1,0 +1,40 @@
+{
+  "name": "ipsecReplayProtectionEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every configured IPSec tunnel has anti-replay set to yes.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "IPSec tunnels configured on the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The IPSec tunnel configuration listing at least one tunnel with every tunnel showing anti-replay yes.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/ipsecReplayProtectionEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "network/tunnel/ipsec/entry/anti-replay (yes or no) from the CLI hierarchy. A tunnel that does not show the element is unknown, not off, because the default is not evidenced."
+}

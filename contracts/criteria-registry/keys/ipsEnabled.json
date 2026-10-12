@@ -1,0 +1,40 @@
+{
+  "name": "ipsEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every enabled allow rule carries a Vulnerability Protection profile, directly or through a profile group.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled allow rules in the rulebase of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase and the profile groups showing every enabled allow rule carrying a Vulnerability Protection profile, directly or through a group.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/ipsEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "profile-setting/profiles/vulnerability and profile-setting/group element names from the PAN-OS CLI hierarchy; the profile's own signature actions are not read. Panorama-pushed rules may not be in the local read. vsys1 only."
+}

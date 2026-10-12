@@ -1,0 +1,40 @@
+{
+  "name": "isContentVersionCurrent",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The installed Applications-and-Threats content and the Antivirus content were both released within the last 30 days.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The installed Applications-and-Threats and Antivirus content release dates, both within the stated window of the evaluation time.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isContentVersionCurrent.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "system/app-release-date and system/av-release-date (YYYY/MM/DD hh:mm:ss) are from vendor examples. The 30-day window is Spektrum's choice, not a vendor figure; content is compared with the clock, not with the vendor's latest release."
+}

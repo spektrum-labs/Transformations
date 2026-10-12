@@ -1,0 +1,40 @@
+{
+  "name": "isProgrammaticAccessEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "An API key authenticated and read system information (the model's own call is the evidence).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful authenticated system-information read with the credential.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isProgrammaticAccessEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "result/system/sw-version or serial from the show system info reply. This is True only because the call authenticated; it cannot be False, because a refused key is Not evaluated."
+}

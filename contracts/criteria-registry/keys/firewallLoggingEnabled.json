@@ -1,0 +1,40 @@
+{
+  "name": "firewallLoggingEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every enabled security rule is assigned a log forwarding profile and logs at session end.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled security rules in the rulebase of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase showing every enabled rule assigned a log forwarding profile and not turning off log-at-session-end.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/firewallLoggingEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Rule element names (log-setting, log-end, disabled, action) are taken from the PAN-OS security rule schema; whether the named log forwarding profile actually forwards anywhere is NOT read. vsys1 only."
+}
