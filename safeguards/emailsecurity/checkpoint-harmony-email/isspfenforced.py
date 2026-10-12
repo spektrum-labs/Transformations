@@ -1,7 +1,7 @@
 """
 Transformation: isSPFEnforced
 Vendor: Check Point Harmony Email & Collaboration
-Method: isDNSConfigured (POST https://integrations.spektrum.ai/mail_server_security_checks/tool, the
+Method: isDNSConfigured (the mail_server_security_checks/tool method, the
 Spektrum DNS probe of the company email domain; the same method Mimecast uses)
 
 True when the domain's published SPF record (1) includes a Check Point sending host
