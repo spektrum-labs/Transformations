@@ -2,7 +2,7 @@
 Transformation: wildfireInlineMlEnabled
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: Every enabled allow rule carries an Antivirus profile whose file-based ML engine action is enable (not alert-only or disable), directly or through a profile group.
+Value: Every enabled allow rule carries an Antivirus profile (directly or through a profile group) in which every listed file-based ML engine model, and at least the core models, is set to enable (not alert-only or disable).
 
 Wire: workflow getInlineMlProfiles: getSecurityRules + getProfileGroups + getSharedProfileGroups (continueOnError) + getVirusProfiles + getSharedVirusProfiles (continueOnError)
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) are from the CLI hierarchy and UNVERIFIED on a real device. A profile name that is not in the profile reads (for example a predefined one) is unknown, so the key is Not evaluated. Cloud-delivered inline analysis settings are not read. vsys1 only.
+UNVERIFIED: Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) and the core model names (Windows Executables, PowerShell Script 1, PowerShell Script 2) are from the CLI hierarchy and public documents and UNVERIFIED on a real device. Any listed model that is not enable gives False; a profile that lists only enabled models but not every core model, a profile name that is not in the profile reads (for example a predefined one) and an unresolved group are unknown, so the key is Not evaluated. A virtual system profile or group wins over a shared one with the same name. Cloud-delivered inline analysis settings are not read. vsys1 only.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -212,19 +212,39 @@ def rule_list(result):
     return entries(rules)
 
 
-def read_list(body, what):
-    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
-    <result/> (the object is not in the configuration): a real answer that nothing is configured.
-    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
-    result, problem = read(body, what)
-    if problem:
-        return None, problem, False
-    if result is None or result == "" or result == {}:
-        pan = find_pan(body)
-        if pan is not None and "result" in pan:
-            return None, None, True
-        return None, what + ": success reply without a result element", False
-    return result, None, False
+def flat_members(value, depth=0):
+    """Every <member> string under value (a zone, interface, address or user list), at any nesting up to 4 levels."""
+    out = []
+    if depth > 4:
+        return out
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "member":
+                for item in as_list(v):
+                    t = text_of(item)
+                    if t:
+                        out.append(t)
+            else:
+                out = out + flat_members(v, depth + 1)
+    elif isinstance(value, list):
+        for v in value:
+            out = out + flat_members(v, depth + 1)
+    return out
+
+
+def covers_all(r, required, optional):
+    """True only when the rule applies to all traffic: every required dimension (zones, addresses) is listed as
+    any, every optional dimension that is listed (users, services, categories) is any, and nothing is negated.
+    A missing required dimension is not proof, so it is not counted as all traffic."""
+    for f in required:
+        if "any" not in flat_members(r.get(f)):
+            return False
+    for f in optional:
+        if f in r and "any" not in flat_members(r.get(f)):
+            return False
+    if yes(r.get("negate-source")) or yes(r.get("negate-destination")):
+        return False
+    return True
 
 
 def name_list(items, limit=5):
@@ -262,8 +282,9 @@ def run(key, title, evaluate, input):
     if problem:
         value = None
         info = dict(info or {})
-        info["rec"] = ["Check that the management address is reachable from Spektrum and that the API "
-                       "key's role may read this part of the configuration."]
+        if not info.get("rec"):
+            info["rec"] = ["Check that the management address is reachable from Spektrum and that the API "
+                           "key's role may read this part of the configuration."]
     return respond(key, value, problem, info, title)
 
 
@@ -292,6 +313,7 @@ def profile_status(rule, kind, groups):
 
 
 def group_map(*bodies):
+    # pass the virtual system body first: a name found there wins over the same name in shared
     groups = {}
     for body in bodies:
         if body is None:
@@ -301,7 +323,7 @@ def group_map(*bodies):
             continue
         for g in entries(find_key(result, "profile-group")):
             n = text_of(g.get("@name"))
-            if n:
+            if n and n not in groups:
                 groups[n] = g
     return groups
 
@@ -346,6 +368,7 @@ def assess(data, kind, only_web, label):
 
 
 def virus_profiles(*bodies):
+    # pass the virtual system body first: a name found there wins over the same name in shared
     found = {}
     for body in bodies:
         if body is None:
@@ -355,16 +378,30 @@ def virus_profiles(*bodies):
             continue
         for p in entries(find_key(result, "virus")):
             n = text_of(p.get("@name"))
-            if n:
+            if n and n not in found:
                 found[n] = p
     return found
 
 
-def ml_on(profile):
+ML_CORE = ("Windows Executables", "PowerShell Script 1", "PowerShell Script 2")
+
+
+def ml_state(profile):
+    """'off' when no ML engine entry is listed or any listed entry is not enable (alert-only, disable,
+    unrecognised); 'unknown' when every listed entry is enable but a core model is not listed (the
+    reply may not show every model); 'on' when every listed entry is enable and the core models are listed."""
+    actions = {}
     for e in entries(profile.get("mlav-engine-filebased-enabled")):
-        if text_of(e.get("mlav-policy-action")) == "enable":
-            return True
-    return False
+        actions[text_of(e.get("@name")) or "?"] = text_of(e.get("mlav-policy-action"))
+    if not actions:
+        return "off"
+    for action in actions.values():
+        if action != "enable":
+            return "off"
+    for model in ML_CORE:
+        if model not in actions:
+            return "unknown"
+    return "on"
 
 
 def virus_names(rule, groups):
@@ -408,10 +445,12 @@ def evaluate(data):
         else:
             for n in names:
                 p = profiles.get(n)
-                if not isinstance(p, dict):
-                    state = "unknown"
-                elif not ml_on(p) and state != "unknown":
+                one = ml_state(p) if isinstance(p, dict) else "unknown"
+                if one == "off":
                     state = "off"
+                    break
+                if one == "unknown":
+                    state = "unknown"
         if state == "off":
             off.append(r)
         elif state == "unknown":

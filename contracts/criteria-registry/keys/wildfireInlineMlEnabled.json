@@ -2,12 +2,12 @@
   "name": "wildfireInlineMlEnabled",
   "revision": 1,
   "status": "proposed",
-  "definition": "Every enabled allow rule carries an Antivirus profile whose file-based ML engine action is enable (not alert-only or disable), directly or through a profile group.",
+  "definition": "Every enabled allow rule carries an Antivirus profile (directly or through a profile group) in which every listed file-based ML engine model, and at least the core models, is set to enable (not alert-only or disable).",
   "valueType": "boolean",
   "unit": "none",
   "population": "enabled allow rules in the rulebase of the vsys read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of the security rulebase, profile groups and Antivirus profiles showing every enabled allow rule carrying an Antivirus profile whose file-based ML engine action is enable.",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase, profile groups and Antivirus profiles showing every enabled allow rule carrying an Antivirus profile in which every listed file-based ML engine model, and at least the core models, is set to enable.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -36,5 +36,5 @@
       "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
     }
   ],
-  "notes": "Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) are from the CLI hierarchy and UNVERIFIED on a real device. A profile name that is not in the profile reads (for example a predefined one) is unknown, so the key is Not evaluated. Cloud-delivered inline analysis settings are not read. vsys1 only."
+  "notes": "Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) and the core model names (Windows Executables, PowerShell Script 1, PowerShell Script 2) are from the CLI hierarchy and public documents and UNVERIFIED on a real device. Any listed model that is not enable gives False; a profile that lists only enabled models but not every core model, a profile name that is not in the profile reads (for example a predefined one) and an unresolved group are unknown, so the key is Not evaluated. A virtual system profile or group wins over a shared one with the same name. Cloud-delivered inline analysis settings are not read. vsys1 only."
 }

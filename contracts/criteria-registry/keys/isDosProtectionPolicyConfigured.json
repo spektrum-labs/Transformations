@@ -2,12 +2,12 @@
   "name": "isDosProtectionPolicyConfigured",
   "revision": 1,
   "status": "proposed",
-  "definition": "An enabled DoS Protection rule with action protect and a bound aggregate or classified DoS profile covers all sources and destinations.",
+  "definition": "An enabled DoS Protection rule with action protect and a bound aggregate or classified DoS profile applies to all traffic (every zone, source, destination, user and service is any), and no earlier all-traffic rule allows traffic without protection.",
   "valueType": "boolean",
   "unit": "none",
   "population": "DoS protection rules of the vsys read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A DoS rulebase read showing an enabled rule with action protect and a bound aggregate or classified DoS profile that covers all sources and destinations.",
+  "evidenceRequiredForTrue": "A DoS rulebase read showing an enabled rule with action protect and a bound aggregate or classified DoS profile that applies to all traffic (every zone, source, destination, user and service is any), with no earlier all-traffic allow rule.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -36,5 +36,5 @@
       "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
     }
   ],
-  "notes": "rulebase/dos/rules/entry: action (deny, allow, protect), source, destination and protection/(aggregate|classified)/profile names are from the CLI hierarchy. Scope is judged from source and destination addresses only (zones are not). A successful reply with no DoS rules reads as nothing configured (False). vsys1 only."
+  "notes": "rulebase/dos/rules/entry: action (deny, allow, protect), from, to, source, destination, source-user, service, negate-source/negate-destination and protection/(aggregate|classified)/profile names are from the CLI hierarchy. A rule counts as all-traffic only when from, to, source and destination are listed as any (and source-user and service are any or not listed) and is not negated; a rule scoped to a zone, address, user or service gives False, and an all-traffic allow rule placed before the protect rule gives False. A successful reply with no DoS rules, an empty result or an empty rules element is Not evaluated: it is also what a firewall managed from a central manager, another virtual system or a role without access returns. vsys1 only."
 }

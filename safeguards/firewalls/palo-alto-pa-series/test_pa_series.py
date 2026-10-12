@@ -142,13 +142,10 @@ NOT_EVALUATED_BODIES = {
 }
 
 
-# A successful PAN-OS reply with an empty result says the object is not in the configuration. For
-# these three keys that is real evidence that nothing is configured (False); everywhere else it is
-# not enough to answer. An empty body, an error or a refusal is Not evaluated for every key.
-NOTHING_CONFIGURED_KEYS = {"sslDeepInspectionEnabled", "isDosProtectionPolicyConfigured", "restApiLoopbackRestricted"}
-NOTHING_LABELS = {"pan_success_empty_result", "pan_success_empty_object_not_present"}
-BATTERY = [(k, l) for k in KEYS for l in sorted(NOT_EVALUATED_BODIES)
-           if not (k in NOTHING_CONFIGURED_KEYS and l in NOTHING_LABELS)]
+# An empty success (result null, or an empty rules / permitted-ip element) is also what a centrally managed
+# firewall, another virtual system or a role without access returns, so it proves nothing for any key:
+# Not evaluated, never False. An empty body, an error or a refusal is Not evaluated too.
+BATTERY = [(k, l) for k in KEYS for l in sorted(NOT_EVALUATED_BODIES)]
 
 
 @pytest.mark.parametrize("key,label", BATTERY)
@@ -320,17 +317,34 @@ def decryption_body(rules):
     return ok({"rules": {"entry": one_or_many(rules)}})
 
 
-def drule(name, action="decrypt", kind="ssl-forward-proxy", profile="dp", disabled=None, source=None,
-          destination=None, category=None):
+def members_of(listed):
+    return {"member": listed}
+
+
+def scope(r, zone_from=None, zone_to=None, source=None, destination=None, user=None, service=None, category=None,
+          negate_source=None, omit=(), zones_as="plain"):
+    """Every dimension defaults to any; pass a list to scope it. omit names dimensions left out of the reply."""
+    zone = (lambda m: members_of(m)) if zones_as == "plain" else (lambda m: {"zone": members_of(m)})
+    dims = (("from", zone(zone_from or ["any"])), ("to", zone(zone_to or ["any"])),
+            ("source", members_of(source or ["any"])), ("destination", members_of(destination or ["any"])))
+    for field, listed in dims:
+        if field not in omit:
+            r[field] = listed
+    for field, listed in (("source-user", user), ("service", service), ("category", category)):
+        if listed:
+            r[field] = members_of(listed)
+    if negate_source:
+        r["negate-source"] = negate_source
+    return r
+
+
+def drule(name, action="decrypt", kind="ssl-forward-proxy", profile="dp", disabled=None, **dims):
     r = {"@name": name, "action": action, "type": {kind: None}}
     if profile:
         r["profile"] = profile
     if disabled:
         r["disabled"] = disabled
-    for field, listed in (("source", source), ("destination", destination), ("category", category)):
-        if listed:
-            r[field] = {"member": listed}
-    return r
+    return scope(r, **dims)
 
 
 def test_decryption_true_with_an_enabled_forward_proxy_decrypt_rule_and_profile():
@@ -359,17 +373,14 @@ def dos_body(rules):
     return ok({"rules": {"entry": one_or_many(rules)}})
 
 
-def dos_rule(name, action="protect", profile=True, disabled=None, source=None, destination=None):
+def dos_rule(name, action="protect", profile=True, disabled=None, **dims):
     r = {"@name": name, "action": {action: None}}
-    if source:
-        r["source"] = {"member": source}
-    if destination:
-        r["destination"] = {"member": destination}
     if profile:
         r["protection"] = {"aggregate": {"profile": "dos-agg"}}
     if disabled:
         r["disabled"] = disabled
-    return r
+    dims.setdefault("zones_as", "zone")
+    return scope(r, **dims)
 
 
 def test_dos_true_with_an_enabled_protect_rule_and_a_profile():
@@ -431,6 +442,13 @@ def test_firmware_software_check_error_is_not_evaluated():
     body = firmware("10.2.9-h1", VERSIONS)
     body["softwareUpdates"] = err("Could not reach the update server", "17")
     assert_not_evaluated("firmwareUpToDate", body)
+
+
+def test_firmware_without_the_release_list_is_not_evaluated_and_says_why():
+    out = run("firmwareUpToDate", {"systemInfo": sysinfo(**{"sw-version": "10.2.9-h1"})})
+    assert out["transformedResponse"]["firmwareUpToDate"] is None
+    assert collection(out)["status"] == "error" and "not read" in " ".join(collection(out)["errors"])
+    assert "reachable" not in " ".join(out["additionalInfo"]["evaluation"]["recommendations"])
 
 
 def test_firmware_system_info_missing_is_not_evaluated():
@@ -609,9 +627,11 @@ def test_lockout_reports_the_failed_attempt_count():
     assert value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "5", "lockout-time": "30"}})) == 5
 
 
-def test_lockout_zero_attempts_is_zero_not_none():
-    out = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "0", "lockout-time": "0"}}))
-    assert out == 0 and out is not False
+def test_lockout_off_is_not_a_threshold_and_can_never_pass_a_less_than_requirement():
+    out = run("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "0", "lockout-time": "0"}}))
+    assert out["transformedResponse"]["adminLockoutThresholdCount"] is None  # never 0, which passes <= N
+    assert collection(out)["status"] == "error" and "lockout is off" in " ".join(collection(out)["errors"])
+    assert "never locked out" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
 
 
 def test_lockout_absent_setting_is_not_evaluated():
@@ -687,7 +707,7 @@ def test_programmatic_access_key_is_not_published_for_this_tool():
     assert not (HERE / "isProgrammaticAccessEnabled.py").exists()
 
 
-# sslDeepInspectionEnabled: scope and order matter, nothing configured is False
+# sslDeepInspectionEnabled: all-traffic scope and order matter; an empty success is Not evaluated
 def test_decryption_false_when_the_only_decrypt_rule_covers_part_of_the_traffic():
     assert value("sslDeepInspectionEnabled", decryption_body([drule("a", source=["192.0.2.0/24"])])) is False
 
@@ -696,8 +716,15 @@ def test_decryption_false_when_a_scoped_category_is_the_only_coverage():
     assert value("sslDeepInspectionEnabled", decryption_body([drule("a", category=["streaming-media"])])) is False
 
 
-def test_decryption_true_when_any_source_destination_and_category_are_listed():
-    rule_all = drule("a", source=["any"], destination=["any"], category=["any"])
+@pytest.mark.parametrize("dims", [{"zone_from": ["dmz"]}, {"zone_to": ["untrust"]}, {"user": ["known-user"]},
+                                  {"service": ["service-https"]}, {"negate_source": "yes"}, {"omit": ("from",)},
+                                  {"omit": ("destination",)}])
+def test_decryption_false_when_the_decrypt_rule_does_not_cover_every_zone_user_or_service(dims):
+    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", **dims)])) is False
+
+
+def test_decryption_true_when_every_dimension_is_any():
+    rule_all = drule("a", category=["any"], user=["any"], service=["any"])
     assert value("sslDeepInspectionEnabled", decryption_body([rule_all])) is True
 
 
@@ -706,16 +733,20 @@ def test_decryption_false_when_a_no_decrypt_for_all_traffic_comes_first():
     assert value("sslDeepInspectionEnabled", decryption_body(rules)) is False
 
 
-def test_decryption_true_when_a_narrow_no_decrypt_exception_comes_first():
-    rules = [drule("skip", action="no-decrypt", category=["financial-services"]), drule("a")]
+@pytest.mark.parametrize("dims", [{"category": ["financial-services"]}, {"zone_from": ["dmz"]}, {"user": ["vip"]},
+                                  {"service": ["service-http"]}])
+def test_decryption_true_when_a_scoped_no_decrypt_exception_comes_first(dims):
+    rules = [drule("skip", action="no-decrypt", **dims), drule("a")]
     assert value("sslDeepInspectionEnabled", decryption_body(rules)) is True
 
 
-@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None})])
-def test_decryption_nothing_configured_on_a_successful_read_is_false(body):
-    out = run("sslDeepInspectionEnabled", body)
-    assert out["transformedResponse"]["sslDeepInspectionEnabled"] is False
-    assert collection(out)["status"] == "success"
+@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None}), ok({"rules": {"entry": []}})])
+def test_decryption_empty_success_is_not_evaluated(body):
+    assert_not_evaluated("sslDeepInspectionEnabled", body)
+
+
+def test_decryption_false_when_rules_exist_but_are_all_disabled():
+    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", disabled="yes")])) is False
 
 
 # isDosProtectionPolicyConfigured
@@ -723,24 +754,37 @@ def test_dos_false_when_the_only_protect_rule_covers_one_destination():
     assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", destination=["192.0.2.10"])])) is False
 
 
-def test_dos_true_when_any_source_and_destination_are_listed():
-    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", source=["any"], destination=["any"])])) is True
+@pytest.mark.parametrize("dims", [{"zone_from": ["dmz"]}, {"zone_to": ["dmz"]}, {"service": ["tcp-80"]},
+                                  {"user": ["known-user"]}, {"negate_source": "yes"}, {"omit": ("to",)}])
+def test_dos_false_when_the_protect_rule_does_not_cover_every_zone_user_or_service(dims):
+    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", **dims)])) is False
 
 
-@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None})])
-def test_dos_nothing_configured_on_a_successful_read_is_false(body):
-    out = run("isDosProtectionPolicyConfigured", body)
-    assert out["transformedResponse"]["isDosProtectionPolicyConfigured"] is False
-    assert collection(out)["status"] == "success"
+def test_dos_true_when_every_dimension_is_any():
+    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", service=["any"], user=["any"])])) is True
 
 
-# restApiLoopbackRestricted
-@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"permitted-ip": None})])
-def test_permitted_ip_empty_list_means_any_source_and_is_false(body):
-    out = run("restApiLoopbackRestricted", body)
-    assert out["transformedResponse"]["restApiLoopbackRestricted"] is False
-    assert collection(out)["status"] == "success"
-    assert "any source" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+def test_dos_false_when_an_all_traffic_allow_rule_comes_before_the_protect_rule():
+    rules = [dos_rule("exempt", action="allow", profile=False), dos_rule("p")]
+    assert value("isDosProtectionPolicyConfigured", dos_body(rules)) is False
+
+
+def test_dos_true_when_a_narrow_allow_rule_comes_first_or_the_protect_rule_does():
+    narrow = dos_rule("exempt", action="allow", profile=False, destination=["192.0.2.50"])
+    assert value("isDosProtectionPolicyConfigured", dos_body([narrow, dos_rule("p")])) is True
+    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("p"), dos_rule("exempt", action="allow", profile=False)])) is True
+
+
+@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None}), ok({"rules": {"entry": []}})])
+def test_dos_empty_success_is_not_evaluated(body):
+    assert_not_evaluated("isDosProtectionPolicyConfigured", body)
+
+
+# restApiLoopbackRestricted: the permitted-ip list must be in the reply
+@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"permitted-ip": None}), ok({"other-setting": "x"}),
+                                  ok({"permitted-ip": {"entry": [{"@name": "192.0.2.1"}, {"detail": "no name"}]}})])
+def test_permitted_ip_absent_empty_or_unnamed_list_is_not_evaluated(body):
+    assert_not_evaluated("restApiLoopbackRestricted", body)
 
 
 def test_permitted_ip_two_halves_of_the_address_space_are_open():
@@ -778,13 +822,17 @@ def test_content_future_dated_release_is_not_evaluated():
 
 
 # wildfireInlineMlEnabled reads the Antivirus ML engine setting, not the WildFire Analysis attachment
+CORE = ("Windows Executables", "PowerShell Script 1", "PowerShell Script 2")
+
+
 def virus_body(profiles):
-    """profiles: {name: ml action or None (no ML element)}"""
+    """profiles: {name: ml action for all core models | {model: action} | None (no ML element)}"""
     items = []
     for n, action in profiles.items():
         e = {"@name": n}
         if action:
-            e["mlav-engine-filebased-enabled"] = {"entry": [{"@name": "Windows Executables", "mlav-policy-action": action}]}
+            models = {m: action for m in CORE} if isinstance(action, str) else action
+            e["mlav-engine-filebased-enabled"] = {"entry": [{"@name": m, "mlav-policy-action": a} for m, a in models.items()]}
         items.append(e)
     return ok({"virus": {"entry": one_or_many(items)}})
 
@@ -827,6 +875,37 @@ def test_wildfire_ml_false_when_one_allow_rule_has_no_antivirus_profile():
     assert value("wildfireInlineMlEnabled", body) is False
 
 
+def test_wildfire_ml_false_when_any_listed_model_is_not_enabled_even_if_another_is():
+    mixed = {"Windows Executables": "alert-only", "PowerShell Script 1": "enable", "PowerShell Script 2": "enable"}
+    assert value("wildfireInlineMlEnabled", ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": mixed})) is False
+    extra = {"Windows Executables": "enable", "PowerShell Script 1": "enable", "PowerShell Script 2": "enable", "Executable Linux": "disable"}
+    assert value("wildfireInlineMlEnabled", ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": extra})) is False
+
+
+def test_wildfire_ml_single_enabled_model_does_not_prove_coverage():
+    only_powershell = {"PowerShell Script 1": "enable"}
+    assert_not_evaluated("wildfireInlineMlEnabled", ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": only_powershell}))
+
+
+def test_wildfire_ml_every_rule_needs_a_covering_profile_when_profiles_differ():
+    body = ml_policy([rule("a", profiles={"virus": "good"}), rule("b", profiles={"virus": "weak"})],
+                     virus={"good": "enable", "weak": {"Windows Executables": "disable", "PowerShell Script 1": "enable", "PowerShell Script 2": "enable"}})
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_virtual_system_profile_wins_over_a_shared_profile_with_the_same_name():
+    on_in_shared = ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": "disable"}, shared_virus={"v": "enable"})
+    assert value("wildfireInlineMlEnabled", on_in_shared) is False
+    on_in_vsys = ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": "enable"}, shared_virus={"v": "disable"})
+    assert value("wildfireInlineMlEnabled", on_in_vsys) is True
+
+
+def test_wildfire_ml_virtual_system_group_wins_over_a_shared_group_with_the_same_name():
+    body = ml_policy([rule("a", group="g")], groups={"g": {"virus": "weak"}}, shared={"g": {"virus": "good"}},
+                     virus={"good": "enable", "weak": "disable"})
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
 def test_wildfire_ml_profile_that_cannot_be_read_is_not_evaluated():
     assert_not_evaluated("wildfireInlineMlEnabled", ml_policy([rule("a", profiles={"virus": "default"})]))
     body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": "enable"})
@@ -863,6 +942,8 @@ DISCRIMINATES = {
                                        lambda: ok({"service": {"disable-http": "no", "disable-telnet": "yes"}})),
     "restApiLoopbackRestricted": (lambda: permitted("192.0.2.0/24"), lambda: permitted("0.0.0.0/0")),
 }
+# the keys that answer an empty or unreadable body with None, not False
+EMPTY_IS_NONE = ("sslDeepInspectionEnabled", "isDosProtectionPolicyConfigured", "restApiLoopbackRestricted")
 
 
 @pytest.mark.parametrize("key", sorted(DISCRIMINATES))
@@ -876,6 +957,12 @@ def test_lockout_threshold_is_a_count_that_differs_with_the_setting():
     five = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "5"}}))
     three = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "3"}}))
     assert (five, three) == (5, 3)
+
+
+def test_lockout_off_and_lockout_on_give_different_answers_and_off_never_passes():
+    on = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "5"}}))
+    off = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "0"}}))
+    assert on == 5 and off is None and not isinstance(off, (int, float))
 
 
 def test_every_published_key_has_a_discriminating_test_or_is_the_count():

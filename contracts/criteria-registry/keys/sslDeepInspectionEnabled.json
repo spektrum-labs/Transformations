@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "the decryption rules (or decryption trust settings) the tool reads",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A successful read of the decryption setup showing forward-proxy decryption with a profile in force across all outbound traffic; a read showing nothing configured is False; an error, empty body or possibly cut-off read is Not evaluated.",
+  "evidenceRequiredForTrue": "A successful read of the decryption setup showing forward-proxy decryption with a profile in force across all outbound traffic; a read with no decryption rules or an empty result, an error, an empty body or a possibly cut-off read is Not evaluated.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -36,5 +36,5 @@
       "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "Scope is judged from the fields the tool can read (hardware: source, destination and URL category). A narrow rule alone is False, not True."
+  "notes": "A rule counts as covering all traffic only when every scope field the tool can read (hardware: zones, source, destination, user, URL category and service) is any; a rule limited to some of them is False, and a narrow no-decrypt exception does not make it False."
 }

@@ -212,19 +212,39 @@ def rule_list(result):
     return entries(rules)
 
 
-def read_list(body, what):
-    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
-    <result/> (the object is not in the configuration): a real answer that nothing is configured.
-    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
-    result, problem = read(body, what)
-    if problem:
-        return None, problem, False
-    if result is None or result == "" or result == {}:
-        pan = find_pan(body)
-        if pan is not None and "result" in pan:
-            return None, None, True
-        return None, what + ": success reply without a result element", False
-    return result, None, False
+def flat_members(value, depth=0):
+    """Every <member> string under value (a zone, interface, address or user list), at any nesting up to 4 levels."""
+    out = []
+    if depth > 4:
+        return out
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "member":
+                for item in as_list(v):
+                    t = text_of(item)
+                    if t:
+                        out.append(t)
+            else:
+                out = out + flat_members(v, depth + 1)
+    elif isinstance(value, list):
+        for v in value:
+            out = out + flat_members(v, depth + 1)
+    return out
+
+
+def covers_all(r, required, optional):
+    """True only when the rule applies to all traffic: every required dimension (zones, addresses) is listed as
+    any, every optional dimension that is listed (users, services, categories) is any, and nothing is negated.
+    A missing required dimension is not proof, so it is not counted as all traffic."""
+    for f in required:
+        if "any" not in flat_members(r.get(f)):
+            return False
+    for f in optional:
+        if f in r and "any" not in flat_members(r.get(f)):
+            return False
+    if yes(r.get("negate-source")) or yes(r.get("negate-destination")):
+        return False
+    return True
 
 
 def name_list(items, limit=5):
@@ -262,8 +282,9 @@ def run(key, title, evaluate, input):
     if problem:
         value = None
         info = dict(info or {})
-        info["rec"] = ["Check that the management address is reachable from Spektrum and that the API "
-                       "key's role may read this part of the configuration."]
+        if not info.get("rec"):
+            info["rec"] = ["Check that the management address is reachable from Spektrum and that the API "
+                           "key's role may read this part of the configuration."]
     return respond(key, value, problem, info, title)
 
 

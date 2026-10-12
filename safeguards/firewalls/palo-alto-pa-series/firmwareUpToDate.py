@@ -2,16 +2,16 @@
 Transformation: firmwareUpToDate
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: The installed PAN-OS version is at or above the newest release the update server lists for the same feature train (major.minor), hotfixes included.
+Value: The installed PAN-OS version is at or above the newest release listed for the same feature train (major.minor), hotfixes included. This tool does not read the list of available releases (the only call that returns it is the request system software check command, which is not read-only), so the key is Not evaluated until a read-only source exists.
 
-Wire: workflow getFirmwareStatus: getSystemInfo (op show system info) + getSoftwareUpdates (op request system software check)
+Wire: workflow getFirmwareStatus: getSystemInfo (op show system info) only; the releases list is not read
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
   {"response": {"@status": "success", "result": {...}}})
 
 Docs:
   PAN-OS XML API operational commands: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/run-operational-mode-commands-api
 
-UNVERIFIED: request system software check reply shape (result/sw-updates/entry/version) is from vendor examples, UNVERIFIED on a real device; the firewall needs a path to the update server or the call errors (Not evaluated). A train that is end of life still reads as current if nothing newer is listed.
+UNVERIFIED: show system info reply (result/system/sw-version) is from vendor examples, UNVERIFIED on a real device. No read-only config or show call lists the available releases, so the list is absent and the key is Not evaluated. If a body does carry a softwareUpdates result (result/sw-updates/entry/version, or under sw-updates/versions) the comparison still runs; a train that is end of life reads as current if nothing newer is listed.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -211,19 +211,39 @@ def rule_list(result):
     return entries(rules)
 
 
-def read_list(body, what):
-    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
-    <result/> (the object is not in the configuration): a real answer that nothing is configured.
-    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
-    result, problem = read(body, what)
-    if problem:
-        return None, problem, False
-    if result is None or result == "" or result == {}:
-        pan = find_pan(body)
-        if pan is not None and "result" in pan:
-            return None, None, True
-        return None, what + ": success reply without a result element", False
-    return result, None, False
+def flat_members(value, depth=0):
+    """Every <member> string under value (a zone, interface, address or user list), at any nesting up to 4 levels."""
+    out = []
+    if depth > 4:
+        return out
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if k == "member":
+                for item in as_list(v):
+                    t = text_of(item)
+                    if t:
+                        out.append(t)
+            else:
+                out = out + flat_members(v, depth + 1)
+    elif isinstance(value, list):
+        for v in value:
+            out = out + flat_members(v, depth + 1)
+    return out
+
+
+def covers_all(r, required, optional):
+    """True only when the rule applies to all traffic: every required dimension (zones, addresses) is listed as
+    any, every optional dimension that is listed (users, services, categories) is any, and nothing is negated.
+    A missing required dimension is not proof, so it is not counted as all traffic."""
+    for f in required:
+        if "any" not in flat_members(r.get(f)):
+            return False
+    for f in optional:
+        if f in r and "any" not in flat_members(r.get(f)):
+            return False
+    if yes(r.get("negate-source")) or yes(r.get("negate-destination")):
+        return False
+    return True
 
 
 def name_list(items, limit=5):
@@ -261,8 +281,9 @@ def run(key, title, evaluate, input):
     if problem:
         value = None
         info = dict(info or {})
-        info["rec"] = ["Check that the management address is reachable from Spektrum and that the API "
-                       "key's role may read this part of the configuration."]
+        if not info.get("rec"):
+            info["rec"] = ["Check that the management address is reachable from Spektrum and that the API "
+                           "key's role may read this part of the configuration."]
     return respond(key, value, problem, info, title)
 
 
@@ -290,6 +311,11 @@ def evaluate(data):
     installed = parse_version(system.get("sw-version") if isinstance(system, dict) else None)
     if installed is None:
         return None, "system info: no readable sw-version", {}
+    shown = ".".join([str(n) for n in installed[:3]]) + ("-h" + str(installed[3]) if installed[3] else "")
+    if sub(data, "softwareUpdates") is None:
+        return None, "software check: the list of available releases is not read (no read-only call returns it), so the firmware level cannot be judged", {
+            "summary": {"installedVersion": shown},
+            "rec": ["Compare the installed PAN-OS version with the vendor's current release for its feature train."]}
     updates, problem = need(sub(data, "softwareUpdates"), "software check")
     if problem:
         return None, problem, {}
@@ -303,7 +329,6 @@ def evaluate(data):
     if not listed:
         return None, "software check: no listed release in the installed feature train", {}
     newest = max(listed)
-    shown = ".".join([str(n) for n in installed[:3]]) + ("-h" + str(installed[3]) if installed[3] else "")
     newest_shown = ".".join([str(n) for n in newest[:3]]) + ("-h" + str(newest[3]) if newest[3] else "")
     summary = {"installedVersion": shown, "newestInTrain": newest_shown}
     if installed >= newest:
