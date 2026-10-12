@@ -95,10 +95,17 @@ class TestProductStateIsTheEvidence:
         out = run(report(rows, devices))
         assert value(out) == 0
 
-    @pytest.mark.parametrize("state", ["OFF", "EXPIRED", "SNOOZED", "UNKNOWN", None, ""])
+    @pytest.mark.parametrize("state", ["OFF", "EXPIRED", "SNOOZED", "UNKNOWN"])
     def test_a_product_that_is_not_running_is_not_counted(self, state):
         out = run(report([av_row(1, state=state), av_row(2)]))
         assert value(out) == 50
+
+    @pytest.mark.parametrize("state", [None, ""])
+    def test_a_named_product_with_no_state_is_left_out_not_counted_off(self, state):
+        # No state is not "off": the row is unreadable and the device is not judged (see test_ninjaone_antivirus_rows_fail_closed).
+        out = run(report([av_row(1, state=state), av_row(2)]))
+        assert value(out) == 100
+        assert out["transformedResponse"]["devicesLeftOutUnreadable"] == 1
 
     def test_one_running_product_among_several_counts_the_device_once(self):
         rows = [av_row(1, product="Defender", state="OFF"), av_row(1, product="Other AV", state="ON"), av_row(2)]
