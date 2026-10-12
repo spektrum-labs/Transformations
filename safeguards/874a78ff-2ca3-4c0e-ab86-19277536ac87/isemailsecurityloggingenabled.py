@@ -4,10 +4,16 @@ Vendor: Microsoft
 Category: Email Security / Logging
 
 Evaluates if email security logging is enabled.
+
+Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
+error marker, a body that is not a sign-in list (an error body, an empty or null response), malformed or
+unreadable input, and failed input validation. A sign-in list that came back empty is a real False.
 """
 
 import json
 from datetime import datetime
+
+RESULT_KEYS = ("isEmailSecurityLoggingEnabled", "isEmailLoggingEnabled")
 
 
 def extract_input(input_data):
@@ -98,6 +104,18 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+def not_evaluated(validation, api_error, fail_reason, recommendation, transformation_errors=None):
+    """No value beside an error: the None reaches the evaluator as Not evaluated through the collection error."""
+    return create_response(
+        result={key: None for key in RESULT_KEYS},
+        validation=validation,
+        transformation_errors=transformation_errors,
+        api_errors=[api_error],
+        fail_reasons=[fail_reason],
+        recommendations=[recommendation]
+    )
+
+
 def transform(input):
     criteriaKey = "isEmailSecurityLoggingEnabled"
 
@@ -110,29 +128,37 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False, "isEmailLoggingEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+            return not_evaluated(
+                validation,
+                "Could not read the sign-in logs: input validation failed",
+                "Input validation failed",
+                "Re-evaluate this check once the sign-in log read succeeds"
             )
-
 
         # Check for API error (e.g., OAuth failure)
         if isinstance(data, dict) and 'PSError' in data:
-            api_error, recommendation = parse_api_error(data.get('PSError', ''), source="Microsoft 365")
-            return create_response(
-                result={criteriaKey: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=["Could not retrieve data from Microsoft 365"],
-                recommendations=[recommendation]
+            api_error, recommendation = parse_api_error(str(data.get('PSError') or ''), source="Microsoft 365")
+            return not_evaluated(
+                {"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_error,
+                "Could not retrieve data from Microsoft 365",
+                recommendation
+            )
+
+        # A Graph error body, an empty body or a null value is not a sign-in list, so it proves nothing either way.
+        logging_entries = data.get('value') if isinstance(data, dict) else None
+        if not isinstance(logging_entries, list):
+            return not_evaluated(
+                validation,
+                "The sign-in log read did not return a list of sign-ins (error body, missing permission or empty response)",
+                "No sign-in list was returned, so this check could not be evaluated",
+                "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
             )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        logging_entries = data.get('value', [])
         is_enabled = len(logging_entries) > 0
 
         if is_enabled:
@@ -151,9 +177,11 @@ def transform(input):
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False, "isEmailLoggingEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+        message = str(e)[:200]  # the text reaches the stored result, so a long one is cut
+        return not_evaluated(
+            {"status": "error", "errors": [], "warnings": []},
+            "Could not evaluate the response",
+            f"Transformation error: {message}",
+            "Re-evaluate this check once the sign-in log read succeeds",
+            transformation_errors=[message]
         )
