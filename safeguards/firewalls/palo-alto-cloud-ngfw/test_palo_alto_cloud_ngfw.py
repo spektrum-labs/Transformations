@@ -103,9 +103,17 @@ def logs_of(*kinds, name="fw-a"):
                              for k in kinds])
 
 
-def log_body(profiles_list=None):
+def log_body(profiles_list=None, listed=None):
+    """listed: the firewall names the firewall list holds; by default the ones the profiles name."""
     profiles_list = profiles_list if profiles_list is not None else [logprofile()]
-    return {"firewallList": ok({"Firewalls": [{"FirewallName": "fw-a"}]}), "logProfiles": profiles_list}
+    if listed is None:
+        listed = []
+        for entry in profiles_list:
+            name = (entry.get("Response") or {}).get("FirewallName") or entry.get("item")
+            if name and name not in listed:
+                listed.append(name)
+    return {"firewallList": ok({"Firewalls": [{"FirewallName": name} for name in listed]}),
+            "logProfiles": profiles_list}
 
 
 SM_ARN = "arn:aws:secretsmanager:us-east-1:111122223333:secret:decrypt-ca-AbCdEf"
@@ -330,54 +338,90 @@ def test_ssl_inspection_empty_profiles_object_is_not_evaluated():
 
 
 # --- isRulestackCommitClean -----------------------------------------------------------
+# The reference models the list filters (Uncommitted defaults to false) as a request body on a GET,
+# and the vendor Go SDK (cloud-ngfw-aws-go, ngfw/aws/stack.go ListRuleStack) never sends an
+# `uncommitted` parameter. So an empty or absent RuleStackUncommitted cannot show "committed": nothing
+# proves the filter was honoured. Only a rulestack a firewall uses that the vendor itself lists under
+# RuleStackUncommitted is shown: that is False. Everything else is Not evaluated. Never True.
 
-def test_commit_clean_true_when_no_bound_rulestack_is_uncommitted():
-    assert run("isRulestackCommitClean", rulestack_body()) is True
+PENDING = [{"RuleStackName": "rs-a", "Operation": "update"}]
+
+
+def clean_looking_probes():
+    fws = [firewall("fw-a", rulestack="", global_rulestack="gs-1")]
+    return [rulestack_body(),
+            rulestack_body(stacks=[]),
+            rulestack_body(uncommitted=[{"RuleStackName": "draft-unused", "Operation": "add"}]),
+            rulestack_body(fws=fws, running_names=["gs-1"]),
+            rulestack_body(fws=[firewall("fw-a", rulestack="rs-a", global_rulestack="gs-1")],
+                           running_names=["rs-a", "gs-1"]),
+            {"response": rulestack_body()},
+            json.dumps(rulestack_body())]
+
+
+def test_commit_clean_never_answers_true_because_an_empty_list_does_not_show_the_filter_was_honoured():
+    for body in clean_looking_probes():
+        out = not_evaluated("isRulestackCommitClean", body)
+        assert "filter" in reason_of(out) and "uncommitted" in reason_of(out)
+
+
+def test_commit_clean_is_not_true_even_when_every_rulestack_in_use_is_listed_running_and_candidate():
+    body = rulestack_body()
+    assert body["rulestackList"]["Response"]["RuleStackRunning"] == ["rs-a"]
+    assert body["rulestackList"]["Response"]["RuleStackCandidate"] == ["rs-a"]
+    assert run("isRulestackCommitClean", body) is None
 
 
 def test_commit_clean_false_when_a_bound_rulestack_has_pending_changes():
-    body = rulestack_body(uncommitted=[{"RuleStackName": "rs-a", "Operation": "update"}])
+    body = rulestack_body(uncommitted=PENDING)
+    out = full("isRulestackCommitClean", body)
+    assert out["transformedResponse"]["isRulestackCommitClean"] is False
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert out["additionalInfo"]["evaluation"]["failReasons"]
+
+
+@pytest.mark.parametrize("operation", ["add", "update", "delete"])
+def test_commit_clean_false_for_every_pending_operation_the_reference_lists(operation):
+    body = rulestack_body(uncommitted=[{"RuleStackName": "rs-a", "Operation": operation}])
     assert run("isRulestackCommitClean", body) is False
 
 
 def test_commit_clean_ignores_an_uncommitted_rulestack_no_firewall_uses():
     body = rulestack_body(uncommitted=[{"RuleStackName": "draft-unused", "Operation": "add"}])
-    assert run("isRulestackCommitClean", body) is True
+    assert run("isRulestackCommitClean", body) is None
 
 
 def test_commit_clean_without_the_uncommitted_list_is_not_evaluated():
     body = rulestack_body()
     del body["rulestackList"]["Response"]["RuleStackUncommitted"]
-    not_evaluated("isRulestackCommitClean", body)
+    out = not_evaluated("isRulestackCommitClean", body)
+    assert "RuleStackUncommitted" in reason_of(out)
+
+
+def test_commit_clean_an_unreadable_uncommitted_entry_is_not_evaluated():
+    for entry in ({"Operation": "update"}, "rs-a", None, {"RuleStackName": ""}):
+        body = rulestack_body(uncommitted=[entry])
+        not_evaluated("isRulestackCommitClean", body)
 
 
 def test_commit_clean_truncated_rulestack_list_is_not_evaluated():
-    body = rulestack_body()
+    body = rulestack_body(uncommitted=PENDING)
     body["rulestackList"]["Response"]["NextToken"] = "abc123"
     not_evaluated("isRulestackCommitClean", body)
 
 
 def test_commit_clean_no_firewalls_is_not_evaluated():
-    not_evaluated("isRulestackCommitClean", rulestack_body(fws=[]))
+    not_evaluated("isRulestackCommitClean", rulestack_body(fws=[], uncommitted=PENDING))
 
 
-def test_commit_clean_discriminates():
+def test_commit_clean_discriminates_only_the_failing_side():
     clean = run("isRulestackCommitClean", rulestack_body())
-    dirty = run("isRulestackCommitClean",
-                rulestack_body(uncommitted=[{"RuleStackName": "rs-a", "Operation": "update"}]))
-    assert (clean, dirty) == (True, False)
+    dirty = run("isRulestackCommitClean", rulestack_body(uncommitted=PENDING))
+    assert (clean, dirty) == (None, False)
 
 
-def test_commit_clean_a_global_rulestack_binding_the_list_does_not_show_is_not_evaluated():
-    # the local list says nothing about a global rulestack, so "not in the uncommitted list" proves nothing
-    body = rulestack_body(fws=[firewall("fw-a", rulestack="", global_rulestack="gs-1")])
-    not_evaluated("isRulestackCommitClean", body)
-
-
-def test_commit_clean_a_global_rulestack_named_in_the_list_is_read_like_any_other():
+def test_commit_clean_a_global_rulestack_named_in_the_uncommitted_list_is_false():
     fws = [firewall("fw-a", rulestack="", global_rulestack="gs-1")]
-    clean = rulestack_body(fws=fws, running_names=["gs-1"])
-    assert run("isRulestackCommitClean", clean) is True
     dirty = rulestack_body(fws=fws, running_names=["gs-1"],
                            uncommitted=[{"RuleStackName": "gs-1", "Operation": "update"}])
     assert run("isRulestackCommitClean", dirty) is False
@@ -388,11 +432,6 @@ def test_commit_clean_reads_both_a_local_and_a_global_rulestack_on_one_firewall(
     dirty = rulestack_body(fws=fws, running_names=["rs-a", "gs-1"],
                            uncommitted=[{"RuleStackName": "gs-1", "Operation": "update"}])
     assert run("isRulestackCommitClean", dirty) is False
-    not_evaluated("isRulestackCommitClean", rulestack_body(fws=fws, running_names=["rs-a"]))
-
-
-def test_commit_clean_a_bound_rulestack_missing_from_the_list_is_not_evaluated():
-    not_evaluated("isRulestackCommitClean", rulestack_body(fws=[firewall("fw-a", "rs-zzz")]))
 
 
 def test_commit_clean_a_rulestack_named_only_in_the_uncommitted_list_is_false():
@@ -401,12 +440,23 @@ def test_commit_clean_a_rulestack_named_only_in_the_uncommitted_list_is_false():
 
 
 def test_commit_clean_a_listed_firewall_with_no_read_of_its_own_is_not_evaluated():
-    not_evaluated("isRulestackCommitClean", rulestack_body(fws=[firewall("fw-b")]))
+    # the list names fw-a; only fw-b was read, so which rulestacks are in use is not fully known
+    not_evaluated("isRulestackCommitClean", rulestack_body(fws=[firewall("fw-b")], uncommitted=PENDING))
 
 
-def test_commit_clean_does_not_need_the_describe_records():
-    body = rulestack_body(stacks=[])
-    assert run("isRulestackCommitClean", body) is True
+def test_commit_clean_a_firewall_naming_no_rulestack_is_not_evaluated():
+    not_evaluated("isRulestackCommitClean",
+                  rulestack_body(fws=[firewall("fw-a", rulestack="")], uncommitted=PENDING))
+
+
+def test_commit_clean_the_reason_for_not_evaluated_carries_the_filter_citation():
+    out = not_evaluated("isRulestackCommitClean", rulestack_body())
+    text = reason_of(out)
+    assert "request body" in text and "SDK" in text
+
+
+def test_commit_clean_does_not_need_the_describe_records_to_find_a_pending_change():
+    assert run("isRulestackCommitClean", rulestack_body(stacks=[], uncommitted=PENDING)) is False
 
 
 # --- firewallLoggingEnabled -------------------------------------------------------------
@@ -486,6 +536,72 @@ def test_logging_an_empty_list_on_one_firewall_and_an_unreadable_other_is_not_ev
     not_evaluated("firewallLoggingEnabled", mixed)
 
 
+def test_logging_a_listed_firewall_with_no_log_profile_read_is_not_evaluated():
+    body = log_body([logprofile("fw-a")], listed=["fw-a", "fw-b"])
+    out = not_evaluated("firewallLoggingEnabled", body)
+    assert "listed firewall" in reason_of(out)
+
+
+def test_logging_every_listed_firewall_read_and_logging_is_true():
+    body = log_body([logprofile("fw-a"), logprofile("fw-b")], listed=["fw-a", "fw-b"])
+    assert run("firewallLoggingEnabled", body) is True
+
+
+def test_logging_a_missing_firewall_is_not_hidden_by_reading_another_one_twice():
+    body = log_body([logprofile("fw-a"), logprofile("fw-a")], listed=["fw-a", "fw-b"])
+    not_evaluated("firewallLoggingEnabled", body)
+
+
+def test_logging_a_profile_that_names_another_firewall_does_not_cover_a_listed_one():
+    body = log_body([logprofile("fw-other")], listed=["fw-a"])
+    not_evaluated("firewallLoggingEnabled", body)
+
+
+def test_logging_a_profile_with_no_firewall_name_cannot_cover_a_listed_firewall():
+    anon = ok({"LogDestinationConfigs": logprofile()["Response"]["LogDestinationConfigs"]})
+    not_evaluated("firewallLoggingEnabled", log_body([anon], listed=["fw-a"]))
+
+
+def test_logging_a_firewall_that_is_off_is_false_even_when_another_listed_one_is_missing():
+    body = log_body([logs_of("TRAFFIC", name="fw-a")], listed=["fw-a", "fw-b"])
+    assert run("firewallLoggingEnabled", body) is False
+
+
+def test_logging_without_the_firewall_list_is_not_evaluated():
+    body = log_body()
+    del body["firewallList"]
+    out = not_evaluated("firewallLoggingEnabled", body)
+    assert "firewall list" in reason_of(out)
+
+
+def test_logging_a_firewall_list_with_no_firewalls_is_not_evaluated():
+    not_evaluated("firewallLoggingEnabled", log_body([logprofile("fw-a")], listed=[]))
+
+
+def test_logging_a_firewall_list_entry_with_no_name_is_not_evaluated():
+    body = log_body([logprofile("fw-a")], listed=["fw-a"])
+    body["firewallList"]["Response"]["Firewalls"].append({"AccountId": "111122223333"})
+    not_evaluated("firewallLoggingEnabled", body)
+
+
+def test_logging_a_firewall_list_with_more_pages_is_not_evaluated():
+    body = log_body()
+    body["firewallList"]["Response"]["NextToken"] = "abc123"
+    not_evaluated("firewallLoggingEnabled", body)
+
+
+def test_logging_a_refused_firewall_list_is_not_evaluated():
+    body = log_body()
+    body["firewallList"] = {"error": True, "statusCode": 403, "message": "Forbidden"}
+    not_evaluated("firewallLoggingEnabled", body)
+
+
+def test_logging_a_firewall_list_without_a_firewalls_array_is_not_evaluated():
+    body = log_body()
+    body["firewallList"] = ok({})
+    not_evaluated("firewallLoggingEnabled", body)
+
+
 # --- hasCertificatesManagedExternally ---------------------------------------------------
 
 def test_certificates_true_when_every_certificate_signer_is_a_secrets_manager_secret():
@@ -540,6 +656,83 @@ def test_certificates_no_running_certificate_object_is_not_evaluated():
     c = ok({"Name": "c", "RuleStackName": "rs-a",
             "CertificateObjectCandidate": {"CertificateSignerArn": SM_ARN}})
     not_evaluated("hasCertificatesManagedExternally", cert_body([c]))
+
+
+RECOGNISED_OTHER_STORES = [
+    "arn:aws:acm:us-east-1:111122223333:certificate/abcd-1234",
+    "arn:aws:acm-pca:us-east-1:111122223333:certificate-authority/abcd-1234",
+    "arn:aws:iam::111122223333:server-certificate/ca",
+    "arn:aws:kms:us-east-1:111122223333:key/abcd-1234",
+    "arn:aws:s3:::my-cert-bucket/ca.pem",
+    "arn:aws-us-gov:acm:us-gov-west-1:111122223333:certificate/abcd-1234",
+    "arn:aws-cn:acm:cn-north-1:111122223333:certificate/abcd-1234",
+]
+
+JUNK_SIGNERS = [
+    "not-an-arn",
+    "ca",
+    "https://example.invalid/ca.pem",
+    "arn",
+    "arn:aws",
+    "arn:aws:acm",
+    "arn:aws:acm:us-east-1:111122223333",
+    "arn:aws:banana:us-east-1:111122223333:thing/abcd",
+    "arn:aws:::::",
+    "arn:garbage:acm:us-east-1:111122223333:certificate/abcd",
+    "arn:aws:acm:us-east-1:1234:certificate/abcd",
+    "arn:aws:acm:us-east-1:not-an-account:certificate/abcd",
+    "ARN:AWS:ACM:us-east-1:111122223333:certificate/abcd",
+    "arn:aws:acm:us-east-1:111122223333:",
+    "arn:aws:secretsmanager:us-east-1:111122223333:",
+    "arn:aws:secretsmanager:us-east-1:111122223333:notasecret:abcd",
+    "arn:garbage:secretsmanager:us-east-1:111122223333:secret:abcd",
+    "arn:aws:secretsmanager:us-east-1:1234:secret:abcd",
+    "null",
+    "0",
+    "false",
+    "<script>alert(1)</script>",
+    "arn:aws:acm:us-east-1:111122223333:certificate/abcd\narn:aws:acm",
+]
+
+
+@pytest.mark.parametrize("arn", RECOGNISED_OTHER_STORES)
+def test_certificates_a_recognised_non_secrets_manager_signer_is_false(arn):
+    assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is False
+
+
+@pytest.mark.parametrize("arn", JUNK_SIGNERS)
+def test_certificates_an_unrecognised_or_junk_signer_is_not_evaluated_never_false(arn):
+    out = not_evaluated("hasCertificatesManagedExternally", cert_body([cert(arn)]))
+    assert "recognis" in reason_of(out)
+
+
+@pytest.mark.parametrize("value", [123, 1.5, True, False, ["arn:aws:acm:us-east-1:111122223333:certificate/a"],
+                                   {"arn": "x"}])
+def test_certificates_a_signer_that_is_not_text_is_not_evaluated(value):
+    c = ok({"Name": "c", "RuleStackName": "rs-a", "CertificateObjectRunning": {"CertificateSignerArn": value}})
+    not_evaluated("hasCertificatesManagedExternally", cert_body([c]))
+
+
+def test_certificates_junk_next_to_a_secrets_manager_signer_is_not_true():
+    body = cert_body([cert(SM_ARN, "a"), cert("not-an-arn", "b")])
+    not_evaluated("hasCertificatesManagedExternally", body)
+
+
+def test_certificates_a_recognised_other_store_still_fails_the_key_next_to_junk():
+    body = cert_body([cert("not-an-arn", "a"), cert(RECOGNISED_OTHER_STORES[0], "b")])
+    assert run("hasCertificatesManagedExternally", body) is False
+
+
+def test_certificates_junk_alone_never_fails_the_key():
+    for arn in JUNK_SIGNERS:
+        assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is None
+
+
+def test_certificates_a_secrets_manager_signer_in_each_partition_is_true():
+    for arn in ("arn:aws:secretsmanager:us-east-1:111122223333:secret:ca-AbCdEf",
+                "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:ca-AbCdEf",
+                "arn:aws-cn:secretsmanager:cn-north-1:111122223333:secret:ca-AbCdEf"):
+        assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is True
 
 
 # --- restApiTokenExpiryEnforced ---------------------------------------------------------

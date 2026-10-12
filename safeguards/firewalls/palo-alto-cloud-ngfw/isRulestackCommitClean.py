@@ -6,18 +6,27 @@ Integration-Service workflow getNgfwRulestackPosture, legs used:
   firewalls     <- describeFirewall: GET /v1/config/ngfirewalls/{name}, per firewall
   rulestackList <- listRulestacks:   GET /v1/config/rulestacks (asks for the uncommitted list)
 
-Value: True when no rulestack that a firewall uses appears in the list's RuleStackUncommitted
-array (each entry {RuleStackName, Operation: add | delete | update}); False when one does, since the
-policy a firewall enforces then differs from the last committed configuration. An uncommitted
-rulestack that no firewall uses is ignored. A firewall's local and global rulestack are both
-read; every one the firewall uses must appear in the list's RuleStackRunning, RuleStackCandidate or
-RuleStackUncommitted arrays, because "not in the uncommitted array" proves nothing for a rulestack
-the list does not cover (a global rulestack, or one the list missed).
+Value: False when a rulestack that a firewall uses appears in the list's RuleStackUncommitted
+array (each entry {RuleStackName, Operation: add | delete | update}): the vendor itself names a
+pending change, so the policy a firewall enforces differs from the last committed configuration.
+Otherwise null. This key never answers True. An empty or absent RuleStackUncommitted cannot show
+"committed", because nothing shows the filter that fills it was honoured on this read:
+  - the OpenAPI reference (ManageRulestacks, get-v1-config-rulestacks) models the list filters,
+    including Uncommitted (default false), as a request body on a GET, not as query parameters;
+  - the vendor's own Go SDK (PaloAltoNetworks/cloud-ngfw-aws-go, ngfw/aws/stack.go ListRuleStack)
+    sends scope, tagkey, tagvalue, candidate, running, describe, nexttoken and maxresults as query
+    parameters and never sends uncommitted, although its input struct has the field;
+  - the commit-status read (GET /v1/config/rulestacks/{name}/commit, ManageCommitConfiguration) is a
+    free-text CommitStatus of the last commit, not a "changes pending" flag, and is not read here.
+A pending change the vendor does list is shown whatever filter produced it, so that side answers.
+An uncommitted rulestack that no firewall uses is ignored. A firewall's local and global rulestack
+are both read.
 
 Fail closed (Not evaluated, never a pass): a refused (401/403), expired-token, error-shaped,
 empty, unrecognised or possibly cut-off read, a list that does not carry the RuleStackUncommitted
 array at all (the read was not asked for it), a firewall in the firewall list with no read of its
-own, a rulestack in use that the rulestack list does not cover, or no firewall is null.
+own, a firewall that names no rulestack, no pending change listed for the rulestacks in use (the
+filter is not shown to be honoured), or no firewall is null.
 
 Source: public OpenAPI reference for Cloud NGFW for AWS (pan.dev, ManageRulestacks).
 """
@@ -198,15 +207,9 @@ def uncommitted_names(top):
     return names, None
 
 
-def listed_names(top):
-    """The rulestack names the list covers: running and candidate arrays (plain names)."""
-    out = set()
-    response = top["rulestackList"]["Response"]
-    for field in ("RuleStackRunning", "RuleStackCandidate"):
-        values = response.get(field)
-        if isinstance(values, list):
-            out.update(text_of(v) for v in values if isinstance(v, str) and text_of(v))
-    return out
+FILTER_NOT_SHOWN = ("rulestack list: no pending change was listed for the rulestacks in use, but nothing shows the "
+                    "uncommitted filter was honoured (the reference models it as a request body on a GET and "
+                    "the vendor SDK never sends it), so an empty list does not show they are committed")
 
 
 def transform(input):
@@ -224,22 +227,12 @@ def transform(input):
             return build_response({KEY: None}, errors=[problem], transform_id=KEY)
         dirty = [name for name in names if name in pending]
         summary = {"rulestacks": len(names), "uncommittedRulestacks": len(dirty)}
-        if not dirty:
-            covered = listed_names(top) | set(pending)
-            absent = [name for name in names if name not in covered]
-            if absent:
-                return build_response({KEY: None}, errors=[
-                    "rulestack list: " + str(len(absent)) + " rulestack(s) a firewall uses are not covered by "
-                    "the list (a global rulestack, or one the list missed), so pending changes were not read"],
-                    summary=summary, transform_id=KEY)
         if dirty:
             return build_response({KEY: False}, fail_reasons=[
                 "rulestack " + name + " has changes that are not committed" for name in dirty],
                 summary=summary,
                 recommendations=["Validate and commit the pending rulestack changes, or revert them."],
                 transform_id=KEY)
-        return build_response({KEY: True}, pass_reasons=[
-            "No pending changes on " + str(len(names)) + " rulestack(s) in use"], summary=summary,
-            transform_id=KEY)
+        return build_response({KEY: None}, errors=[FILTER_NOT_SHOWN], summary=summary, transform_id=KEY)
     except Exception as error:
         return build_response({KEY: None}, errors=[str(error)[:300]], transform_id=KEY)

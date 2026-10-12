@@ -6,6 +6,9 @@ Integration-Service workflow getNgfwRulestackPosture (firewalls, then each runni
   firewalls   <- describeFirewall:  GET /v1/config/ngfirewalls/{name}
   rulestacks  <- describeRulestack: GET /v1/config/rulestacks/{name}
 
+NOT WIRED: this key is not in the Integration-Service definition's retrievalTransformationArray, so
+it shows as not covered. The file stays as a documented placeholder until a read can show both outcomes.
+
 Value: None (Not evaluated) on every read. An Profiles.OutboundTrustCertificate shows that a
 decryption certificate was chosen, not that any security rule selects traffic for decryption, and
 decryption rules are not read, so "certificate named" would be True without evidence that anything

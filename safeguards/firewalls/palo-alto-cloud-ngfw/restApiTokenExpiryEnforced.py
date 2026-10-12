@@ -6,6 +6,9 @@ Integration-Service method describeProgrammaticAccess:
   GET /v1/mgmt/tokens ("Describe programmatic access")
   -> {"Response": {"Enabled": bool, "MaxExpiryTime": int}, "ResponseStatus": {"ErrorCode": 0}}
 
+NOT WIRED: this key is not in the Integration-Service definition's retrievalTransformationArray, so
+it shows as not covered. The file stays as a documented placeholder until a read can show both outcomes.
+
 Value: None (Not evaluated) on every read. The reference bounds the tenant ceiling MaxExpiryTime
 to 480 through 1440 (the unit is not stated), so every value the vendor can return is inside that
 range and "bounded" would always be True. This is the tenant-wide ceiling on token lifetime, not a

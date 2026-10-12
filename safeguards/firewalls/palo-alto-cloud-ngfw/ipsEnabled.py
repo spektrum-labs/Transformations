@@ -8,6 +8,9 @@ Integration-Service workflow getNgfwRulestackPosture, legs:
   rulestackList <- listRulestacks:    GET /v1/config/rulestacks
   rulestacks    <- describeRulestack: GET /v1/config/rulestacks/{name}, per running rulestack
 
+NOT WIRED: this key is not in the Integration-Service definition's retrievalTransformationArray, so
+it shows as not covered. The file stays as a documented placeholder until a read can show both outcomes.
+
 Value: None (Not evaluated) on every read. The reference allows only custom or BestPractice for
 VulnerabilityProfile and defaults it to BestPractice, so a vendor reply can never show IPS is off
 and "attached" would always be True. The key answers only after the read itself fails or after a
