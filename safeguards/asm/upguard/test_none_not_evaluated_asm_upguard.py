@@ -36,6 +36,15 @@ class Poisoned(dict):
 CASES = [
     ('exploitedfindingscount', ('exploitedFindingsCount',), 'empty_dict', lambda: {}),
     ('exploitedfindingscount', ('exploitedFindingsCount',), 'poisoned', lambda: Poisoned()),
+    ('isasmenabled', ('isASMEnabled',), 'empty_dict', lambda: {}),
+    ('isasmenabled', ('isASMEnabled',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
+    ('isasmenabled', ('isASMEnabled',), 'poisoned', lambda: Poisoned()),
+    ('nocriticalfindings', ('noCriticalFindings',), 'empty_dict', lambda: {}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'poisoned', lambda: Poisoned()),
+    ('nohighfindings', ('noHighFindings',), 'empty_dict', lambda: {}),
+    ('nohighfindings', ('noHighFindings',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
+    ('nohighfindings', ('noHighFindings',), 'poisoned', lambda: Poisoned()),
 ]
 
 
