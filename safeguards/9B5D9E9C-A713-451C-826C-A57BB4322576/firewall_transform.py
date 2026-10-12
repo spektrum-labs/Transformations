@@ -4,6 +4,11 @@ Vendor: Firewall (Cato Networks)
 Category: Network Security / Firewall
 
 Evaluates if Firewalls are set up properly including internet firewall and WAN network rules.
+
+isFirewallLoggingEnabled is answered only from the audit feed. A feed that was read with fetchedCount above zero is True
+and one read with fetchedCount 0 is the measured False. A feed that is absent, null, empty, not an object, or has no
+readable fetchedCount (and a failed validation or an exception) was not measured: the answer is None with a
+data-collection error, which is Not evaluated. A field of that name in the body is never read.
 """
 
 import json
@@ -68,9 +73,34 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+AUDIT_FEED_NOT_READ = "Audit feed was missing or could not be read, so firewall logging was not evaluated"
+
+
+def read_fetched_count(value):
+    """A feed's fetchedCount as a whole number of entries, or None when it cannot be read as one.
+
+    A bool, a negative number, a fraction, text that is not plain digits, null, a list or an object are unreadable.
+    Plain digits as text ("7") read as the number."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        try:
+            whole = int(value)
+        except (ValueError, OverflowError):
+            return None
+        return whole if whole == value and whole >= 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text != "" and all(ch in "0123456789" for ch in text):
+            return int(text)
+    return None
+
+
 def transform(input):
     is_firewall_enabled = False
-    is_firewall_logging_enabled = False
+    is_firewall_logging_enabled = None
     is_internet_firewall_enabled = False
     is_wan_network_enabled = False
     internet_firewall_rules = []
@@ -101,9 +131,10 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={"isFirewallEnabled": False, "isFirewallLoggingEnabled": False, "isFirewallConfigured": False},
+                result={"isFirewallEnabled": False, "isFirewallLoggingEnabled": None, "isFirewallConfigured": False},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=["Input validation failed"],
+                api_errors=[AUDIT_FEED_NOT_READ]
             )
 
         pass_reasons = []
@@ -152,27 +183,34 @@ def transform(input):
                                     if 'rule' in rule and 'name' in rule['rule']:
                                         wan_network_rules.append(rule['rule']['name'])
 
-            is_firewall_logging_enabled = True if data.get('isFirewallLoggingEnabled', False) else False
-
-            if 'auditFeed' in audit_data:
-                audit_logs_raw = parse_input(audit_data['auditFeed'])
+            # isFirewallLoggingEnabled is answered only from the audit feed below. A field of that name in the body
+            # is never read: the vendor does not send one, so a body that carried it would choose its own answer.
+            # A feed that is absent, null, empty, not an object, or has no readable fetchedCount was not measured:
+            # the answer stays None. Only a feed that was read with fetchedCount 0 is the measured False.
+            if isinstance(audit_data, dict) and 'auditFeed' in audit_data:
                 try:
-                    fetched_count = int(audit_logs_raw['fetchedCount'])
-                except:
-                    fetched_count = 0
-                is_firewall_logging_enabled = True if fetched_count > 0 else False
+                    audit_logs_raw = parse_input(audit_data['auditFeed'])
+                except Exception:
+                    audit_logs_raw = None
+                if isinstance(audit_logs_raw, dict):
+                    fetched_count = read_fetched_count(audit_logs_raw.get('fetchedCount'))
+                    if fetched_count is not None:
+                        is_firewall_logging_enabled = fetched_count > 0
 
         is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
         is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
 
         additional_findings = []
 
-        # Primary criteria: isFirewallLoggingEnabled
-        if is_firewall_logging_enabled:
+        # Primary criteria: isFirewallLoggingEnabled. None is Not evaluated: no pass or fail reason is given for it.
+        api_errors = []
+        if is_firewall_logging_enabled is True:
             pass_reasons.append("Firewall logging is enabled")
-        else:
+        elif is_firewall_logging_enabled is False:
             fail_reasons.append("Firewall logging is not enabled")
             recommendations.append("Enable firewall logging for audit and compliance")
+        else:
+            api_errors.append(AUDIT_FEED_NOT_READ)
 
         # Additional finding: isFirewallEnabled
         if is_firewall_enabled_final:
@@ -217,6 +255,7 @@ def transform(input):
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             additional_findings=additional_findings,
+            api_errors=api_errors,
             input_summary={
                 "firewallEnabled": is_firewall_enabled_final,
                 "loggingEnabled": is_firewall_logging_enabled,
@@ -229,10 +268,11 @@ def transform(input):
         return create_response(
             result={
                 "isFirewallEnabled": False,
-                "isFirewallLoggingEnabled": is_firewall_logging_enabled,
-                "isFirewallConfigured": is_firewall_enabled and is_firewall_logging_enabled
+                "isFirewallLoggingEnabled": None,
+                "isFirewallConfigured": False
             },
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[f"Transformation error: {str(e)}"],
+            api_errors=[AUDIT_FEED_NOT_READ]
         )
