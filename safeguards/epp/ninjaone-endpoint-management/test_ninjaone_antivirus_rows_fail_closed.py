@@ -43,7 +43,30 @@ def load(name):
     return module.transform
 
 
+def with_roster(body):
+    """isEPPConfigured measures against the device list beside the report, so a report sent to it carries one.
+
+    The roster is exactly the devices the rows mention, so nothing is missing from the report and the other
+    rules under test are the only thing that moves the answer. Bodies that already carry a list are unchanged.
+    """
+    if not isinstance(body, dict):
+        return body
+    out = dict(body)
+    if isinstance(out.get("results"), list) and "devices" not in out:
+        ids = []
+        for r in out["results"]:
+            if isinstance(r, dict) and r.get("deviceId") is not None and r.get("deviceId") not in ids:
+                ids.append(r.get("deviceId"))
+        out["devices"] = [{"id": i, "nodeClass": "WINDOWS_WORKSTATION", "lastContact": NOW} for i in ids]
+    for key, inner in list(out.items()):
+        if isinstance(inner, dict) and key != "devices":
+            out[key] = with_roster(inner)
+    return out
+
+
 def run(name, body):
+    if name == "isEPPConfigured":
+        body = with_roster(body)
     return load(name)(body)
 
 
