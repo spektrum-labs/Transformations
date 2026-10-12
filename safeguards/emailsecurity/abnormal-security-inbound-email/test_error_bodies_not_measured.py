@@ -164,5 +164,45 @@ class MalformedListItemsAreNotRecords(unittest.TestCase):
                 self.assertIs(out["transformedResponse"][CAMPAIGN], False)
 
 
+class OnlyRealCaseRecordsAreCounted(unittest.TestCase):
+    """A vendor case is an object with a real vendorCaseId. An error-shaped or empty object in the list
+    is not a case: it is not counted, and a list with no real case in it is not measured."""
+
+    def run_vendor(self, body):
+        return load(VENDOR).transform(body)
+
+    def test_error_shaped_items_are_not_cases(self):
+        for label, items in [
+            ("error object", [{"error": "x"}]),
+            ("error flag object", [{"error": True, "message": "boom"}]),
+            ("empty object", [{}]),
+            ("no id", [{"message": "x"}, {"vendorCaseId": None}]),
+            ("blank id", [{"vendorCaseId": ""}, {"vendorCaseId": "   "}]),
+            ("boolean id", [{"vendorCaseId": True}]),
+            ("id is an object", [{"vendorCaseId": {"a": 1}}]),
+        ]:
+            for shape, body in [("wrapped", {"vendorCases": items}), ("bare", items), ("data", {"data": items})]:
+                with self.subTest(items=label, shape=shape):
+                    out = self.run_vendor(body)
+                    self.assertIsNone(out["transformedResponse"][VENDOR])
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                    self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                    self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+
+    def test_only_real_records_are_counted_next_to_junk(self):
+        body = {"vendorCases": [{"error": "x"}, {"vendorCaseId": "1"}, {}, {"vendorCaseId": 7}, {"vendorCaseId": ""}]}
+        out = self.run_vendor(body)
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 2)
+
+    def test_a_numeric_case_id_is_a_real_record(self):
+        out = self.run_vendor({"vendorCases": [{"vendorCaseId": 42}]})
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 1)
+
+    def test_the_empty_list_keeps_the_previous_verdict(self):
+        self.assertIs(self.run_vendor({"vendorCases": []})["transformedResponse"][VENDOR], False)
+
+
 if __name__ == "__main__":
     unittest.main()

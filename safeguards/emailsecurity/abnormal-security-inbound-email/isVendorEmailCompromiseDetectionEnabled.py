@@ -114,22 +114,39 @@ def vendor_cases_of(data):
     return None, "Abnormal returned no vendor case list; nothing to measure."
 
 
+def case_id(item):
+    """The vendorCaseId of a real vendor case record, or None.
+
+    A real record is an object that carries its own case id: a non-empty string or a number. An error
+    object, an empty object or an object without an id is not a case."""
+    if not isinstance(item, dict):
+        return None
+    value = item.get("vendorCaseId")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
 def transform(input):
     data, validation = extract_input(input)
     vendor_cases, problem = vendor_cases_of(data)
     if problem is None:
         vendor_cases, problem = objects_only(vendor_cases, "vendor case")
+    if problem is None and vendor_cases:
+        vendor_cases = [case for case in vendor_cases if case_id(case) is not None]
+        if not vendor_cases:
+            problem = "Abnormal returned a vendor case list with no case record (vendorCaseId) in it; nothing to measure."
     if problem is not None:
         return not_measured(problem, validation)
 
-    case_count = len(vendor_cases) if isinstance(vendor_cases, list) else 0
+    case_count = len(vendor_cases)
     is_enabled = case_count > 0
 
-    sample_ids = []
-    if isinstance(vendor_cases, list):
-        for case in vendor_cases[:5]:
-            if case.get("vendorCaseId") is not None:
-                sample_ids.append(case.get("vendorCaseId"))
+    sample_ids = [case_id(case) for case in vendor_cases[:5]]
 
     if is_enabled:
         pass_reasons = [
