@@ -6,6 +6,7 @@ role, or anything else) never reads positive and never reads as a fail: with no 
 not evaluated (None). With the antivirus-status report the value is the whole-number percentage of judged
 devices that have a product reporting ON. Synthetic data only."""
 import importlib.util
+import json
 import pathlib
 import time
 
@@ -281,3 +282,39 @@ class TestUnreadableDeviceListIsNotEvaluated:
         out = run(report(self.ROWS, fleet_of(4)))
         assert value(out) == 50
         assert not not_evaluated(out)
+
+
+class TestStringEncodedReply:
+    """The engine can hand the reply over as a JSON string or bytes. An error reply must be read as an error either way,
+    and a clean one measured, exactly as the other NinjaOne antivirus-status checks do."""
+
+    def encoded(self, **extra):
+        body = report([av_row(1), av_row(2)])
+        body.update(extra)
+        return json.dumps(body)
+
+    @pytest.mark.parametrize("extra", [{"error": "Forbidden"}, {"errors": ["Forbidden"]}, {"status": 403}, {"statusCode": 500}])
+    def test_a_string_encoded_error_reply_is_flagged_as_an_error(self, extra):
+        out = run(self.encoded(**extra))
+        assert value(out) is None
+        assert not_evaluated(out)
+        assert "instead of a measurement" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+
+    def test_a_bytes_encoded_error_reply_is_flagged_as_an_error(self):
+        out = run(self.encoded(error="Forbidden").encode("utf-8"))
+        assert value(out) is None
+        assert "instead of a measurement" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+
+    def test_a_string_encoded_clean_reply_is_measured(self):
+        out = run(self.encoded())
+        assert value(out) == 100
+        assert not not_evaluated(out)
+
+    def test_a_bytes_encoded_clean_reply_is_measured(self):
+        assert value(run(self.encoded().encode("utf-8"))) == 100
+
+    @pytest.mark.parametrize("body", ["not json", "", b"\xff\xfe", "[1, 2"])
+    def test_an_unparseable_reply_is_not_evaluated(self, body):
+        out = run(body)
+        assert value(out) is None
+        assert not_evaluated(out)

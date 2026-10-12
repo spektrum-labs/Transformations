@@ -15,6 +15,7 @@ list is readable.
 Endpoint rules (2026-09-29) as in the other NinjaOne antivirus-status checks: devices seen within 15 days of the newest
 row, phones and tablets left out, a Mac with only third-party products not reporting ON is unreadable and left out.
 """
+import json
 from datetime import datetime, timezone
 
 
@@ -282,6 +283,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
+    if isinstance(input, (str, bytes)):
+        try:
+            input = json.loads(input)
+        except Exception:
+            input = {}
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else []
     problem = body_problem(input, data)
