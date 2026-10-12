@@ -2,12 +2,12 @@
   "name": "isURLFilteringProfileEnabled",
   "revision": 1,
   "status": "proposed",
-  "definition": "True when the running configuration of every rulestack a managed firewall uses has a URL filtering profile set (not the none default).",
+  "definition": "True when every rule or rulestack the tool reads that can carry web traffic has a URL filtering profile set (not none).",
   "valueType": "boolean",
   "unit": "none",
-  "population": "running rulestack configurations used by the managed firewalls; denominator = every rulestack a firewall uses",
+  "population": "the policy rules or rulestacks the tool reads that can carry web traffic; denominator = every one read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of every firewall (the firewall list and the per-firewall reads agree) and of the running configuration of each local and global rulestack it uses, each showing a URL filtering profile other than none.",
+  "evidenceRequiredForTrue": "A complete read of the policy and its profiles showing a URL filtering profile on every in-scope rule or rulestack; an error, empty or possibly cut-off read is Not evaluated.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -26,15 +26,15 @@
     "implementations": []
   },
   "citations": [
-    "safeguards/firewalls/palo-alto-cloud-ngfw/isURLFilteringProfileEnabled.py and its test file (synthetic fixtures)",
-    "Public OpenAPI reference for Cloud NGFW for AWS, pan.dev openapi-specs/cloudngfw/aws (ManageNGFW, ManageRulestacks, ManageCertificateObjects), rendered at https://pan.dev/cloudngfw/aws/api/"
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
-      "change": "Registered so the Cloud NGFW transform can emit it. Meaning written from the public reference only; no customer read, so the key stays proposed and V0."
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "Presence of a profile, not its strength: a custom profile is not graded. Whether other firewall tools should answer this key is not ruled."
+  "notes": "Presence of a profile, not its strength: a custom profile is not graded. How web-capable rules are told apart is per tool (hardware: application any, web-browsing or ssl)."
 }
