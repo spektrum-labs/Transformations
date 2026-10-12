@@ -105,6 +105,20 @@ class TestAReportWithMoreRowsThanItHoldsIsPartial:
         assert value(name, out) == expected(name, 2, 2)
         assert not not_evaluated(out)
 
+    @pytest.mark.parametrize("cur", [{"name": "c1"}, {"name": "c1", "offset": 0, "count": None, "expires": 0},
+                                     {"name": "c1", "count": "n/a"}])
+    def test_a_cursor_that_names_itself_and_gives_no_count_is_partial(self, name, cur):
+        body = {"results": [av_row(1), av_row(2)], "devices": fleet(2), "cursor": cur}
+        out = run(name, body)
+        assert value(name, out) is None
+        assert not_evaluated(out)
+
+    def test_a_cursor_with_no_name_and_no_count_is_a_complete_read(self, name):
+        rows = [av_row(1), av_row(2)]
+        out = run(name, {"results": rows, "devices": fleet(4), "cursor": {"name": None, "offset": 0, "expires": 0}})
+        assert value(name, out) == expected(name, 2, 2)
+        assert not not_evaluated(out)
+
     def test_a_next_page_marker_on_the_report_is_partial(self, name):
         body = {"results": [av_row(1), av_row(2)], "devices": fleet(2), "next": "page-2"}
         out = run(name, body)
