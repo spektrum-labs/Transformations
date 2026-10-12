@@ -1,7 +1,14 @@
 """
 Transformation: isDMARCConfigured
 Vendor: Proofpoint  |  Category: Email Security
-Evaluates: anti_spoofing feature is enabled.
+Evaluates: whether the domain publishes a DMARC record.
+
+The Proofpoint Essentials features body (getFeatures) has no DMARC setting. Its anti_spoofing flag
+is a different control (sender-spoofing protection inside Proofpoint), so it is not read here: an
+enabled anti_spoofing flag does not prove a DMARC record exists and a disabled one does not prove
+it is missing. DMARC is answered only from a DNS lookup answer under a DMARC key: the record text
+(starts with v=DMARC1) is True, a stated absent record (False) is False. A body with no such answer,
+which is every getFeatures body, is None (Not evaluated) together with a dataCollection error.
 """
 import json
 from datetime import datetime
@@ -42,18 +49,44 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def evaluate(data):
-    """Core evaluation logic extracted from doc transform."""
-    try:
-        # `bool(data)` asked whether a response arrived, not what it said, so any
-        # non-empty body -- including one describing the feature as OFF -- satisfied
-        # this criterion and no input could make it false. Resolved from the named
-        # feature flag(s) now; see affirmative_signal below.
-        result = affirmative_signal(data, ['anti_spoofing', 'antiSpoofing'], require_all=False)
-        return {"isDMARCConfigured": result}
+RECORD_PREFIX = "v=dmarc1"
 
-    except Exception as e:
-        return {"isDMARCConfigured": False, "error": str(e)}
+
+def read_dmarc_answer(data):
+    """The DNS lookup's DMARC answer: True for the record text, False for a stated absent record, None otherwise.
+
+    None means the body carries no usable DMARC answer: no DMARC key, an error word, a blank value, the
+    record of another protocol, a number, a list or an object. It is never a record found or absent."""
+    if not isinstance(data, dict):
+        return None
+    value = None
+    if "DMARC" in data:
+        value = data.get("DMARC")
+    else:
+        for key, candidate in data.items():
+            if isinstance(key, str) and key.lower() == "dmarc":
+                value = candidate
+                break
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low == "false":
+            return False
+        if low.startswith(RECORD_PREFIX):
+            return True
+    return None
+
+
+def not_evaluated(validation, reason, transformation_errors=None):
+    """No value beside an error: the None reaches the evaluator as Not evaluated through the collection error."""
+    return create_response(
+        result={"isDMARCConfigured": None},
+        validation=validation,
+        transformation_errors=transformation_errors,
+        api_errors=[reason],
+        recommendations=["Read DMARC from the domain's DNS record; the Proofpoint features API does not report it"]
+    )
 
 
 def transform(input):
@@ -67,98 +100,36 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return not_evaluated(validation, "Could not read the response: input validation failed")
 
-        # Run core evaluation
-        eval_result = evaluate(data)
+        answer = read_dmarc_answer(data)
+        if answer is None:
+            return not_evaluated(
+                validation,
+                "The response carries no DMARC answer: the Proofpoint features API does not report DMARC, "
+                "so it needs a DNS lookup of the domain's DMARC record")
 
-        # Extract the boolean result and any extra fields
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        if result_value:
-            pass_reasons.append(f"{criteriaKey} check passed")
-            for k, v in extra_fields.items():
-                pass_reasons.append(f"{k}: {v}")
+        if answer:
+            pass_reasons = ["A DMARC record is published for the domain"]
+            fail_reasons = []
+            recommendations = []
         else:
-            fail_reasons.append(f"{criteriaKey} check failed")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Proofpoint configuration for {criteriaKey}")
+            pass_reasons = []
+            fail_reasons = ["No DMARC record is published for the domain"]
+            recommendations = ["Publish a DMARC record for the domain"]
 
         return create_response(
-            result={criteriaKey: result_value, **extra_fields},
+            result={criteriaKey: answer},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={criteriaKey: result_value, **extra_fields}
+            input_summary={criteriaKey: answer}
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
-
-
-def affirmative_signal(data, feature_keys, require_all=False):
-    """True only when the payload POSITIVELY evidences the named feature(s).
-
-    Replaces `result = bool(data)`, which asked whether a response arrived rather than
-    what it said -- so ANY non-empty body, including one describing the feature as OFF,
-    satisfied the criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Looks for feature_keys at the top level and inside common nested containers
-    (features/settings/config/policies/result). An explicit OFF for any checked key
-    beats everything. With require_all, every key must evidence ON; otherwise any one
-    doing so is enough. Anything unread, empty, erroring or unrecognised -> False
-    (never True by default).
-    """
-    if not isinstance(data, dict) or not data:
-        return False
-    for err_key in ("error", "errors", "errorMessage", "errorType", "fault"):
-        if data.get(err_key):
-            return False
-    containers = [data]
-    for nest_key in ("features", "settings", "featureSettings", "configuration",
-                     "config", "policies", "data", "result"):
-        nested = data.get(nest_key)
-        if isinstance(nested, dict):
-            containers.append(nested)
-    off_words = ("false", "disabled", "off", "inactive", "none")
-    on_words = ("true", "enabled", "on", "active", "yes")
-
-    def signal(key):
-        for container in containers:
-            if key in container:
-                value = container[key]
-                if value is False:
-                    return False
-                if isinstance(value, str) and value.strip().lower() in off_words:
-                    return False
-                if value is True:
-                    return True
-                if isinstance(value, str) and value.strip().lower() in on_words:
-                    return True
-                if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-                    return True
-                return None  # present but an unrecognised shape -- not a signal either way
-        return None  # key not present at all
-
-    signals = [signal(k) for k in feature_keys]
-    if any(s is False for s in signals):
-        return False
-    if require_all:
-        return bool(signals) and all(s is True for s in signals)
-    return any(s is True for s in signals)
+        # An error is Not evaluated, never a fail: None plus a dataCollection error.
+        return not_evaluated(
+            {"status": "error", "errors": [], "warnings": []},
+            f"Transformation error: {str(e)}",
+            transformation_errors=[str(e)])
