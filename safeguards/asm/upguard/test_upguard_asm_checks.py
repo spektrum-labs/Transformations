@@ -17,7 +17,7 @@ def load(name):
 
 FAIL_CLOSED = [{}, None, "{}", "", {"error": True, "statusCode": 401}, {"hello": "world"},
                "not json", {"error": True, "message": "HTTP 503"}, {"data": None},
-               {"risks": [], "domains": [], "vulnerabilities": []}]
+               {"domains": []}]
 
 ALL_CHECKS = [("nocriticalfindings", "noCriticalFindings"), ("nohighfindings", "noHighFindings"),
               ("isasmenabled", "isASMEnabled"), ("exploitedfindingscount", "exploitedFindingsCount")]
@@ -55,33 +55,55 @@ def test_a_list_that_is_not_a_list_of_records_is_not_evaluated(name, key, body):
 LIST_OF = {"nocriticalfindings": "risks", "nohighfindings": "risks", "isasmenabled": "domains",
            "exploitedfindingscount": "vulnerabilities"}
 
+# What an empty list means differs by endpoint, per the vendor's public API spec: /domains documents a
+# total_results count, so an empty domain list must state it as 0; /risks and /vulnerabilities document
+# no count, so an empty list on the last page is the complete answer (a clean account).
+EMPTY_MEASURED = {"nocriticalfindings": True, "nohighfindings": True, "isasmenabled": False,
+                  "exploitedfindingscount": 0}
+
 
 @pytest.mark.parametrize("extra", [
-    {},                                          # an empty list that states nothing is not a read
-    {"total": 5},                                # the body says there is something, the list is empty
-    {"total": False},                            # a bool is not a count
-    {"total": "0"},                              # text is not a count
-    {"total": 0, "next_page_token": "abc"},      # a count of 0 on a page that is not the last
+    {"total_results": 5},                                # the body says there is something, the list is empty
+    {"total_results": False},                            # a bool is not a count
+    {"total_results": "0"},                              # text is not a count
+    {"total_results": 0, "next_page_token": "abc"},      # a count of 0 on a page that is not the last
+    {"next_page_token": "abc"},                          # an empty page that is not the last
+    {"error": True},                                     # an error marker beside the list
+    {"errors": ["x"]},
 ])
-def test_an_empty_list_without_a_stated_zero_is_not_evaluated(extra):
+def test_an_empty_list_that_is_not_a_complete_answer_is_not_evaluated(extra):
     for name, key in ALL_CHECKS:
         body = dict({LIST_OF[name]: []}, **extra)
         assert_not_evaluated(load(name)(body), key)
 
 
-@pytest.mark.parametrize("count_key", ["total", "count", "total_count", "totalCount", "total_results", "totalResults"])
-def test_an_empty_list_with_a_stated_zero_is_measured(count_key):
-    expected = {"nocriticalfindings": True, "nohighfindings": True, "isasmenabled": False,
-                "exploitedfindingscount": 0}
+def test_an_empty_domain_list_must_state_a_count_of_0():
+    assert_not_evaluated(load("isasmenabled")({"domains": []}), "isASMEnabled")
+    out = load("isasmenabled")({"domains": [], "total_results": 0, "next_page_token": None})
+    assert out["isASMEnabled"] is False
+    assert "additionalInfo" not in out
+
+
+def test_an_empty_list_on_the_last_page_is_a_clean_account_where_the_vendor_documents_no_count():
     for name, key in ALL_CHECKS:
-        out = load(name)({LIST_OF[name]: [], count_key: 0})
-        assert out[key] == expected[name]
+        if name == "isasmenabled":
+            continue
+        out = load(name)({LIST_OF[name]: [], "next_page_token": None})
+        assert out[key] == EMPTY_MEASURED[name]
+        assert "additionalInfo" not in out
+
+
+def test_a_stated_zero_is_measured_for_every_check():
+    for name, key in ALL_CHECKS:
+        out = load(name)({LIST_OF[name]: [], "total_results": 0})
+        assert out[key] == EMPTY_MEASURED[name]
         assert "additionalInfo" not in out
 
 
 def test_the_stated_zero_is_read_through_a_response_wrapper():
-    out = load("nocriticalfindings")({"apiResponse": {"risks": [], "total": 0}})
-    assert out["noCriticalFindings"] is True
+    out = load("isasmenabled")({"apiResponse": {"domains": [], "total_results": 0}})
+    assert out["isASMEnabled"] is False
+    assert "additionalInfo" not in out
 
 
 def test_the_text_never_echoes_the_body():
@@ -92,9 +114,9 @@ def test_the_text_never_echoes_the_body():
 
 
 def test_a_measured_answer_carries_no_data_collection_error():
-    for name, body, key in (("nocriticalfindings", {"risks": [], "total": 0}, "noCriticalFindings"),
+    for name, body, key in (("nocriticalfindings", {"risks": []}, "noCriticalFindings"),
                             ("nohighfindings", {"risks": [{"severity": "critical"}]}, "noHighFindings"),
-                            ("isasmenabled", {"domains": [], "total": 0}, "isASMEnabled")):
+                            ("isasmenabled", {"domains": [], "total_results": 0}, "isASMEnabled")):
         out = load(name)(body)
         assert out[key] is not None
         assert "additionalInfo" not in out
@@ -107,7 +129,7 @@ def test_severity_checks():
     crit = {"apiResponse": {"risks": [{"id": "r2", "severity": "critical"}]}}
     assert load("nocriticalfindings")(crit)["noCriticalFindings"] is False
     assert load("nohighfindings")(crit)["noHighFindings"] is True
-    assert load("nocriticalfindings")({"risks": [], "total": 0})["noCriticalFindings"] is True
+    assert load("nocriticalfindings")({"risks": []})["noCriticalFindings"] is True
     assert load("nocriticalfindings")({"risks": [{"severity": "severe"}]})["noCriticalFindings"] is False
 
 
@@ -115,7 +137,7 @@ def test_asm_enabled():
     t = load("isasmenabled")
     assert t({"domains": [{"hostname": "a.example", "active": True, "scanned_at": "2026-09-20T00:00:00Z"}]})["isASMEnabled"] is True
     assert t({"domains": [{"hostname": "a.example", "active": True}]})["isASMEnabled"] is False
-    assert t({"domains": [], "total": 0})["isASMEnabled"] is False
+    assert t({"domains": [], "total_results": 0})["isASMEnabled"] is False
 
 
 def test_exploited_count():
@@ -123,5 +145,5 @@ def test_exploited_count():
     body = {"vulnerabilities": [{"hostname": "a", "known_exploited_vulnerability": True},
                                 {"hostname": "b", "known_exploited_vulnerability": False}]}
     assert t(body)["exploitedFindingsCount"] == 1
-    assert t({"vulnerabilities": [], "total": 0})["exploitedFindingsCount"] == 0
+    assert t({"vulnerabilities": []})["exploitedFindingsCount"] == 0
     assert t({"vulnerabilities": [{"hostname": "a"}]})["exploitedFindingsCount"] is None

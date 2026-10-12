@@ -23,33 +23,32 @@ def criteria_unmeasured(result):
     return len(present) > 0 and all(result[k] is None for k in present)
 
 
-#: Keys under which a body can state how many records the vendor holds, and keys that point at a further page.
-COUNT_KEYS = ("total", "count", "total_count", "totalCount", "total_results", "totalResults")
+#: The one count the vendor's public API spec documents (on the domain list). The risk and vulnerability
+#: lists document no count.
+COUNT_KEY = "total_results"
 NEXT_PAGE_KEYS = ("next_page_token", "nextPageToken", "next_page", "next")
 
 
-def states_zero(data):
-    """True when the body itself states a count of 0 and no further page follows.
+def empty_list_is_complete(data, count_documented):
+    """True when an empty list is a real, complete answer rather than a failed or cut-off read.
 
-    An empty list alone is not a read: a failed or cut-off call can give one. A real zero is a body
-    that says so, with a whole number 0 (not a bool or text) under a count key, on the last page.
-    A count key that holds anything else contradicts the empty list.
+    Never when the body carries an error marker or points at a further page, or when it states a
+    count that is not a whole number 0 (a bool or text count, or a count above 0).
+    Where the vendor documents a count for the endpoint (count_documented), the body must state it
+    as 0. Where it documents none, the empty list on the last page is the vendor's own answer for
+    an account with nothing to report.
     """
     if not isinstance(data, dict):
+        return False
+    if data.get("error") or data.get("errors"):
         return False
     for k in NEXT_PAGE_KEYS:
         if data.get(k):
             return False
-    zero_stated = False
-    for k in COUNT_KEYS:
-        v = data.get(k)
-        if v is None:
-            continue
-        if isinstance(v, int) and not isinstance(v, bool) and v == 0:
-            zero_stated = True
-        else:
-            return False
-    return zero_stated
+    count = data.get(COUNT_KEY)
+    if count is None:
+        return not count_documented
+    return isinstance(count, int) and not isinstance(count, bool) and count == 0
 
 
 def transform_unmarked(input):
@@ -58,8 +57,9 @@ def transform_unmarked(input):
 
     Waived risks still count: a waiver is an accepted risk, not a closed one.
     False when any risk carries a severity outside the documented enum (it could be critical).
-    None (not evaluated) when the body has no risks list, holds no object record, is an empty list that
-    states no count of 0, or cannot be read.
+    None (not evaluated) when the body has no risks list, holds no object record, is an empty list that is
+    not a complete answer (an error marker, a next page, or a count above 0), or cannot be read. The vendor
+    documents no count for this list, so an empty list on the last page is a clean account.
     """
     key = "noCriticalFindings"
     documented = ["info", "low", "medium", "high", "critical"]
@@ -91,8 +91,8 @@ def transform_unmarked(input):
             return {key: None, "reason": "Response has no risks list (the /risks call did not run)"}
         if data["risks"] and not any(isinstance(r, dict) for r in data["risks"]):
             return {key: None, "reason": "Risk list holds no object record"}
-        if not data["risks"] and not states_zero(data):
-            return {key: None, "reason": "Risk list is empty and the response does not state a count of 0, so it is not read as no open risks"}
+        if not data["risks"] and not empty_list_is_complete(data, False):
+            return {key: None, "reason": "Risk list is empty but the response is not a complete answer (an error marker, a next page, or a count above 0), so it is not read as no open risks"}
         hits = 0
         for r in data["risks"]:
             sev = str((r.get("severity") if isinstance(r, dict) else "") or "").strip().lower()
