@@ -131,6 +131,10 @@ IAM4_CASES = [
     ("PASSED with empty NextToken", {"Findings": [iam4("PASSED")], "NextToken": ""}, True),
     ("PASSED with null NextToken", {"Findings": [iam4("PASSED")], "NextToken": None}, True),
     ("no IAM.4 with more pages", {"Findings": [], "NextToken": "abc"}, None),
+    ("PASSED with more pages, lower camel case token", {"Findings": [iam4("PASSED")], "nextToken": "abc"}, None),
+    ("FAILED with more pages, lower camel case token", {"Findings": [iam4("FAILED")], "nextToken": "abc"}, False),
+    ("wrapped, PASSED with a lower camel case token", {"api_response": {"Findings": [iam4("PASSED")], "nextToken": "abc"}}, None),
+    ("PASSED, token on the wrapper around the findings", {"api_response": {"Findings": [iam4("PASSED")]}, "NextToken": "abc"}, None),
     ("wrapped, PASSED with more pages", {"api_response": {"Findings": [iam4("PASSED")], "NextToken": "abc"}}, None),
 ]
 

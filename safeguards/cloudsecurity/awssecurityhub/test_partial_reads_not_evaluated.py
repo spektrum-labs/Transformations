@@ -1,0 +1,270 @@
+"""AWS Security Hub findings checks: a partial read never proves an absence.
+
+The rule, for every check that reads the Security Hub GetFindings list:
+
+  * When a next-page token is present (NextToken, or nextToken in lower camel case, on the page or on any
+    wrapper around it), or when a finding cannot be read (its Compliance entry is not an object), any result
+    that rests on the ABSENCE of a failure is None (Not evaluated): a True, a "none found" False and a total count.
+  * A negative PROVEN by a finding already seen may stay False, but its count is None, and the number seen is
+    reported as a lower bound in a separate field. It is never a total.
+  * unencryptedStorageResourceCount needs a status for all three storage controls before it can say True.
+  * A finding that cannot be read never raises: the check answers from the findings it could read.
+
+Each case runs twice: as plain Python and compiled in the production RestrictedPython sandbox
+(tools/restricted_sandbox.py) when RestrictedPython is installed. All payloads are synthetic.
+"""
+import functools
+import importlib.util
+import pathlib
+import sys
+
+import pytest
+
+HERE = pathlib.Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
+
+
+@functools.lru_cache(maxsize=None)
+def plain(name):
+    spec = importlib.util.spec_from_file_location("awssh_partial_" + name, HERE / (name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.transform
+
+
+@functools.lru_cache(maxsize=None)
+def sandboxed(name):
+    pytest.importorskip("RestrictedPython")
+    sys.path.insert(0, str(ROOT / "tools"))
+    import restricted_sandbox
+    return restricted_sandbox.load((HERE / (name + ".py")).read_text())["transform"]
+
+
+LOADERS = [plain, sandboxed]
+LOADER_IDS = ["plain", "sandbox"]
+
+
+def finding(control, status, severity="MEDIUM"):
+    return {"Compliance": {"Status": status, "SecurityControlId": control},
+            "Severity": {"Label": severity}, "RecordState": "ACTIVE"}
+
+
+# name -> (criterion key, controls the check reads)
+CONTROL_CHECKS = {
+    "areadminaccountsseparate": ("areAdminAccountsSeparate", ["IAM.1", "IAM.4"]),
+    "aredlppoliciesconfigured": ("areDLPPoliciesConfigured", ["Macie.1", "Macie.2"]),
+    "isguarddutyenabled": ("isGuardDutyEnabled", ["GuardDuty.1"]),
+    "isiamloggingenabled": ("isIAMLoggingEnabled", ["CloudTrail.1"]),
+    "ismfaenforcedforusers": ("isMFAEnforcedForUsers", ["IAM.5"]),
+    "unencryptedstorageresourcecount": ("unencryptedStorageResourceCount", ["EC2.7", "RDS.3", "EFS.1"]),
+}
+SCORE = "compliancepercentage"
+CRITICAL = "criticalopenfindingscount"
+ALL_FINDINGS_CHECKS = sorted(CONTROL_CHECKS) + [SCORE, CRITICAL]
+KEYS = {name: spec[0] for name, spec in CONTROL_CHECKS.items()}
+KEYS[SCORE] = "compliancePercentage"
+KEYS[CRITICAL] = "criticalOpenFindingsCount"
+
+
+def passing_findings(name):
+    """Findings that would make this check read True (or a real score) on a complete page."""
+    if name == SCORE:
+        return [finding("IAM.1", "PASSED"), finding("IAM.4", "PASSED")]
+    if name == CRITICAL:
+        return [finding("S3.3", "PASSED", "CRITICAL"), finding("S3.2", "FAILED", "HIGH")]
+    return [finding(control, "PASSED") for control in CONTROL_CHECKS[name][1]]
+
+
+def collection(out):
+    return out["additionalInfo"]["dataCollection"]
+
+
+def not_evaluated(out, name):
+    inner = out["transformedResponse"]
+    assert inner[KEYS[name]] is None, name + " = " + repr(inner[KEYS[name]])
+    assert collection(out)["status"] == "error"
+    assert collection(out)["errors"]
+    assert out["additionalInfo"]["evaluation"]["passReasons"] == []
+    # a reason, not a crash: the check did not raise
+    assert out["additionalInfo"]["transformation"]["status"] == "success"
+
+
+def answered(out, name):
+    inner = out["transformedResponse"]
+    assert collection(out)["status"] == "success"
+    return inner[KEYS[name]]
+
+
+# --- a clean page still answers --------------------------------------------------------------
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+def test_a_complete_page_still_answers(loader, name):
+    out = loader(name)({"Findings": passing_findings(name)})
+    if name == CRITICAL:
+        assert answered(out, name) is True
+    elif name == SCORE:
+        assert answered(out, name) == 100
+    else:
+        assert answered(out, name) is True
+
+
+# --- the next-page token, in every spelling and position --------------------------------------
+
+TOKEN_SHAPES = [
+    ("NextToken on the page", lambda f: {"Findings": f, "NextToken": "abc"}),
+    ("nextToken on the page", lambda f: {"Findings": f, "nextToken": "abc"}),
+    ("NextToken on the wrapper", lambda f: {"api_response": {"Findings": f}, "NextToken": "abc"}),
+    ("nextToken on the wrapper", lambda f: {"response": {"Findings": f}, "nextToken": "abc"}),
+    ("nextToken on an inner wrapper", lambda f: {"api_response": {"result": {"Findings": f}, "nextToken": "abc"}}),
+    ("nextToken in a data envelope", lambda f: {"data": {"Findings": f, "nextToken": "abc"}, "validation": {"status": "skipped"}}),
+]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("label,shape", TOKEN_SHAPES, ids=[s[0] for s in TOKEN_SHAPES])
+def test_a_pass_from_a_partial_page_is_not_a_pass(loader, name, label, shape):
+    not_evaluated(loader(name)(shape(passing_findings(name))), name)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("token", [None, ""])
+@pytest.mark.parametrize("key", ["NextToken", "nextToken"])
+def test_an_empty_token_is_not_a_next_page(loader, name, key, token):
+    out = loader(name)({"Findings": passing_findings(name), key: token})
+    assert collection(out)["status"] == "success"
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", sorted(CONTROL_CHECKS))
+@pytest.mark.parametrize("key", ["NextToken", "nextToken"])
+def test_a_failing_control_seen_on_a_partial_page_stays_false(loader, name, key):
+    control = CONTROL_CHECKS[name][1][0]
+    out = loader(name)({"Findings": [finding(control, "FAILED")], key: "abc"})
+    assert out["transformedResponse"][KEYS[name]] is False
+    assert collection(out)["status"] == "success"
+
+
+# --- counts of a partial read are a lower bound, never a total ---------------------------------
+
+CRITICAL_FINDINGS = [finding("IAM.4", "FAILED", "CRITICAL"), finding("S3.1", "FAILED", "CRITICAL"),
+                     finding("S3.2", "FAILED", "HIGH"), finding("S3.3", "PASSED", "CRITICAL")]
+UNENCRYPTED_FINDINGS = [finding("EC2.7", "FAILED"), finding("RDS.3", "FAILED"), finding("EFS.1", "PASSED"),
+                        finding("S3.1", "FAILED")]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("key", ["NextToken", "nextToken"])
+def test_critical_count_of_a_partial_page_is_a_lower_bound(loader, key):
+    inner = loader(CRITICAL)({"Findings": CRITICAL_FINDINGS, key: "abc"})["transformedResponse"]
+    assert inner["criticalOpenFindingsCount"] is False
+    assert inner["openCriticalFindings"] is None
+    assert inner["openCriticalFindingsAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("key", ["NextToken", "nextToken"])
+def test_unencrypted_count_of_a_partial_page_is_a_lower_bound(loader, key):
+    inner = loader("unencryptedstorageresourcecount")({"Findings": UNENCRYPTED_FINDINGS, key: "abc"})["transformedResponse"]
+    assert inner["unencryptedStorageResourceCount"] is False
+    assert inner["unencryptedResources"] is None
+    assert inner["unencryptedResourcesAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_counts_of_a_complete_page_are_totals_with_no_lower_bound_field(loader):
+    crit = loader(CRITICAL)({"Findings": CRITICAL_FINDINGS})["transformedResponse"]
+    assert crit["openCriticalFindings"] == 2 and "openCriticalFindingsAtLeast" not in crit
+    unenc = loader("unencryptedstorageresourcecount")({"Findings": UNENCRYPTED_FINDINGS})["transformedResponse"]
+    assert unenc["unencryptedResources"] == 2 and "unencryptedResourcesAtLeast" not in unenc
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_a_lower_bound_reason_says_so(loader):
+    out = loader(CRITICAL)({"Findings": CRITICAL_FINDINGS, "NextToken": "abc"})
+    reasons = " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+    assert "At least 2" in reasons
+
+
+# --- unencryptedStorageResourceCount needs all three controls to say True ---------------------
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("read", [["EC2.7"], ["RDS.3"], ["EFS.1"], ["EC2.7", "RDS.3"], ["RDS.3", "EFS.1"]])
+def test_fewer_than_all_three_storage_controls_is_not_a_pass(loader, read):
+    out = loader("unencryptedstorageresourcecount")({"Findings": [finding(c, "PASSED") for c in read]})
+    not_evaluated(out, "unencryptedstorageresourcecount")
+    assert out["transformedResponse"]["unencryptedResources"] is None
+    unread = [c for c in ["EC2.7", "RDS.3", "EFS.1"] if c not in read]
+    assert all(c in " ".join(collection(out)["errors"]) for c in unread)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_all_three_storage_controls_passing_is_true(loader):
+    out = loader("unencryptedstorageresourcecount")({"Findings": [finding(c, "PASSED") for c in ["EC2.7", "RDS.3", "EFS.1"]]})
+    assert out["transformedResponse"]["unencryptedStorageResourceCount"] is True
+    assert out["transformedResponse"]["unencryptedResources"] == 0
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_a_failure_seen_with_fewer_than_three_controls_read_stays_false(loader):
+    out = loader("unencryptedstorageresourcecount")({"Findings": [finding("EC2.7", "FAILED")]})
+    inner = out["transformedResponse"]
+    assert inner["unencryptedStorageResourceCount"] is False and inner["unencryptedResources"] == 1
+
+
+# --- a finding that cannot be read never raises -----------------------------------------------
+
+UNREADABLE = ["oops", ["IAM.1"], 7, True, [{"Status": "FAILED"}]]
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("bad", UNREADABLE, ids=[repr(b) for b in UNREADABLE])
+def test_an_unreadable_finding_beside_passes_is_not_a_pass(loader, name, bad):
+    findings = passing_findings(name) + [{"Compliance": bad, "Severity": {"Label": "CRITICAL"}}]
+    not_evaluated(loader(name)({"Findings": findings}), name)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", ALL_FINDINGS_CHECKS)
+@pytest.mark.parametrize("bad", UNREADABLE, ids=[repr(b) for b in UNREADABLE])
+def test_only_unreadable_findings_is_not_evaluated(loader, name, bad):
+    not_evaluated(loader(name)({"Findings": [{"Compliance": bad}, {"Compliance": bad}]}), name)
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("name", sorted(CONTROL_CHECKS))
+def test_an_unreadable_finding_beside_a_failure_stays_false(loader, name):
+    control = CONTROL_CHECKS[name][1][0]
+    out = loader(name)({"Findings": [{"Compliance": "oops"}, finding(control, "FAILED")]})
+    assert out["transformedResponse"][KEYS[name]] is False
+    assert collection(out)["status"] == "success"
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_counts_beside_an_unreadable_finding_are_lower_bounds(loader):
+    crit = loader(CRITICAL)({"Findings": CRITICAL_FINDINGS + [{"Compliance": "oops"}]})["transformedResponse"]
+    assert crit["criticalOpenFindingsCount"] is False
+    assert crit["openCriticalFindings"] is None and crit["openCriticalFindingsAtLeast"] == 2
+    unenc = loader("unencryptedstorageresourcecount")({"Findings": UNENCRYPTED_FINDINGS + [{"Compliance": ["x"]}]})["transformedResponse"]
+    assert unenc["unencryptedResources"] is None and unenc["unencryptedResourcesAtLeast"] == 2
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+@pytest.mark.parametrize("severity", ["CRITICAL", ["CRITICAL"], None, 3])
+def test_a_failing_finding_with_an_unreadable_severity_is_not_a_clean_zero(loader, severity):
+    findings = [finding("S3.3", "PASSED", "CRITICAL"), {"Compliance": {"Status": "FAILED", "SecurityControlId": "S3.9"},
+                                                         "Severity": severity}]
+    out = loader(CRITICAL)({"Findings": findings})
+    inner = out["transformedResponse"]
+    assert inner["criticalOpenFindingsCount"] is not True
+    assert out["additionalInfo"]["transformation"]["status"] == "success"
+
+
+@pytest.mark.parametrize("loader", LOADERS, ids=LOADER_IDS)
+def test_a_finding_with_no_compliance_entry_is_just_not_counted(loader):
+    # No Compliance at all is a finding that is not a control finding; it is not an unreadable one.
+    out = loader(CRITICAL)({"Findings": passing_findings(CRITICAL) + [{"Severity": {"Label": "LOW"}}]})
+    assert out["transformedResponse"]["criticalOpenFindingsCount"] is True
