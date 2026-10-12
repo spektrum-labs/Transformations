@@ -159,6 +159,22 @@ jobs:
       - name: Every transform must compile in the production sandbox
         run: python tools/check_sandbox_compile.py
 
+      # The sixth contract: every criteria key a transform emits is defined, once, in
+      # contracts/criteria-registry/keys/. #1069 shipped the checker and the registry but
+      # wired neither into this workflow, and the gap was measured within two days: on
+      # 2026-10-08 main carried 12 emitted keys that were neither registered nor allowlisted
+      # (JumpCloud, Sophos behavioural monitoring, Google admin MFA, CrowdStrike EDR), and
+      # every push run was green because nothing ran the check. Same job, not a new one,
+      # so no new required-check name is created; it runs on push to trunk as well as on
+      # pull requests, like every step above. The allowlist may only shrink and is
+      # regenerated with --emit-allowlist, never hand-edited. Schema failures are never
+      # allowlisted. RestrictedPython is installed by the sandbox step above.
+      - name: Criteria-registry checker self-test
+        run: python tools/check_criteria_registry.py --self-test
+
+      - name: Every criteria key a transform emits must be registered
+        run: python tools/check_criteria_registry.py
+
   # WHY THIS JOB WAS ADDED. Measured 2026-09-22 on this branch: the repo contains
   # 9 pytest files holding 71 tests, and no workflow here ran a single one of them
   # -- `grep -rn "pytest\|unittest" .github/workflows/` returned nothing. All 71

@@ -1,0 +1,43 @@
+{
+  "name": "enabledCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Count of non-mobile CrowdStrike Falcon hosts whose sensor is outside Reduced Functionality Mode with an agent_version and a sensor_update policy. Supporting figure emitted beside isEDREnabled; it carries no verdict of its own.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "non-mobile hosts returned by the Falcon host-details read",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "not a verdict key: it carries no pass or fail of its own; null when the host records cannot be read",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": [
+    "Endpoint Security"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "d61a39d7-f00a-4963-bc9c-38164918e883",
+      "name": "CrowdStrike Falcon-Endpoint Security"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/crowdstrike-falcon/isEDREnabled.py: emitted in the result beside isEDREnabled"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered at V0 so the registry gate can fail push runs on main; proposed, single emitter. A supporting count, registered so it is defined rather than allowlisted."
+    }
+  ]
+}

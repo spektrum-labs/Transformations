@@ -1,0 +1,43 @@
+{
+  "name": "isAPIAccountPermissionScoped",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when JumpCloud's complete service-account inventory holds at least one service account and none of them has a full-admin role (Administrator With Billing or Administrator). False when any service account holds a full-admin role.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "service accounts returned by GET /api/v2/service-accounts, read completely against totalCount",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "a complete service-account list with at least one account and no account whose role is a full-admin system role",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34",
+      "name": "JumpCloud"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/identity-and-access-management/jumpcloud/isAPIAccountPermissionScoped.py: module docstring Verdict block"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered at V0 so the registry gate can fail push runs on main; proposed, single emitter. An empty inventory is not measured, by the file's own rule."
+    }
+  ]
+}

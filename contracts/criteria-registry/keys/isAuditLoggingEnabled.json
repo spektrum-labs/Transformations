@@ -1,0 +1,130 @@
+{
+  "name": "isAuditLoggingEnabled",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- every wired implementation answers an activity proxy ('audit records came back from the read'), but they disagree on recency and on what an empty read means (false at seven integrations, not measured at JumpCloud and Duo, false-if-stale at Google), and one unwired file answers 'an audit-log export job was accepted'. See conflict.positions.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- differs per position: audit records in the vendor's default read window (no recency), Directory Insights events, Duo administrator events of the last 30 days judged on the newest one, Google Admin audit events judged on the newest one, or one report-export request",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown until ruled: at least one audit record in the read (most vendors), a newest administrator event no more than 3 days old (Duo) or 90 days old (Google), or an accepted audit-log export job (Safe Security); no implementation reads a logging configuration",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management", "Multifactor Authentication", "Network Security"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+    {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+    {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)", "note": "RTA URL pinned at ea2d2a3f; the file is identical on main"},
+    {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"},
+    {"srn": "37d36d50-df89-42f0-9435-c130ba6dc717", "name": "Duo - MSP partner account"},
+    {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management", "note": "RTA URL pinned at f9020402 (IS repo config says develop); the file is identical on main"},
+    {"srn": "b4cb18a5-7d08-4a1a-855e-ad5d38127758", "name": "Britive - IAM", "note": "catalogue category is null"},
+    {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint", "note": "catalogue category is null"},
+    {"srn": "5bc68a9a-9e8e-4036-bb4b-310b250a6da5", "name": "Zscaler", "note": "catalogue category is null; two RTA rows (methods isAuditLoggingEnabled and getAuditLogs)"},
+    {"srn": "5cdba755-d162-4cbe-b264-760d316ed66c", "name": "Google - MFA", "note": "catalogue category is null; wired in the production definition but no Integration-Service repo config row"}
+  ],
+  "aliases": [],
+  "owner": "J.J.",
+  "conflict": {
+    "summary": "Eleven wired integrations, nine files. The type agrees (boolean) and every wired file answers from activity, never from a logging setting, so the configured-versus-activity split recorded on isIAMLoggingEnabled applies here too, with no configured side yet. Inside the activity side the files still disagree on recency (none, 3 days, 90 days) and on whether an empty read is false or not measured, so the same quiet tenant reads false at Okta, Azure AD, Britive, Saviynt and Zscaler and Not evaluated at Duo and JumpCloud. Separately: at Okta the isAuditLoggingEnabled file and is_mfa_logging_enabled.py run the same affirmative_signal over the same getAuditLogging read, so isAuditLoggingEnabled, isMFALoggingEnabled and isIAMLoggingEnabled are one value under three names there.",
+    "positions": [
+      {
+        "meaning": "At least one record is returned by the audit-log read, or the body carries an explicit on flag (enabled, loggingEnabled, auditLoggingEnabled, status). No recency. An empty read is a measured false.",
+        "valueType": "boolean",
+        "population": "audit records in the vendor's default read window",
+        "integrations": [
+          {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+          {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+          {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+          {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)"},
+          {"srn": "b4cb18a5-7d08-4a1a-855e-ad5d38127758", "name": "Britive - IAM", "note": "a totalCount above 0 with an empty page also passes"},
+          {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"},
+          {"srn": "5bc68a9a-9e8e-4036-bb4b-310b250a6da5", "name": "Zscaler"}
+        ],
+        "files": [
+          "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/isauditloggingenabled.py:94,:120-171",
+          "safeguards/mfa/azure/isauditloggingenabled.py (byte-identical to the 86ded564 copy)",
+          "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isauditloggingenabled.py:102 @ ea2d2a3f",
+          "safeguards/iam/britive/isauditloggingenabled.py:64,:70",
+          "safeguards/iam/saviynt/isauditloggingenabled.py:30,:35,:38",
+          "safeguards/sase/zscaler/isauditloggingenabled.py:102-118"
+        ],
+        "source": "Files read for this entry; RTA descriptions 'returns true if records exist, else false' (Okta, Okta - Application, Azure AD, Azure AD (One-Click)) in the 2026-10-06 definition snapshot"
+      },
+      {
+        "meaning": "At least one Directory Insights event carrying id, timestamp and event_type is returned. No recency. An empty read is not measured (null, dataCollection error).",
+        "valueType": "boolean",
+        "population": "JumpCloud Directory Insights events returned by searchDirectoryAuditEvents (up to 10000 rows)",
+        "integrations": [
+          {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"}
+        ],
+        "files": ["safeguards/identity-and-access-management/jumpcloud/isAuditLoggingEnabled.py:100,:160,:183"],
+        "source": "File read for this entry; test_jumpcloud_logs_fail_closed.py"
+      },
+      {
+        "meaning": "The newest well-formed administrator log event in the last 30 days is no more than maxEventAgeDays old (default 3). Never false: an empty, stale or unreadable read is not measured (null).",
+        "valueType": "boolean",
+        "population": "Duo administrator log, /admin/v1/logs/administrator, last 30 days, at most 1000 events",
+        "integrations": [
+          {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"},
+          {"srn": "37d36d50-df89-42f0-9435-c130ba6dc717", "name": "Duo - MSP partner account"}
+        ],
+        "files": ["safeguards/iam/duo/isAuditLoggingEnabled.py:50-51,:262,:337,:362"],
+        "source": "File read for this entry; test_isAuditLoggingEnabled.py"
+      },
+      {
+        "meaning": "The newest Google Workspace Admin audit event in the Reports API feed is within 90 days. An empty feed or a stale newest event is a measured false.",
+        "valueType": "boolean",
+        "population": "Admin audit events (applicationName admin) on the first page of the Reports API activity feed",
+        "integrations": [
+          {"srn": "5cdba755-d162-4cbe-b264-760d316ed66c", "name": "Google - MFA"}
+        ],
+        "files": ["safeguards/mfa/google/isauditloggingenabled.py:29,:154,:164"],
+        "source": "File read for this entry; RTA description in the 2026-10-06 definition snapshot; test_google_mfa_policy_checks.py"
+      },
+      {
+        "meaning": "A SAFE One audit-log report export request was accepted: the body has success true and a job uuid. No audit record is read.",
+        "valueType": "boolean",
+        "population": "one POST /api/v3/reports response",
+        "integrations": [
+          {"srn": "bb8f299c-c701-423d-9702-8dd0769411d6", "name": "Safe Security - CRQ", "note": "unwired: catalogue definition is null; the RTA row exists only in the Integration-Service repo config crq/safesecurity.json; SRN matched by name"}
+        ],
+        "files": ["safeguards/crq/safesecurity/isauditloggingenabled.py:65"],
+        "source": "File read for this entry; 2026-10-06 definition snapshot shows definition null"
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Rule this key together with isIAMLoggingEnabled, whose open proposal keeps the logging-key name for a configured state and moves record-presence answers to a presence key whose empty read is not_measured. No file here reads a configuration, so under that proposal every wired position would move and this name would be left with no implementation until one reads a setting. Settle recency (none, 3 days, 90 days) as part of the same ruling, and decide separately whether an accepted export job (Safe Security) is evidence for any logging key."
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Does isAuditLoggingEnabled mean 'audit logging is configured on' or 'audit records were returned', how recent must the newest record be, and is an empty read false or not measured? Is it one key with isIAMLoggingEnabled (and, at Okta, isMFALoggingEnabled), since Okta answers all three from one read?"
+    }
+  },
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/isauditloggingenabled.py:82,:94,:113,:120-171",
+    "safeguards/mfa/azure/isauditloggingenabled.py",
+    "safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/isauditloggingenabled.py:90,:102,:121",
+    "safeguards/iam/britive/isauditloggingenabled.py:64,:70,:93,:130",
+    "safeguards/iam/saviynt/isauditloggingenabled.py:30,:35,:38,:47",
+    "safeguards/sase/zscaler/isauditloggingenabled.py:83,:102-118,:137",
+    "safeguards/identity-and-access-management/jumpcloud/isAuditLoggingEnabled.py:100,:160,:183",
+    "safeguards/iam/duo/isAuditLoggingEnabled.py:50-51,:262,:337,:362",
+    "safeguards/mfa/google/isauditloggingenabled.py:29,:109,:154,:164,:170",
+    "safeguards/crq/safesecurity/isauditloggingenabled.py:65,:83,:120",
+    "safeguards/iam/duo/test_isAuditLoggingEnabled.py",
+    "safeguards/identity-and-access-management/jumpcloud/test_jumpcloud_logs_fail_closed.py",
+    "safeguards/mfa/google/test_google_mfa_policy_checks.py",
+    "integration-service integration_configs: iam/okta.json, iam/okta_app.json, iam/azure-ad.json, iam/azure-ad-oneclick.json, mfa/azure.json, iam/duo.json, iam/duo_msp.json, iam/britive.json, iam/saviynt.json, networksecurity/zscaler-1.json, networksecurity/zscaler_zia.json, identity-and-access-management/jumpcloud.json, crq/safesecurity.json",
+    "spektrum-labs-cli reports/qc-2026-10-06/defs/<srn>.json: the eleven production RTA rows, methods and descriptions; bb8f299c definition null",
+    "contracts/criteria-registry-allowlist.json: the ten file::isAuditLoggingEnabled entries"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-08", "change": "Registered at V0 so the registry gate can fail push runs on main; contested because the files answer an activity proxy with three recency rules and two empty-read meanings, and one unwired file answers 'an export job was accepted'."}
+  ]
+}

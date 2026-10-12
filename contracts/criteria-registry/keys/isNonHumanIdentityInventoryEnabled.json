@@ -1,0 +1,43 @@
+{
+  "name": "isNonHumanIdentityInventoryEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when JumpCloud's complete service-account inventory holds at least one service account, so machine identities are inventoried separately from human admins' API keys. False when the complete inventory is empty.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "service accounts returned by GET /api/v2/service-accounts, read completely against totalCount",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "a complete service-account list holding at least one service account",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34",
+      "name": "JumpCloud"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/identity-and-access-management/jumpcloud/isNonHumanIdentityInventoryEnabled.py: module docstring Verdict block"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered at V0 so the registry gate can fail push runs on main; proposed, single emitter. Presence of an inventory, not its completeness."
+    }
+  ]
+}

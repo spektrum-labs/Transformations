@@ -1,0 +1,43 @@
+{
+  "name": "isEDREnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when at least one non-mobile CrowdStrike Falcon host runs a sensor outside Reduced Functionality Mode, with an agent_version and a sensor_update policy. ANY ONE such sensor makes it true: it says EDR telemetry is switched on somewhere in the tenant, not that it covers the fleet (coverage is requiredCoveragePercentage).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "non-mobile hosts returned by the Falcon host-details read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "at least one host record with reduced_functionality_mode not true, a non-empty agent_version and a sensor_update policy",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Endpoint Security"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "d61a39d7-f00a-4963-bc9c-38164918e883",
+      "name": "CrowdStrike Falcon-Endpoint Security"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/crowdstrike-falcon/isEDREnabled.py: the enabled_count > 0 rule and the create_response result"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered at V0 so the registry gate can fail push runs on main; proposed, single emitter. The any-one-sensor rule is recorded as written, not endorsed."
+    }
+  ]
+}
