@@ -7,15 +7,32 @@ Evidence: getUserMFAStatus, Directory API users.list (customer=my_customer), pag
 isAdmin is the documented super-administrator flag on the user resource.
 
 Rule (fail closed): True only when at least one active super admin (isAdmin true) exists and every one has isEnforcedIn2Sv true.
+False when a super admin was read and one has isEnforcedIn2Sv false (a real finding).
 Google sends booleans as the strings "True"/"False". An error envelope, a missing scope,
-no users list, or a list still carrying nextPageToken is not measured (False, dataCollection error).
+no users list, a list still carrying nextPageToken, a body that is not JSON, a list with no
+active user, or a list with no active super admin (every tenant has one, so none means the list
+cannot be trusted) is not measured (None, dataCollection error), never False.
 """
 
 import json
 from datetime import datetime
 
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isSuperAdminMfaFullyEnforced',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 CRITERIA_KEY = "isSuperAdminMfaFullyEnforced"
-NOT_MEASURED = False
+NOT_MEASURED = None
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/admin.directory.user.readonly"
 SCOPE_HINTS = ["scope_not_granted", "access_denied", "unauthorized_client",
                "insufficient authentication scopes", "access_token_scope_insufficient",
@@ -41,6 +58,12 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -164,7 +187,7 @@ def transform(input):
 def evaluate(users):
     admins = [u for u in users if is_true(u.get("isAdmin"))]
     if not admins:
-        return create_response(result={CRITERIA_KEY: False}, api_errors=["No active super admin was returned"],
+        return create_response(result={CRITERIA_KEY: NOT_MEASURED}, api_errors=["No active super admin was returned"],
                                fail_reasons=["Not measured: no active super admin was returned"])
     missing = [u for u in admins if not is_true(u.get("isEnforcedIn2Sv"))]
     affected = account_names(missing)
