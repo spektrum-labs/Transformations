@@ -749,6 +749,25 @@ def test_certificates_a_secrets_manager_signer_in_each_partition_is_true():
         assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is True
 
 
+# --- the four keys that are not wired -----------------------------------------------------
+# ipsEnabled, sslDeepInspectionEnabled, restApiTokenExpiryEnforced and isRulestackCommitClean are not
+# in the Integration-Service retrievalTransformationArray, so they show as not covered. Each file
+# says so at the top, so nobody reads it as a live check.
+
+NOT_WIRED_KEYS = ["ipsEnabled", "sslDeepInspectionEnabled", "restApiTokenExpiryEnforced",
+                  "isRulestackCommitClean"]
+
+
+@pytest.mark.parametrize("name", NOT_WIRED_KEYS)
+def test_a_not_wired_key_file_says_not_wired_in_its_docstring(name):
+    assert "NOT WIRED" in (load(name).__doc__ or "")
+
+
+def test_the_commit_clean_file_names_the_condition_for_wiring_it_again():
+    doc = load("isRulestackCommitClean").__doc__
+    assert "real read-only connection" in doc and "re-wire" in doc
+
+
 # --- restApiTokenExpiryEnforced ---------------------------------------------------------
 # The reference bounds the tenant ceiling MaxExpiryTime to 480 through 1440, so any value the
 # vendor can return is inside it and the key would always be True. Not evaluated until a read
