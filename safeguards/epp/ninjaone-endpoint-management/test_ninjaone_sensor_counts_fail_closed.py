@@ -114,7 +114,13 @@ def test_stale_without_any_last_contact_is_unevaluated():
 
 
 def av_report(rows):
-    return {"results": rows, "cursor": {"name": "c1", "offset": 0, "count": len(rows), "expires": 0}}
+    # The device list beside the report is the roster; every device in it is in the report here.
+    ids = []
+    for r in rows:
+        if isinstance(r, dict) and r.get("deviceId") is not None and r.get("deviceId") not in ids:
+            ids.append(r.get("deviceId"))
+    devices = [{"id": i, "nodeClass": "WINDOWS_WORKSTATION", "lastContact": NOW - 60} for i in ids]
+    return {"results": rows, "devices": devices, "cursor": {"name": "c1", "offset": 0, "count": len(rows), "expires": 0}}
 
 
 def test_unprotected_measures_a_real_report():
