@@ -7,7 +7,9 @@ Count of quarantined messages awaiting a restore decision: end-user restore requ
 neither restored nor declined (entityPayload.isRestoreRequested / isRestored / isRestoreDeclined,
 API reference, Additional Response Parameters for Email). The count is responseEnvelope.recordsNumber
 (total matches; measured on live event queries, where it reads 10000 against a 100-record page), or
-the page length when the page is complete. If any returned entity does not match the filter, the
+the page length when the page is complete. When a scrollId says more pages remain, the count is the
+vendor's recordsNumber only if that total is larger than the page; otherwise the page length is only a
+lower bound and the count is None. If any returned entity does not match the filter, the
 vendor did not apply it and the count is unreadable: None, which fails the check. No live payload
 of this method has been captured yet.
 Fails closed: an empty, error or unrecognised body proves nothing.
@@ -55,44 +57,67 @@ def transform_unmarked(input):
             },
         }
 
+    def http_status(value):
+        """An HTTP status as a number: a number, or text such as "401" or " 403 ". Booleans, blank
+        or non-numeric text and any other type are None, which is not an error."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isascii() and digits.isdigit():
+                return int(digits)
+        return None
+
+    def marker_error(obj):
+        """Fixed reason when this one object says the call failed (error, errors, or an HTTP
+        status of 400 or more in status, statusCode or status_code), else None. The vendor's own
+        response text is never copied into the reason."""
+        if obj.get("error") or obj.get("errors"):
+            return "Harmony Email & Collaboration answered with an error; nothing is measured."
+        for field in ("status", "statusCode", "status_code"):
+            code = http_status(obj.get(field))
+            if code is not None and code >= 400:
+                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
+        return None
+
     def hec_body(data):
         """The HEC API answers {"responseEnvelope": {...}, "responseData": [...]}. Unwrap
-        Integration-Service wrappers until that shape is found; anything else is None."""
+        Integration-Service wrappers until that shape is found. Returns (body, error): body is
+        None when the shape is not found; error is a fixed reason when a wrapper around the body
+        carries an error marker, in which case nothing inside it is trusted."""
         for attempt in range(4):
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
                 except Exception:
-                    return None
+                    return None, None
             if not isinstance(data, dict):
-                return None
+                return None, None
             if isinstance(data.get("responseData"), list):
-                return data
+                return data, None
+            err = marker_error(data)
+            if err:
+                return None, err
             nxt = None
             for key in ("apiResponse", "response", "result", "data", "rawResponse"):
                 if isinstance(data.get(key), (dict, str)):
                     nxt = data[key]
                     break
             if nxt is None:
-                return None
+                return None, None
             data = nxt
-        return None
+        return None, None
 
     def envelope_error(body):
-        """Fixed reason when the response says the call failed, else None. The vendor's own
-        response text is never copied into the reason."""
+        """Fixed reason when the response body says the call failed, else None."""
         env = body.get("responseEnvelope")
         if isinstance(env, dict):
             code = env.get("responseCode")
             if code is not None and str(code) not in ("200", "0"):
                 return "Harmony Email & Collaboration answered with an error status; nothing is measured."
-        if body.get("error") or body.get("errors"):
-            return "Harmony Email & Collaboration answered with an error; nothing is measured."
-        for field in ("statusCode", "status_code"):
-            status = body.get(field)
-            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
-        return None
+        return marker_error(body)
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""
@@ -121,7 +146,9 @@ def transform_unmarked(input):
     try:
         if isinstance(input, bytes):
             input = input.decode("utf-8")
-        body = hec_body(input)
+        body, err = hec_body(input)
+        if err:
+            return create_response(None, fail_reasons=[err], api_errors=[err])
         if body is None:
             return create_response(None, fail_reasons=["No Harmony Email & Collaboration response "
                                    "(responseData) in the input; nothing is proven"],
@@ -148,8 +175,11 @@ def transform_unmarked(input):
         raw_total = text(env.get("recordsNumber"))
         if re.match(r"^[0-9]+$", raw_total):
             total = int(raw_total)
-        if total is None and not text(env.get("scrollId")):
+        paged = bool(text(env.get("scrollId")) or text(body.get("scrollId")))
+        if total is None and not paged:
             total = len(records)
+        # a next-page token with a total that is not above the page: the page is only a lower bound
+        lower_bound = paged and total is not None and total <= len(body["responseData"])
         if total is not None and total < len(records):
             total = len(records)
         summary = {"entitiesOnFirstPage": len(records), "recordsNumber": raw_total,
@@ -158,9 +188,9 @@ def transform_unmarked(input):
             return create_response(None, fail_reasons=[str(stray) + " returned entit(y/ies) are not pending restore "
                                    "requests, so the vendor did not apply the filter; the count is unreadable"],
                                    input_summary=summary)
-        if total is None:
-            return create_response(None, fail_reasons=["The response is paged and carries no recordsNumber; the count "
-                                   "is unreadable"], input_summary=summary)
+        if total is None or lower_bound:
+            return create_response(None, fail_reasons=["The response is paged and carries no recordsNumber above the "
+                                   "page; the count is unreadable"], input_summary=summary)
         summary["pendingRestoreRequests"] = total
         if total == 0:
             return create_response(0, pass_reasons=["No quarantined message is awaiting a restore decision"],

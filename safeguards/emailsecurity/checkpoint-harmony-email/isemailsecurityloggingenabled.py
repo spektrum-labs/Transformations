@@ -10,6 +10,9 @@ required; a tenant with no logged events or no logged actions reads false.
 Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised:
 it proves nothing, so it is never reported as False. A readable answer that lists nothing keeps the
 verdict described above.
+One page of a paged answer is not the whole window: when the response carries a scrollId or a
+recordsNumber above the page, a match already seen still counts, but an absence is not proven, so a
+page with no match reads None (Not evaluated) and never False.
 """
 
 import json
@@ -47,44 +50,97 @@ def transform(input):
         return create_response(None, fail_reasons=[reason], api_errors=[reason],
                                transformation_errors=transformation_errors)
 
+    def http_status(value):
+        """An HTTP status as a number: a number, or text such as "401" or " 403 ". Booleans, blank
+        or non-numeric text and any other type are None, which is not an error."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            digits = value.strip()
+            if digits.isascii() and digits.isdigit():
+                return int(digits)
+        return None
+
+    def marker_error(obj):
+        """Fixed reason when this one object says the call failed (error, errors, or an HTTP
+        status of 400 or more in status, statusCode or status_code), else None. The vendor's own
+        response text is never copied into the reason."""
+        if obj.get("error") or obj.get("errors"):
+            return "Harmony Email & Collaboration answered with an error; nothing is measured."
+        for field in ("status", "statusCode", "status_code"):
+            code = http_status(obj.get(field))
+            if code is not None and code >= 400:
+                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
+        return None
+
     def hec_body(data):
         """The HEC API answers {"responseEnvelope": {...}, "responseData": [...]}. Unwrap
-        Integration-Service wrappers until that shape is found; anything else is None."""
+        Integration-Service wrappers until that shape is found. Returns (body, error): body is
+        None when the shape is not found; error is a fixed reason when a wrapper around the body
+        carries an error marker, in which case nothing inside it is trusted."""
         for attempt in range(4):
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
                 except Exception:
-                    return None
+                    return None, None
             if not isinstance(data, dict):
-                return None
+                return None, None
             if isinstance(data.get("responseData"), list):
-                return data
+                return data, None
+            err = marker_error(data)
+            if err:
+                return None, err
             nxt = None
             for key in ("apiResponse", "response", "result", "data", "rawResponse"):
                 if isinstance(data.get(key), (dict, str)):
                     nxt = data[key]
                     break
             if nxt is None:
-                return None
+                return None, None
             data = nxt
-        return None
+        return None, None
 
     def envelope_error(body):
-        """Fixed reason when the response says the call failed, else None. The vendor's own
-        response text is never copied into the reason."""
+        """Fixed reason when the response body says the call failed, else None."""
         env = body.get("responseEnvelope")
         if isinstance(env, dict):
             code = env.get("responseCode")
             if code is not None and str(code) not in ("200", "0"):
                 return "Harmony Email & Collaboration answered with an error status; nothing is measured."
-        if body.get("error") or body.get("errors"):
-            return "Harmony Email & Collaboration answered with an error; nothing is measured."
-        for field in ("statusCode", "status_code"):
-            status = body.get(field)
-            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-                return "Harmony Email & Collaboration answered with an HTTP error; nothing is measured."
+        return marker_error(body)
+
+    def records_total(body):
+        """The vendor's recordsNumber as an int, else None."""
+        env = body.get("responseEnvelope")
+        if isinstance(env, dict):
+            try:
+                return int(str(env.get("recordsNumber")).strip())
+            except Exception:
+                return None
         return None
+
+    def more_pages(body):
+        """True when the response says records remain beyond this page: a scrollId that is not
+        empty (the stored raw form writes null as "None"), or a recordsNumber larger than the
+        page. A partial page cannot prove an absence."""
+        env = body.get("responseEnvelope")
+        for holder in (env if isinstance(env, dict) else {}, body):
+            token = holder.get("scrollId")
+            if token and str(token).strip().lower() not in ("", "none", "null"):
+                return True
+        total = records_total(body)
+        return total is not None and total > len(body["responseData"])
+
+    def partial_not_measured(what, summary):
+        """No verdict: the response is one page of several, so a result that rests on records not
+        read cannot be given. `what` names the claim that would need the unread pages."""
+        reason = ("The response is a partial page (the vendor reports more records than it returned), so "
+                  + what + " is not proven; nothing is measured.")
+        return create_response(None, fail_reasons=[reason], api_errors=[reason],
+                               input_summary=dict(summary, partialPage=True))
 
     def text(value):
         """Scalar as a trimmed string; the stored raw form writes null as "None"."""
@@ -113,7 +169,9 @@ def transform(input):
     try:
         if isinstance(input, bytes):
             input = input.decode("utf-8")
-        body = hec_body(input)
+        body, err = hec_body(input)
+        if err:
+            return not_measured(err)
         if body is None:
             return not_measured("No readable Harmony Email & Collaboration response (responseData) in the "
                                 "input; nothing is measured.")
@@ -138,6 +196,8 @@ def transform(input):
             return create_response(True, pass_reasons=[str(len(logged)) + " security event(s) and " + str(len(actions)) +
                                    " action(s) with actionType and createTime are logged by Harmony Email & Collaboration "
                                    "in the last 30 days (first page of the event query)"], input_summary=summary)
+        if more_pages(body):
+            return partial_not_measured("the absence of logged events or logged actions in the unread records", summary)
         if not logged:
             return create_response(False, fail_reasons=["No security event with eventId, type and eventCreated was logged "
                                    "for Microsoft 365 mail in the last 30 days"], input_summary=summary)

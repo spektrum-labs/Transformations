@@ -45,6 +45,15 @@ def events(mutate=None, records=None):
     return body
 
 
+def complete(body):
+    """The same page as a finished answer: no next-page token and a total equal to the page.
+    The real fixture is one page of 100 out of 10000 records with a scrollId, so it is partial."""
+    body = copy.deepcopy(body)
+    body["responseEnvelope"]["scrollId"] = ""
+    body["responseEnvelope"]["recordsNumber"] = str(len(body["responseData"]))
+    return body
+
+
 ERROR_ENVELOPE = {"responseEnvelope": {"responseCode": "401", "responseText": "Unauthorized"}, "responseData": []}
 UNREADABLE = [{}, None, ERROR_ENVELOPE, "not json", {"hello": "world"}]
 
@@ -68,31 +77,40 @@ def strip_create_time(r):
 
 
 EVENT_CASES = [
-    # (file, real verdict, flip, flipped verdict)
-    ("isemailsecurityloggingenabled", True, drop_actions, False),
-    ("messagemoveaudittrailenabled", True, strip_create_time, False),
-    ("ispostdeliveryquarantineenabled", True, no_quarantine, False),
-    ("isimposteremaildetectionenabled", True, ms_only, False),
+    # (file, verdict on the real partial page, flip, flipped verdict on the partial page,
+    #  flipped verdict once the page is complete)
+    # A partial page cannot prove an absence: a flip that removes the match reads None there and
+    # False only on a complete page. messageMoveAuditTrailEnabled says "every move action is
+    # auditable", which a partial page cannot prove, but a move action seen without its audit
+    # fields is a negative the unread pages cannot undo.
+    ("isemailsecurityloggingenabled", True, drop_actions, None, False),
+    ("messagemoveaudittrailenabled", None, strip_create_time, False, False),
+    ("ispostdeliveryquarantineenabled", True, no_quarantine, None, False),
+    ("isimposteremaildetectionenabled", True, ms_only, None, False),
 ]
 
 
-@pytest.mark.parametrize("name,real,flip,flipped", EVENT_CASES)
-def test_event_checks_real_and_flipped(name, real, flip, flipped):
-    assert verdict(name, events()) is real
-    assert verdict(name, events(flip)) is flipped
+@pytest.mark.parametrize("name,real_partial,flip,flipped_partial,flipped_complete", EVENT_CASES)
+def test_event_checks_real_and_flipped(name, real_partial, flip, flipped_partial, flipped_complete):
+    assert verdict(name, events()) is real_partial
+    assert verdict(name, events(flip)) is flipped_partial
+    assert verdict(name, complete(events())) is True
+    assert verdict(name, complete(events(flip))) is flipped_complete
 
 
 @pytest.mark.parametrize("name", [c[0] for c in EVENT_CASES])
 def test_event_checks_unreadable_bodies_are_not_evaluated(name):
     for body in UNREADABLE:
         assert verdict(name, body) is None, body
-    assert verdict(name, events(records=[])) is False
+    assert verdict(name, complete(events(records=[]))) is False
+    # the same empty answer with a next-page token proves nothing
+    assert verdict(name, events(records=[])) is None
 
 
 @pytest.mark.parametrize("name", [c[0] for c in EVENT_CASES])
 def test_event_checks_accept_wrapped_and_string_forms(name):
-    assert verdict(name, {"apiResponse": events()}) is True
-    assert verdict(name, json.dumps(events())) is True
+    assert verdict(name, {"apiResponse": complete(events())}) is True
+    assert verdict(name, json.dumps(complete(events()))) is True
 
 
 def test_real_page_facts_the_checks_rely_on():
@@ -105,13 +123,15 @@ def test_real_page_facts_the_checks_rely_on():
 def test_move_audit_ignores_non_move_actions():
     def headers_only(r):
         r["actions"] = [a for a in r["actions"] if a["actionType"].startswith("add_")]
-    assert verdict("messagemoveaudittrailenabled", events(headers_only)) is False
+    assert verdict("messagemoveaudittrailenabled", complete(events(headers_only))) is False
+    assert verdict("messagemoveaudittrailenabled", events(headers_only)) is None
 
 
 def test_logging_needs_events_with_core_fields():
     def blank(r):
         r["eventCreated"] = "None"
-    assert verdict("isemailsecurityloggingenabled", events(blank)) is False
+    assert verdict("isemailsecurityloggingenabled", complete(events(blank))) is False
+    assert verdict("isemailsecurityloggingenabled", events(blank)) is None
 
 
 # isSPFEnforced: Spektrum DNS probe (isDNSConfigured); real record shape, tenant id replaced.
