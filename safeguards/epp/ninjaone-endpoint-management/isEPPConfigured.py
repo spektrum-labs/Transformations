@@ -80,13 +80,17 @@ def http_error_status(code):
     """The HTTP status as a number when it is an error (400 or more), else None.
 
     A status sent as a string ("500", " 403 ") is an error exactly like the number. A boolean, an empty or
-    non-numeric string and anything below 400 are not an error status.
+    non-numeric string, a digit string longer than nine digits and anything below 400 are not an error status.
     """
     if isinstance(code, bool):
         return None
     if isinstance(code, str):
         code = code.strip()
-        code = int(code) if code.isdecimal() else None
+        # An HTTP status has three digits. A longer digit string is not a status (and int() of thousands of digits
+        # raises), so it is ignored rather than read.
+        if not code.isdecimal() or len(code) > 9:
+            return None
+        code = int(code)
     if isinstance(code, int) and code >= 400:
         return code
     return None
