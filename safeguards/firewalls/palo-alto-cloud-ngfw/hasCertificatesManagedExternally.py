@@ -12,7 +12,7 @@ when one is a well-formed ARN of another AWS service that holds certificates or 
 (acm, acm-pca, iam, kms, s3, ssm). The reference types the field only as "Certificate signer ARN"
 and says certificate objects are stored in AWS Secrets Manager. Any value that is not a well-formed
 AWS ARN of one of those services (free text, a URL, a malformed or unknown-service ARN, a Secrets
-Manager ARN that is not a secret) is not recognised and is null, never False. The certificate read
+Manager ARN that is not a secret, or that has an empty region or account) is not recognised and is null, never False. The certificate read
 is the rulestack's outbound trust certificate, so the answer speaks for that certificate, not for
 every certificate in the account.
 
@@ -149,8 +149,9 @@ ACCOUNT = re.compile(r"[0-9]{12}")
 
 
 def arn_service(text):
-    """(service, resource) when text is a well-formed AWS ARN (arn:partition:service:region:account:
-    resource, no whitespace anywhere), else None."""
+    """(service, resource, region, account) when text is a well-formed AWS ARN (arn:partition:service:
+    region:account:resource, no whitespace anywhere), else None. Region and account may be empty
+    here (an S3 ARN has neither); the Secrets Manager check requires both."""
     if not text or any(ch in text for ch in " \t\r\n"):
         return None
     parts = text.split(":", 5)
@@ -163,7 +164,7 @@ def arn_service(text):
         return None
     if not resource:
         return None
-    return service, resource
+    return service, resource, region, account
 
 
 def judge(resp):
@@ -181,9 +182,11 @@ def judge(resp):
                       "and the reference does not say that means it is held outside a secrets manager")
     found = arn_service(arn)
     if found is not None:
-        service, resource = found
+        service, resource, region, account = found
         if service == "secretsmanager":
-            if resource.startswith("secret:") and len(resource) > len("secret:"):
+            # A real secret ARN carries both a region and an account; with either one empty it is not
+            # shown to be Secrets Manager, so it never counts as True.
+            if region and account and resource.startswith("secret:") and len(resource) > len("secret:"):
                 return True, ""
         elif service in OTHER_STORE_SERVICES:
             return False, ("certificate " + name + ": signer is an AWS " + service
