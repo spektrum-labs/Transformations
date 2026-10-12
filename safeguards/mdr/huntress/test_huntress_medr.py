@@ -1,6 +1,7 @@
 """Huntress Managed EDR transforms: real verdicts on complete reads, None on anything else."""
 import importlib.util
 import os
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -14,7 +15,13 @@ def load(name):
     return module.transform
 
 
-def agent(i, last="2026-09-30T10:00:00Z"):
+def ago(days):
+    """A last_callback_at timestamp this many days before now, so the tests hold on any date."""
+    return (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def agent(i, last=None, days=1):
+    last = last if last is not None else ago(days)
     return {"id": i, "hostname": "h" + str(i), "platform": "windows", "last_callback_at": last}
 
 
@@ -35,7 +42,7 @@ def value(key, payload):
 
 
 FRESH = [agent(1), agent(2), agent(3), agent(4)]
-MIXED = [agent(1), agent(2, last="2026-09-20T10:00:00Z"), agent(3, last="2026-08-01T00:00:00Z"), agent(4, last=None)]
+MIXED = [agent(1), agent(2, days=10), agent(3, days=60), {"id": 4, "hostname": "h4", "last_callback_at": None}]
 
 AGENT_CASES = [
     ("isEDRAgentActive", True, True),
@@ -50,20 +57,58 @@ def test_agent_keys_measure_a_complete_read(key, fresh, mixed):
     assert value(key, body("agents", MIXED)) == mixed
 
 
-def test_window_is_relative_to_newest_callback_not_wall_clock():
-    old = [agent(1, last="2020-01-01T00:00:00Z"), agent(2, last="2020-01-10T00:00:00Z")]
-    assert value("staleAgentOfflineCount", body("agents", old)) == 0
-    assert value("isEDRAgentActive", body("agents", old)) is True
+def test_newest_callback_wins_whatever_the_order():
+    ages = [200, 3, 90]
+    for order in ([0, 1, 2], [1, 0, 2], [2, 0, 1]):
+        agents = [agent(i + 1, days=ages[j]) for i, j in enumerate(order)]
+        assert value("isEDRAgentActive", body("agents", agents)) is True
+
+
+def test_one_recent_agent_is_enough_among_dark_ones():
+    agents = [agent(1, days=400), agent(2, days=90), agent(3, days=2), agent(4, days=250)]
+    assert value("isEDRAgentActive", body("agents", agents)) is True
+
+
+def test_dark_fleet_is_not_active_even_though_its_newest_agent_is_the_newest():
+    # Every agent has been silent for longer than the limit: judged against now, none is active.
+    old = [agent(1, days=200), agent(2, days=190)]
+    assert value("isEDRAgentActive", body("agents", old)) is False
+    assert value("staleAgentOfflineCount", body("agents", old)) == 2
+    assert value("assetInventoryCoveragePercentage", body("agents", old)) == 0.0
+    out = load("isEDRAgentActive")(body("agents", old))
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert out["transformedResponse"]["activeAgents"] == 0
+
+
+def test_threshold_is_fifteen_days_from_now():
+    assert value("isEDRAgentActive", body("agents", [agent(1, days=14)])) is True
+    assert value("isEDRAgentActive", body("agents", [agent(1, days=16)])) is False
 
 
 def test_empty_fleet():
-    assert value("isEDRAgentActive", body("agents", [])) is False
+    # Nothing to judge: not measured, never a graded False or True.
+    assert value("isEDRAgentActive", body("agents", [])) is None
+    assert load("isEDRAgentActive")(body("agents", []))["additionalInfo"]["dataCollection"]["status"] == "error"
     assert value("staleAgentOfflineCount", body("agents", [])) == 0
     assert value("assetInventoryCoveragePercentage", body("agents", [])) is None
 
 
+def test_error_body_is_not_measured():
+    for payload in ({"data": {"apiResponse": {"errors": ["Unauthorized"]}}, "validation": {}},
+                    {"data": {"apiResponse": {"error": "invalid credentials", "status_code": 401}}, "validation": {}},
+                    {"data": {"apiResponse": {"status": 500, "message": "boom"}}, "validation": {}}):
+        out = load("isEDRAgentActive")(payload)
+        assert out["transformedResponse"]["isEDRAgentActive"] is None
+        assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
 def test_never_called_back_fleet_is_not_active():
-    assert value("isEDRAgentActive", body("agents", [agent(1, last=None)])) is False
+    assert value("isEDRAgentActive", body("agents", [{"id": 1, "last_callback_at": None}, {"id": 2, "last_callback_at": None}])) is False
+
+
+def test_missing_data_is_never_active():
+    # Unparseable and absent timestamps are not a callback; they can never make the check pass.
+    assert value("isEDRAgentActive", body("agents", [{"id": 1}, agent(2, last="not a date")])) is False
 
 
 def test_open_incident_count():

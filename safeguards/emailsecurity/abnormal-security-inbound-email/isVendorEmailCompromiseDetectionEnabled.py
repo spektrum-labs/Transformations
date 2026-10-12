@@ -67,16 +67,60 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+KEY = "isVendorEmailCompromiseDetectionEnabled"
+
+
+def not_measured(reason, validation):
+    """No verdict: the result is None and the data-collection status is error, so the evaluator
+    shows Not evaluated instead of a failed check. The reason is fixed text: the vendor's own error
+    message is never copied into it."""
+    return create_response(
+        result={KEY: None},
+        validation=validation,
+        fail_reasons=[reason],
+        api_errors=[reason],
+        metadata={"transformationId": KEY, "vendor": "Abnormal Security Inbound Email", "category": "emailsecurity"},
+    )
+
+
+def is_error_body(data):
+    return isinstance(data, dict) and (data.get("error") is True or bool(data.get("errors")))
+
+
+def objects_only(items, noun):
+    """(objects, problem): the object items of a list.
+
+    A non-empty list with no object in it proves nothing, so it is "not measured". Items that are not
+    objects are never counted as records. An empty list is passed through unchanged."""
+    objects = [x for x in items if isinstance(x, dict)]
+    if items and not objects:
+        return None, "Abnormal returned a " + noun + " list with no objects in it; nothing to measure."
+    return objects, None
+
+
+def vendor_cases_of(data):
+    """(cases, problem): the case list of a /v1/vendor-cases body, or why there is none.
+
+    An empty list from a well-formed response is still read as "no cases" (unchanged); only an
+    error, an empty or an unrecognised body is "not measured"."""
+    if isinstance(data, list):
+        return data, None
+    if is_error_body(data):
+        return None, "Abnormal returned an error for the vendor cases; nothing to measure."
+    if isinstance(data, dict):
+        for name in ["vendorCases", "data"]:
+            if isinstance(data.get(name), list):
+                return data.get(name), None
+    return None, "Abnormal returned no vendor case list; nothing to measure."
+
+
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
-
-    if isinstance(data, list):
-        vendor_cases = data
-    elif isinstance(data, dict):
-        vendor_cases = data.get("vendorCases") or data.get("data") or []
-    else:
-        vendor_cases = []
+    vendor_cases, problem = vendor_cases_of(data)
+    if problem is None:
+        vendor_cases, problem = objects_only(vendor_cases, "vendor case")
+    if problem is not None:
+        return not_measured(problem, validation)
 
     case_count = len(vendor_cases) if isinstance(vendor_cases, list) else 0
     is_enabled = case_count > 0
@@ -84,7 +128,7 @@ def transform(input):
     sample_ids = []
     if isinstance(vendor_cases, list):
         for case in vendor_cases[:5]:
-            if isinstance(case, dict) and case.get("vendorCaseId") is not None:
+            if case.get("vendorCaseId") is not None:
                 sample_ids.append(case.get("vendorCaseId"))
 
     if is_enabled:
