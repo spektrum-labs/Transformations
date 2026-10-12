@@ -486,11 +486,12 @@ def measure_unprotected(input):
 
 
 def partial_count(key, partial, judged, validation, metadata):
-    """The count when only part of the fleet was read: a seen unprotected device is a proven negative.
+    """The count when only part of the fleet was read: not a total, so it reads None.
 
-    A device that was seen and has no active protection is unprotected whatever the unread pages hold, so the count of
-    seen unprotected devices stays (a lower bound) and the total is left unknown. With none seen, nothing is proven and the
-    count is not evaluated. Devices the report does not mention are not added: on a partial read they may be on the unread rows.
+    A seen unprotected device is unprotected whatever the unread pages hold, but a floor is not a count: it can grade a pass
+    against any threshold above zero (3 seen, a limit of 5, a real count of 10). So the criterion key is None with a
+    data-collection error, and the number of seen unprotected devices is reported beside it as unprotectedCountAtLeast.
+    Devices the report does not mention are not added: on a partial read they may be on the unread rows.
     """
     rows, scope = judged
     protected = {}
@@ -502,19 +503,8 @@ def partial_count(key, partial, judged, validation, metadata):
         elif rec.get("deviceId") not in protected:
             protected[rec.get("deviceId")] = False
     seen_off = [d for d, covered in protected.items() if not covered]
-    if not seen_off:
-        return unevaluated(key, partial, validation, metadata, {"totalDevices": None, "partialRead": True})
-    result = {**scope, key: len(seen_off), "totalDevices": None, "totalDevicesReported": None, "protectedDeviceCount": None,
-              "devicesNotInReport": None, "devicesNotInReportLeftOut": None, "partialRead": True, "deviceListRead": True}
-    return create_response(
-        result=result,
-        validation=validation,
-        fail_reasons=["At least %d devices report no active AV/EPP protection (productState != 'ON', or product missing/NONE, or state unreported); "
-                      "example deviceIds: %s. The read is only part of the fleet, so this is a lower bound and the total is not known." % (len(seen_off), seen_off[:10])],
-        recommendations=["Read every page of the NinjaOne antivirus-status report and device list for this tenant, and remediate the unprotected devices."],
-        input_summary={"recordsInResponse": len(rows), "unprotectedDeviceCount": len(seen_off)},
-        metadata=metadata,
-    )
+    return unevaluated(key, partial, validation, metadata,
+                       {"totalDevices": None, "partialRead": True, "unprotectedCountAtLeast": len(seen_off)})
 
 
 def parse_body(input):
