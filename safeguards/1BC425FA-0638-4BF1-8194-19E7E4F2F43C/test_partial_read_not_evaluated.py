@@ -7,8 +7,14 @@ from it is not a total: the answer rests on endpoints nobody has seen. Every key
 with a data-collection error instead.
 
 A page that does not start at the beginning (pages.fromKey set) is also only part of the fleet.
-A page count above the number of items returned, with no page size to compare, cannot be a whole
-read either.
+More than one page (pages.total above 1) is only part of the fleet too, unless pages.items says how
+many items the whole list holds and that is exactly the number returned (a body whose pages were joined).
+A page total says nothing about how many items a page holds, so page 1 of 4 is partial with or without
+a page size, and so is a page total of 2 beside 2 items when nothing says those are all the items.
+A pages field that is present but is not an object (text, a number, a list) says nothing about the pages, so it is partial too,
+and so is a next key at the top of the body. A page total or item total that is present but cannot be read as a whole number (the text "many", "4.5", a
+boolean, a list) is partial too: nothing shows the list is whole. Integral floats and decimal strings (4.0, "4.0")
+are read as the number they are; null, an empty string and the stringified nulls count as absent.
 
 A body that carries only a configured flag has no endpoint list, so every key is None. The configured
 keys (isMDRConfigured, isEPPConfigured) are derived from the endpoint list alone; Sophos documents no such
@@ -58,6 +64,7 @@ def enveloped(body):
 
 MANAGED = [endpoint("e1", ["endpointProtection", "mtr"])]
 UNMANAGED = [endpoint("e1", ["endpointProtection"]), endpoint("e2", ["endpointProtection"], mdrManaged=False)]
+MANY = [endpoint("e%d" % n, ["endpointProtection"]) for n in range(100)]
 
 PARTIAL_BODIES = [
     ("next key with a managed endpoint seen",
@@ -74,6 +81,34 @@ PARTIAL_BODIES = [
     ("more pages reported than present", {"items": UNMANAGED, "pages": {"size": "500", "total": "3"}}),
     ("total pages above the items returned, no page size", {"items": UNMANAGED, "pages": {"total": "3"}}),
     ("total as a number above the items returned, no page size", {"items": UNMANAGED, "pages": {"total": 250}}),
+    ("page 1 of 4, a full page of items, no size", {"items": MANY, "pages": {"total": "4"}}),
+    ("page 1 of 4, total as a number, no size", {"items": MANY, "pages": {"total": 4}}),
+    ("page 1 of 4 with a size", {"items": MANY, "pages": {"size": "100", "total": "4"}}),
+    ("pages above one with no item total (merged pages)", {"items": UNMANAGED, "pages": {"size": "1", "maxSize": "1", "total": "2"}}),
+    ("page total equal to the items returned, no item total", {"items": UNMANAGED, "pages": {"total": "2"}}),
+    ("pages above one with an item total below the items returned", {"items": UNMANAGED, "pages": {"total": "4", "items": "1"}}),
+    ("pages above one, wrapped", {"response": {"items": MANY, "pages": {"total": "4"}}}),
+    ("pages above one, enveloped", enveloped({"items": MANY, "pages": {"total": "4"}})),
+    ("page total as an integral float", {"items": MANY, "pages": {"total": 4.0}}),
+    ("page total as a decimal string", {"items": MANY, "pages": {"total": "4.0"}}),
+    ("page total as a decimal string with spaces", {"items": MANY, "pages": {"total": " 4.0 "}}),
+    ("page total as text", {"items": MANY, "pages": {"total": "many"}}),
+    ("page total as text beside a one page body", {"items": UNMANAGED, "pages": {"total": "unknown", "size": "2"}}),
+    ("page total as a fraction", {"items": MANY, "pages": {"total": "4.5"}}),
+    ("page total as a float with a fraction", {"items": MANY, "pages": {"total": 4.5}}),
+    ("page total as a boolean", {"items": MANY, "pages": {"total": True}}),
+    ("page total as a list", {"items": MANY, "pages": {"total": [4]}}),
+    ("page total as an object", {"items": MANY, "pages": {"total": {"pages": 4}}}),
+    ("page total as not a number", {"items": MANY, "pages": {"total": float("nan")}}),
+    ("page total as an infinite float", {"items": MANY, "pages": {"total": float("inf")}}),
+    ("item total as text", {"items": UNMANAGED, "pages": {"items": "many"}}),
+    ("item total as a fraction", {"items": UNMANAGED, "pages": {"items": "2.5"}}),
+    ("item total as a boolean", {"items": UNMANAGED, "pages": {"items": True}}),
+    ("item total as a float above the items returned", {"items": UNMANAGED, "pages": {"items": 250.0}}),
+    ("item total as a decimal string above the items returned", {"items": UNMANAGED, "pages": {"items": "250.0"}}),
+    ("item total below the items returned as a float", {"items": UNMANAGED, "pages": {"total": 4.0, "items": 1.0}}),
+    ("page total as text, wrapped", {"response": {"items": MANY, "pages": {"total": "many"}}}),
+    ("page total as a decimal string, enveloped", enveloped({"items": MANY, "pages": {"total": "4.0"}})),
     ("a page that does not start at the beginning", {"items": UNMANAGED, "pages": {"fromKey": "cursor-abc", "size": "2"}}),
     ("a later page with no further cursor", {"items": UNMANAGED, "pages": {"fromKey": "cursor-abc", "nextKey": None}}),
     ("a later page with a numeric key", {"items": UNMANAGED, "pages": {"fromKey": 777}}),
@@ -83,6 +118,18 @@ PARTIAL_BODIES = [
     ("enveloped partial read", enveloped({"items": UNMANAGED, "pages": {"nextKey": "cursor-abc"}})),
     ("partial read beside an unset flag", {"items": UNMANAGED, "pages": {"nextKey": "cursor-abc"}, "isMDRConfigured": None,
                                            "isEPPConfigured": None}),
+    ("pages as text", {"items": UNMANAGED, "pages": "many"}),
+    ("pages as a number", {"items": UNMANAGED, "pages": 3}),
+    ("pages as a boolean", {"items": UNMANAGED, "pages": True}),
+    ("pages as a list", {"items": UNMANAGED, "pages": [{"total": 3}]}),
+    ("pages as an empty list", {"items": UNMANAGED, "pages": []}),
+    ("pages as stringified json", {"items": UNMANAGED, "pages": '{"nextKey": "cursor-abc"}'}),
+    ("pages as text, wrapped", {"response": {"items": MANY, "pages": "many"}}),
+    ("pages as a list, enveloped", enveloped({"items": MANY, "pages": [4]})),
+    ("top level next key", {"items": UNMANAGED, "nextKey": "cursor-abc"}),
+    ("top level next key as a number", {"items": UNMANAGED, "nextKey": 12345}),
+    ("top level next key beside a clean pages object", {"items": UNMANAGED, "pages": {"size": "2"}, "nextKey": "cursor-abc"}),
+    ("top level next key, wrapped", {"response": {"items": MANAGED, "nextKey": "cursor-abc"}}),
 ]
 
 # No cursor and no marker: a complete read, scored as before.
@@ -97,13 +144,36 @@ COMPLETE_BODIES = [
     ("truncated stringified false", {"items": UNMANAGED, "pages": {"truncated": "false"}}),
     ("one page of one", {"items": UNMANAGED, "pages": {"size": "2", "total": "1"}}),
     ("item total matches", {"items": UNMANAGED, "pages": {"size": "2", "items": "2"}}),
-    ("merged pages", {"items": UNMANAGED, "pages": {"size": "1", "maxSize": "1", "total": "2"}}),
-    ("page total equal to the items returned, no size", {"items": UNMANAGED, "pages": {"total": "2"}}),
+    ("joined pages whose item total matches", {"items": UNMANAGED, "pages": {"size": "1", "maxSize": "1", "total": "2", "items": "2"}}),
+    ("joined pages whose item total matches, no size", {"items": UNMANAGED, "pages": {"total": "2", "items": "2"}}),
+    ("joined pages whose item total matches, as numbers", {"items": UNMANAGED, "pages": {"total": 2, "items": 2}}),
+    ("joined pages whose item total matches, enveloped", enveloped({"items": UNMANAGED, "pages": {"total": "2", "items": "2"}})),
+    ("joined pages of 100 whose item total matches", {"items": MANY, "pages": {"total": "4", "items": "100"}}),
     ("page total of one, no size", {"items": UNMANAGED, "pages": {"total": "1"}}),
+    ("joined pages whose item total matches, as floats", {"items": UNMANAGED, "pages": {"total": 2.0, "items": 2.0}}),
+    ("joined pages whose item total matches, as decimal strings", {"items": UNMANAGED, "pages": {"total": "2.0", "items": "2.0"}}),
+    ("joined pages of 100 whose totals are floats", {"items": MANY, "pages": {"total": 4.0, "items": 100.0}}),
+    ("page total of one as a float", {"items": UNMANAGED, "pages": {"total": 1.0}}),
+    ("page total of one as a decimal string", {"items": UNMANAGED, "pages": {"total": "1.0"}}),
+    ("item total matches as a float", {"items": UNMANAGED, "pages": {"items": 2.0}}),
+    ("page total stringified none", {"items": UNMANAGED, "pages": {"total": "None"}}),
+    ("page total stringified null", {"items": UNMANAGED, "pages": {"total": "null"}}),
+    ("page total empty", {"items": UNMANAGED, "pages": {"total": ""}}),
+    ("page total null", {"items": UNMANAGED, "pages": {"total": None}}),
+    ("item total null", {"items": UNMANAGED, "pages": {"items": None}}),
     ("start key null", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": None}}),
     ("start key stringified none", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "None"}}),
     ("start key stringified null", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "null"}}),
     ("start key empty", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": ""}}),
+    ("pages null", {"items": UNMANAGED, "pages": None}),
+    ("pages stringified none", {"items": UNMANAGED, "pages": "None"}),
+    ("pages stringified null", {"items": UNMANAGED, "pages": "null"}),
+    ("pages empty text", {"items": UNMANAGED, "pages": ""}),
+    ("pages false", {"items": UNMANAGED, "pages": False}),
+    ("pages empty object", {"items": UNMANAGED, "pages": {}}),
+    ("top level next key null", {"items": UNMANAGED, "nextKey": None}),
+    ("top level next key stringified none", {"items": UNMANAGED, "nextKey": "None"}),
+    ("top level next key empty", {"items": UNMANAGED, "nextKey": ""}),
     ("bare list", UNMANAGED),
     ("enveloped", enveloped({"items": UNMANAGED, "pages": {"size": "2"}})),
 ]
@@ -136,6 +206,37 @@ def assert_not_evaluated(name, out):
 @pytest.mark.parametrize("label,body", PARTIAL_BODIES, ids=[label for label, _ in PARTIAL_BODIES])
 def test_partial_read_is_not_evaluated(name, label, body):
     assert_not_evaluated(name, run(name, body))
+
+
+# A page total or item total that is absent (null, an empty string, a stringified null) is "no information". It never
+# counts as "complete" and it never hides another signal: a next key, a start key, a truncation marker or an item total
+# above the items returned still marks the read partial.
+ABSENT_TOTALS = [None, "", " ", "None", "null", "NULL"]
+OTHER_PARTIAL_SIGNALS = [
+    ("next key", {"nextKey": "cursor-abc"}),
+    ("next key as a number", {"nextKey": 12345}),
+    ("start key", {"fromKey": "cursor-abc"}),
+    ("truncated", {"truncated": True}),
+    ("truncated as text", {"truncated": "true"}),
+    ("item total above the items returned", {"items": "250"}),
+]
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("absent", ABSENT_TOTALS, ids=["none", "empty", "blank", "text-None", "text-null", "text-NULL"])
+@pytest.mark.parametrize("label,signal", OTHER_PARTIAL_SIGNALS, ids=[label for label, _ in OTHER_PARTIAL_SIGNALS])
+def test_an_absent_page_total_never_hides_another_partial_signal(name, absent, label, signal):
+    pages = dict({"total": absent}, **signal)
+    assert_not_evaluated(name, run(name, {"items": UNMANAGED, "pages": pages}))
+    assert_not_evaluated(name, run(name, {"items": MANAGED, "pages": pages}))
+    assert_not_evaluated(name, run(name, {"response": {"items": UNMANAGED, "pages": pages}}))
+    assert_not_evaluated(name, run(name, enveloped({"items": UNMANAGED, "pages": pages})))
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("absent", ABSENT_TOTALS, ids=["none", "empty", "blank", "text-None", "text-null", "text-NULL"])
+def test_an_absent_item_total_never_hides_a_page_total_above_one(name, absent):
+    assert_not_evaluated(name, run(name, {"items": MANY, "pages": {"total": "4", "items": absent}}))
 
 
 @pytest.mark.parametrize("name", FILES)
