@@ -144,7 +144,7 @@ def evaluate(data):
             )
     else:
         fails.append(
-            "GET /v1/projects returned no projects, so no Supabase data estate can be "
+            "GET /v1/projects returned no projects, so no Supabase data environment can be "
             "enumerated for this organization."
         )
         recs.append("Confirm the access token has visibility of the organization's projects.")

@@ -40,7 +40,7 @@ def host(n, rfm="no", sensor_update=True, agent_version="7.40.21309.0"):
     policies = {"prevention": {"policy_id": "prev-a", "applied": True}}
     if sensor_update:
         policies["sensor_update"] = {"policy_id": "su-a", "applied": True}
-    record = {"device_id": "estate-a-dev-%04d" % n, "hostname": "estate-a-host-%04d" % n,
+    record = {"device_id": "env-a-dev-%04d" % n, "hostname": "env-a-host-%04d" % n,
               "status": "normal", "platform_name": "Windows", "device_policies": policies,
               "last_seen": RECENT}
     if rfm is not ABSENT:

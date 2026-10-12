@@ -162,7 +162,7 @@ def evaluate(data):
                 % (len(controllers) - len(enabled))
             )
     else:
-        fails.append("No controllers were returned, so the physical access estate cannot be enumerated.")
+        fails.append("No controllers were returned, so the physical access environment cannot be enumerated.")
     return result, passes, fails, recs, {"controllerCount": len(controllers), "readerCount": len(readers)}
 
 

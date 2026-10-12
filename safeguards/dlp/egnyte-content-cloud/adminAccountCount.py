@@ -177,7 +177,7 @@ def evaluate(data):
             )
         elif result["adminAccountPercentage"] and result["adminAccountPercentage"] > 10:
             recs.append(
-                "Administrators are %s%% of the active estate. Review whether each needs "
+                "Administrators are %s%% of the active environment. Review whether each needs "
                 "domain-wide permission and file access, or whether Power User suffices."
                 % result["adminAccountPercentage"]
             )

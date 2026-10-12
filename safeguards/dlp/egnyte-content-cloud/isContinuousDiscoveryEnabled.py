@@ -165,11 +165,11 @@ def evaluate(data):
         if total and len(users) < total:
             recs.append(
                 "The response is paginated: %d of %d accounts were returned. Page through "
-                "startIndex so the assessment covers the whole estate."
+                "startIndex so the assessment covers all assets in scope."
                 % (len(users), total)
             )
     else:
-        fails.append("No user accounts were returned, so the Egnyte user estate cannot be enumerated.")
+        fails.append("No user accounts were returned, so the Egnyte user environment cannot be enumerated.")
     return result, passes, fails, recs, {"usersReturned": len(users), "totalResults": total}
 
 

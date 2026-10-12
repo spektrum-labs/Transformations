@@ -73,7 +73,7 @@ def transform(input):
                 "note": "CrashPlan returned no readable security settings (empty body or an "
                         "error response), so encryption was not verified for this tenant. "
                         "CrashPlan does encrypt by default, but that is a product fact and "
-                        "not a reading of this estate.",
+                        "not a reading of this environment.",
             }
 
         # CrashPlan always encrypts data by default
@@ -131,7 +131,7 @@ def transform(input):
             "encryptionManaged": False,
             "note": "Could not read CrashPlan security settings, so encryption was not "
                     "verified for this tenant. CrashPlan does encrypt by default, but that "
-                    "is a product fact and not a reading of this estate -- re-run once the "
+                    "is a product fact and not a reading of this environment -- re-run once the "
                     "call succeeds.",
             "parseError": str(e)
         }

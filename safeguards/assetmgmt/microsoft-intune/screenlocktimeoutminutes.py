@@ -358,7 +358,7 @@ def transform(input):
         every = [(v, n) for v, n in limits] + [(v, n + " [" + w + "]") for v, n, w in narrowed if w != NOT_ASSIGNED]
         worst = max([v for v, n in every])
         names = [n + " (" + str(v) + " min)" for v, n in sorted(every, reverse=True)]
-        line = ("The longest inactivity limit set by an Intune profile is " + str(worst) + " minutes (estate-wide "
+        line = ("The longest inactivity limit set by an Intune profile is " + str(worst) + " minutes (tenant-wide "
                 "baseline from a profile assigned to all devices or all users): " + name_list(names))
         if worst > 15:
             return create_response(
