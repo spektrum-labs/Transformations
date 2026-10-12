@@ -29,9 +29,9 @@ def transform_unmarked(input):
     isPrivilegedIdentityManagementEnabled = true when Secret Server actively verifies stored privileged accounts:
     at least one secret has heartbeat status Success (the account was checked against its target). False only
     when heartbeat counts exist and none of the secrets has status Success (every one is Disabled/Pending/
-    failing). None (not evaluated) on an error body, no statuses list, a total that is not a number, an empty
-    statuses list or all totals zero (that cannot be told apart from a service user who sees no secrets), or an
-    exception.
+    failing). None (not evaluated) on an error body, no statuses list, a total that is not a non-negative whole
+    number, an empty statuses list or all totals zero (that cannot be told apart from a service user who sees no
+    secrets), or an exception.
     Ruling needed: the line is "at least one"; coverage is reported, not judged.
     """
     key = "isPrivilegedIdentityManagementEnabled"
@@ -88,8 +88,8 @@ def transform_unmarked(input):
             if not isinstance(s, dict):
                 continue
             n = s.get("total")
-            if isinstance(n, bool) or not isinstance(n, int):
-                return {key: None, "reason": "A heartbeat status total is not a number"}
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                return {key: None, "reason": "A heartbeat status total is not a non-negative whole number"}
             name = str(s.get("heartbeatStatus"))
             totals[name] = totals.get(name, 0) + n
         success = 0

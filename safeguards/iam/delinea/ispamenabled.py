@@ -27,9 +27,10 @@ def criteria_unmeasured(result):
 def transform_unmarked(input):
     """
     isPAMEnabled = true when the Platform tenant has at least one ACTIVE vault with a connection URL, i.e. a live
-    Secret Server vault governs privileged credentials. False only when a vaults list was read and none of its
-    vaults is active with a connection URL. None (not evaluated) on an error body, a response with no vaults
-    list, or an exception: a read that proves nothing is not a failed control.
+    Secret Server vault governs privileged credentials. False only when a non-empty vaults list was read and none
+    of its vaults is active with a connection URL. None (not evaluated) on an error body, a response with no
+    vaults list, an empty vaults list (the body carries no count, so a completed read of zero vaults is not shown),
+    or an exception: a read that proves nothing is not a failed control.
     """
     key = "isPAMEnabled"
 
@@ -80,6 +81,8 @@ def transform_unmarked(input):
         vaults = data.get("vaults")
         if not isinstance(vaults, list):
             return {key: None, "reason": "Response has no vaults list"}
+        if len(vaults) == 0:
+            return {key: None, "reason": "The vaults list is empty and carries no count, so a completed read of zero vaults is not shown"}
         live = []
         for v in vaults:
             if not isinstance(v, dict) or v.get("isActive") is not True:

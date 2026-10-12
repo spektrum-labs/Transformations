@@ -32,9 +32,10 @@ def transform_unmarked(input):
     isSeparationOfDutiesEnabled = true when at least one active secret policy requires approval for access
     (requireApprovalForAccess true, applied as Default or Enforced), names approvers (approval groups or an
     approval workflow), and is applied to at least one secret. False only when every policy was read and none
-    qualifies. None (not evaluated) when policies were left unread, when any policy detail could not be read or
-    the detail count does not match, on an error body, a response lacking records or policyDetails, or an
-    exception. Coverage across all secrets is reported by count, not judged.
+    qualifies. None (not evaluated) when policies were left unread (next page, or total above the policies read),
+    when any policy detail could not be read or the detail count does not match, on an error body, a response
+    lacking records or policyDetails, a total that is not a non-negative whole number, an empty list without an
+    explicit total of 0, or an exception. Coverage across all secrets is reported by count, not judged.
     """
     key = "isSeparationOfDutiesEnabled"
 
@@ -88,8 +89,15 @@ def transform_unmarked(input):
             return {key: None, "reason": "Response lacks records or policyDetails"}
         if data.get("hasNext") is True:
             return {key: None, "reason": "More secret policies exist than were read"}
+        total = data.get("total")
+        if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
+            return {key: None, "reason": "total is not a count, so whether all secret policies were read is unknown"}
+        if isinstance(total, int) and total > len(records):
+            return {key: None, "reason": "Only " + str(len(records)) + " of " + str(total) + " secret policies were read"}
         if len(records) == 0:
-            return {key: False, "reason": "No active secret policy"}
+            if total == 0:
+                return {key: False, "reason": "No active secret policy"}
+            return {key: None, "reason": "No secret policies were returned and no completed count of 0 was given"}
         if len(details) != len(records):
             return {key: None, "reason": "Read " + str(len(details)) + " policy details for " + str(len(records)) + " policies"}
         qualifying = []

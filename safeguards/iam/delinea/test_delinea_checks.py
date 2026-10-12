@@ -50,6 +50,15 @@ def test_sso():
     assert t({"records": [], "count": 0, "totalCount": 0})["isSSOEnabled"] is False
     assert t({"records": [], "count": 0, "totalCount": 3})["isSSOEnabled"] is None      # partial read, none enabled
     assert t(dict(off, totalCount=2))["isSSOEnabled"] is None
+    # an empty list is measured only against an explicit completed count of 0
+    assert t({"records": []})["isSSOEnabled"] is None
+    assert t({"records": [], "count": 0})["isSSOEnabled"] is None
+    assert not_evaluated(t({"records": []}), "isSSOEnabled")
+    for odd in ["0", True, -1, 1.5, [], {}]:
+        assert t({"records": [], "totalCount": odd})["isSSOEnabled"] is None
+        assert t(dict(off, totalCount=odd))["isSSOEnabled"] is None                    # not a count: completeness unknown
+    assert t(dict(off, totalCount=1))["isSSOEnabled"] is False
+    assert t({k: v for k, v in off.items() if k != "totalCount"})["isSSOEnabled"] is False
     assert t(dict(good, totalCount=2))["isSSOEnabled"] is True                          # an enabled provider was read
     assert t({"records": "x"})["isSSOEnabled"] is None
     for bad in EMPTYISH:
@@ -66,13 +75,16 @@ def test_pam():
     assert t({"vaults": [vault]})["isPAMEnabled"] is True
     assert t({"vaults": [dict(vault, isActive=False)]})["isPAMEnabled"] is False
     assert t({"vaults": [dict(vault, connection={"url": ""})]})["isPAMEnabled"] is False
-    assert t({"vaults": []})["isPAMEnabled"] is False
     assert t({"vaults": [dict(vault, connection=None)]})["isPAMEnabled"] is False
+    assert t({"vaults": [dict(vault, isActive=False), dict(vault, connection={})]})["isPAMEnabled"] is False
+    # the vaults body carries no count, so an empty list cannot show a completed read of zero vaults
+    assert t({"vaults": []})["isPAMEnabled"] is None
+    assert not_evaluated(t({"vaults": []}), "isPAMEnabled")
     assert t({"vaults": "x"})["isPAMEnabled"] is None
     for bad in EMPTYISH:
         assert t(bad)["isPAMEnabled"] is None
         assert not_evaluated(t(bad), "isPAMEnabled")
-    assert "additionalInfo" not in t({"vaults": []})
+    assert "additionalInfo" not in t({"vaults": [dict(vault, isActive=False)]})
 
 
 def test_pim():
@@ -94,6 +106,13 @@ def test_pim():
     assert t({"statuses": [{"heartbeatStatus": "Success", "total": "40"}]})[key] is None
     assert not_evaluated(t({"statuses": [{"heartbeatStatus": "Success", "total": "40"}]}), key)
     assert t({"statuses": [{"heartbeatStatus": "Success", "total": True}]})[key] is None
+    # a negative or non-integer total is not a count: never True, never False
+    for odd in [-1, -50, 1.5, None, [], {}]:
+        body = {"statuses": [{"heartbeatStatus": "Success", "total": odd}, {"heartbeatStatus": "Disabled", "total": 3}]}
+        assert t(body)[key] is None
+        assert not_evaluated(t(body), key)
+    assert t({"statuses": [{"heartbeatStatus": "Disabled", "total": -5}]})[key] is None
+    assert t({"statuses": [{"heartbeatStatus": "Success", "total": 40}, {"heartbeatStatus": "Disabled", "total": -1}]})[key] is None
     for bad in EMPTYISH:
         assert t(bad)[key] is None
         assert not_evaluated(t(bad), key)
@@ -111,6 +130,18 @@ def test_workflow():
     assert not_evaluated(t(paging([], has_next=True)), "isWorkflowAutomationEnabled")
     assert t(paging([tpl], has_next=True))["isWorkflowAutomationEnabled"] is True      # an active one was read
     assert t({"records": "x"})["isWorkflowAutomationEnabled"] is None
+    inactive = dict(tpl, active=False)
+    # more templates than were read, with no next page flag: not a complete read
+    assert t({"records": [inactive], "total": 5, "hasNext": False})["isWorkflowAutomationEnabled"] is None
+    assert t({"records": [inactive], "total": 1, "hasNext": False})["isWorkflowAutomationEnabled"] is False
+    assert t({"records": [inactive], "hasNext": False})["isWorkflowAutomationEnabled"] is False
+    for odd in ["1", True, -1, 1.5]:
+        assert t({"records": [inactive], "total": odd, "hasNext": False})["isWorkflowAutomationEnabled"] is None
+    # an empty list is measured only against an explicit completed count of 0
+    assert t({"records": [], "hasNext": False})["isWorkflowAutomationEnabled"] is None
+    assert t({"records": []})["isWorkflowAutomationEnabled"] is None
+    assert t({"records": [], "total": "0", "hasNext": False})["isWorkflowAutomationEnabled"] is None
+    assert t({"records": [], "total": 0, "hasNext": False})["isWorkflowAutomationEnabled"] is False
     for bad in EMPTYISH:
         assert t(bad)["isWorkflowAutomationEnabled"] is None
         assert not_evaluated(t(bad), "isWorkflowAutomationEnabled")
@@ -183,6 +214,19 @@ def test_separation_of_duties():
     assert t(paging([{"secretPolicyId": 1}]))[key] is None                              # fan-out never ran
     assert not_evaluated(t(paging([{"secretPolicyId": 1}])), key)
     assert t({"policyDetails": []})[key] is None
+    # more policies than were read, with no next page flag
+    more = sod([policy(1, approve=False)])
+    more["total"] = 4
+    assert t(more)[key] is None
+    assert not_evaluated(t(more), key)
+    for odd in ["1", True, -1, 1.5]:
+        bad_total = sod([policy(1, approve=False)])
+        bad_total["total"] = odd
+        assert t(bad_total)[key] is None
+    # an empty list is measured only against an explicit completed count of 0
+    assert t({"records": [], "policyDetails": []})[key] is None
+    assert t({"records": [], "policyDetails": [], "total": "0", "hasNext": False})[key] is None
+    assert t({"records": [], "policyDetails": [], "total": 0, "hasNext": False})[key] is False
     assert t({"records": "x", "policyDetails": []})[key] is None
     for bad in EMPTYISH:
         assert t(bad)[key] is None
