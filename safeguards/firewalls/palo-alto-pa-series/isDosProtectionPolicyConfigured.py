@@ -2,7 +2,7 @@
 Transformation: isDosProtectionPolicyConfigured
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: At least one enabled DoS Protection rule has action protect and a bound aggregate or classified DoS profile.
+Value: An enabled DoS Protection rule with action protect and a bound aggregate or classified DoS profile covers all sources and destinations.
 
 Wire: getDosRules: GET {serverUrl}/api/?type=config&action=show&xpath=.../vsys/entry[@name='vsys1']/rulebase/dos/rules
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: rulebase/dos/rules/entry: action (deny, allow, protect) and protection/(aggregate|classified)/profile names are from the CLI hierarchy; an empty DoS rulebase reads as Not evaluated, not False.
+UNVERIFIED: rulebase/dos/rules/entry: action (deny, allow, protect), source, destination and protection/(aggregate|classified)/profile names are from the CLI hierarchy. Scope is judged from source and destination addresses only (zones are not). A successful reply with no DoS rules reads as nothing configured (False). vsys1 only.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -189,11 +189,42 @@ def need(body, what):
     return result, None
 
 
+def contains_key(obj, key, depth=0):
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        for inner in obj.values():
+            if contains_key(inner, key, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for inner in obj:
+            if contains_key(inner, key, depth + 1):
+                return True
+    return False
+
+
 def rule_list(result):
     rules = find_key(result, "rules")
     if rules is None:
-        return None
+        return [] if contains_key(result, "rules") else None
     return entries(rules)
+
+
+def read_list(body, what):
+    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
+    <result/> (the object is not in the configuration): a real answer that nothing is configured.
+    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
+    result, problem = read(body, what)
+    if problem:
+        return None, problem, False
+    if result is None or result == "" or result == {}:
+        pan = find_pan(body)
+        if pan is not None and "result" in pan:
+            return None, None, True
+        return None, what + ": success reply without a result element", False
+    return result, None, False
 
 
 def name_list(items, limit=5):
@@ -236,14 +267,25 @@ def run(key, title, evaluate, input):
     return respond(key, value, problem, info, title)
 
 
+def broad(r, fields):
+    for f in fields:
+        listed = members(r.get(f))
+        if listed and "any" not in listed:
+            return False
+    return True
+
+
 def evaluate(data):
-    result, problem = need(data, "DoS rules")
+    result, problem, nothing = read_list(data, "DoS rules")
     if problem:
         return None, problem, {}
-    rules = rule_list(result)
+    rules = [] if nothing else rule_list(result)
+    if rules is None:
+        return None, "DoS rules: no rules element in the reply", {}
     if not rules:
-        return None, "DoS rules: no rule entries in the reply", {}
-    good = []
+        return False, None, {"summary": {"dosRules": 0}, "fail": ["No DoS Protection rules are configured."],
+                             "rec": ["Add a DoS Protection policy rule (action Protect) bound to an aggregate or classified DoS profile."]}
+    wide_ok, scoped = [], []
     for r in rules:
         action = r.get("action")
         protect = (isinstance(action, dict) and "protect" in action) or text_of(action) == "protect"
@@ -254,11 +296,18 @@ def evaluate(data):
                 section = protection.get(part)
                 if isinstance(section, dict) and text_of(section.get("profile")):
                     bound = True
-        if not yes(r.get("disabled")) and protect and bound:
-            good.append(r)
-    summary = {"dosRules": len(rules), "enabledProtectRulesWithProfile": len(good)}
-    if good:
-        return True, None, {"summary": summary, "pass": [str(len(good)) + " enabled DoS Protection rule(s) with a bound profile."]}
+        if yes(r.get("disabled")) or not protect or not bound:
+            continue
+        if broad(r, ("source", "destination")):
+            wide_ok.append(r)
+        else:
+            scoped.append(r)
+    summary = {"dosRules": len(rules), "enabledProtectRulesCoveringAllTraffic": len(wide_ok), "enabledProtectRulesScoped": len(scoped)}
+    if wide_ok:
+        return True, None, {"summary": summary, "pass": [str(len(wide_ok)) + " enabled DoS Protection rule(s) with a bound profile cover all sources and destinations."]}
+    if scoped:
+        return False, None, {"summary": summary, "fail": [str(len(scoped)) + " DoS Protection rule(s) exist but each covers only some sources or destinations."],
+                             "rec": ["Add or widen a DoS Protection rule (action Protect) so it covers the traffic to protect."]}
     return False, None, {"summary": summary, "fail": ["No enabled DoS rule with action protect and a bound DoS Protection profile among " + str(len(rules)) + " rules."],
                          "rec": ["Add a DoS Protection policy rule (action Protect) bound to an aggregate or classified DoS profile."]}
 

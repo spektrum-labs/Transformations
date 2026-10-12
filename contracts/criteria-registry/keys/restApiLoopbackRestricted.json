@@ -2,12 +2,12 @@
   "name": "restApiLoopbackRestricted",
   "revision": 1,
   "status": "proposed",
-  "definition": "The management interface permitted-IP list names specific sources and does not include an any-source entry.",
+  "definition": "The management interface permitted-IP list names specific sources and does not include an any-source or very wide entry. An empty list means any source is allowed (False).",
   "valueType": "boolean",
   "unit": "none",
   "population": "the management interface permitted-IP list of the one firewall the credential reaches",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "The management permitted-IP list showing at least one entry and no any-source entry.",
+  "evidenceRequiredForTrue": "The management permitted-IP list showing at least one entry and no any-source or very wide entry.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -36,5 +36,5 @@
       "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
     }
   ],
-  "notes": "deviceconfig/system/permitted-ip/entry (the MGT permitted IP list) from the CLI hierarchy. An empty list means any source is allowed, but an empty reply cannot be told apart from an unreadable one, so it is Not evaluated. Interface management profiles on data-plane interfaces are not read."
+  "notes": "deviceconfig/system/permitted-ip/entry (the MGT permitted IP list) from the CLI hierarchy. A successful reply with no entries reads as any source allowed (False). An IPv4 prefix shorter than /8 (IPv6 shorter than /16) counts as open; other wide unions of ranges are not detected. Interface management profiles on data-plane interfaces are not read."
 }

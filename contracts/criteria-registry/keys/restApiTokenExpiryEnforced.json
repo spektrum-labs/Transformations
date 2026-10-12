@@ -2,12 +2,12 @@
   "name": "restApiTokenExpiryEnforced",
   "revision": 1,
   "status": "proposed",
-  "definition": "The API key lifetime under Authentication Settings is a positive number of minutes (0 means keys never expire).",
+  "definition": "True when the API credential has a bounded lifetime, so keys or tokens expire and must be reissued.",
   "valueType": "boolean",
   "unit": "none",
-  "population": "the API key lifetime setting of the one firewall the credential reaches",
+  "population": "the API key or token lifetime setting of the firewall or management service the credential reaches",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "The management authentication settings showing an API key lifetime greater than zero minutes.",
+  "evidenceRequiredForTrue": "A successful read of the authentication settings showing a lifetime greater than zero (or an enforced maximum); zero or never-expire is False; an error, empty or absent setting is Not evaluated.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -26,15 +26,15 @@
     "implementations": []
   },
   "citations": [
-    "safeguards/firewalls/palo-alto-pa-series/restApiTokenExpiryEnforced.py",
-    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
-      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "deviceconfig/setting/management/api/key/lifetime (1 to 525600, or 0) from the CLI hierarchy. An absent setting is Not evaluated, not False."
+  "notes": "The setting read is the service-wide lifetime, not each individual key."
 }

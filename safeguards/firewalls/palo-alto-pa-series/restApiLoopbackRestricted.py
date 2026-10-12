@@ -2,7 +2,7 @@
 Transformation: restApiLoopbackRestricted
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: The management interface permitted-IP list names specific sources and does not include an any-source entry.
+Value: The management interface permitted-IP list names specific sources and does not include an any-source or very wide entry. An empty list means any source is allowed (False).
 
 Wire: getPermittedIp: GET {serverUrl}/api/?type=config&action=show&xpath=/config/devices/entry[@name='localhost.localdomain']/deviceconfig/system/permitted-ip
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: deviceconfig/system/permitted-ip/entry (the MGT permitted IP list) from the CLI hierarchy. An empty list means any source is allowed, but an empty reply cannot be told apart from an unreadable one, so it is Not evaluated. Interface management profiles on data-plane interfaces are not read.
+UNVERIFIED: deviceconfig/system/permitted-ip/entry (the MGT permitted IP list) from the CLI hierarchy. A successful reply with no entries reads as any source allowed (False). An IPv4 prefix shorter than /8 (IPv6 shorter than /16) counts as open; other wide unions of ranges are not detected. Interface management profiles on data-plane interfaces are not read.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -189,11 +189,42 @@ def need(body, what):
     return result, None
 
 
+def contains_key(obj, key, depth=0):
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        for inner in obj.values():
+            if contains_key(inner, key, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for inner in obj:
+            if contains_key(inner, key, depth + 1):
+                return True
+    return False
+
+
 def rule_list(result):
     rules = find_key(result, "rules")
     if rules is None:
-        return None
+        return [] if contains_key(result, "rules") else None
     return entries(rules)
+
+
+def read_list(body, what):
+    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
+    <result/> (the object is not in the configuration): a real answer that nothing is configured.
+    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
+    result, problem = read(body, what)
+    if problem:
+        return None, problem, False
+    if result is None or result == "" or result == {}:
+        pan = find_pan(body)
+        if pan is not None and "result" in pan:
+            return None, None, True
+        return None, what + ": success reply without a result element", False
+    return result, None, False
 
 
 def name_list(items, limit=5):
@@ -236,19 +267,34 @@ def run(key, title, evaluate, input):
     return respond(key, value, problem, info, title)
 
 
+def is_open(name):
+    if name in ("any", "0.0.0.0/0", "::/0"):
+        return True
+    if "/" in name:
+        head, tail = name.rsplit("/", 1)
+        if tail.isdigit():
+            bits = int(tail)
+            if ":" in head:
+                return bits < 16
+            return bits < 8
+    return False
+
+
 def evaluate(data):
-    result, problem = need(data, "permitted IP list")
+    result, problem, nothing = read_list(data, "permitted IP list")
     if problem:
         return None, problem, {}
-    listed = entries(find_key(result, "permitted-ip"))
-    names = [text_of(e.get("@name")) for e in listed]
-    names = [n for n in names if n]
+    names = []
+    if not nothing:
+        names = [text_of(e.get("@name")) for e in entries(find_key(result, "permitted-ip"))]
+        names = [n for n in names if n]
     if not names:
-        return None, "permitted IP list: no entries in the reply", {}
-    open_ones = [n for n in names if n in ("0.0.0.0/0", "::/0", "any")]
-    summary = {"permittedSources": len(names), "anySourceEntries": len(open_ones)}
+        return False, None, {"summary": {"permittedSources": 0}, "fail": ["The permitted IP list is empty, which allows any source to reach the management interface."],
+                             "rec": ["Restrict the permitted IP list to the management network and Spektrum's egress addresses."]}
+    open_ones = [n for n in names if is_open(n)]
+    summary = {"permittedSources": len(names), "anySourceOrVeryWideEntries": len(open_ones)}
     if open_ones:
-        return False, None, {"summary": summary, "fail": ["The permitted IP list contains an any-source entry."],
+        return False, None, {"summary": summary, "fail": ["The permitted IP list contains an any-source or very wide entry."],
                              "rec": ["Restrict the permitted IP list to the management network and Spektrum's egress addresses."]}
     return True, None, {"summary": summary, "pass": ["Management access is limited to " + str(len(names)) + " listed source(s)."]}
 

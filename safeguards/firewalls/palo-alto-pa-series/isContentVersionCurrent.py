@@ -188,11 +188,42 @@ def need(body, what):
     return result, None
 
 
+def contains_key(obj, key, depth=0):
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        for inner in obj.values():
+            if contains_key(inner, key, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for inner in obj:
+            if contains_key(inner, key, depth + 1):
+                return True
+    return False
+
+
 def rule_list(result):
     rules = find_key(result, "rules")
     if rules is None:
-        return None
+        return [] if contains_key(result, "rules") else None
     return entries(rules)
+
+
+def read_list(body, what):
+    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
+    <result/> (the object is not in the configuration): a real answer that nothing is configured.
+    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
+    result, problem = read(body, what)
+    if problem:
+        return None, problem, False
+    if result is None or result == "" or result == {}:
+        pan = find_pan(body)
+        if pan is not None and "result" in pan:
+            return None, None, True
+        return None, what + ": success reply without a result element", False
+    return result, None, False
 
 
 def name_list(items, limit=5):
@@ -260,6 +291,8 @@ def evaluate(data):
     av_age = release_age_days(system.get("av-release-date"))
     if app_age is None or av_age is None:
         return None, "system info: app-release-date or av-release-date missing or unreadable", {}
+    if app_age < 0 or av_age < 0:
+        return None, "system info: a content release date is in the future (clock or data problem)", {}
     limit = 30
     summary = {"appsAndThreatsContentAgeDays": app_age, "antivirusContentAgeDays": av_age, "windowDays": limit}
     if app_age <= limit and av_age <= limit:

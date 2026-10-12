@@ -189,11 +189,42 @@ def need(body, what):
     return result, None
 
 
+def contains_key(obj, key, depth=0):
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        for inner in obj.values():
+            if contains_key(inner, key, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for inner in obj:
+            if contains_key(inner, key, depth + 1):
+                return True
+    return False
+
+
 def rule_list(result):
     rules = find_key(result, "rules")
     if rules is None:
-        return None
+        return [] if contains_key(result, "rules") else None
     return entries(rules)
+
+
+def read_list(body, what):
+    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
+    <result/> (the object is not in the configuration): a real answer that nothing is configured.
+    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
+    result, problem = read(body, what)
+    if problem:
+        return None, problem, False
+    if result is None or result == "" or result == {}:
+        pan = find_pan(body)
+        if pan is not None and "result" in pan:
+            return None, None, True
+        return None, what + ": success reply without a result element", False
+    return result, None, False
 
 
 def name_list(items, limit=5):

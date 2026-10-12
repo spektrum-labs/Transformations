@@ -2,12 +2,12 @@
   "name": "ipsEnabled",
   "revision": 1,
   "status": "proposed",
-  "definition": "Every enabled allow rule carries a Vulnerability Protection profile, directly or through a profile group.",
+  "definition": "True when every enabled allow rule or policy set the tool reads carries an intrusion prevention (vulnerability protection) profile, directly or through a profile group.",
   "valueType": "boolean",
   "unit": "none",
-  "population": "enabled allow rules in the rulebase of the vsys read",
+  "population": "the enabled allow rules (or policy sets) the tool reads; denominator = every one read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of the security rulebase and the profile groups showing every enabled allow rule carrying a Vulnerability Protection profile, directly or through a group.",
+  "evidenceRequiredForTrue": "A complete read of the policy and profile groups showing an intrusion prevention profile on every in-scope allow rule; an error, empty or possibly cut-off read is Not evaluated.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -26,15 +26,15 @@
     "implementations": []
   },
   "citations": [
-    "safeguards/firewalls/palo-alto-pa-series/ipsEnabled.py",
-    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
-      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "profile-setting/profiles/vulnerability and profile-setting/group element names from the PAN-OS CLI hierarchy; the profile's own signature actions are not read. Panorama-pushed rules may not be in the local read. vsys1 only."
+  "notes": "Presence of a profile, not its signature actions."
 }

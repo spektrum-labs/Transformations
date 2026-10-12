@@ -2,12 +2,12 @@
   "name": "sslDeepInspectionEnabled",
   "revision": 1,
   "status": "proposed",
-  "definition": "At least one enabled decryption rule decrypts with SSL Forward Proxy and names a decryption profile.",
+  "definition": "True when outbound TLS traffic is decrypted for inspection (forward proxy) with a decryption profile in place, covering all outbound traffic and not skipped for all traffic by an earlier rule.",
   "valueType": "boolean",
   "unit": "none",
-  "population": "decryption rules of the vsys read",
+  "population": "the decryption rules (or decryption trust settings) the tool reads",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A decryption rulebase read showing at least one enabled SSL Forward Proxy decrypt rule that names a decryption profile.",
+  "evidenceRequiredForTrue": "A successful read of the decryption setup showing forward-proxy decryption with a profile in force across all outbound traffic; a read showing nothing configured is False; an error, empty body or possibly cut-off read is Not evaluated.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -26,15 +26,15 @@
     "implementations": []
   },
   "citations": [
-    "safeguards/firewalls/palo-alto-pa-series/sslDeepInspectionEnabled.py",
-    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
-      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "rulebase/decryption/rules/entry: action (decrypt or no-decrypt), type/ssl-forward-proxy and profile element names are from the CLI hierarchy; an empty decryption rulebase reads as Not evaluated, not False."
+  "notes": "Scope is judged from the fields the tool can read (hardware: source, destination and URL category). A narrow rule alone is False, not True."
 }

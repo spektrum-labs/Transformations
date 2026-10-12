@@ -2,7 +2,7 @@
 Transformation: autoUpdateSignaturesEnabled
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: The Applications-and-Threats content has a recurring update schedule with a download action.
+Value: The Applications-and-Threats content has a recurring update schedule whose action is download-and-install. Download-only is False: the content is fetched but never activated.
 
 Wire: getUpdateSchedule: GET {serverUrl}/api/?type=config&action=show&xpath=/config/devices/entry[@name='localhost.localdomain']/deviceconfig/system/update-schedule
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
@@ -189,11 +189,42 @@ def need(body, what):
     return result, None
 
 
+def contains_key(obj, key, depth=0):
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        for inner in obj.values():
+            if contains_key(inner, key, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for inner in obj:
+            if contains_key(inner, key, depth + 1):
+                return True
+    return False
+
+
 def rule_list(result):
     rules = find_key(result, "rules")
     if rules is None:
-        return None
+        return [] if contains_key(result, "rules") else None
     return entries(rules)
+
+
+def read_list(body, what):
+    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
+    <result/> (the object is not in the configuration): a real answer that nothing is configured.
+    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
+    result, problem = read(body, what)
+    if problem:
+        return None, problem, False
+    if result is None or result == "" or result == {}:
+        pan = find_pan(body)
+        if pan is not None and "result" in pan:
+            return None, None, True
+        return None, what + ": success reply without a result element", False
+    return result, None, False
 
 
 def name_list(items, limit=5):
@@ -255,12 +286,19 @@ def evaluate(data):
         return False, None, {"summary": {"threatsScheduled": False},
                              "fail": ["Applications-and-Threats content updates are not scheduled (recurrence none)."],
                              "rec": ["Schedule Applications-and-Threats content updates (download and install)."]}
+    download_only = None
     for cadence, settings in recurring.items():
         if isinstance(settings, dict):
             action = text_of(settings.get("action"))
-            if action in ("download-only", "download-and-install"):
+            if action == "download-and-install":
                 return True, None, {"summary": {"threatsScheduled": True, "cadence": cadence, "action": action},
                                     "pass": ["Applications-and-Threats content updates recur (" + cadence + ", " + action + ")."]}
+            if action == "download-only":
+                download_only = cadence
+    if download_only is not None:
+        return False, None, {"summary": {"threatsScheduled": True, "cadence": download_only, "action": "download-only"},
+                             "fail": ["Content is downloaded on a schedule but not installed (download-only), so the firewall keeps enforcing older signatures."],
+                             "rec": ["Change the Applications-and-Threats schedule action to download-and-install."]}
     return None, "update schedule: the threats recurrence has no recognisable action", {}
 
 KEY = "autoUpdateSignaturesEnabled"

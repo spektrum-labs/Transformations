@@ -2,13 +2,13 @@
   "name": "wildfireInlineMlEnabled",
   "revision": 1,
   "status": "proposed",
-  "definition": "Every enabled allow rule carries a WildFire Analysis profile, directly or through a profile group. Inline ML settings are not read.",
+  "definition": "Every enabled allow rule carries an Antivirus profile whose file-based ML engine action is enable (not alert-only or disable), directly or through a profile group.",
   "valueType": "boolean",
   "unit": "none",
   "population": "enabled allow rules in the rulebase of the vsys read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of the security rulebase and profile groups showing every enabled allow rule carrying a WildFire Analysis profile (attachment only; profile content is not read).",
-  "evidenceClass": "presence",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase, profile groups and Antivirus profiles showing every enabled allow rule carrying an Antivirus profile whose file-based ML engine action is enable.",
+  "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
     "envelope": "additionalInfo.dataCollection.status == \"error\""
@@ -36,5 +36,5 @@
       "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
     }
   ],
-  "notes": "Only the attachment of a WildFire Analysis profile is read, not what the profile forwards or whether Inline ML is on; the key name overstates what this proves. vsys1 only."
+  "notes": "Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) are from the CLI hierarchy and UNVERIFIED on a real device. A profile name that is not in the profile reads (for example a predefined one) is unknown, so the key is Not evaluated. Cloud-delivered inline analysis settings are not read. vsys1 only."
 }

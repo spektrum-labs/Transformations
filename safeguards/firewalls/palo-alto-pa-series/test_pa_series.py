@@ -23,7 +23,6 @@ KEYS = [
     "isContentVersionCurrent", "autoUpdateSignaturesEnabled", "haModeEnabled", "vpnTunnelEstablished",
     "ipsecReplayProtectionEnabled", "isRulestackCommitClean", "adminLockoutThresholdCount",
     "restApiTokenExpiryEnforced", "isManagementInterfaceHttpsOnly", "restApiLoopbackRestricted",
-    "isProgrammaticAccessEnabled",
 ]
 
 
@@ -143,8 +142,16 @@ NOT_EVALUATED_BODIES = {
 }
 
 
-@pytest.mark.parametrize("key", KEYS)
-@pytest.mark.parametrize("label", sorted(NOT_EVALUATED_BODIES))
+# A successful PAN-OS reply with an empty result says the object is not in the configuration. For
+# these three keys that is real evidence that nothing is configured (False); everywhere else it is
+# not enough to answer. An empty body, an error or a refusal is Not evaluated for every key.
+NOTHING_CONFIGURED_KEYS = {"sslDeepInspectionEnabled", "isDosProtectionPolicyConfigured", "restApiLoopbackRestricted"}
+NOTHING_LABELS = {"pan_success_empty_result", "pan_success_empty_object_not_present"}
+BATTERY = [(k, l) for k in KEYS for l in sorted(NOT_EVALUATED_BODIES)
+           if not (k in NOTHING_CONFIGURED_KEYS and l in NOTHING_LABELS)]
+
+
+@pytest.mark.parametrize("key,label", BATTERY)
 def test_body_that_proves_nothing_is_not_evaluated(key, label):
     assert_not_evaluated(key, NOT_EVALUATED_BODIES[label])
 
@@ -228,7 +235,7 @@ def test_logging_count_mismatch_is_possibly_truncated():
 
 # --- ipsEnabled / isURLFilteringProfileEnabled / wildfireInlineMlEnabled ---------
 
-PROFILE_KEYS = [("ipsEnabled", "vulnerability"), ("wildfireInlineMlEnabled", "wildfire-analysis")]
+PROFILE_KEYS = [("ipsEnabled", "vulnerability")]
 
 
 @pytest.mark.parametrize("key,kind", PROFILE_KEYS)
@@ -313,12 +320,16 @@ def decryption_body(rules):
     return ok({"rules": {"entry": one_or_many(rules)}})
 
 
-def drule(name, action="decrypt", kind="ssl-forward-proxy", profile="dp", disabled=None):
+def drule(name, action="decrypt", kind="ssl-forward-proxy", profile="dp", disabled=None, source=None,
+          destination=None, category=None):
     r = {"@name": name, "action": action, "type": {kind: None}}
     if profile:
         r["profile"] = profile
     if disabled:
         r["disabled"] = disabled
+    for field, listed in (("source", source), ("destination", destination), ("category", category)):
+        if listed:
+            r[field] = {"member": listed}
     return r
 
 
@@ -348,8 +359,12 @@ def dos_body(rules):
     return ok({"rules": {"entry": one_or_many(rules)}})
 
 
-def dos_rule(name, action="protect", profile=True, disabled=None):
+def dos_rule(name, action="protect", profile=True, disabled=None, source=None, destination=None):
     r = {"@name": name, "action": {action: None}}
+    if source:
+        r["source"] = {"member": source}
+    if destination:
+        r["destination"] = {"member": destination}
     if profile:
         r["protection"] = {"aggregate": {"profile": "dos-agg"}}
     if disabled:
@@ -466,9 +481,12 @@ def test_auto_update_true_when_threats_recurs_with_an_action():
     assert value("autoUpdateSignaturesEnabled", body) is True
 
 
-def test_auto_update_download_only_still_counts_as_scheduled():
+def test_auto_update_download_only_is_false_because_nothing_is_installed():
     body = schedule(threats={"recurring": {"daily": {"at": "02:00", "action": "download-only"}}})
-    assert value("autoUpdateSignaturesEnabled", body) is True
+    out = run("autoUpdateSignaturesEnabled", body)
+    assert out["transformedResponse"]["autoUpdateSignaturesEnabled"] is False
+    assert collection(out)["status"] == "success"
+    assert "not installed" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
 
 
 def test_auto_update_false_when_threats_recurrence_is_none():
@@ -654,18 +672,211 @@ def test_permitted_ip_single_entry_as_dict():
     assert value("restApiLoopbackRestricted", permitted("192.0.2.9")) is True
 
 
-# --- isProgrammaticAccessEnabled --------------------------------------------------------
-
-def test_programmatic_access_true_when_the_key_read_system_info():
-    assert value("isProgrammaticAccessEnabled", sysinfo()) is True
-
-
-def test_programmatic_access_system_info_without_identity_is_not_evaluated():
-    assert_not_evaluated("isProgrammaticAccessEnabled", ok({"system": {}}))
-
-
 # --- no customer or tenant data in the fixtures ------------------------------------------
 
 def test_this_file_names_no_customer_host_or_address():
     text = pathlib.Path(__file__).read_text()
     assert ("10." + "30.") not in text and ("@spektrum" + ".ai") not in text
+
+
+# --- review fixes (red first): scope, nothing configured, download-only, ML, discrimination --------
+
+def test_programmatic_access_key_is_not_published_for_this_tool():
+    # nothing the firewall can answer makes it False: a refused key is Not evaluated, so True would only
+    # restate that our own call worked
+    assert not (HERE / "isProgrammaticAccessEnabled.py").exists()
+
+
+# sslDeepInspectionEnabled: scope and order matter, nothing configured is False
+def test_decryption_false_when_the_only_decrypt_rule_covers_part_of_the_traffic():
+    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", source=["192.0.2.0/24"])])) is False
+
+
+def test_decryption_false_when_a_scoped_category_is_the_only_coverage():
+    assert value("sslDeepInspectionEnabled", decryption_body([drule("a", category=["streaming-media"])])) is False
+
+
+def test_decryption_true_when_any_source_destination_and_category_are_listed():
+    rule_all = drule("a", source=["any"], destination=["any"], category=["any"])
+    assert value("sslDeepInspectionEnabled", decryption_body([rule_all])) is True
+
+
+def test_decryption_false_when_a_no_decrypt_for_all_traffic_comes_first():
+    rules = [drule("skip", action="no-decrypt"), drule("a")]
+    assert value("sslDeepInspectionEnabled", decryption_body(rules)) is False
+
+
+def test_decryption_true_when_a_narrow_no_decrypt_exception_comes_first():
+    rules = [drule("skip", action="no-decrypt", category=["financial-services"]), drule("a")]
+    assert value("sslDeepInspectionEnabled", decryption_body(rules)) is True
+
+
+@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None})])
+def test_decryption_nothing_configured_on_a_successful_read_is_false(body):
+    out = run("sslDeepInspectionEnabled", body)
+    assert out["transformedResponse"]["sslDeepInspectionEnabled"] is False
+    assert collection(out)["status"] == "success"
+
+
+# isDosProtectionPolicyConfigured
+def test_dos_false_when_the_only_protect_rule_covers_one_destination():
+    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", destination=["192.0.2.10"])])) is False
+
+
+def test_dos_true_when_any_source_and_destination_are_listed():
+    assert value("isDosProtectionPolicyConfigured", dos_body([dos_rule("a", source=["any"], destination=["any"])])) is True
+
+
+@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"rules": None})])
+def test_dos_nothing_configured_on_a_successful_read_is_false(body):
+    out = run("isDosProtectionPolicyConfigured", body)
+    assert out["transformedResponse"]["isDosProtectionPolicyConfigured"] is False
+    assert collection(out)["status"] == "success"
+
+
+# restApiLoopbackRestricted
+@pytest.mark.parametrize("body", [ok(None), ok(None, "7"), ok({"permitted-ip": None})])
+def test_permitted_ip_empty_list_means_any_source_and_is_false(body):
+    out = run("restApiLoopbackRestricted", body)
+    assert out["transformedResponse"]["restApiLoopbackRestricted"] is False
+    assert collection(out)["status"] == "success"
+    assert "any source" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+def test_permitted_ip_two_halves_of_the_address_space_are_open():
+    assert value("restApiLoopbackRestricted", permitted("0.0.0.0/1", "128.0.0.0/1")) is False
+
+
+def test_permitted_ip_a_very_wide_prefix_is_open():
+    assert value("restApiLoopbackRestricted", permitted("192.0.2.0/24", "10.0.0.0/7")) is False
+
+
+def test_permitted_ip_a_slash_eight_is_not_treated_as_open():
+    assert value("restApiLoopbackRestricted", permitted("10.0.0.0/8")) is True
+
+
+# autoUpdateSignaturesEnabled
+def test_auto_update_download_and_install_on_any_cadence_wins_over_download_only():
+    body = schedule(threats={"recurring": {"daily": {"at": "02:00", "action": "download-only"},
+                                           "hourly": {"at": "5", "action": "download-and-install"}}})
+    assert value("autoUpdateSignaturesEnabled", body) is True
+
+
+# firmwareUpToDate: the release list can sit under a versions wrapper
+def test_firmware_reads_the_release_list_under_a_versions_wrapper():
+    body = firmware("10.2.7-h3", VERSIONS)
+    entries_list = body["softwareUpdates"]["response"]["result"]["sw-updates"].pop("entry")
+    body["softwareUpdates"]["response"]["result"]["sw-updates"]["versions"] = {"entry": entries_list}
+    assert value("firmwareUpToDate", body) is False
+    body["systemInfo"] = sysinfo(**{"sw-version": "10.2.9-h1"})
+    assert value("firmwareUpToDate", body) is True
+
+
+# isContentVersionCurrent: a future release date is not evidence
+def test_content_future_dated_release_is_not_evaluated():
+    assert_not_evaluated("isContentVersionCurrent", content(-5, 1))
+
+
+# wildfireInlineMlEnabled reads the Antivirus ML engine setting, not the WildFire Analysis attachment
+def virus_body(profiles):
+    """profiles: {name: ml action or None (no ML element)}"""
+    items = []
+    for n, action in profiles.items():
+        e = {"@name": n}
+        if action:
+            e["mlav-engine-filebased-enabled"] = {"entry": [{"@name": "Windows Executables", "mlav-policy-action": action}]}
+        items.append(e)
+    return ok({"virus": {"entry": one_or_many(items)}})
+
+
+def ml_policy(rules, groups=None, shared=None, virus=None, shared_virus=None):
+    body = policy(rules, groups, shared)
+    body["virusProfiles"] = virus_body(virus or {})
+    body["sharedVirusProfiles"] = virus_body(shared_virus or {})
+    return body
+
+
+def test_wildfire_ml_true_when_every_allow_rule_has_an_antivirus_profile_with_the_ml_engine_enabled():
+    body = ml_policy([rule("a", profiles={"virus": "av1"}), rule("b", profiles={"virus": "av1"})], virus={"av1": "enable"})
+    assert value("wildfireInlineMlEnabled", body) is True
+
+
+def test_wildfire_ml_true_through_a_profile_group_and_a_shared_antivirus_profile():
+    body = ml_policy([rule("a", group="g1")], groups={"g1": {"virus": "av2"}}, shared_virus={"av2": "enable"})
+    assert value("wildfireInlineMlEnabled", body) is True
+
+
+def test_wildfire_ml_false_when_the_profile_only_alerts():
+    body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": "alert-only"})
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_false_when_the_ml_engine_is_disabled_or_absent():
+    for action in ("disable", None):
+        body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": action})
+        assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_false_when_a_wildfire_analysis_profile_is_all_that_is_attached():
+    body = ml_policy([rule("a", profiles={"wildfire-analysis": "wf"})])
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_false_when_one_allow_rule_has_no_antivirus_profile():
+    body = ml_policy([rule("a", profiles={"virus": "av1"}), rule("b")], virus={"av1": "enable"})
+    assert value("wildfireInlineMlEnabled", body) is False
+
+
+def test_wildfire_ml_profile_that_cannot_be_read_is_not_evaluated():
+    assert_not_evaluated("wildfireInlineMlEnabled", ml_policy([rule("a", profiles={"virus": "default"})]))
+    body = ml_policy([rule("a", profiles={"virus": "av1"})], virus={"av1": "enable"})
+    body["virusProfiles"] = err()
+    assert_not_evaluated("wildfireInlineMlEnabled", body)
+
+
+def test_wildfire_ml_ignores_deny_and_disabled_rules_and_needs_an_allow_rule():
+    body = ml_policy([rule("a", profiles={"virus": "av1"}), rule("b", action="deny"), rule("c", disabled="yes")], virus={"av1": "enable"})
+    assert value("wildfireInlineMlEnabled", body) is True
+    assert_not_evaluated("wildfireInlineMlEnabled", ml_policy([rule("a", action="deny")]))
+
+
+# one True body and one False body for every key: the answer must depend on the evidence
+DISCRIMINATES = {
+    "firewallLoggingEnabled": (lambda: rules_body([rule("a")]), lambda: rules_body([rule("a", log_setting=None)])),
+    "ipsEnabled": (lambda: policy([rule("a", profiles={"vulnerability": "p"})]), lambda: policy([rule("a")])),
+    "isURLFilteringProfileEnabled": (lambda: policy([rule("a", profiles={"url-filtering": "p"})]), lambda: policy([rule("a")])),
+    "wildfireInlineMlEnabled": (lambda: ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": "enable"}),
+                                lambda: ml_policy([rule("a", profiles={"virus": "v"})], virus={"v": "disable"})),
+    "sslDeepInspectionEnabled": (lambda: decryption_body([drule("a")]), lambda: decryption_body([drule("a", source=["192.0.2.0/24"])])),
+    "isDosProtectionPolicyConfigured": (lambda: dos_body([dos_rule("a")]), lambda: dos_body([dos_rule("a", destination=["192.0.2.10"])])),
+    "firmwareUpToDate": (lambda: firmware("10.2.9-h1", VERSIONS), lambda: firmware("10.2.9", VERSIONS)),
+    "isContentVersionCurrent": (lambda: content(3, 3), lambda: content(90, 3)),
+    "autoUpdateSignaturesEnabled": (
+        lambda: schedule(threats={"recurring": {"daily": {"at": "02:00", "action": "download-and-install"}}}),
+        lambda: schedule(threats={"recurring": {"daily": {"at": "02:00", "action": "download-only"}}})),
+    "haModeEnabled": (lambda: ha(), lambda: ha(enabled="no")),
+    "vpnTunnelEstablished": (lambda: vpn("active"), lambda: vpn("init")),
+    "ipsecReplayProtectionEnabled": (lambda: tunnels("yes"), lambda: tunnels("no")),
+    "isRulestackCommitClean": (lambda: ok("no"), lambda: ok("yes")),
+    "restApiTokenExpiryEnforced": (lambda: mgmt(api={"key": {"lifetime": "60"}}), lambda: mgmt(api={"key": {"lifetime": "0"}})),
+    "isManagementInterfaceHttpsOnly": (lambda: ok({"service": {"disable-http": "yes", "disable-telnet": "yes"}}),
+                                       lambda: ok({"service": {"disable-http": "no", "disable-telnet": "yes"}})),
+    "restApiLoopbackRestricted": (lambda: permitted("192.0.2.0/24"), lambda: permitted("0.0.0.0/0")),
+}
+
+
+@pytest.mark.parametrize("key", sorted(DISCRIMINATES))
+def test_each_key_can_be_true_and_can_be_false_on_evidence(key):
+    good, bad = DISCRIMINATES[key]
+    assert value(key, good()) is True
+    assert value(key, bad()) is False
+
+
+def test_lockout_threshold_is_a_count_that_differs_with_the_setting():
+    five = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "5"}}))
+    three = value("adminLockoutThresholdCount", mgmt(**{"admin-lockout": {"failed-attempts": "3"}}))
+    assert (five, three) == (5, 3)
+
+
+def test_every_published_key_has_a_discriminating_test_or_is_the_count():
+    assert set(KEYS) - set(DISCRIMINATES) == {"adminLockoutThresholdCount"}

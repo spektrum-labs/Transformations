@@ -2,9 +2,9 @@
 Transformation: wildfireInlineMlEnabled
 Vendor: Palo Alto Networks  |  Product: PA-Series Next-Generation Firewall (hardware)  |  Category: Firewalls
 
-Value: Every enabled allow rule carries a WildFire Analysis profile, directly or through a profile group. Inline ML settings are not read.
+Value: Every enabled allow rule carries an Antivirus profile whose file-based ML engine action is enable (not alert-only or disable), directly or through a profile group.
 
-Wire: workflow getSecurityPolicyProfiles
+Wire: workflow getInlineMlProfiles: getSecurityRules + getProfileGroups + getSharedProfileGroups (continueOnError) + getVirusProfiles + getSharedVirusProfiles (continueOnError)
   (X-PAN-KEY header; Integration-Service parses the XML reply with xmltodict:
   {"response": {"@status": "success", "result": {...}}})
 
@@ -12,7 +12,7 @@ Docs:
   PAN-OS XML API configuration (get/show) with xpath: https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api/pan-os-xml-api-request-types/get-active-configuration-api
   PAN-OS 11.1 configure CLI command hierarchy (element names): https://docs.paloaltonetworks.com/ngfw/pan-os-cli-quick-start/cli-command-hierarchy/pan-os-11-1-configure-cli-command-hierarchy
 
-UNVERIFIED: Only the attachment of a WildFire Analysis profile is read, not what the profile forwards or whether Inline ML is on; the key name overstates what this proves. vsys1 only.
+UNVERIFIED: Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) are from the CLI hierarchy and UNVERIFIED on a real device. A profile name that is not in the profile reads (for example a predefined one) is unknown, so the key is Not evaluated. Cloud-delivered inline analysis settings are not read. vsys1 only.
 Confirm against one real read-only connection before go-live.
 
 Fail closed: an error status, an empty reply, a refused, error-shaped, unrecognised or possibly cut-off
@@ -189,11 +189,42 @@ def need(body, what):
     return result, None
 
 
+def contains_key(obj, key, depth=0):
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        for inner in obj.values():
+            if contains_key(inner, key, depth + 1):
+                return True
+    elif isinstance(obj, list):
+        for inner in obj:
+            if contains_key(inner, key, depth + 1):
+                return True
+    return False
+
+
 def rule_list(result):
     rules = find_key(result, "rules")
     if rules is None:
-        return None
+        return [] if contains_key(result, "rules") else None
     return entries(rules)
+
+
+def read_list(body, what):
+    """(result, problem, nothing). nothing is True when PAN-OS answered success with an empty
+    <result/> (the object is not in the configuration): a real answer that nothing is configured.
+    An empty body, an error status or a possibly cut-off reply is a problem, never 'nothing'."""
+    result, problem = read(body, what)
+    if problem:
+        return None, problem, False
+    if result is None or result == "" or result == {}:
+        pan = find_pan(body)
+        if pan is not None and "result" in pan:
+            return None, None, True
+        return None, what + ": success reply without a result element", False
+    return result, None, False
 
 
 def name_list(items, limit=5):
@@ -314,11 +345,89 @@ def assess(data, kind, only_web, label):
     return True, None, {"summary": summary, "pass": ["All " + str(len(live)) + " enabled allow rules carry a " + label + "."]}
 
 
+def virus_profiles(*bodies):
+    found = {}
+    for body in bodies:
+        if body is None:
+            continue
+        result, problem = read(body, "antivirus profiles")
+        if problem or result is None:
+            continue
+        for p in entries(find_key(result, "virus")):
+            n = text_of(p.get("@name"))
+            if n:
+                found[n] = p
+    return found
+
+
+def ml_on(profile):
+    for e in entries(profile.get("mlav-engine-filebased-enabled")):
+        if text_of(e.get("mlav-policy-action")) == "enable":
+            return True
+    return False
+
+
+def virus_names(rule, groups):
+    """(names, unknown): the Antivirus profile names the rule carries, directly or through groups."""
+    setting = rule.get("profile-setting")
+    if not isinstance(setting, dict):
+        return [], False
+    profiles = setting.get("profiles")
+    if isinstance(profiles, dict) and members(profiles.get("virus")):
+        return members(profiles.get("virus")), False
+    names, unknown = [], False
+    for n in members(setting.get("group")):
+        g = groups.get(n)
+        if not isinstance(g, dict):
+            unknown = True
+            continue
+        names = names + members(g.get("virus"))
+    return names, unknown
+
+
 def evaluate(data):
-    return assess(data, "wildfire-analysis", False, "WildFire Analysis profile")
+    result, problem = need(sub(data, "securityRules"), "security rules")
+    if problem:
+        return None, problem, {}
+    rules = rule_list(result)
+    if rules is None:
+        return None, "security rules: no rules element in the reply", {}
+    live = [r for r in rules if not yes(r.get("disabled")) and text_of(r.get("action")) == "allow"]
+    if not live:
+        return None, "security rules: no enabled allow rule to judge for WildFire Inline ML", {}
+    groups = group_map(sub(data, "profileGroups"), sub(data, "sharedProfileGroups"))
+    profiles = virus_profiles(sub(data, "virusProfiles"), sub(data, "sharedVirusProfiles"))
+    off, unknown, on = [], [], 0
+    for r in live:
+        names, unresolved = virus_names(r, groups)
+        state = "on"
+        if unresolved:
+            state = "unknown"
+        elif not names:
+            state = "off"
+        else:
+            for n in names:
+                p = profiles.get(n)
+                if not isinstance(p, dict):
+                    state = "unknown"
+                elif not ml_on(p) and state != "unknown":
+                    state = "off"
+        if state == "off":
+            off.append(r)
+        elif state == "unknown":
+            unknown.append(r)
+        else:
+            on = on + 1
+    summary = {"allowRulesJudged": len(live), "withInlineMlOn": on, "withoutInlineMlOn": len(off), "unresolvedProfile": len(unknown)}
+    if off:
+        return False, None, {"summary": summary, "fail": [str(len(off)) + " of " + str(len(live)) + " enabled allow rules have no Antivirus profile with the ML engine set to enable: " + name_list(off)],
+                             "rec": ["Attach an Antivirus profile with the file-based ML engine action set to enable to every allow rule."]}
+    if unknown:
+        return None, "security rules: " + str(len(unknown)) + " rule(s) name an Antivirus profile or group that could not be read", {"summary": summary}
+    return True, None, {"summary": summary, "pass": ["All " + str(len(live)) + " enabled allow rules carry an Antivirus profile with the ML engine set to enable."]}
 
 KEY = "wildfireInlineMlEnabled"
-TITLE = "WildFire Inline ML / Cloud Analysis Enabled"
+TITLE = "WildFire Inline ML (Antivirus ML Engine) Enabled"
 
 
 def transform(input):

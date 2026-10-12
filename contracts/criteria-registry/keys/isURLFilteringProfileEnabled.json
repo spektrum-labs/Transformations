@@ -2,12 +2,12 @@
   "name": "isURLFilteringProfileEnabled",
   "revision": 1,
   "status": "proposed",
-  "definition": "Every enabled allow rule that can carry web traffic (application any, web-browsing or ssl) has a URL Filtering profile.",
+  "definition": "True when every rule or rulestack the tool reads that can carry web traffic has a URL filtering profile set (not none).",
   "valueType": "boolean",
   "unit": "none",
-  "population": "enabled allow rules whose application is any, web-browsing or ssl",
+  "population": "the policy rules or rulestacks the tool reads that can carry web traffic; denominator = every one read",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of the security rulebase and profile groups showing every enabled allow rule that can carry web traffic carrying a URL Filtering profile.",
+  "evidenceRequiredForTrue": "A complete read of the policy and its profiles showing a URL filtering profile on every in-scope rule or rulestack; an error, empty or possibly cut-off read is Not evaluated.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -26,15 +26,15 @@
     "implementations": []
   },
   "citations": [
-    "safeguards/firewalls/palo-alto-pa-series/isURLFilteringProfileEnabled.py",
-    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
-      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "Which rules face the internet is not in the configuration, so the web-capable test is by application (any, web-browsing, ssl); a profile's category actions are not read. vsys1 only."
+  "notes": "Presence of a profile, not its strength: a custom profile is not graded. How web-capable rules are told apart is per tool (hardware: application any, web-browsing or ssl)."
 }

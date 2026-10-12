@@ -2,13 +2,13 @@
   "name": "isRulestackCommitClean",
   "revision": 1,
   "status": "proposed",
-  "definition": "The firewall reports no pending (uncommitted) configuration changes.",
+  "definition": "True when the policy the firewall tool reads has no uncommitted (candidate) changes, so the policy the firewall enforces equals the last committed configuration.",
   "valueType": "boolean",
   "unit": "none",
-  "population": "the candidate configuration of the one firewall the credential reaches",
+  "population": "the policy sets (candidate configuration or rulestacks) in use by the firewalls the credential reaches; unused ones are ignored",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "The pending-changes check answering no.",
-  "evidenceClass": "measured",
+  "evidenceRequiredForTrue": "A complete, successful read showing no pending changes for every policy set in use; an error, empty or possibly cut-off read is Not evaluated.",
+  "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
     "envelope": "additionalInfo.dataCollection.status == \"error\""
@@ -26,15 +26,15 @@
     "implementations": []
   },
   "citations": [
-    "safeguards/firewalls/palo-alto-pa-series/isRulestackCommitClean.py",
-    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
-      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
     }
   ],
-  "notes": "The reply text (yes or no) is from vendor documentation of the check pending-changes operational command and a client library that wraps it; UNVERIFIED on a real device. The candidate configuration is shared by all administrators, so this covers the whole configuration, not only the security rulebase."
+  "notes": "Answers only a tool that has a commit step between candidate and running policy. Hardware firewalls use the pending-changes check; cloud rulestacks use the uncommitted list."
 }
