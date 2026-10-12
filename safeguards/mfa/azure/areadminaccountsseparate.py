@@ -13,7 +13,10 @@ assignedPlans is in the read and shows no enabled Exchange plan, or every assign
 and is not a productivity SKU (KNOWN_NON_PRODUCTIVITY_SKU_IDS). `mail` plus a SKU we cannot
 classify and no assignedPlans is not evaluated ("mailbox licence could not be classified"),
 never a pass. A proven fail on any admin wins over unresolved admins. No role or licence data
-is not evaluated, never a measured fail.
+is not evaluated, never a measured fail. So is a partial read: a page with an @odata.nextLink
+(role assignments, directory roles, their members or users) cannot show that no other admin
+holds a mailbox, and an administrator whose own row has no assignedLicenses list (missing or
+null) was never checked for a licence. Neither can read as a pass.
 """
 
 import json
@@ -38,10 +41,41 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+# The validator's text can carry vendor text, so what is echoed under additionalInfo.validation is
+# bounded: at most MAX_ECHOED_ITEMS strings of at most MAX_ECHOED_TEXT characters each.
+MAX_ECHOED_ITEMS = 20
+MAX_ECHOED_TEXT = 300
+
+
+def bounded_texts(items):
+    """A list of at most MAX_ECHOED_ITEMS strings, each cut to MAX_ECHOED_TEXT characters."""
+    if not items:
+        return []
+    if not isinstance(items, list):
+        items = [items]
+    bounded = []
+    for item in items[:MAX_ECHOED_ITEMS]:
+        text = str(item)
+        if len(text) > MAX_ECHOED_TEXT:
+            text = text[:MAX_ECHOED_TEXT] + "..."
+        bounded.append(text)
+    return bounded
+
+
+def bounded_code(value):
+    """An error code from a Graph error body, as text of at most 80 characters (None stays None)."""
+    if value is None:
+        return None
+    return str(value)[:80]
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    validation_status = validation.get("status", "unknown")
+    if isinstance(validation_status, str):
+        validation_status = validation_status[:40]
     return {
         "transformedResponse": result,
         "additionalInfo": {
@@ -50,9 +84,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "errors": api_errors or []
             },
             "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", [])
+                "status": validation_status,
+                "errors": bounded_texts(validation.get("errors")),
+                "warnings": bounded_texts(validation.get("warnings"))
             },
             "transformation": {
                 "status": "error" if (transformation_errors or []) else "success",
@@ -127,6 +161,25 @@ def as_list(value):
             return nested
         return [nested] if nested else []
     return [value]
+
+
+def has_next_link(value):
+    return isinstance(value, dict) and bool(value.get("@odata.nextLink"))
+
+
+def truncated_parts(data):
+    """Names of the parts of the read that Graph says continue on another page (@odata.nextLink)."""
+    parts = []
+    if has_next_link(data):
+        parts.append("the user feed")
+    for label in ["roleAssignments", "directoryRoles", "users"]:
+        if has_next_link(data.get(label)):
+            parts.append(label)
+    for role in as_list(data.get("directoryRoles")):
+        if isinstance(role, dict) and has_next_link(role.get("members")):
+            parts.append("directoryRoles members")
+            break
+    return parts
 
 
 def role_id_from_entry(entry):
@@ -302,9 +355,12 @@ def transform(input):
             )
 
         if validation.get("status") == "failed":
+            # Input that failed validation is not a measurement of the tenant: carry it as a data
+            # collection error so the check reads "not evaluated", never a measured fail.
             return create_response(
                 result=default_result,
                 validation=validation,
+                api_errors=["Input validation failed"],
                 fail_reasons=["Input validation failed"]
             )
 
@@ -315,11 +371,14 @@ def transform(input):
             inner_error = error_info.get("innerError", {})
             if not isinstance(inner_error, dict):
                 inner_error = {}
+            error_message = error_info.get("message")
+            error_message = str(error_message)[:200] if error_message else "API error"
             return create_response(
                 result=default_result,
-                validation={"status": "error", "errors": [error_info.get("message", "API error")], "warnings": []},
+                validation={"status": "error", "errors": [error_message], "warnings": []},
                 api_errors=[f"Microsoft Graph API error: {str(error_info.get('code', 'unknown'))[:80]}"],
-                input_summary={"errorCode": error_info.get("code"), "innerErrorCode": inner_error.get("code") if inner_error else None}
+                input_summary={"errorCode": bounded_code(error_info.get("code")),
+                               "innerErrorCode": bounded_code(inner_error.get("code")) if inner_error else None}
             )
 
         pass_reasons = []
@@ -338,6 +397,7 @@ def transform(input):
         users_by_id = {user.get("id"): user for user in users if isinstance(user, dict) and user.get("id")}
 
         has_license_data = any(isinstance(user, dict) and "assignedLicenses" in user for user in users)
+        truncated = truncated_parts(data)
         admin_principal_ids = collect_admin_principal_ids(data, users)
         has_role_data = (
             bool(as_list(data.get("directoryRoles")))
@@ -350,6 +410,7 @@ def transform(input):
         admins_with_mail_license_names = []
         admins_with_mail_attribute_only = []
         admins_unclassified = []
+        admins_licence_unread = []
         admins_missing_from_user_feed = 0
         is_separate = False
 
@@ -364,6 +425,10 @@ def transform(input):
                 if user_has_mail_or_exchange_license(user):
                     admins_with_mail_license += 1
                     admins_with_mail_license_names.append(name)
+                elif not isinstance(user.get("assignedLicenses"), list):
+                    # This administrator's own row carries no licence list (missing or null), so the
+                    # licence question was never asked of them: not a clean row, whatever other rows hold.
+                    admins_licence_unread.append(name)
                 elif user_has_mail_attribute(user):
                     if mail_only_is_classified(user):
                         admins_with_mail_attribute_only.append(name)
@@ -380,6 +445,16 @@ def transform(input):
                     f"{len(admins_unclassified)} privileged admin account(s) have a mail address and a mailbox "
                     f"licence that could not be classified (no assignedPlans in the read): "
                     + "; ".join(admins_unclassified[:5])
+                )
+            if admins_licence_unread:
+                unresolved.append(
+                    f"{len(admins_licence_unread)} privileged admin account(s) have no assignedLicenses list in the "
+                    f"read, so their licences were not checked: " + "; ".join(admins_licence_unread[:5])
+                )
+            if truncated:
+                unresolved.append(
+                    "the read is truncated (@odata.nextLink on " + ", ".join(truncated) + "), so later pages "
+                    "were not read"
                 )
 
             is_separate = admin_count > 0 and admins_with_mail_license == 0 and not unresolved
@@ -401,6 +476,7 @@ def transform(input):
                 )
             elif admin_count == 0:
                 no_evidence.append("No privileged directory role members found in user feed")
+                no_evidence.extend(unresolved)
                 recommendations.append("Verify directory role membership is included in the integration feed")
             else:
                 if admins_unclassified:
@@ -435,16 +511,21 @@ def transform(input):
             fail_reasons=fail_reasons,
             recommendations=recommendations,
             input_summary=with_affected(
-                {"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data},
+                {"userCount": user_count, "hasLicenseData": has_license_data, "hasRoleData": has_role_data,
+                 "truncated": truncated, "adminsWithoutLicenceList": len(admins_licence_unread)},
                 admins_with_mail_license_names),
             api_errors=no_evidence,
             additional_findings=findings,
         )
 
     except Exception as e:
+        # An exception means the body was not understood, not that admins are shared: report it as a
+        # data collection error too, so the check reads "not evaluated" and never a measured fail.
+        error_message = str(e)[:200]
         return create_response(
             result=default_result,
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            transformation_errors=[error_message],
+            api_errors=["Transformation error: " + error_message],
+            fail_reasons=["Transformation error: " + error_message]
         )
