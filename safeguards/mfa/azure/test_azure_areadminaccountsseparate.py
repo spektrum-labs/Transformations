@@ -146,6 +146,41 @@ class AzureAdminSeparationTests(unittest.TestCase):
         self.assertFalse(result[KEY])
         self.assertEqual(info["dataCollection"]["status"], "success")
 
+    # --- a body that could not be read is not evidence about admins ----------
+    def test_failed_validation_is_not_evaluated_not_a_measured_fail(self):
+        data = body([user("u1", "admin@contoso.com", mail="admin@contoso.com", skus=[SPE_E3])], ["u1"])
+        result, info = self.run_t(data)
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        result, info = self.run_t({"data": data, "validation": {"status": "failed", "errors": ["bad shape"], "warnings": []}})
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "error", info)
+        self.assertIn("Input validation failed", info["dataCollection"]["errors"][0])
+        self.assertEqual(info["evaluation"]["passReasons"], [])
+
+    def test_unreadable_input_is_not_evaluated_not_a_measured_fail(self):
+        for data in ["{not json", b"\xff\xfe\x00"]:
+            result, info = self.run_t(data)
+            self.assertFalse(result[KEY])
+            self.assertEqual(info["transformation"]["status"], "error")
+            self.assertEqual(info["dataCollection"]["status"], "error", info)
+            self.assertIn("Transformation error", info["dataCollection"]["errors"][0])
+
+    def test_exception_message_is_bounded_in_every_field(self):
+        def boom(_):
+            raise ValueError("x" * 1000)
+
+        original = self.t.extract_input
+        self.t.extract_input = boom
+        try:
+            result, info = self.run_t({"value": []})
+        finally:
+            self.t.extract_input = original
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        for text in (info["dataCollection"]["errors"][0], info["transformation"]["errors"][0],
+                     info["evaluation"]["failReasons"][0]):
+            self.assertLess(len(text), 400)
+
     def test_dedicated_admin_passes(self):
         result, info = self.run_t(body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1"]))
         self.assertTrue(result[KEY], info)

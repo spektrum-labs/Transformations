@@ -439,10 +439,14 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            # Input that failed validation is not a measurement of the tenant: carry it as a data
+            # collection error so the check reads "not evaluated", never a measured fail.
+            validation_text = short("; ".join(str(item) for item in (validation.get("errors") or [])), 300)
             return create_response(
                 result=default_result,
                 validation=validation,
-                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
+                api_errors=["Input validation failed" + (": " + validation_text if validation_text else "")],
+                fail_reasons=["Input validation failed" + (": " + validation_text if validation_text else "")],
                 recommendations=["Verify the Microsoft integration is configured correctly"],
             )
 
@@ -616,9 +620,13 @@ def transform(input):
         )
 
     except Exception as e:
+        # An exception means the body was not understood, not that admins are shared: report it as a
+        # data collection error too, so the check reads "not evaluated" and never a measured fail.
+        error_message = short(e, 200)
         return create_response(
             result=default_result,
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"],
+            transformation_errors=[error_message],
+            api_errors=["Transformation error: " + error_message],
+            fail_reasons=["Transformation error: " + error_message],
         )

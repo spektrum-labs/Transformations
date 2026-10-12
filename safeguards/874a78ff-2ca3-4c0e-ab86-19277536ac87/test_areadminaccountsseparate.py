@@ -258,6 +258,49 @@ class MS365AdminSeparationTests(unittest.TestCase):
         self.assertFalse(result[KEY])
         self.assertEqual(info["transformation"]["status"], "error")
 
+    # --- a body that could not be read is not evidence about admins -----------
+    def test_malformed_json_is_unevaluated_not_a_measured_fail(self):
+        for body in ["{not json", b"\xff\xfe\x00", b"{not json"]:
+            info = self.assert_unevaluated(body)
+            self.assertEqual(info["transformation"]["status"], "error")
+            self.assertIn("Transformation error", info["dataCollection"]["errors"][0])
+
+    def test_exception_message_is_bounded_in_every_field(self):
+        def boom(_):
+            raise ValueError("x" * 1000)
+
+        original = self.t.extract_input
+        self.t.extract_input = boom
+        try:
+            info = self.assert_unevaluated({"value": []})
+        finally:
+            self.t.extract_input = original
+        self.assertEqual(info["transformation"]["status"], "error")
+        for text in (info["dataCollection"]["errors"][0], info["transformation"]["errors"][0],
+                     info["evaluation"]["failReasons"][0]):
+            self.assertLess(len(text), 400)
+
+    def test_failed_validation_is_unevaluated_not_a_measured_fail(self):
+        # The same body would be a measured fail (a Global Administrator with a mailbox and a licence) if it
+        # had passed validation; once validation failed it is not a measurement of the tenant at all.
+        data = merged([assignment("u-admin")], [user("u-admin", "admin@contoso.com", mail="admin@contoso.com", skus=[SPE_E3])])
+        self.assertFalse(self.run_t(data)[1][KEY])
+        self.assertEqual(self.run_t(data)[2]["dataCollection"]["status"], "success")
+        info = self.assert_unevaluated(
+            {"data": data, "validation": {"status": "failed", "errors": ["body is not a Graph list"], "warnings": []}})
+        self.assertIn("Input validation failed", info["dataCollection"]["errors"][0])
+        self.assertIn("body is not a Graph list", info["dataCollection"]["errors"][0])
+        self.assertEqual(info["validation"]["status"], "failed")
+        self.assertEqual(info["evaluation"]["passReasons"], [])
+
+    def test_failed_validation_never_passes_and_bounds_vendor_text(self):
+        clean = merged([assignment("u-admin")], [DEDICATED_ADMIN, EVERYDAY_USER])
+        self.assertTrue(self.run_t(clean)[1][KEY])
+        for errors in (None, [], ["y" * 1000], [{"code": "x"}, 7, None]):
+            info = self.assert_unevaluated({"data": clean, "validation": {"status": "failed", "errors": errors}})
+            self.assertLess(len(info["dataCollection"]["errors"][0]), 400)
+            self.assertLess(len(info["evaluation"]["failReasons"][0]), 400)
+
     def test_tenant_supplied_names_are_bounded(self):
         long_upn = "x" * 500 + "@contoso.com"
         body = merged([assignment("u-long")], [user("u-long", long_upn, mail=long_upn, skus=[SPE_E3])])
