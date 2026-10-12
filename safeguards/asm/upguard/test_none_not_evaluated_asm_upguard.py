@@ -52,6 +52,14 @@ CASES = [
      lambda: {"risks": [], "total_results": 3}),
     ('nohighfindings', ('noHighFindings',), 'empty_list_contradicting_count',
      lambda: {"risks": [], "total_results": 3}),
+    ('isasmenabled', ('isASMEnabled',), 'cut_off_page',
+     lambda: {"domains": [{"active": False}], "next_page_token": "abc"}),
+    ('exploitedfindingscount', ('exploitedFindingsCount',), 'cut_off_page',
+     lambda: {"vulnerabilities": [{"known_exploited_vulnerability": False}], "next_page_token": "abc"}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'cut_off_page',
+     lambda: {"risks": [{"severity": "low"}], "next_page_token": "abc"}),
+    ('nohighfindings', ('noHighFindings',), 'error_beside_records',
+     lambda: {"risks": [{"severity": "low"}], "error": "boom"}),
 ]
 
 

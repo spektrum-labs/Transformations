@@ -30,22 +30,34 @@ COUNT_KEY = "total_results"
 NEXT_PAGE_KEYS = ("next_page_token", "nextPageToken", "next_page", "next")
 
 
-def empty_list_is_complete(data, count_documented):
-    """True when an empty list is a real, complete answer rather than a failed or cut-off read.
+def read_is_partial(levels):
+    """True when the body, or a wrapper around it, carries an error marker or points at a further page.
 
-    Never when the body carries an error marker or points at a further page, or when it states a
-    count that is not a whole number 0 (a bool or text count, or a count above 0).
+    Such a body proves nothing about the account whatever the length of its list: a cut-off page holds
+    only some of the records, and a body with an error beside the list is not the vendor's answer. It is
+    checked before any verdict is read, so a pass, a fail or a count is never taken from it.
+    """
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        if level.get("error") or level.get("errors"):
+            return True
+        for k in NEXT_PAGE_KEYS:
+            if level.get(k):
+                return True
+    return False
+
+
+def empty_list_is_complete(data, count_documented):
+    """True when an empty list (on a body read_is_partial has already cleared) is a real answer.
+
+    Never when it states a count that is not a whole number 0 (a bool or text count, or a count above 0).
     Where the vendor documents a count for the endpoint (count_documented), the body must state it
     as 0. Where it documents none, the empty list on the last page is the vendor's own answer for
     an account with nothing to report.
     """
     if not isinstance(data, dict):
         return False
-    if data.get("error") or data.get("errors"):
-        return False
-    for k in NEXT_PAGE_KEYS:
-        if data.get(k):
-            return False
     count = data.get(COUNT_KEY)
     if count is None:
         return not count_documented
@@ -57,8 +69,10 @@ def transform_unmarked(input):
     True when at least one domain is active and has been scanned: UpGuard is monitoring the
     organisation's external surface. False when no active domain has been scanned, and on an empty list
     only when the body states total_results as 0 (the vendor documents that count) on the last page.
-    None (not evaluated) when the body has no domains list, holds no object record, is an empty list that
-    does not state a count of 0, or cannot be read.
+    None (not evaluated) before any verdict is read when the body, or a wrapper around it, carries an error
+    marker or points at a further page, whatever the length of its list (a cut-off page holds only some
+    of the domains). Also None when the body has no domains list, holds no object record, is an empty list
+    that does not state a count of 0, or cannot be read.
     """
     key = "isASMEnabled"
 
@@ -70,7 +84,9 @@ def transform_unmarked(input):
         return value
 
     def unwrap(value, marker):
+        levels = []
         for depth in range(4):
+            levels.append(value)
             if not isinstance(value, dict) or marker in value:
                 break
             moved = False
@@ -81,12 +97,16 @@ def transform_unmarked(input):
                     break
             if not moved:
                 break
-        return value
+        if levels[-1] is not value:
+            levels.append(value)
+        return value, levels
 
     try:
-        data = unwrap(parse(input), "domains")
+        data, levels = unwrap(parse(input), "domains")
         if not isinstance(data, dict) or not isinstance(data.get("domains"), list):
             return {key: None, "reason": "Response has no domains list (the /domains call did not run)"}
+        if read_is_partial(levels):
+            return {key: None, "reason": "The response carries an error marker or points at a further page, so the list is not a complete answer and is not evaluated"}
         if data["domains"] and not any(isinstance(d, dict) for d in data["domains"]):
             return {key: None, "reason": "Domain list holds no object record"}
         if not data["domains"] and not empty_list_is_complete(data, True):
