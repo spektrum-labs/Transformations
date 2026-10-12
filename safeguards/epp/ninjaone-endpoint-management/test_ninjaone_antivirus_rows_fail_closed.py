@@ -1,13 +1,15 @@
-"""NinjaOne antivirus-status checks: an error reply, a far-future timestamp and a null product field never move the answer.
+"""NinjaOne antivirus-status checks: an error reply, a far-future timestamp, a null product field and an empty reply never move the answer.
 
-Eight transforms share one set of endpoint rules (endpoint_rows). Three defects are pinned here, all synthetic:
+Eight transforms share one set of endpoint rules (endpoint_rows). Four defects are pinned here, all synthetic:
   1. A reply that carries an error or an HTTP status of 400 or more is not a measurement even when it also
      carries product rows. It reads None (Not evaluated), never 100.
   2. One timestamp far in the future must not move the stale cutoff and drop every other device. A timestamp
      more than a day ahead is unusable; a small clock skew is still a real contact.
   3. A row with no product name, or a named product with no state, is not evidence of "no product" and not OFF.
      It is left out; if nothing readable is left the result is None, never 0. An explicit productName NONE is
-     still a real answer (the device has no product).
+     still a real answer (the device has no product). The signature check also reads a row that carries a
+     definitionStatus even when the product name is missing.
+  4. An empty reply (no rows, or no row with a device id) proves nothing: None, never False or 0.
 """
 import importlib.util
 import pathlib
@@ -154,7 +156,8 @@ def test_a_future_timestamp_cannot_hide_a_dark_fleet(name):
     {"productState": "ON"},
 ])
 def test_a_row_with_no_product_name_is_not_evidence(name, bad):
-    only = {"deviceId": 1, "definitionStatus": "Up-to-Date", "timestamp": NOW}
+    # No definitionStatus either: a row that carries one is evidence for the signature check (see below).
+    only = {"deviceId": 1, "timestamp": NOW}
     only.update(bad)
     out = run(name, {"results": [only]})
     assert value(name, out) is None
@@ -198,3 +201,47 @@ def test_percentage_counts_only_readable_devices(name):
     rows = [row(1), row(2, state="OFF"), row(3, state=None)]
     out = run(name, {"results": rows})
     assert value(name, out) == 50
+
+
+# 4. an empty reply proves nothing
+EMPTY_BODIES = [
+    {},
+    [],
+    {"results": []},
+    {"data": []},
+    {"results": [{"productName": "Defender", "productState": "ON", "definitionStatus": "Up-to-Date", "timestamp": NOW}]},
+]
+
+
+@pytest.mark.parametrize("name", FILES)
+@pytest.mark.parametrize("body", EMPTY_BODIES)
+def test_an_empty_reply_is_not_evaluated(name, body):
+    # No device id anywhere, or no rows at all: nothing to judge. Never False, never 0, never a pass.
+    out = run(name, body)
+    assert value(name, out) is None
+    assert not_evaluated(out)
+
+
+# 5. signature currency reads definitionStatus, so a row that carries one is evidence even without a product name
+def null_name_row(did, definition, state=None):
+    return {"deviceId": did, "productName": None, "productState": state, "definitionStatus": definition, "timestamp": NOW}
+
+
+def test_a_null_name_out_of_date_row_still_fails_signatures():
+    out = run("isSignatureUpToDate", {"results": [row(1), null_name_row(2, "Out-of-Date")]})
+    assert value("isSignatureUpToDate", out) is False
+    assert out["transformedResponse"]["outOfDateCount"] == 1
+    assert out["transformedResponse"]["devicesLeftOutUnreadable"] == 0
+
+
+def test_a_null_name_up_to_date_row_counts_for_signatures():
+    out = run("isSignatureUpToDate", {"results": [null_name_row(1, "Up-to-Date"), row(2)]})
+    assert value("isSignatureUpToDate", out) is True
+    assert out["transformedResponse"]["devicesJudged"] == 2
+
+
+def test_a_null_name_row_with_no_definition_status_is_left_out_of_signatures():
+    out = run("isSignatureUpToDate", {"results": [row(1), {"deviceId": 2, "productName": None, "timestamp": NOW}]})
+    assert out["transformedResponse"]["devicesLeftOutUnreadable"] == 1
+    assert out["transformedResponse"]["devicesJudged"] == 1
+    assert value("isSignatureUpToDate", out) is True
