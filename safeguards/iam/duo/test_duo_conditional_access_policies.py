@@ -15,12 +15,12 @@ KEY = "isConditionalAccessEnabled"
 PCT = "conditionalAccessAppPercentage"
 HERE = Path(__file__).parent
 ROOT = HERE.parents[2]
-GLOBAL_KEY = "POGLOBALESTATEA00001"
-VPN_KEY = "POVPNESTATEA00000001"
-SPARE_KEY = "POSPAREESTATEA000001"
-GROUP_KEY = "POGROUPESTATEA000001"
-PORTAL = "DIESTATEAPORTAL00001"
-VPN_APP = "DIESTATEAVPN00000001"
+GLOBAL_KEY = "POGLOBALTENANTA00001"
+VPN_KEY = "POVPNTENANTA00000001"
+SPARE_KEY = "POSPARETENANTA000001"
+GROUP_KEY = "POGROUPTENANTA000001"
+PORTAL = "DITENANTAPORTAL00001"
+VPN_APP = "DITENANTAVPN00000001"
 
 # Sections a Premier global policy returns with Duo's documented defaults: none is an access condition.
 DEFAULTS = {
@@ -80,9 +80,9 @@ def bodies(global_sections, customs=(), applied=(), truncated=False, count=None,
     for key, name, sections in customs:
         pols.append(policy(key, name, copy.deepcopy(sections)))
     if apps is None:
-        apps = [(PORTAL, "Estate A Portal", None)]
+        apps = [(PORTAL, "Tenant A Portal", None)]
         for i, key in enumerate(applied):
-            apps.append(("DIESTATEAAPP%08d" % i, "Estate A App %d" % i, key))
+            apps.append(("DITENANTAAPP%08d" % i, "Tenant A App %d" % i, key))
     integrations = []
     for ikey, name, pkey in apps:
         app = {"integration_key": ikey, "name": name, "type": "sso-generic"}
@@ -94,7 +94,7 @@ def bodies(global_sections, customs=(), applied=(), truncated=False, count=None,
         applies = [{"app_integration_key": ikey, "app_name": name, "apply_type": "app"}
                    for ikey, name, pkey in apps if pkey == p["policy_key"]]
         applies.extend({"app_integration_key": ikey, "app_name": "group binding", "apply_type": "group_app",
-                        "group_name": "Estate A Group"} for gkey, ikey in groups if gkey == p["policy_key"])
+                        "group_name": "Tenant A Group"} for gkey, ikey in groups if gkey == p["policy_key"])
         summary.append({"policy_key": p["policy_key"], "policy_name": p["policy_name"], "policy_applies_to": applies})
     return {"policies": {"response": pols},
             "summary": {"response": {"policies": summary, "policy_count": len(pols) if count is None else count,
@@ -189,7 +189,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
 
     def test_every_app_with_own_condition_is_true(self):
         customs = [(VPN_KEY, "VPN trusted only", {"trusted_endpoints": {"trusted_endpoint_checking": "require-trusted"}})]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY)]
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY)]
         self.assertIs(self.value(bodies(DEFAULTS, customs, apps=apps))[0], True)
 
     def test_string_booleans_and_comma_lists(self):
@@ -219,18 +219,18 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
         self.assertTrue(out["additionalInfo"]["evaluation"]["recommendations"])
-        self.assertIn("Estate A Portal", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
+        self.assertIn("Tenant A Portal", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
 
     def test_global_with_no_sections_is_false(self):
         self.assertIs(self.value(bodies({}))[0], False)
 
     def test_twenty_five_apps_one_covered_is_4_0(self):
         customs = [(VPN_KEY, "Desktop required", DESKTOP_WINDOWS)]
-        customs += [("POCUSTOMESTATEA%05d" % i, "Custom %d" % i, {"trusted_endpoints":
+        customs += [("POCUSTOMTENANTA%05d" % i, "Custom %d" % i, {"trusted_endpoints":
                                                                   {"trusted_endpoint_checking": "allow-all"}})
                     for i in range(19)]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY)]
-        apps += [("DIESTATEAAPP%08d" % i, "Estate A App %02d" % i, "POCUSTOMESTATEA%05d" % (i % 19))
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY)]
+        apps += [("DITENANTAAPP%08d" % i, "Tenant A App %02d" % i, "POCUSTOMTENANTA%05d" % (i % 19))
                  for i in range(24)]
         value, out = self.value(bodies(ESSENTIALS, customs, apps=apps))
         result = out["transformedResponse"]
@@ -240,7 +240,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
         reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
         self.assertIn("24 of 25", reasons)
         self.assertIn("and 14 more", reasons)
-        self.assertNotIn("Estate A VPN", reasons)
+        self.assertNotIn("Tenant A VPN", reasons)
 
     def test_partial_names_uncovered_and_percentage(self):
         customs = [(VPN_KEY, "VPN geo block", GEO_BLOCK)]
@@ -248,21 +248,21 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertIs(value, False)
         self.assertEqual(out["transformedResponse"][PCT], 50.0)
         reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
-        self.assertIn("Estate A Portal", reasons)
-        self.assertNotIn("Estate A App 0", reasons)
+        self.assertIn("Tenant A Portal", reasons)
+        self.assertNotIn("Tenant A App 0", reasons)
 
     def test_relaxing_app_value_overrides_global_in_same_section(self):
         customs = [(VPN_KEY, "VPN location ignored",
                     {"user_location": {"default_action": "ignore-location", "deny_access_countries_list": []}})]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY)]
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY)]
         value, out = self.value(bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, apps=apps))
         self.assertIs(value, False)
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
 
     def test_percentage_one_decimal(self):
         customs = [(VPN_KEY, "VPN geo block", GEO_BLOCK)]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY), (PORTAL, "Estate A Portal", None),
-                ("DIESTATEAMAIL0000001", "Estate A Mail", None)]
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY), (PORTAL, "Tenant A Portal", None),
+                ("DITENANTAMAIL0000001", "Tenant A Mail", None)]
         self.assertEqual(self.value(bodies(DEFAULTS, customs, apps=apps))[1]["transformedResponse"][PCT], 33.3)
 
     def test_require_mfa_settings_are_not_conditions(self):
@@ -363,11 +363,11 @@ class DuoConditionalAccessTests(unittest.TestCase):
 
     def test_indeterminate_with_an_uncovered_app_is_false(self):
         customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
-        apps = [(PORTAL, "Estate A Portal", None), ("DIESTATEAMAIL0000001", "Estate A Mail", None)]
+        apps = [(PORTAL, "Tenant A Portal", None), ("DITENANTAMAIL0000001", "Tenant A Mail", None)]
         value, out = self.value(bodies(DEFAULTS, customs, apps=apps, groups=[(GROUP_KEY, PORTAL)]))
         self.assertIs(value, False)
         self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
-        self.assertIn("Estate A Mail", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
+        self.assertIn("Tenant A Mail", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
 
     def test_group_binding_to_unlisted_app_is_unevaluated(self):
         customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
@@ -396,7 +396,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertUnevaluated(b, "exactly one global policy")
 
     def test_unknown_policy_key_is_unevaluated(self):
-        apps = [(VPN_APP, "Estate A VPN", "PONOTINTHELIST000001")]
+        apps = [(VPN_APP, "Tenant A VPN", "PONOTINTHELIST000001")]
         self.assertUnevaluated(bodies(with_sections(DEFAULTS, **GEO_BLOCK), apps=apps), "policy_key")
 
     def test_missing_empty_or_non_list_integrations_is_unevaluated(self):
@@ -406,7 +406,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
             "bare empty": lambda b: b.__setitem__("integrations", []),
             "not a list": lambda b: b.__setitem__("integrations", {"stat": "OK", "response": "apps"}),
             "none": lambda b: b.__setitem__("integrations", None),
-            "entry not object": lambda b: b["integrations"]["response"].append("DIESTATEA"),
+            "entry not object": lambda b: b["integrations"]["response"].append("DITENANTA"),
             "entry without key": lambda b: b["integrations"]["response"].append({"name": "Keyless"}),
         }
         for label, mutate in cases.items():
@@ -542,7 +542,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertUnevaluated(body, "exactly one global policy")
 
     def test_unrelated_json_is_unevaluated(self):
-        self.assertUnevaluated({"users": [{"user_id": "DUESTATEA"}]})
+        self.assertUnevaluated({"users": [{"user_id": "DUTENANTA"}]})
 
     def test_invalid_json_string_is_transformation_error(self):
         value, out = self.value("{not json")

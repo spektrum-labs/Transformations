@@ -308,7 +308,7 @@ def transform(input):
                   "spotlightOpenCriticalHighTotal"]:
             if k != KEY:
                 result[k] = numbers[k]
-        summary = ("Spotlight vendor counts over the whole estate (" + str(numbers["spotlightOpenCriticalHighTotal"])
+        summary = ("Spotlight vendor counts over all assets in scope (" + str(numbers["spotlightOpenCriticalHighTotal"])
                    + " open/reopened critical+high instances): " + str(numbers[KEY_CRITICAL]) + " critical, "
                    + str(numbers[KEY_HIGH]) + " high, " + str(numbers[KEY_OVERDUE])
                    + " past the BOD 19-02 window (" + str(numbers["overdueCriticalCount"]) + " critical > 15 days, "

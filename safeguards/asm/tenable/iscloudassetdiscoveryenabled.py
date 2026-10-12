@@ -140,7 +140,7 @@ def evaluate(data):
         extras["partial"] = True
     if hosted:
         return True, extras, [f"{len(hosted)} cloud-hosted asset(s) discovered across {len(providers) or 1} provider(s)"], [], [], []
-    return False, extras, [], ["no cloud-hosted assets in the inventory"], ["Connect cloud sources (Azure keys) or confirm the estate has no cloud-hosted exposure"], []
+    return False, extras, [], ["no cloud-hosted assets in the inventory"], ["Connect cloud sources (Azure keys) or confirm the environment has no cloud-hosted exposure"], []
 
 
 def transform(input):

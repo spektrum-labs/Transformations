@@ -152,7 +152,7 @@ def run_criterion(input, criteria_key, evaluate, transformation_id):
         value, extras, passes, fails, recs, api_errors = evaluate(data)
         if value == 0 and not isinstance(value, bool) and extras.get("partial") is True:
             reason = (f"scanned {extras.get('assetsScanned')} of {extras.get('inventoryTotal')} assets; "
-                      "zero on a partial inventory is not a clean estate, so the count is unknown")
+                      "zero on a partial inventory is not proof of no findings in scope, so the count is unknown")
             return unevaluated(criteria_key, reason, validation, transformation_id, extras)
         return create_response({criteria_key: value, **extras}, validation, pass_reasons=passes, fail_reasons=fails,
                                recommendations=recs, input_summary={criteria_key: value, **extras},
