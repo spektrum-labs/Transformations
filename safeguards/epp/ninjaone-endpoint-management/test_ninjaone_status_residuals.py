@@ -82,11 +82,12 @@ def test_the_reason_says_the_product_did_not_report_a_definition_status():
     assert "definition status" in reasons
 
 
-def test_one_reporting_device_still_decides_the_answer():
+def test_a_silent_device_beside_an_up_to_date_device_is_not_a_pass():
+    """A device that is judged and reports no definition status has not said its signatures are current: missing is never True."""
     rows = [row(1, definition=None), row(2, definition="Up-to-Date")]
     out = run("isSignatureUpToDate", body(rows))
-    assert value("isSignatureUpToDate", out) is True
-    assert not not_evaluated(out)
+    assert value("isSignatureUpToDate", out) is None
+    assert not_evaluated(out)
 
 
 def test_an_out_of_date_device_still_fails():
