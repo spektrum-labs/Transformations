@@ -108,12 +108,21 @@ def transform(input):
         if not isinstance(pgs, list):
             return respond(key, None, "protectionGroups has an unexpected shape")
         good = []
+        seen = 0
+        live = 0
         for g in pgs:
             if not isinstance(g, dict) or g.get("isDeleted") is True or g.get("isActive") is False or g.get("isPaused") is True:
                 continue
+            live = live + 1
             info = last_backup(g)
+            if info is not None:
+                seen = seen + 1
             if info is not None and info.get("status") in ["Succeeded", "SucceededWithWarning"]:
                 good.append(str(g.get("name")))
+        if not good and seen == 0 and live > 0:
+            # Helios returned groups with no last-run record on any of them (a Viewer key, or a list that does
+            # not carry run data). That proves nothing about whether backups run, so it is not a failure.
+            return respond(key, None, "Helios returned no last-run record for any protection group, so whether backups are running could not be read")
         if not good:
             return respond(key, False, "No active protection group has a successful last backup run")
         return respond(key, True, str(len(good)) + " active protection groups have a successful last backup run", {"groups": good[:20]})
