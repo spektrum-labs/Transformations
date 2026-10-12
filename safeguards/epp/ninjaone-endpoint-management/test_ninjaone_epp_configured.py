@@ -127,3 +127,85 @@ class TestProductStateIsTheEvidence:
     def test_error_body_is_never_positive(self):
         out = run({"results": [], "error": "Unauthorized"})
         assert value(out) is None
+
+
+class TestDevicesMissingFromTheReportCountAgainst:
+    """A device in the device list that the antivirus-status report does not mention is not shown protected.
+
+    It counts in the denominator and never in the numerator (missing is never a pass)."""
+
+    def fleet(self, n):
+        return [device(i + 1) for i in range(n)]
+
+    def test_two_running_of_ten_devices_reads_twenty(self):
+        out = run(report([av_row(1), av_row(2)], self.fleet(10)))
+        assert value(out) == 20
+        scope = out["transformedResponse"]
+        assert scope["totalDevices"] == 10
+        assert scope["devicesWithRunningProduct"] == 2
+        assert scope["devicesNotInReport"] == 8
+
+    def test_every_device_present_and_running_still_reads_one_hundred(self):
+        rows = [av_row(i + 1) for i in range(10)]
+        out = run(report(rows, self.fleet(10)))
+        assert value(out) == 100
+        assert out["transformedResponse"]["devicesNotInReport"] == 0
+
+    def test_no_device_in_the_report_but_a_device_list_is_not_a_hundred(self):
+        # A row for a device that is not in the list does not rescue the missing ones.
+        out = run(report([av_row(99)], self.fleet(4)))
+        assert value(out) == 20
+
+    def test_phones_and_tablets_without_a_row_are_left_out(self):
+        devices = [device(1), device(2, node_class="APPLE_IOS"), device(3, node_class="ANDROID"), device(4)]
+        out = run(report([av_row(1)], devices))
+        assert value(out) == 50
+        scope = out["transformedResponse"]
+        assert scope["devicesNotInReport"] == 1
+        assert scope["devicesNotInReportLeftOut"] == 2
+
+    def test_devices_unseen_for_fifteen_days_without_a_row_are_left_out(self):
+        devices = [device(1), device(2, seen=NOW - 40 * 86400), device(3)]
+        out = run(report([av_row(1)], devices))
+        assert value(out) == 50
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 1
+
+    def test_a_last_contact_far_in_the_future_is_not_a_contact(self):
+        devices = [device(1), device(2, seen=NOW + 400 * 86400)]
+        out = run(report([av_row(1)], devices))
+        assert value(out) == 100
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 1
+
+    def test_a_missing_device_with_no_last_contact_counts_against(self):
+        devices = [device(1), {"id": 2, "nodeClass": "WINDOWS_WORKSTATION"}]
+        out = run(report([av_row(1)], devices))
+        assert value(out) == 50
+
+    def test_a_device_listed_twice_counts_once(self):
+        devices = [device(1), device(2), device(2)]
+        out = run(report([av_row(1)], devices))
+        assert value(out) == 50
+
+    def test_a_device_whose_rows_were_left_out_is_not_also_counted_as_missing(self):
+        old = NOW - 40 * 86400
+        devices = [device(1), device(2)]
+        out = run(report([av_row(1), av_row(2, seen=old)], devices))
+        assert value(out) == 100
+        scope = out["transformedResponse"]
+        assert scope["devicesLeftOutStale"] == 1
+        assert scope["devicesNotInReport"] == 0
+
+    def test_without_a_device_list_the_report_alone_is_judged(self):
+        out = run(report([av_row(1), av_row(2)]))
+        assert value(out) == 100
+        assert out["transformedResponse"]["deviceListRead"] is False
+
+    def test_an_unreadable_device_list_is_treated_as_not_read(self):
+        out = run({"results": [av_row(1), av_row(2)], "devices": "not a list"})
+        assert value(out) == 100
+        assert out["transformedResponse"]["deviceListRead"] is False
+
+    def test_the_missing_count_is_in_the_reason(self):
+        out = run(report([av_row(1)], self.fleet(4)))
+        text = " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+        assert "3" in text and "no antivirus-status row" in text

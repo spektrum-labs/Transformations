@@ -8,6 +8,8 @@ A policy id is not evidence. policyId only says which NinjaOne policy a device u
 inherited from the device role), not that a protection product is installed or running, so it is never read here:
 it can neither make a device configured nor count against one. With no product rows (the device list alone, an empty
 or error body) the check is not evaluated (dataCollection error, no value), never a pass and never a 0.
+A device in the device list that the report does not mention is not shown protected: it counts in the denominator and
+never in the numerator.
 Endpoint rules (2026-09-29) as in the other NinjaOne antivirus-status checks: devices seen within 15 days of the newest
 row, phones and tablets left out, a Mac with only third-party products not reporting ON is unreadable and left out.
 """
@@ -93,6 +95,45 @@ def endpoint_rows(rows, data, mac_unreadable):
         "fleetDark": dark,
     }
     return kept, scope
+
+
+def devices_without_report(data, rows):
+    """Devices in the device list (workflow key "devices") that the antivirus-status report does not mention.
+
+    A device the report does not mention is not shown protected: it counts in the denominator and never in
+    the numerator (missing is never a pass). Phones and tablets, and devices not seen within ACTIVE_WINDOW_DAYS
+    (or with a last contact more than a day ahead of now), are left out as in the other endpoint rules.
+    Returns (devices counted as not covered, devices left out, whether a device list was read).
+    """
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(devices, dict):
+        devices = devices.get("data") or devices.get("results")
+    if not isinstance(devices, list):
+        return 0, 0, False
+    reported = set()
+    for row in rows:
+        if isinstance(row, dict) and row.get("deviceId") is not None:
+            reported.add(str(row.get("deviceId")))
+    now = datetime.now(timezone.utc).timestamp()
+    seen_ids = set()
+    counted = 0
+    left_out = 0
+    for device in devices:
+        if not isinstance(device, dict) or device.get("id") is None:
+            continue
+        device_id = str(device.get("id"))
+        if device_id in reported or device_id in seen_ids:
+            continue
+        seen_ids.add(device_id)
+        if str(device.get("nodeClass") or "").upper() in MOBILE_NODE_CLASSES:
+            left_out = left_out + 1
+            continue
+        last_contact = epoch(device.get("lastContact"))
+        if last_contact is not None and (last_contact < now - ACTIVE_WINDOW_DAYS * 86400 or last_contact > now + 86400):
+            left_out = left_out + 1
+            continue
+        counted = counted + 1
+    return counted, left_out, True
 
 
 def extract_input(input_data):
@@ -213,7 +254,8 @@ def transform(input):
         if name != "NONE" and state == "ON":
             device_state[device_id] = True
 
-    total_devices = len(device_state)
+    missing, missing_left_out, device_list_read = devices_without_report(data, rows)
+    total_devices = len(device_state) + missing
     covered = len([d for d in device_state if device_state[d]])
     configured_pct = (covered * 100) // total_devices
 
@@ -229,11 +271,19 @@ def transform(input):
         fail_reasons = ["None of the %d devices judged have an antivirus or EPP product reporting ON." % total_devices]
         recommendations = ["Deploy and enable an antivirus or EPP product on managed devices so NinjaOne can report its state."]
 
+    if missing:
+        fail_reasons.append("%d devices in the device list have no antivirus-status row, so they count as not covered." % missing)
+        if not recommendations:
+            recommendations = ["Check why these devices do not report an antivirus or EPP product to NinjaOne, and deploy one."]
+
     result = {
         **scope,
         "isEPPConfigured": configured_pct,
         "totalDevices": total_devices,
         "devicesWithRunningProduct": covered,
+        "devicesNotInReport": missing,
+        "devicesNotInReportLeftOut": missing_left_out,
+        "deviceListRead": device_list_read,
     }
 
     return create_response(
