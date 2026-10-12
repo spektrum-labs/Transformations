@@ -19,6 +19,7 @@ DAY = 86400.0
 COVERAGE = "requiredCoveragePercentage"
 UNPROTECTED = "endpointOperationalStatusUnprotectedCount"
 BOTH = [COVERAGE, UNPROTECTED]
+THREE = ["isEPPConfigured", COVERAGE, UNPROTECTED]
 
 
 def run(name, body):
@@ -59,7 +60,7 @@ def fleet(n):
 
 def expected(name, protected, missing_or_off):
     """The check's value when `protected` devices are covered and `missing_or_off` are not."""
-    if name == COVERAGE:
+    if name != UNPROTECTED:
         total = protected + missing_or_off
         return (protected * 100) // total
     return missing_or_off
@@ -237,3 +238,46 @@ class TestUnreadableDeviceListIsNotEvaluated:
             out = run(name, body)
             assert value(name, out) is None
             assert not_evaluated(out)
+
+
+@pytest.mark.parametrize("name", THREE)
+class TestMissingDevicesUseTheSameWindowAsTheReportRows:
+    """A device with a report row is judged against 15 days before the newest row (not before now). A device with no
+    row is judged against the same cutoff, so the two kinds of device are held to one window. Without this a device last
+    seen 15.5 days ago was kept when it had a row and silently dropped when it had none."""
+
+    def test_a_device_just_outside_fifteen_days_of_now_but_inside_the_report_window_counts(self, name):
+        rows = [av_row(1, seen=NOW - 1 * DAY)]
+        devices = [device(1, seen=NOW - 1 * DAY), device(2, seen=NOW - 15.5 * DAY)]
+        out = run(name, report(rows, devices))
+        assert value(name, out) == expected(name, 1, 1)
+        assert out["transformedResponse"]["devicesNotInReport"] == 1
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 0
+
+    def test_a_device_older_than_the_report_window_is_left_out(self, name):
+        rows = [av_row(1, seen=NOW - 1 * DAY)]
+        devices = [device(1, seen=NOW - 1 * DAY), device(2, seen=NOW - 17 * DAY)]
+        out = run(name, report(rows, devices))
+        assert value(name, out) == expected(name, 1, 0)
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 1
+
+    def test_when_the_newest_row_is_older_the_window_moves_with_it(self, name):
+        # Newest row is 10 days old, so the window starts 25 days back; a device last seen 24 days ago is inside it.
+        rows = [av_row(1, seen=NOW - 10 * DAY)]
+        devices = [device(1, seen=NOW - 10 * DAY), device(2, seen=NOW - 24 * DAY), device(3, seen=NOW - 26 * DAY)]
+        out = run(name, report(rows, devices))
+        assert out["transformedResponse"]["devicesNotInReport"] == 1
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 1
+
+    def test_a_far_future_row_does_not_move_the_window(self, name):
+        rows = [av_row(1, seen=NOW + 400 * DAY), av_row(2, seen=NOW - 1 * DAY)]
+        devices = [device(1), device(2), device(3, seen=NOW - 15.5 * DAY), device(4, seen=NOW - 20 * DAY)]
+        out = run(name, report(rows, devices))
+        assert out["transformedResponse"]["devicesNotInReport"] == 1
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 1
+
+    def test_a_device_in_the_future_is_still_left_out(self, name):
+        rows = [av_row(1)]
+        devices = [device(1), device(2, seen=NOW + 400 * DAY)]
+        out = run(name, report(rows, devices))
+        assert out["transformedResponse"]["devicesNotInReportLeftOut"] == 1
