@@ -29,22 +29,34 @@ COUNT_KEY = "total_results"
 NEXT_PAGE_KEYS = ("next_page_token", "nextPageToken", "next_page", "next")
 
 
-def empty_list_is_complete(data, count_documented):
-    """True when an empty list is a real, complete answer rather than a failed or cut-off read.
+def read_is_partial(levels):
+    """True when the body, or a wrapper around it, carries an error marker or points at a further page.
 
-    Never when the body carries an error marker or points at a further page, or when it states a
-    count that is not a whole number 0 (a bool or text count, or a count above 0).
+    Such a body proves nothing about the account whatever the length of its list: a cut-off page holds
+    only some of the records, and a body with an error beside the list is not the vendor's answer. It is
+    checked before any verdict is read, so a pass, a fail or a count is never taken from it.
+    """
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        if level.get("error") or level.get("errors"):
+            return True
+        for k in NEXT_PAGE_KEYS:
+            if level.get(k):
+                return True
+    return False
+
+
+def empty_list_is_complete(data, count_documented):
+    """True when an empty list (on a body read_is_partial has already cleared) is a real answer.
+
+    Never when it states a count that is not a whole number 0 (a bool or text count, or a count above 0).
     Where the vendor documents a count for the endpoint (count_documented), the body must state it
     as 0. Where it documents none, the empty list on the last page is the vendor's own answer for
     an account with nothing to report.
     """
     if not isinstance(data, dict):
         return False
-    if data.get("error") or data.get("errors"):
-        return False
-    for k in NEXT_PAGE_KEYS:
-        if data.get(k):
-            return False
     count = data.get(COUNT_KEY)
     if count is None:
         return not count_documented
@@ -57,9 +69,11 @@ def transform_unmarked(input):
 
     Waived risks still count: a waiver is an accepted risk, not a closed one.
     False when any risk carries a severity outside the documented enum (it could be high).
-    None (not evaluated) when the body has no risks list, holds no object record, is an empty list that is
-    not a complete answer (an error marker, a next page, or a count above 0), or cannot be read. The vendor
-    documents no count for this list, so an empty list on the last page is a clean account.
+    None (not evaluated) before any verdict is read when the body, or a wrapper around it, carries an error
+    marker or points at a further page, whatever the length of its list (a cut-off page holds only some
+    of the records). Also None when the body has no risks list, holds no object record, is an empty list
+    with a count above 0, or cannot be read. The vendor documents no count for this list, so an empty
+    list on the last page is a clean account.
     """
     key = "noHighFindings"
     documented = ["info", "low", "medium", "high", "critical"]
@@ -72,7 +86,9 @@ def transform_unmarked(input):
         return value
 
     def unwrap(value, marker):
+        levels = []
         for depth in range(4):
+            levels.append(value)
             if not isinstance(value, dict) or marker in value:
                 break
             moved = False
@@ -83,12 +99,16 @@ def transform_unmarked(input):
                     break
             if not moved:
                 break
-        return value
+        if levels[-1] is not value:
+            levels.append(value)
+        return value, levels
 
     try:
-        data = unwrap(parse(input), "risks")
+        data, levels = unwrap(parse(input), "risks")
         if not isinstance(data, dict) or not isinstance(data.get("risks"), list):
             return {key: None, "reason": "Response has no risks list (the /risks call did not run)"}
+        if read_is_partial(levels):
+            return {key: None, "reason": "The response carries an error marker or points at a further page, so the list is not a complete answer and is not evaluated"}
         if data["risks"] and not any(isinstance(r, dict) for r in data["risks"]):
             return {key: None, "reason": "Risk list holds no object record"}
         if not data["risks"] and not empty_list_is_complete(data, False):

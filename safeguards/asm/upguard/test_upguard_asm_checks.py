@@ -77,6 +77,63 @@ def test_an_empty_list_that_is_not_a_complete_answer_is_not_evaluated(extra):
         assert_not_evaluated(load(name)(body), key)
 
 
+# Records that would each read as a verdict (a pass, a fail or a count) on a complete page. The same
+# records on a page that is cut off, or beside an error marker, prove nothing about the account.
+RECORDS_OF = {
+    "nocriticalfindings": ([{"id": "r1", "severity": "low"}], [{"id": "r2", "severity": "critical"}]),
+    "nohighfindings": ([{"id": "r1", "severity": "low"}], [{"id": "r2", "severity": "high"}]),
+    "isasmenabled": ([{"hostname": "a.example", "active": True, "scanned_at": "2026-01-01T00:00:00Z"}],
+                     [{"hostname": "b.example", "active": False}]),
+    "exploitedfindingscount": ([{"id": "v1", "known_exploited_vulnerability": False}],
+                               [{"id": "v2", "known_exploited_vulnerability": True}]),
+}
+
+PARTIAL = [
+    {"next_page_token": "abc"},
+    {"nextPageToken": "abc"},
+    {"next_page": "abc"},
+    {"next": "abc"},
+    {"next_page_token": "abc", "total_results": 1},
+    {"error": "boom"},
+    {"error": True},
+    {"errors": ["boom"]},
+    {"errors": [{"message": "boom"}]},
+]
+
+
+@pytest.mark.parametrize("extra", PARTIAL)
+def test_a_non_empty_page_that_is_cut_off_or_carries_an_error_is_not_evaluated(extra):
+    for name, key in ALL_CHECKS:
+        for records in RECORDS_OF[name]:
+            body = dict({LIST_OF[name]: records}, **extra)
+            assert_not_evaluated(load(name)(body), key)
+
+
+@pytest.mark.parametrize("extra", PARTIAL)
+def test_a_cut_off_page_or_error_on_a_response_wrapper_is_not_evaluated(extra):
+    for name, key in ALL_CHECKS:
+        for records in RECORDS_OF[name]:
+            body = dict({"apiResponse": {LIST_OF[name]: records}}, **extra)
+            assert_not_evaluated(load(name)(body), key)
+            inner = {"apiResponse": dict({LIST_OF[name]: records}, **extra)}
+            assert_not_evaluated(load(name)(inner), key)
+
+
+@pytest.mark.parametrize("extra", [
+    {},
+    {"next_page_token": None, "total_results": 1},
+    {"next_page_token": "", "errors": [], "error": None},
+])
+def test_a_complete_non_empty_page_still_reads_its_verdict(extra):
+    expected = {"nocriticalfindings": (True, False), "nohighfindings": (True, False),
+                "isasmenabled": (True, False), "exploitedfindingscount": (0, 1)}
+    for name, key in ALL_CHECKS:
+        for records, want in zip(RECORDS_OF[name], expected[name]):
+            out = load(name)(dict({LIST_OF[name]: records}, **extra))
+            assert out[key] == want
+            assert "additionalInfo" not in out
+
+
 def test_an_empty_domain_list_must_state_a_count_of_0():
     assert_not_evaluated(load("isasmenabled")({"domains": []}), "isASMEnabled")
     out = load("isasmenabled")({"domains": [], "total_results": 0, "next_page_token": None})
