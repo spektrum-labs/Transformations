@@ -1,0 +1,40 @@
+{
+  "name": "isURLFilteringProfileEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the running configuration of every rulestack a managed firewall uses has a URL filtering profile set (not the none default).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "running rulestack configurations used by the managed firewalls; denominator = every rulestack a firewall uses",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of every firewall and of the running configuration of each rulestack it uses, each showing a URL filtering profile other than none.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-cloud-ngfw/isURLFilteringProfileEnabled.py and its test file (synthetic fixtures)",
+    "Public OpenAPI reference for Cloud NGFW for AWS, pan.dev openapi-specs/cloudngfw/aws (ManageNGFW, ManageRulestacks, ManageCertificateObjects), rendered at https://pan.dev/cloudngfw/aws/api/"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Cloud NGFW transform can emit it. Meaning written from the public reference only; no customer read, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Presence of a profile, not its strength: a custom profile is not graded. Whether other firewall tools should answer this key is not ruled."
+}
