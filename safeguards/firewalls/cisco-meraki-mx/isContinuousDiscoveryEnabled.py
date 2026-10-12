@@ -3,7 +3,7 @@ Transformation: isContinuousDiscoveryEnabled
 Vendor: Cisco Meraki MX  |  Category: firewalls
 Source: GET /organizations/{organizationId}/devices
 Pass: the organization's device inventory is readable and returns at least one device, so
-the estate under assessment is enumerated rather than assumed.
+the environment under assessment is enumerated rather than assumed.
 """
 import json
 from datetime import datetime

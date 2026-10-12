@@ -1,6 +1,6 @@
 """isRBACImplemented must not score a response it cannot read.
 
-The Okta definition wires isRBACImplemented to getEstateSecondFactors (GET /api/v1/org/factors),
+The Okta definition wires isRBACImplemented to the second-factors method (GET /api/v1/org/factors),
 which returns a bare list of factor types. This generic file reads an object with an 'rbac' role
 assignment list, so that list used to be scored False ("No RBAC role assignments found"), a
 finding against the customer from a read that could not answer. It must be None (Not evaluated).
