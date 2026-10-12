@@ -233,6 +233,73 @@ def devices_without_report(devices, rows):
     return counted, left_out
 
 
+# A read that holds fewer rows than the vendor says exist is only part of the fleet. The devices on the pages nobody read
+# are unseen, not "missing", so a percentage or a total taken from the part that was read is not a total.
+PARTIAL_REASON = ("The NinjaOne antivirus-status report or the device list is only part of the fleet (a cursor count or a "
+                  "next-page marker shows rows that were not read), so a figure taken from the part that was read is not a "
+                  "total and this is not evaluated here.")
+NEXT_KEYS = ("next", "nextPage", "nextToken", "nextCursor", "nextKey", "nextUrl", "nextLink", "nextOffset",
+             "next_page", "next_token", "next_cursor", "next_key", "next_url", "next_link", "next_offset")
+MORE_KEYS = ("truncated", "hasMore", "has_more", "hasNext", "has_next", "moreResults", "more_results", "more")
+
+
+def count_of(value):
+    """An integer count, or None. Stored replays stringify numbers."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def marker_set(value):
+    """True when a pagination cursor or more-pages flag carries a value. Stored replays stringify null and false."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (list, dict, tuple)):
+        return len(value) > 0
+    return str(value).strip().lower() not in ("", "none", "null", "false", "0")
+
+
+def shows_more_rows(body, received):
+    """True when a body that carries rows says there are more rows than it holds.
+
+    A next-page marker or a more-pages flag that is set, a cursor that is set, or a cursor.count above the rows received.
+    The live joined body has "cursor": [] and no marker, which is a complete read.
+    """
+    if not isinstance(body, dict):
+        return False
+    for key in NEXT_KEYS + MORE_KEYS:
+        if marker_set(body.get(key)):
+            return True
+    cursor = body.get("cursor")
+    if isinstance(cursor, dict):
+        count = count_of(cursor.get("count"))
+        if count is not None and count > received:
+            return True
+        for key in NEXT_KEYS + MORE_KEYS:
+            if marker_set(cursor.get(key)):
+                return True
+    elif marker_set(cursor):
+        return True
+    return False
+
+
+def partial_read(data, report_rows, roster):
+    """PARTIAL_REASON when the report or the device list (workflow key "devices") is only part of the fleet, else None.
+
+    `report_rows` is every report row received and `roster` is the device list from device_roster. A device-list wrapper
+    that carries a next-page marker or a cursor.count above its list is partial; a plain list cannot say.
+    """
+    if shows_more_rows(data, len(report_rows)):
+        return PARTIAL_REASON
+    wrapper = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(wrapper, dict) and shows_more_rows(wrapper, len(roster)):
+        return PARTIAL_REASON
+    return None
+
+
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -326,6 +393,9 @@ def measure_unprotected(input):
     if roster is None:
         return unevaluated(key, "The NinjaOne device list was not returned or could not be read, so devices the antivirus-status report does not mention cannot be counted and this is not evaluated here.", validation, metadata,
                            {"deviceListRead": False})
+    partial = partial_read(data, records, roster)
+    if partial is not None:
+        return partial_count(key, partial, endpoint_rows(records, data, True), validation, metadata)
     device_seen = {}
     report_rows = records
     records, scope = endpoint_rows(records, data, True)
@@ -364,29 +434,21 @@ def measure_unprotected(input):
     fail_reasons = []
     recommendations = []
 
-    if total_devices == 0:
+    if unprotected_count > 0:
         fail_reasons.append(
-            "Antivirus status report returned no device records; unable to determine unprotected endpoint count."
+            f"{unprotected_count} of {total_devices} devices report no active AV/EPP protection "
+            f"(productState != 'ON', or product missing/NONE, or state unreported); example deviceIds: {sample_ids}."
         )
         recommendations.append(
-            "Verify the antivirus status report endpoint is returning data for managed devices."
+            "Investigate and remediate unprotected devices: reinstall or re-enable the endpoint protection "
+            "agent and confirm productState reports 'ON'."
         )
+        if missing:
+            fail_reasons.append("%d devices in the device list have no antivirus-status row, so they count as unprotected." % missing)
     else:
-        if unprotected_count > 0:
-            fail_reasons.append(
-                f"{unprotected_count} of {total_devices} devices report no active AV/EPP protection "
-                f"(productState != 'ON', or product missing/NONE, or state unreported); example deviceIds: {sample_ids}."
-            )
-            recommendations.append(
-                "Investigate and remediate unprotected devices: reinstall or re-enable the endpoint protection "
-                "agent and confirm productState reports 'ON'."
-            )
-            if missing:
-                fail_reasons.append("%d devices in the device list have no antivirus-status row, so they count as unprotected." % missing)
-        else:
-            pass_reasons.append(
-                f"All {total_devices} devices report at least one AV/EPP product with productState='ON'."
-            )
+        pass_reasons.append(
+            f"All {total_devices} devices report at least one AV/EPP product with productState='ON'."
+        )
 
     result = {
         **scope,
@@ -419,6 +481,38 @@ def measure_unprotected(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        metadata=metadata,
+    )
+
+
+def partial_count(key, partial, judged, validation, metadata):
+    """The count when only part of the fleet was read: a seen unprotected device is a proven negative.
+
+    A device that was seen and has no active protection is unprotected whatever the unread pages hold, so the count of
+    seen unprotected devices stays (a lower bound) and the total is left unknown. With none seen, nothing is proven and the
+    count is not evaluated. Devices the report does not mention are not added: on a partial read they may be on the unread rows.
+    """
+    rows, scope = judged
+    protected = {}
+    for rec in rows:
+        if not isinstance(rec, dict) or rec.get("deviceId") is None:
+            continue
+        if rec.get("productState") == "ON":
+            protected[rec.get("deviceId")] = True
+        elif rec.get("deviceId") not in protected:
+            protected[rec.get("deviceId")] = False
+    seen_off = [d for d, covered in protected.items() if not covered]
+    if not seen_off:
+        return unevaluated(key, partial, validation, metadata, {"totalDevices": None, "partialRead": True})
+    result = {**scope, key: len(seen_off), "totalDevices": None, "totalDevicesReported": None, "protectedDeviceCount": None,
+              "devicesNotInReport": None, "devicesNotInReportLeftOut": None, "partialRead": True, "deviceListRead": True}
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=["At least %d devices report no active AV/EPP protection (productState != 'ON', or product missing/NONE, or state unreported); "
+                      "example deviceIds: %s. The read is only part of the fleet, so this is a lower bound and the total is not known." % (len(seen_off), seen_off[:10])],
+        recommendations=["Read every page of the NinjaOne antivirus-status report and device list for this tenant, and remediate the unprotected devices."],
+        input_summary={"recordsInResponse": len(rows), "unprotectedDeviceCount": len(seen_off)},
         metadata=metadata,
     )
 
