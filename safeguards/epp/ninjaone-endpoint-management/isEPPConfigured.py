@@ -12,6 +12,9 @@ A device in the device list that the report does not mention is not shown protec
 never in the numerator. The device list is the roster for that count, so an absent or unreadable list (missing, not a
 list, an error reply) leaves the check not evaluated, never a percentage from the report alone. A well-formed empty
 list is readable.
+A read that is only part of the fleet (a cursor.count above the rows received, a cursor.offset above zero, a next-page
+marker or more-pages flag, on the report or on the device list) is not a total either: the devices on the pages nobody read
+are unseen, not missing, so the percentage is not evaluated (dataCollection error, no value), whatever the seen devices show.
 Endpoint rules (2026-09-29) as in the other NinjaOne antivirus-status checks: devices seen within 15 days of the newest
 row, phones and tablets left out, a Mac with only third-party products not reporting ON is unreadable and left out.
 """
@@ -249,6 +252,80 @@ def devices_without_report(devices, rows):
     return counted, left_out
 
 
+# A read that holds fewer rows than the vendor says exist is only part of the fleet. The devices on the pages nobody read
+# are unseen, not "missing", so a percentage or a total taken from the part that was read is not a total.
+PARTIAL_REASON = ("The NinjaOne antivirus-status report or the device list is only part of the fleet (a cursor count or a "
+                  "next-page marker shows rows that were not read), so a figure taken from the part that was read is not a "
+                  "total and this is not evaluated here.")
+NEXT_KEYS = ("next", "nextPage", "nextToken", "nextCursor", "nextKey", "nextUrl", "nextLink", "nextOffset",
+             "next_page", "next_token", "next_cursor", "next_key", "next_url", "next_link", "next_offset")
+MORE_KEYS = ("truncated", "hasMore", "has_more", "hasNext", "has_next", "moreResults", "more_results", "more")
+
+
+def count_of(value):
+    """An integer count, or None. Stored replays stringify numbers."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def marker_set(value):
+    """True when a pagination cursor or more-pages flag carries a value. Stored replays stringify null and false."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (list, dict, tuple)):
+        return len(value) > 0
+    return str(value).strip().lower() not in ("", "none", "null", "false", "0")
+
+
+def shows_more_rows(body, received):
+    """True when a body that carries rows says there are more rows than it holds.
+
+    A next-page marker or a more-pages flag that is set, a cursor that is set, a cursor.count (the total the query holds)
+    above the rows received, a cursor.offset above zero (the body starts after the first row), or a cursor that names itself
+    but gives no count (it cannot show the read is whole).
+    The live joined body has "cursor": [] and no marker, which is a complete read.
+    """
+    if not isinstance(body, dict):
+        return False
+    for key in NEXT_KEYS + MORE_KEYS:
+        if marker_set(body.get(key)):
+            return True
+    cursor = body.get("cursor")
+    if isinstance(cursor, dict):
+        count = count_of(cursor.get("count"))
+        if count is not None and count > received:
+            return True
+        offset = count_of(cursor.get("offset"))
+        if offset is not None and offset > 0:
+            return True
+        if count is None and marker_set(cursor.get("name")):
+            return True
+        for key in NEXT_KEYS + MORE_KEYS:
+            if marker_set(cursor.get(key)):
+                return True
+    elif marker_set(cursor):
+        return True
+    return False
+
+
+def partial_read(data, report_rows, roster):
+    """PARTIAL_REASON when the report or the device list (workflow key "devices") is only part of the fleet, else None.
+
+    `report_rows` is every report row received and `roster` is the device list from device_roster. A device-list wrapper
+    that carries a next-page marker or a cursor.count above its list is partial; a plain list cannot say.
+    """
+    if shows_more_rows(data, len(report_rows)):
+        return PARTIAL_REASON
+    wrapper = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(wrapper, dict) and shows_more_rows(wrapper, len(roster)):
+        return PARTIAL_REASON
+    return None
+
+
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -363,6 +440,18 @@ def transform(input):
             fail_reasons=[reason],
             recommendations=["Confirm the NinjaOne API client can read the device list for this tenant."],
             api_errors=[reason],
+            input_summary={"productRows": len(rows)},
+            metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
+        )
+
+    partial = partial_read(data, records, roster)
+    if partial is not None:
+        return create_response(
+            result={"isEPPConfigured": None, "totalDevices": None, "partialRead": True, "deviceListRead": True},
+            validation=validation,
+            fail_reasons=[partial],
+            recommendations=["Read every page of the NinjaOne antivirus-status report and device list for this tenant."],
+            api_errors=[partial],
             input_summary={"productRows": len(rows)},
             metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
         )

@@ -1,14 +1,16 @@
-"""NinjaOne coverage percentage and unprotected count: a read that is only part of the fleet is not a total.
+"""NinjaOne coverage percentage, configured percentage and unprotected count: a read that is only part of the fleet is not a total.
 
-requiredCoveragePercentage and endpointOperationalStatusUnprotectedCount measure the antivirus-status report against the
-device list that rides beside it (workflow key "devices"). When either one is only a page of the fleet, the devices on
-the pages nobody read are not "missing": they are unseen. A percentage or a count taken from part of the fleet is not a
-total, so both checks read Not evaluated (value None, dataCollection.status "error", a non-empty errors list).
+requiredCoveragePercentage, isEPPConfigured and endpointOperationalStatusUnprotectedCount measure the antivirus-status
+report against the device list that rides beside it (workflow key "devices"). When either one is only a page of the fleet,
+the devices on the pages nobody read are not "missing": they are unseen. A percentage or a count taken from part of the
+fleet is not a total, so all three checks read Not evaluated (value None, dataCollection.status "error", a non-empty errors
+list).
 
-What a partial read still shows is a floor: a device that was seen and has no active protection is unprotected
-whatever the unread pages hold. A floor is not a count, though: it can grade a pass against any threshold above zero. So
-the unprotected count reads None on a partial read, and the number of seen unprotected devices is reported beside it as
-unprotectedCountAtLeast. A percentage has no floor either, so it reads None.
+Row shape: the report carries one row per product per device (a device with two products has two rows, and a device with
+none has one row named NONE), and nothing says the rows of one device sit together. A device seen with no running product
+on one page can therefore have its running product on a page nobody read, so a seen unprotected device is not proven
+unprotected on a partial read. There is no floor to report: the unprotected count reads None and unprotectedCountAtLeast
+is None too. A percentage has no floor either, so it reads None.
 
 Shapes: the report's own cursor object is {"name", "offset", "count", "expires"}; its count is the number of rows the
 query holds. A report whose cursor.count is above the rows received is partial. A device-list wrapper is partial when it
@@ -24,8 +26,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 NOW = time.time()
 
 COVERAGE = "requiredCoveragePercentage"
+CONFIGURED = "isEPPConfigured"
 UNPROTECTED = "endpointOperationalStatusUnprotectedCount"
-BOTH = [COVERAGE, UNPROTECTED]
+BOTH = [COVERAGE, CONFIGURED, UNPROTECTED]
 
 
 def run(name, body):
@@ -113,6 +116,20 @@ class TestAReportWithMoreRowsThanItHoldsIsPartial:
         assert value(name, out) is None
         assert not_evaluated(out)
 
+    @pytest.mark.parametrize("offset", [50, "50", 1])
+    def test_a_cursor_offset_above_zero_means_the_body_starts_after_the_first_row_and_is_partial(self, name, offset):
+        cur = {"name": "c1", "offset": offset, "count": 2, "expires": 0}
+        out = run(name, {"results": [av_row(1), av_row(2)], "devices": fleet(2), "cursor": cur})
+        assert value(name, out) is None
+        assert not_evaluated(out)
+
+    @pytest.mark.parametrize("offset", [0, "0", None, "", "n/a"])
+    def test_a_cursor_offset_of_zero_or_unreadable_is_not_a_partial_signal_on_its_own(self, name, offset):
+        cur = {"name": "c1", "offset": offset, "count": 2, "expires": 0}
+        out = run(name, {"results": [av_row(1), av_row(2)], "devices": fleet(4), "cursor": cur})
+        assert value(name, out) == expected(name, 2, 2)
+        assert not not_evaluated(out)
+
     def test_a_cursor_with_no_name_and_no_count_is_a_complete_read(self, name):
         rows = [av_row(1), av_row(2)]
         out = run(name, {"results": rows, "devices": fleet(4), "cursor": {"name": None, "offset": 0, "expires": 0}})
@@ -181,32 +198,39 @@ class TestADeviceListWithMoreDevicesThanItHoldsIsPartial:
 
 
 class TestAPartialCountIsNeitherATotalNorAFloor:
-    """A lower bound can grade a pass against any threshold above zero (3 seen, a limit of 5, a real count of 10), so on a
-    partial read the count itself is None. The number of seen unprotected devices rides beside it, never as the count."""
+    """A seen unprotected device is not proven unprotected on a partial read: the report holds one row per product per
+    device and is not guaranteed to keep a device's rows together, so the running product can be on an unread page. There
+    is no floor to report, and a floor could grade a pass against any threshold above zero anyway (3 seen, a limit of 5, a
+    real count of 10). The count is None and so is unprotectedCountAtLeast."""
     name = UNPROTECTED
 
-    def check(self, out, at_least):
+    def check(self, out):
         assert value(self.name, out) is None
-        assert out["transformedResponse"]["unprotectedCountAtLeast"] == at_least
+        assert out["transformedResponse"]["unprotectedCountAtLeast"] is None
         assert out["transformedResponse"]["totalDevices"] is None
         assert out["transformedResponse"]["partialRead"] is True
         assert not_evaluated(out)
 
-    def test_a_partial_report_with_seen_off_devices_reads_none_and_reports_the_seen_count_beside_it(self):
+    def test_a_partial_report_with_seen_off_devices_has_no_floor(self):
         rows = [av_row(1), av_row(2, state="OFF"), av_row(3, state="OFF")]
-        self.check(run(self.name, {"results": rows, "devices": fleet(10), "cursor": cursor(100)}), 2)
+        self.check(run(self.name, {"results": rows, "devices": fleet(10), "cursor": cursor(100)}))
 
-    def test_a_partial_device_list_with_a_seen_off_device_reads_none_and_reports_the_seen_count_beside_it(self):
+    def test_a_partial_device_list_with_a_seen_off_device_has_no_floor(self):
         rows = [av_row(1), av_row(2, state="OFF")]
-        self.check(run(self.name, {"results": rows, "devices": {"data": fleet(10), "next": "p2"}}), 1)
+        self.check(run(self.name, {"results": rows, "devices": {"data": fleet(10), "next": "p2"}}))
 
-    def test_devices_missing_from_a_partial_read_are_not_added_to_the_seen_count(self):
+    def test_a_device_seen_with_no_product_may_have_one_on_the_unread_page(self):
+        # Device 1 shows an OFF product and a NONE row here; its running product can sit on the page nobody read.
+        rows = [av_row(1, state="OFF"), {"deviceId": 2, "productName": "NONE", "timestamp": NOW}]
+        self.check(run(self.name, {"results": rows, "devices": fleet(10), "cursor": cursor(900)}))
+
+    def test_devices_missing_from_a_partial_read_are_not_counted(self):
         rows = [av_row(1, state="OFF")]
-        self.check(run(self.name, {"results": rows, "devices": fleet(50), "cursor": cursor(900)}), 1)
+        self.check(run(self.name, {"results": rows, "devices": fleet(50), "cursor": cursor(900)}))
 
-    def test_a_partial_read_with_every_seen_device_running_reads_none_with_a_seen_count_of_zero(self):
+    def test_a_partial_read_with_every_seen_device_running_has_no_floor_either(self):
         rows = [av_row(1), av_row(2)]
-        self.check(run(self.name, {"results": rows, "devices": fleet(2), "cursor": cursor(900)}), 0)
+        self.check(run(self.name, {"results": rows, "devices": fleet(2), "cursor": cursor(900)}))
 
     def test_the_reason_says_the_figure_is_not_a_total(self):
         rows = [av_row(1, state="OFF")]
@@ -214,12 +238,19 @@ class TestAPartialCountIsNeitherATotalNorAFloor:
         assert "only part of the fleet" in " ".join(collection(out)["errors"])
 
 
+@pytest.mark.parametrize("name", [COVERAGE, CONFIGURED])
 class TestAPercentageFromPartOfTheFleetIsNotAFigure:
-    name = COVERAGE
-
-    def test_a_partial_read_with_a_seen_off_device_still_reads_none(self):
+    def test_a_partial_read_with_a_seen_off_device_still_reads_none(self, name):
         rows = [av_row(1), av_row(2, state="OFF")]
-        out = run(self.name, {"results": rows, "devices": fleet(10), "cursor": cursor(100)})
-        assert value(self.name, out) is None
+        out = run(name, {"results": rows, "devices": fleet(10), "cursor": cursor(100)})
+        assert value(name, out) is None
         assert out["transformedResponse"]["totalDevices"] is None
+        assert out["transformedResponse"]["partialRead"] is True
         assert not_evaluated(out)
+
+    def test_a_partial_read_never_reports_a_percentage_or_a_device_total_whatever_the_seen_rows_show(self, name):
+        for rows in ([av_row(1)], [av_row(1, state="OFF")], [av_row(1), av_row(2, state="OFF")]):
+            out = run(name, {"results": rows, "devices": fleet(3), "cursor": cursor(300)})
+            assert value(name, out) is None
+            assert out["transformedResponse"]["totalDevices"] is None
+            assert not_evaluated(out)
