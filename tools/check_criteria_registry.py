@@ -8,7 +8,7 @@ GET /integration/enum/products). Criteria keys had none, which is how they drift
 `isMFAEnabled` carries five incompatible meanings across eight integrations,
 `requiredCoveragePercentage` is a boolean at two vendors and a percentage at ten, and
 `isEPPConfigured` is a percentage at fourteen and a boolean at six -- so no requirement bar fits
-both halves of the estate. contracts/criteria-registry/keys/<key>.json is that one definition.
+both halves of the assets in scope. contracts/criteria-registry/keys/<key>.json is that one definition.
 
 WHAT THIS CHECKS, three things, each behind the same may-only-shrink ratchet the sibling
 contracts use:
