@@ -13,6 +13,8 @@ Data source: the per-vault protected items list (Azure Backup protectedItems rea
 Not evaluated (None, with a collection error) whenever the body does not prove the answer: no vault was
 read, a vault's list is an error body, is incomplete (nextLink) or holds an entry the code cannot read, and
 the input failed validation. A vault that was read and holds no actively protected item is a real False.
+When an active item was seen but some list could not be read, the answer stays True (a seen item proves it)
+and no total is given, because a count of the items that were seen would be an undercount.
 """
 
 import json
@@ -156,6 +158,17 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        if found and unreadable > 0:
+            # Proven by an item that was seen; the totals would be undercounts, so none is given.
+            pass_reasons.append(
+                f"At least {len(active_items)} actively protected item(s) seen; not every protected items list could be read, so no total is given"
+            )
+            return create_response(
+                result={CRITERIA_KEY: True, "protectedItemsCount": None, "totalItems": None},
+                validation=validation,
+                pass_reasons=pass_reasons,
+                input_summary={"activeProtectedItemsSeen": len(active_items), "itemsSeen": total_items, "unreadable": unreadable, "vaultPagesRead": len(pages)}
+            )
         if found:
             pass_reasons.append(f"Backups enabled for {len(active_items)} protected items across the vaults that were read")
         else:
@@ -172,10 +185,11 @@ def transform(input):
         )
 
     except Exception as e:
+        message = str(e)[:200]  # the text reaches the stored result, so a long one is cut
         return not_evaluated(
             {"status": "error", "errors": [], "warnings": []},
             "Could not evaluate the response",
-            f"Transformation error: {str(e)}",
+            f"Transformation error: {message}",
             "Re-evaluate this check once the Azure Backup read succeeds",
-            transformation_errors=[str(e)]
+            transformation_errors=[message]
         )
