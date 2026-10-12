@@ -120,7 +120,7 @@ def transform(input):
         # backups as encrypted, and said so with the same confidence as a real reading.
         # Measured 2026-09-21: transform(None) returned {"isBackupEncrypted": true,
         # "parseError": "Input must be JSON string, bytes, or dict"}. A criterion answered
-        # from a parse failure is not a measurement of this customer's estate.
+        # from a parse failure is not a measurement of this customer's environment.
         #
         # The vendor-default reasoning is not wrong and is kept where it belongs: in the
         # success path above, which applies it to a response that WAS read and that did not

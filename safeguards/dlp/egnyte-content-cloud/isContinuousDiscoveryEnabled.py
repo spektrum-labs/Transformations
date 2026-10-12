@@ -2,7 +2,7 @@
 Transformation: isContinuousDiscoveryEnabled
 Vendor: Egnyte Content Cloud  |  Category: Data Security
 Source: GET /pubapi/v2/users
-Pass: the user estate is enumerable, with active and inactive accounts distinguishable,
+Pass: the user environment is enumerable, with active and inactive accounts distinguishable,
 so who can reach the content cloud is inventoried rather than assumed.
 """
 import json

@@ -3,7 +3,7 @@ Transformation: isContinuousDiscoveryEnabled
 Vendor: Supabase  |  Category: Data Security
 Source: GET https://api.supabase.com/v1/projects
 Pass: the project inventory is readable and returns at least one project, so the
-data estate under assessment is enumerable rather than assumed.
+data environment under assessment is enumerable rather than assumed.
 """
 import json
 from datetime import datetime

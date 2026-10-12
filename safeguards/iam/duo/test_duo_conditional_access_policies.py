@@ -1,7 +1,7 @@
 """Duo isConditionalAccessEnabled, graded per application (workflow getApplicationPolicyCoverage).
 
 Inputs: GET /admin/v2/policies, GET /admin/v2/policies/summary and GET /admin/v3/integrations, merged under
-"policies", "summary" and "integrations". Synthetic bodies for "estate A" in the documented shapes (Duo Admin
+"policies", "summary" and "integrations". Synthetic bodies for "environment A" in the documented shapes (Duo Admin
 API "Retrieve Policies", "Summarize Policies", "Policy Section Data" and "Retrieve Integrations"). Policy keys,
 application names and integration keys are invented. No customer data.
 """
