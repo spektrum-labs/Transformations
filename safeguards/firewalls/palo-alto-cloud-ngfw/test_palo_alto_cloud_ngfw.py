@@ -687,6 +687,9 @@ JUNK_SIGNERS = [
     "arn:aws:secretsmanager:us-east-1:111122223333:notasecret:abcd",
     "arn:garbage:secretsmanager:us-east-1:111122223333:secret:abcd",
     "arn:aws:secretsmanager:us-east-1:1234:secret:abcd",
+    "arn:aws:secretsmanager::111122223333:secret:abcd",
+    "arn:aws:secretsmanager:us-east-1::secret:abcd",
+    "arn:aws:secretsmanager:::secret:abcd",
     "null",
     "0",
     "false",
@@ -726,6 +729,17 @@ def test_certificates_a_recognised_other_store_still_fails_the_key_next_to_junk(
 def test_certificates_junk_alone_never_fails_the_key():
     for arn in JUNK_SIGNERS:
         assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is None
+
+
+@pytest.mark.parametrize("arn", [
+    "arn:aws:secretsmanager::111122223333:secret:ca-AbCdEf",
+    "arn:aws:secretsmanager:us-east-1::secret:ca-AbCdEf",
+    "arn:aws:secretsmanager:::secret:ca-AbCdEf",
+])
+def test_certificates_a_secrets_manager_arn_with_an_empty_region_or_account_is_not_true(arn):
+    # A real Secrets Manager secret ARN always carries both a region and an account.
+    assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is None
+    not_evaluated("hasCertificatesManagedExternally", cert_body([cert(SM_ARN, "a"), cert(arn, "b")]))
 
 
 def test_certificates_a_secrets_manager_signer_in_each_partition_is_true():
