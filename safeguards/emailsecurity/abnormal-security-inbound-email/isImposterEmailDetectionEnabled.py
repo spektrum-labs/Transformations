@@ -87,6 +87,24 @@ def is_error_body(data):
     return isinstance(data, dict) and (data.get("error") is True or bool(data.get("errors")))
 
 
+def objects_only(items, noun):
+    """(objects, problem): the object items of a list.
+
+    A non-empty list with no object in it proves nothing, so it is "not measured". Items that are not
+    objects are never counted as records. An empty list is passed through unchanged."""
+    objects = [x for x in items if isinstance(x, dict)]
+    if items and not objects:
+        return None, "Abnormal returned a " + noun + " list with no objects in it; nothing to measure."
+    return objects, None
+
+
+def text_of(value):
+    """The value when it is a non-blank string, else an empty string; a number or a list is not a label."""
+    if isinstance(value, str) and value.strip():
+        return value
+    return ""
+
+
 def threat_messages(data):
     """(messages, problem): the message list of a /v1/threats/{threatId} body, or why there is none."""
     if isinstance(data, list):
@@ -101,6 +119,8 @@ def threat_messages(data):
 def transform(input):
     data, validation = extract_input(input)
     messages, problem = threat_messages(data)
+    if problem is None:
+        messages, problem = objects_only(messages, "threat message")
     if problem is not None:
         return not_measured(problem, validation)
 
@@ -112,11 +132,9 @@ def transform(input):
     impersonated_parties_seen = []
 
     for m in messages:
-        if not isinstance(m, dict):
-            continue
-        attack_type = m.get("attackType")
-        attack_strategy = m.get("attackStrategy")
-        impersonated_party = m.get("impersonatedParty")
+        attack_type = text_of(m.get("attackType"))
+        attack_strategy = text_of(m.get("attackStrategy"))
+        impersonated_party = text_of(m.get("impersonatedParty"))
 
         if attack_type and attack_strategy:
             classified_count = classified_count + 1
@@ -132,8 +150,8 @@ def transform(input):
                 impersonated_parties_seen.append(impersonated_party)
 
         impersonation_keywords = ["impersonation", "spoof", "bec", "invoice", "payment fraud", "executive"]
-        strategy_lower = (attack_strategy or "").lower()
-        type_lower = (attack_type or "").lower()
+        strategy_lower = attack_strategy.lower()
+        type_lower = attack_type.lower()
         is_impersonation_flavoured = False
         for kw in impersonation_keywords:
             if kw in strategy_lower or kw in type_lower:
