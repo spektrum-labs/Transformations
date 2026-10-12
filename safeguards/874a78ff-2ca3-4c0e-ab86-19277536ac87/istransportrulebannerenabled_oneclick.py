@@ -128,10 +128,10 @@ def transform(input):
         if isinstance(data, dict) and 'PSError' in data:
             raw_error = data.get('PSError', '')
             if is_exchange_access_required_error(raw_error):
-                # The Spektrum app lacks the directory role Exchange Online needs. Not evaluated, with the exact next step;
-                # the vendor text (it names the application) is not echoed.
+                # The Spektrum app lacks the directory role Exchange Online needs. Not evaluated (no value beside the
+                # error), with the exact next step; the vendor text (it names the application) is not echoed.
                 return create_response(
-                    result={criteriaKey: False},
+                    result={criteriaKey: None},
                     validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
                     api_errors=["Could not connect to Microsoft 365: Exchange access is not complete"],
                     fail_reasons=["Exchange access is required for this check."],
@@ -150,7 +150,17 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        transport_rules = data.get("transportRules", [])
+        # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
+        # transportRules proved nothing, so it is Not evaluated, never the stated-negative False.
+        transport_rules = data.get("transportRules") if isinstance(data, dict) else None
+        if not isinstance(transport_rules, list):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Could not read transport rules"],
+                fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+            )
         banner_rules = []
 
         for rule in transport_rules:

@@ -8,8 +8,8 @@ LEGACY_TRANSFORMATION_PATH = Path(__file__).with_name("istransportrulebannerenab
 
 KEY = "isTransportRuleBannerEnabled"
 EXCHANGE_ACCESS_ERROR = "Could not connect to Microsoft 365: Exchange access is not complete"
-# A synthetic application id that happens to contain "401" and "404": the generic parser would read these as HTTP codes.
-EXAMPLE_APP_ID = "00000000-0000-4040-8000-000000000401"
+# A synthetic, non-UUID application id that contains "401" and "404": the generic parser would read these as HTTP codes.
+EXAMPLE_APP_ID = "example-app-401-404"
 EXCHANGE_ROLE_ERROR = (
     "Failed to connect to Exchange Online: The role assigned to application " + EXAMPLE_APP_ID + " "
     "isn't supported in this scenario. Please check online documentation for assigning "
@@ -58,7 +58,7 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
             evaluation["recommendations"],
             ["Complete Exchange access in Microsoft One-Click, then re-evaluate this check."],
         )
-        self.assertFalse(response["transformedResponse"][KEY])
+        self.assertIsNone(response["transformedResponse"][KEY])
 
     def test_exchange_role_failure_is_reported_as_a_data_collection_error(self):
         """A data collection error is what makes the platform grade the check Not evaluated, not failed."""
@@ -71,7 +71,8 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
         self.assertNotIn(EXAMPLE_APP_ID, collection["errors"][0])
         self.assertNotIn("HTTP", collection["errors"][0])
         self.assertEqual(response["additionalInfo"]["transformation"]["status"], "success")
-        self.assertFalse(response["transformedResponse"][KEY])
+        # Never a False beside an error: the check carries no value at all.
+        self.assertIsNone(response["transformedResponse"][KEY])
 
     def test_exchange_role_failure_is_recognised_in_each_response_wrapper(self):
         for wrapper in ("Output", "response", "result", "apiResponse", "api_response"):
@@ -81,6 +82,7 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                     response["additionalInfo"]["evaluation"]["failReasons"],
                     ["Exchange access is required for this check."],
                 )
+                self.assertIsNone(response["transformedResponse"][KEY])
 
     def test_exchange_role_failure_is_recognised_from_a_json_string_and_bytes(self):
         body = '{"Output": {"PSError": "%s"}}' % EXCHANGE_ROLE_ERROR
@@ -145,16 +147,34 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
             with self.subTest(rules=rules):
                 response = self.transformation.transform({"Output": {"transportRules": rules}})
                 self.assertFalse(response["transformedResponse"][KEY])
+                # A list that was read (an empty one included) is a stated negative, with no collection error.
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["errors"], [])
                 self.assertEqual(
                     response["additionalInfo"]["evaluation"]["failReasons"],
                     ["No transport rules with Disclaimer or SubjectPrefix actions found"],
                 )
 
-    def test_empty_data_returns_a_valid_failure(self):
-        response = self.transformation.transform({"Output": {}})
+    def test_missing_or_non_list_transport_rules_is_not_evaluated(self):
+        """Only a list that was actually read gives the stated-negative False; anything else proved nothing."""
+        for payload in (
+            {"Output": {}},
+            {"Output": {"transportRules": None}},
+            {"Output": {"transportRules": {}}},
+            {"Output": {"transportRules": {"Name": "a single rule, not a list"}}},
+            {"Output": {"transportRules": "not a list"}},
+            {"Output": {"somethingElse": []}},
+            {"Output": []},
+            [],
+            "[]",
+        ):
+            with self.subTest(payload=payload):
+                response = self.transformation.transform(payload)
 
-        self.assertFalse(response["transformedResponse"][KEY])
-        self.assertEqual(response["additionalInfo"]["transformation"]["inputSummary"]["totalRules"], 0)
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["errors"], ["Could not read transport rules"])
+                self.assertEqual(response["additionalInfo"]["transformation"]["status"], "success")
 
     def test_malformed_json_returns_a_failure_with_a_transformation_error(self):
         response = self.transformation.transform("{not-json")
