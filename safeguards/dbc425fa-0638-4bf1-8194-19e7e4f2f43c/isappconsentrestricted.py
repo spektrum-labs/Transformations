@@ -35,11 +35,14 @@ def transform(input):
     Also returns appConsentRestrictedPolicyPercentage: restricted policies / returned policies * 100.
 
     False (measured) when unconfigured-third-party-apps policies were read and one is not restricted.
+    When another policy did not report its accessLevel, the open policy still proves False, and the
+    percentage is None because the share cannot be computed from a policy that states nothing.
 
     Not measured (both keys None and a dataCollection error, so Token-Service shows Not evaluated, never
     Failed): an error or refusal body, a body that is not JSON or not an object, no policies collection,
     an empty list, no unconfigured_third_party_apps policy in it (the setting must be shown before it can
-    be judged), a policy that does not report its accessLevel (it proves nothing about that policy), a list
+    be judged), a policy that does not report its accessLevel while no policy states open (it proves nothing
+    about that policy), a list
     still carrying nextPageToken (the share of restricted policies would be partial), and this transform's
     own exception.
 
@@ -55,6 +58,8 @@ def transform(input):
     ok = state["total"] > 0 and state["restricted"] == state["total"]
     line = (str(state["restricted"]) + " of " + str(state["total"])
             + " unconfigured third-party app policies restrict access (BLOCK_ALL or ALLOW_SIGN_IN_ONLY)")
+    if state["unreported"]:
+        line = line + "; " + str(state["unreported"]) + " did not report an access level"
     if ok:
         return respond(True, state["percentage"], [line], [], state["inputSummary"], [])
     return respond(False, state["percentage"], [], [line] + state["open"][:10], state["inputSummary"], [])
@@ -96,7 +101,7 @@ def error_in(data):
 
 def evaluate(raw):
     data = parse(raw)
-    state = {"error": None, "total": 0, "restricted": 0, "percentage": 0, "open": [], "inputSummary": {}}
+    state = {"error": None, "total": 0, "restricted": 0, "unreported": 0, "percentage": 0, "open": [], "inputSummary": {}}
     problem = error_in(data)
     if problem is not None:
         state["error"] = problem
@@ -136,12 +141,23 @@ def evaluate(raw):
             restricted = restricted + 1
         else:
             state["open"].append("Unconfigured third-party apps allowed at " + where + ": accessLevel " + level)
-    if unreported:
+    if unreported and not state["open"]:
+        # No policy states open and some state nothing: all-restricted cannot be shown, and neither can
+        # an open policy. That is a read that could not answer.
         state["error"] = ("An unconfigured_third_party_apps policy did not report its accessLevel (" + ", ".join(unreported[:5])
-                          + "): the share of restricted policies cannot be computed, so it was not evaluated")
+                          + "): no policy states third-party app access is open, so it was not evaluated")
         return state
     state["total"] = len(found)
     state["restricted"] = restricted
+    state["unreported"] = len(unreported)
+    if unreported:
+        # A policy that states open already proves False. The share of restricted policies needs every
+        # policy's level, so it is None while any policy states nothing.
+        state["percentage"] = None
+        state["inputSummary"] = {"unconfiguredAppPolicies": len(found), "restricted": restricted,
+                                 "openPolicies": len(state["open"]), "withoutAccessLevel": len(unreported),
+                                 "appConsentRestrictedPolicyPercentage": None}
+        return state
     state["percentage"] = round(restricted * 100.0 / len(found), 1)
     state["inputSummary"] = {"unconfiguredAppPolicies": len(found), "restricted": restricted,
                              "appConsentRestrictedPolicyPercentage": state["percentage"]}

@@ -205,6 +205,14 @@ def not_measured(reason, validation, recommendation=None, result_extra=None):
     )
 
 
+def is_truncated(body):
+    """True when the feed still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    marker = body.get("paginationTruncated")
+    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
+
+
 def transform(input):
     try:
         if isinstance(input, (str, bytes)) and len(input.strip()) == 0:
@@ -240,7 +248,14 @@ def transform(input):
             if when is not None and (newest is None or when > newest):
                 newest = when
         other = [a for a in apps if a != "gmail"]
-        summary = {"items": len(items), "applications": apps, "newestGmailEvent": newest.isoformat() if newest else None}
+        # A feed cut short holds only part of the events: the totals are None, never a partial count.
+        cut_short = is_truncated(data)
+        shown_events = None if cut_short else gmail_events
+        newest_text = newest.isoformat() if newest else None
+        if cut_short:
+            summary = {"truncated": True, "newestGmailEvent": newest_text}
+        else:
+            summary = {"items": len(items), "applications": apps, "newestGmailEvent": newest_text}
         if other and gmail_events == 0:
             return not_measured(
                 "the feed holds %s events, not Gmail log events; admin audit events do not prove email logging" % "/".join(sorted(other)),
@@ -249,8 +264,12 @@ def transform(input):
         cutoff = datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)
         result_value = newest is not None and newest >= cutoff
         if result_value:
-            return create_response(result={CRITERIA_KEY: True, "gmailEventsRead": gmail_events}, validation=validation,
-                                   pass_reasons=["Gmail log events are recorded and readable: %d events read, newest %s" % (gmail_events, newest.isoformat())],
+            if cut_short:
+                reads = "newest %s (the feed was cut short, so the count is not given)" % newest.isoformat()
+            else:
+                reads = "%d events read, newest %s" % (gmail_events, newest.isoformat())
+            return create_response(result={CRITERIA_KEY: True, "gmailEventsRead": shown_events}, validation=validation,
+                                   pass_reasons=["Gmail log events are recorded and readable: %s" % reads],
                                    input_summary=summary)
         # An empty feed, or events with no readable time, prove nothing either way: no mail may have
         # flowed in the window, or Gmail log events may not be offered for the edition. That is a read
@@ -260,8 +279,13 @@ def transform(input):
                                 "Confirm Gmail log events are available for the tenant's Workspace edition and that mail is flowing")
         if newest is None:
             return not_measured("Gmail log events carry no readable timestamps (%d read)" % gmail_events, validation)
+        if cut_short:
+            # The pages not read could hold a recent event, so old events seen so far do not prove False.
+            return not_measured("the Gmail log feed was cut short and the events read were older than %d days; "
+                                "later pages could hold a recent one" % RECENT_DAYS, validation,
+                                "Re-run the check so the whole feed is read")
         reason = "Newest Gmail log event is %s, older than %d days" % (newest.isoformat(), RECENT_DAYS)
-        return create_response(result={CRITERIA_KEY: False, "gmailEventsRead": gmail_events}, validation=validation,
+        return create_response(result={CRITERIA_KEY: False, "gmailEventsRead": shown_events}, validation=validation,
                                fail_reasons=[reason],
                                recommendations=["Confirm Gmail log events are available for the tenant's Workspace edition and that mail is flowing"],
                                input_summary=summary)

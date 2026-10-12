@@ -238,13 +238,20 @@ def evaluate_licensing(body, validation):
         name = str(item.get("skuName") or SKU_NAMES.get(sku) or sku or "unknown SKU")
         counts[name] = counts.get(name, 0) + 1
     total = sum(counts.values())
-    summary = {"workspaceAssignments": total, "skus": counts, "morePages": is_truncated(body)}
+    more_pages = is_truncated(body)
+    # A list cut short holds only part of the assignments, so any total taken from it is None: a count
+    # from some pages must not read as the whole.
+    shown_total = None if more_pages else total
+    summary = {"workspaceAssignments": shown_total, "skus": None if more_pages else counts, "morePages": more_pages}
     if total > 0:
-        listed = ", ".join("%s x%d%s" % (k, counts[k], "+" if summary["morePages"] else "") for k in sorted(counts))
-        return create_response(result={CRITERIA_KEY: True, "workspaceAssignments": total}, validation=validation,
+        if more_pages:
+            listed = ", ".join(sorted(counts)) + " (more pages were not read)"
+        else:
+            listed = ", ".join("%s x%d" % (k, counts[k]) for k in sorted(counts))
+        return create_response(result={CRITERIA_KEY: True, "workspaceAssignments": shown_total}, validation=validation,
                                pass_reasons=["Google Workspace licences are assigned: %s" % listed],
                                input_summary=summary)
-    if summary["morePages"]:
+    if more_pages:
         return not_measured("licence assignment list was truncated (nextPageToken present) before a Google "
                             "Workspace assignment was found", validation)
     return create_response(result={CRITERIA_KEY: False, "workspaceAssignments": 0}, validation=validation,

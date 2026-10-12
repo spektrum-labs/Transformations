@@ -175,6 +175,20 @@ def is_truncated(body):
     return bool(str(body.get("nextPageToken") or "").strip()) or is_true(body.get("paginationTruncated"))
 
 
+def enforcement_state(record):
+    """True or False when the user record states whether 2-Step Verification is enforced; None when it does
+    not (no field, null, blank or an unrecognised value). Silence is not "not enforced"."""
+    value = record.get("isEnforcedIn2Sv")
+    if value is True or value is False:
+        return value
+    text = str(value).strip().lower() if isinstance(value, str) else ""
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
+
+
 def parse_time(value):
     if value is None or str(value).strip() == "":
         return None
@@ -240,16 +254,24 @@ def transform(input):
                                 validation, "Enable paging on getUserMFAStatus", result_extra=UNMEASURED_COUNTS)
 
         active = [u for u in body["users"] if isinstance(u, dict) and not is_true(u.get("suspended")) and not is_true(u.get("archived"))]
-        enforced = [u for u in active if is_true(u.get("isEnforcedIn2Sv"))]
+        enforced = [u for u in active if enforcement_state(u) is True]
         enrolled = [u for u in active if is_true(u.get("isEnrolledIn2Sv"))]
-        missing = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in active if not is_true(u.get("isEnforcedIn2Sv"))]
+        # Only a record that states "not enforced" counts against the control. A record that states
+        # nothing is unknown: it could be enforced.
+        missing = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in active if enforcement_state(u) is False]
+        silent = [u for u in active if enforcement_state(u) is None]
         total = len([u for u in body["users"] if isinstance(u, dict)])
         if len(active) == 0:
             # Every tenant has active users, so a list with none cannot be trusted: that is a read that
             # could not answer, not a finding that enforcement is off.
             return not_measured("No active users were returned; enforcement could not be confirmed", validation,
                                 result_extra=UNMEASURED_COUNTS)
-        result_value = len(enforced) == len(active)
+        if not missing and silent:
+            return not_measured("%d of %d active users do not state whether 2-Step Verification is enforced, and none "
+                                "states that it is not; enforcement could not be confirmed" % (len(silent), len(active)),
+                                validation, "Re-read the user list so every user reports isEnforcedIn2Sv",
+                                result_extra=UNMEASURED_COUNTS)
+        result_value = len(missing) == 0
         result = {CRITERIA_KEY: result_value, "totalUsers": len(active), "mfaEnrolledUsers": len(enforced)}
         summary = {"usersRead": total, "activeUsers": len(active), "enforced": len(enforced),
                    "enrolled": len(enrolled), "excludedSuspendedOrArchived": total - len(active)}
@@ -260,6 +282,8 @@ def transform(input):
                                    input_summary=summary)
         shown = ", ".join(missing[:LIST_LIMIT]) + (" (and more)" if len(missing) > LIST_LIMIT else "")
         reason = "2-Step Verification is not enforced for %d of %d active users: %s" % (len(missing), len(active), shown)
+        if silent:
+            reason = reason + " (%d more users do not state it)" % len(silent)
         return create_response(result=result, validation=validation, fail_reasons=[reason],
                                recommendations=["Enforce 2-Step Verification for every organizational unit (Security > Authentication > 2-Step Verification)"],
                                input_summary=summary)

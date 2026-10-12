@@ -175,10 +175,11 @@ def when(days_ago):
     return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def gmail_feed(*items):
+def gmail_feed(*items, **extra):
     body = {"kind": "admin#reports#activities"}
     if items:
         body["items"] = list(items)
+    body.update(extra)
     return body
 
 
@@ -196,10 +197,24 @@ def logging_spec(name, key):
             ("gmail_events_without_a_time",
              lambda: gmail_feed({"id": {"applicationName": "gmail"}, "events": []})),
             ("not_a_reports_feed", lambda: {"policies": []}),
+            # A feed cut short could hold a recent event on a later page, so stale events seen so far
+            # prove nothing.
+            ("truncated_and_only_stale_gmail_events",
+             lambda: gmail_feed(activity("gmail", 30), nextPageToken=TOKEN)),
+            ("truncation_marker_and_only_stale_gmail_events",
+             lambda: gmail_feed(activity("gmail", 30), paginationTruncated=True)),
         ],
         "measured": [
-            ("only_stale_gmail_events", lambda: gmail_feed(activity("gmail", 30), activity("gmail", 25)), {key: False}),
-            ("recent_gmail_events", lambda: gmail_feed(activity("gmail", 1)), {key: True}),
+            ("only_stale_gmail_events", lambda: gmail_feed(activity("gmail", 30), activity("gmail", 25)),
+             {key: False, "gmailEventsRead": 2}),
+            ("recent_gmail_events", lambda: gmail_feed(activity("gmail", 1), activity("gmail", 2)),
+             {key: True, "gmailEventsRead": 2}),
+            # A recent event already seen proves True; the count is from part of the feed, so None.
+            ("truncated_but_a_recent_event_seen", lambda: gmail_feed(activity("gmail", 1), nextPageToken=TOKEN),
+             {key: True, "gmailEventsRead": None}),
+            ("truncation_marker_but_a_recent_event_seen",
+             lambda: gmail_feed(activity("gmail", 1), activity("gmail", 2), paginationTruncated="true"),
+             {key: True, "gmailEventsRead": None}),
         ],
     }
 
@@ -213,6 +228,9 @@ MFA_KEYS = ("isMFAEnforcedForUsers", "totalUsers", "mfaEnrolledUsers")
 ENFORCED = {"id": "synthetic-user-1", "isEnforcedIn2Sv": "True", "isEnrolledIn2Sv": "True"}
 NOT_ENFORCED = {"id": "synthetic-user-2", "isEnforcedIn2Sv": "False", "isEnrolledIn2Sv": "False"}
 SUSPENDED = {"id": "synthetic-user-3", "suspended": "True", "isEnforcedIn2Sv": "False"}
+NO_FIELD = {"id": "synthetic-user-4"}
+NULL_FIELD = {"id": "synthetic-user-5", "isEnforcedIn2Sv": None}
+SUSPENDED_NO_FIELD = {"id": "synthetic-user-6", "suspended": "True"}
 
 
 def users(*members, **extra):
@@ -348,14 +366,17 @@ SPECS = [
         ],
         "measured": [
             ("no_workspace_licence", lambda: {"kind": LICENSES, "items": [OTHER_PRODUCT]},
-             {"confirmedLicensePurchased": False}),
+             {"confirmedLicensePurchased": False, "workspaceAssignments": 0}),
             ("policy_proxy_without_a_workspace_licence", lambda: {"policies": {"policies": [PROXY_NO_SKU]}},
              {"confirmedLicensePurchased": False}),
             ("workspace_licence_assigned", lambda: {"kind": LICENSES, "items": [WORKSPACE_LICENCE]},
-             {"confirmedLicensePurchased": True}),
+             {"confirmedLicensePurchased": True, "workspaceAssignments": 1}),
             ("truncated_but_a_workspace_licence_found",
              lambda: {"kind": LICENSES, "items": [WORKSPACE_LICENCE], "nextPageToken": TOKEN},
-             {"confirmedLicensePurchased": True}),
+             {"confirmedLicensePurchased": True, "workspaceAssignments": None}),
+            ("truncation_marker_but_a_workspace_licence_found",
+             lambda: {"kind": LICENSES, "items": [WORKSPACE_LICENCE, WORKSPACE_LICENCE], "paginationTruncated": True},
+             {"confirmedLicensePurchased": True, "workspaceAssignments": None}),
         ],
     },
     {
@@ -370,10 +391,19 @@ SPECS = [
             ("truncation_marker_and_a_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED, paginationTruncated=True)),
             ("no_users_key", lambda: {"kind": "admin#directory#users"}),
             ("users_not_a_list", lambda: {"users": "none"}),
+            # A record that does not state enforcement is unknown, not "not enforced".
+            ("the_only_active_user_states_nothing", lambda: users(NO_FIELD)),
+            ("the_only_active_user_states_null", lambda: users(NULL_FIELD)),
+            ("one_enforced_and_one_states_nothing", lambda: users(ENFORCED, NO_FIELD)),
         ],
         "measured": [
             ("an_active_user_not_enforced", lambda: users(ENFORCED, NOT_ENFORCED),
              {"isMFAEnforcedForUsers": False, "totalUsers": 2, "mfaEnrolledUsers": 1}),
+            # One record that states not-enforced proves False, whatever the others say.
+            ("one_not_enforced_and_one_states_nothing", lambda: users(NOT_ENFORCED, NO_FIELD),
+             {"isMFAEnforcedForUsers": False, "totalUsers": 2, "mfaEnrolledUsers": 0}),
+            ("a_suspended_user_stating_nothing_is_ignored", lambda: users(ENFORCED, SUSPENDED_NO_FIELD),
+             {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
             ("every_active_user_enforced", lambda: users(ENFORCED, SUSPENDED),
              {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
             ("marker_present_but_not_set", lambda: users(ENFORCED, paginationTruncated=False),
@@ -403,6 +433,10 @@ SPECS = [
             ("direct_flag_in_the_raw_response", lambda: {"rawResponse": {"isMFAEnforcedForUsers": True}}),
             ("users_that_are_all_junk_beside_a_direct_flag",
              lambda: {"isMFAEnforcedForUsers": True, "users": ["junk", 7]}),
+            # False only when every record states not-enforced; a record that states nothing could be enforced.
+            ("no_user_states_enforcement", lambda: users(NO_FIELD)),
+            ("a_user_states_null", lambda: users(NULL_FIELD)),
+            ("none_enforced_and_one_states_nothing", lambda: users(NOT_ENFORCED, NO_FIELD)),
         ],
         "measured": [
             ("no_user_enforced", lambda: users(NOT_ENFORCED),
@@ -420,6 +454,8 @@ SPECS = [
             ("users_in_the_raw_response", lambda: {"rawResponse": users(ENFORCED)},
              {"isMFAEnforcedForUsers": True, "totalUsers": 1, "mfaEnrolledUsers": 1}),
             ("items_that_are_not_users_are_not_counted", lambda: users(ENFORCED, "junk", 7, None, NOT_ENFORCED),
+             {"isMFAEnforcedForUsers": True, "totalUsers": 2, "mfaEnrolledUsers": 1}),
+            ("one_enforced_and_one_states_nothing", lambda: users(ENFORCED, NO_FIELD),
              {"isMFAEnforcedForUsers": True, "totalUsers": 2, "mfaEnrolledUsers": 1}),
         ],
     },
@@ -490,6 +526,7 @@ SPECS = [
     {
         "name": "isdnsconfigured",
         "keys": ("isDNSConfigured", "isDMARCConfigured", "isDKIMConfigured", "isSPFConfigured"),
+        "verdict_key": "isDNSConfigured",
         "unmeasured": [
             ("no_dmarc_dkim_or_spf_answer", lambda: {"note": "nothing here"}),
             ("failed_input_validation",
@@ -508,13 +545,16 @@ SPECS = [
             ("record_text_is_a_found_record", lambda: {"DMARC": "v=DMARC1; p=reject", "DKIM": True, "SPF": "v=spf1 -all"},
              {"isDNSConfigured": True, "isDMARCConfigured": True, "isDKIMConfigured": True, "isSPFConfigured": True}),
         ],
-        # A key the lookup did not report is None, never False. The answer is Not evaluated for it
-        # (dataCollection error), and the keys the lookup did report keep their own values.
+        # A key the lookup did not report is None, never False, and the keys it did report keep their own
+        # values. A reported record that is absent already proves isDNSConfigured False, and a missing key must
+        # not mask it: the dataCollection error is set only when isDNSConfigured itself is None.
         "partial": [
             ("dkim_key_missing", lambda: {"DMARC": True, "SPF": True},
              {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": True}),
             ("spf_off_and_dkim_key_missing", lambda: {"DMARC": True, "SPF": False},
              {"isDNSConfigured": False, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": False}),
+            ("dmarc_off_and_two_keys_missing", lambda: {"DMARC": False},
+             {"isDNSConfigured": False, "isDMARCConfigured": False, "isDKIMConfigured": None, "isSPFConfigured": None}),
             ("only_dmarc_reported", lambda: {"DMARC": True},
              {"isDNSConfigured": None, "isDMARCConfigured": True, "isDKIMConfigured": None, "isSPFConfigured": None}),
             ("a_key_present_as_null", lambda: {"DMARC": True, "DKIM": None, "SPF": True},
@@ -534,9 +574,6 @@ SPECS = [
             ("access_level_missing", lambda: {"policies": [app_consent_without_a_level()]}),
             ("one_restricted_and_one_without_a_level",
              lambda: {"policies": [app_consent("BLOCK_ALL"), app_consent_without_a_level("orgUnits/synthetic-a")]}),
-            ("one_open_and_one_without_a_level",
-             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED"),
-                                   app_consent_without_a_level("orgUnits/synthetic-a")]}),
         ],
         "measured": [
             ("unrestricted", lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED")]},
@@ -546,6 +583,16 @@ SPECS = [
              {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": 50.0}),
             ("block_all", lambda: {"policies": [app_consent("BLOCK_ALL")]},
              {"isAppConsentRestricted": True, "appConsentRestrictedPolicyPercentage": 100.0}),
+            # A policy that states open already proves False; the share cannot be computed while another
+            # policy states nothing, so it is None.
+            ("one_open_and_one_without_a_level",
+             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED"),
+                                   app_consent_without_a_level("orgUnits/synthetic-a")]},
+             {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": None}),
+            ("one_open_one_restricted_and_one_without_a_level",
+             lambda: {"policies": [app_consent("ACCESS_LEVEL_UNSPECIFIED"), app_consent("BLOCK_ALL", "orgUnits/synthetic-b"),
+                                   app_consent_without_a_level("orgUnits/synthetic-a")]},
+             {"isAppConsentRestricted": False, "appConsentRestrictedPolicyPercentage": None}),
         ],
     },
     # The next three already answered None with a dataCollection error. They are covered here so the
@@ -607,7 +654,7 @@ class GoogleEmailSecurityNotEvaluated(unittest.TestCase):
         self.assertTrue(all(isinstance(e, str) and e.strip() for e in collection["errors"]))
 
     def assert_partial(self, spec, body, expected):
-        """Some keys are measured and at least one is None: the None one must read Not evaluated."""
+        """Some keys are measured and some are None. The combined answer decides the dataCollection error."""
         out = load(spec["name"]).transform(body)
         inner = out["transformedResponse"]
         for key in expected:
@@ -617,8 +664,12 @@ class GoogleEmailSecurityNotEvaluated(unittest.TestCase):
             else:
                 self.assertIsNone(inner[key], "%s: %r" % (key, inner[key]))
         collection = out["additionalInfo"]["dataCollection"]
-        self.assertEqual(collection["status"], "error")
-        self.assertTrue(collection["errors"])
+        if expected[spec["verdict_key"]] is None:
+            self.assertEqual(collection["status"], "error")
+            self.assertTrue(collection["errors"])
+        else:
+            self.assertEqual(collection["status"], "success", "a measured verdict must not be hidden")
+            self.assertEqual(collection["errors"], [])
 
     def assert_measured(self, spec, body, expected):
         out = load(spec["name"]).transform(body)
@@ -663,6 +714,29 @@ for _spec in SPECS:
     for _label, _factory, _expected in _spec.get("partial", []):
         setattr(GoogleEmailSecurityNotEvaluated, "test_%s_%s_is_partly_not_evaluated" % (_spec["name"], _label),
                 _partial_test(_spec, _factory, _expected))
+
+
+class TruncatedReadsGiveNoTotals(unittest.TestCase):
+    """A summary or count taken from part of a list must not look like a total."""
+
+    def summary(self, name, body):
+        return load(name).transform(body)["additionalInfo"]["transformation"]["inputSummary"]
+
+    def test_licence_summary_has_no_assignment_total(self):
+        summary = self.summary("confirmedlicensepurchased",
+                               {"kind": LICENSES, "items": [WORKSPACE_LICENCE], "nextPageToken": TOKEN})
+        self.assertIsNone(summary["workspaceAssignments"])
+        self.assertTrue(summary["morePages"])
+
+    def test_licence_summary_keeps_the_total_for_a_complete_list(self):
+        summary = self.summary("confirmedlicensepurchased", {"kind": LICENSES, "items": [WORKSPACE_LICENCE]})
+        self.assertEqual(summary["workspaceAssignments"], 1)
+
+    def test_logging_summary_has_no_event_total(self):
+        for name in ("isemailloggingenabled", "isemailsecurityloggingenabled"):
+            summary = self.summary(name, gmail_feed(activity("gmail", 1), nextPageToken=TOKEN))
+            self.assertNotIn("items", summary, name)
+            self.assertTrue(summary["truncated"], name)
 
 
 class EverySpecIsComplete(unittest.TestCase):
