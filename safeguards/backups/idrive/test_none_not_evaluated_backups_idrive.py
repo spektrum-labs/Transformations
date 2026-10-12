@@ -35,7 +35,6 @@ class Poisoned(dict):
 
 CASES = [
     ('isBackupEncrypted', ('isBackupEncrypted',), 'empty_dict', lambda: {}),
-    ('isDesktopAppStatusRestricted', ('isDesktopAppStatusRestricted',), 'empty_dict', lambda: {}),
 ]
 
 

@@ -38,6 +38,16 @@ CASES = [
     ('isAdminMFAPhishingResistant', ('isAdminMFAPhishingResistant',), 'poisoned', lambda: Poisoned()),
     ('isConditionalAccessEnabled', ('isConditionalAccessEnabled',), 'poisoned', lambda: Poisoned()),
     ('isStrongAuthRequiredByPolicy', ('isStrongAuthRequired',), 'poisoned', lambda: Poisoned()),
+    ('isMFAEnforcedForUsers', ('isMFAEnforcedForUsers',), 'poisoned', lambda: Poisoned()),
+    ('islifecyclemanagementenabled', ('isLifeCycleManagementEnabled',), 'poisoned', lambda: Poisoned()),
+    ('mfaDeviceEnrollmentPercentage', ('mfaDeviceEnrollmentPercentage',), 'poisoned', lambda: Poisoned()),
+    ('desktopAuthenticatorEnrollmentPercentage', ('desktopAuthenticatorEnrollmentPercentage',), 'poisoned',
+     lambda: Poisoned()),
+    ('hasEmergencyAccessCodeAPIAccess', ('hasEmergencyAccessCodeAPIAccess',), 'poisoned', lambda: Poisoned()),
+    ('hasFIDOAuthenticatorManagementAPIAccess', ('hasFIDOAuthenticatorManagementAPIAccess',), 'poisoned',
+     lambda: Poisoned()),
+    ('webAuthnCredentialAdoptionPercentage', ('webAuthnCredentialAdoptionPercentage',), 'poisoned',
+     lambda: Poisoned()),
 ]
 
 

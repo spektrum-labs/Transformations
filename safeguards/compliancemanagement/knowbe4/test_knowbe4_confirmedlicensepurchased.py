@@ -29,11 +29,24 @@ def test_full_timestamp_still_parsed():
     assert verdict(dict(ACCOUNT, subscription_end_date="2099-03-06T00:00:00Z")) is True
 
 
-def test_free_or_missing_level_fails():
+def test_free_level_fails():
     assert verdict(dict(ACCOUNT, subscription_level="Free")) is False
-    assert verdict({k: v for k, v in ACCOUNT.items() if k != "subscription_level"}) is False
+    assert verdict(dict(ACCOUNT, subscription_level="")) is False
 
 
-def test_no_evidence_fails():
-    for body in [{}, None, "{}", {"error": True, "message": "HTTP 401: Unauthorized"}]:
-        assert verdict(body) is False
+def test_no_evidence_is_not_evaluated():
+    """An error, an empty or an unrecognised body is not an account: None plus a data-collection
+    error (shown as Not evaluated), never a failed check."""
+    bodies = [{}, None, "{}", "", {"error": True, "message": "HTTP 401: Unauthorized"},
+              {k: v for k, v in ACCOUNT.items() if k != "subscription_level"}, {"hello": "world"}]
+    for body in bodies:
+        out = LICENCE.transform(body)
+        assert out["transformedResponse"]["confirmedLicensePurchased"] is None, body
+        collection = out["additionalInfo"]["dataCollection"]
+        assert collection["status"] == "error" and collection["errors"], body
+
+
+def test_unreadable_end_date_is_not_evaluated():
+    out = LICENCE.transform(dict(ACCOUNT, subscription_end_date="not a date"))
+    assert out["transformedResponse"]["confirmedLicensePurchased"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"

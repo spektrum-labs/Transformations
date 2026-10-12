@@ -71,12 +71,14 @@ def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, dict) else {}
 
-    api_section = data.get("api") or {}
+    api_section = data.get("api")
+    api_section = api_section if isinstance(api_section, dict) else {}
     api_enabled = api_section.get("enabled")
 
     org_id = data.get("id") or "unknown"
     org_name = data.get("name") or "unknown organization"
 
+    api_errors = []
     if api_enabled is True:
         result = {"isProgrammaticAccessEnabled": True}
         pass_reasons = [
@@ -97,12 +99,16 @@ def transform(input):
             "to allow programmatic control of the firewall fleet."
         ]
     else:
-        result = {"isProgrammaticAccessEnabled": False}
+        # No usable api.enabled value (empty body, vendor error body, field absent): nothing was
+        # measured, so the criterion is None with a dataCollection error, never a fail.
+        result = {"isProgrammaticAccessEnabled": None}
         pass_reasons = []
-        fail_reasons = [
-            f"Organization '{org_name}' (id={org_id}) response did not contain an api.enabled field; "
-            "cannot confirm Dashboard API access is enabled."
-        ]
+        problem = (
+            "The Meraki organization response did not contain a boolean api.enabled field; "
+            "nothing to measure."
+        )
+        fail_reasons = [problem]
+        api_errors = [problem]
         recommendations = [
             "Verify organization API access configuration via the Meraki dashboard or API."
         ]
@@ -116,6 +122,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "isProgrammaticAccessEnabled",
             "vendor": "Cisco Meraki MX",

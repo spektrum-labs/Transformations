@@ -316,7 +316,12 @@ def transform(input):
                                recommendations=recommendations, additional_findings=findings,
                                input_summary={criteriaKey: value, **summary})
     except Exception as e:
+        # The evaluator reads additionalInfo.dataCollection.status only, which is derived
+        # from api_errors; the transformation channel alone leaves the row graded as a
+        # measured answer. Report the failure on both so the row reads Not evaluated.
+        reason = "Transformation error: " + str(e)[:200]
         return create_response(result={criteriaKey: False},
                                validation={"status": "error", "errors": [], "warnings": []},
                                transformation_errors=[str(e)[:200]],
-                               fail_reasons=["Transformation error: " + str(e)[:200]])
+                               api_errors=[reason],
+                               fail_reasons=[reason])

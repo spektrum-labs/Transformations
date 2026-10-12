@@ -34,6 +34,8 @@ class Poisoned(dict):
 
 
 CASES = [
+    ('isPublicSharingRestricted', ('isPublicSharingRestricted',), 'partial_link_page', lambda: {"links": [{"id": "L1", "path": "/Shared/f1", "type": "file", "accessibility": "domain", "created_by": "admin", "creation_date": "2026-03-13T06:15:27+0000"}], "count": 1, "total_count": 7}),
+    ('isSSOEnabled', ('isSSOEnabled',), 'partial_user_page', lambda: {"totalResults": 250, "itemsPerPage": 100, "startIndex": 1, "resources": [{"id": i, "userName": "u" + str(i), "active": True, "authType": "sso"} for i in range(100)]}),
     ('publicLinksWithoutExpiryCount', ('publicLinksWithoutExpiryCount',), 'empty_dict', lambda: {}),
 ]
 
