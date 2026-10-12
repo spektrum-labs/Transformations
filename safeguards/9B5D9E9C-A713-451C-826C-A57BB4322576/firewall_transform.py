@@ -7,8 +7,14 @@ Evaluates if Firewalls are set up properly including internet firewall and WAN n
 
 isFirewallLoggingEnabled is answered only from the audit feed. A feed that was read with fetchedCount above zero is True
 and one read with fetchedCount 0 is the measured False. A feed that is absent, null, empty, not an object, or has no
-readable fetchedCount (and a failed validation or an exception) was not measured: the answer is None with a
-data-collection error, which is Not evaluated. A field of that name in the body is never read.
+readable fetchedCount was not measured: the answer is None with a data-collection error, which is Not evaluated. A field
+of that name in the body is never read.
+
+isFirewallEnabled and isFirewallConfigured are answered from the two policy layers (internet firewall, WAN network). A
+layer is read only when its policy object is there and its enabled flag is a boolean or the text "true" or "false"
+(any case, any spacing); any other value (a number, "maybe", null, a list) leaves the layer unread, and an unread layer
+contributes no rules. When neither layer was read both answers are None with a data-collection error. A failed
+validation and an exception answer None for all three keys with a data-collection error.
 """
 
 import json
@@ -74,6 +80,26 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 AUDIT_FEED_NOT_READ = "Audit feed was missing or could not be read, so firewall logging was not evaluated"
+LAYERS_NOT_READ = ("No firewall policy layer (internet firewall or WAN network) could be read, so firewall enabled "
+                   "and firewall configured were not evaluated")
+VALIDATION_FAILED = "Input validation failed, so no firewall answer was evaluated"
+PROCESSING_FAILED = "The firewall response could not be processed, so no firewall answer was evaluated"
+MAX_ERROR_TEXT = 200
+
+
+def read_enabled(value):
+    """True or False for a boolean or the text "true" or "false" (any case, any spacing), else None (unreadable).
+
+    A number, "maybe", "yes", null, an empty string, a list and an object are unreadable: they never read as enabled."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+    return None
 
 
 def read_fetched_count(value):
@@ -103,6 +129,8 @@ def transform(input):
     is_firewall_logging_enabled = None
     is_internet_firewall_enabled = False
     is_wan_network_enabled = False
+    internet_layer_read = False
+    wan_layer_read = False
     internet_firewall_rules = []
     wan_network_rules = []
 
@@ -131,10 +159,10 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={"isFirewallEnabled": False, "isFirewallLoggingEnabled": None, "isFirewallConfigured": False},
+                result={"isFirewallEnabled": None, "isFirewallLoggingEnabled": None, "isFirewallConfigured": None},
                 validation=validation,
                 fail_reasons=["Input validation failed"],
-                api_errors=[AUDIT_FEED_NOT_READ]
+                api_errors=[VALIDATION_FAILED]
             )
 
         pass_reasons = []
@@ -159,13 +187,15 @@ def transform(input):
                         firewall_policy = parse_input(firewall_data['internetFirewall'])
                         if 'policy' in firewall_policy:
                             firewall_policy = parse_input(firewall_policy['policy'])
-                            if 'enabled' in firewall_policy:
-                                is_internet_firewall_enabled = True if firewall_policy.get('enabled', False) else False
-                            if 'rules' in firewall_policy:
-                                internet_firewall_rules_raw = firewall_policy['rules']
-                                for rule in internet_firewall_rules_raw:
-                                    if 'rule' in rule and 'name' in rule['rule']:
-                                        internet_firewall_rules.append(rule['rule']['name'])
+                            internet_flag = read_enabled(firewall_policy.get('enabled'))
+                            if internet_flag is not None:
+                                internet_layer_read = True
+                                is_internet_firewall_enabled = internet_flag
+                                if 'rules' in firewall_policy:
+                                    internet_firewall_rules_raw = firewall_policy['rules']
+                                    for rule in internet_firewall_rules_raw:
+                                        if 'rule' in rule and 'name' in rule['rule']:
+                                            internet_firewall_rules.append(rule['rule']['name'])
 
             if 'data' in wan_network_data:
                 wan_network_data = parse_input(wan_network_data['data'])
@@ -175,13 +205,15 @@ def transform(input):
                         wan_network_policy = parse_input(wan_network_data['wanNetwork'])
                         if 'policy' in wan_network_policy:
                             wan_network_policy = parse_input(wan_network_policy['policy'])
-                            if 'enabled' in wan_network_policy:
-                                is_wan_network_enabled = True if wan_network_policy.get('enabled', False) else False
-                            if 'rules' in wan_network_policy:
-                                wan_network_rules_raw = wan_network_policy['rules']
-                                for rule in wan_network_rules_raw:
-                                    if 'rule' in rule and 'name' in rule['rule']:
-                                        wan_network_rules.append(rule['rule']['name'])
+                            wan_flag = read_enabled(wan_network_policy.get('enabled'))
+                            if wan_flag is not None:
+                                wan_layer_read = True
+                                is_wan_network_enabled = wan_flag
+                                if 'rules' in wan_network_policy:
+                                    wan_network_rules_raw = wan_network_policy['rules']
+                                    for rule in wan_network_rules_raw:
+                                        if 'rule' in rule and 'name' in rule['rule']:
+                                            wan_network_rules.append(rule['rule']['name'])
 
             # isFirewallLoggingEnabled is answered only from the audit feed below. A field of that name in the body
             # is never read: the vendor does not send one, so a body that carried it would choose its own answer.
@@ -197,8 +229,13 @@ def transform(input):
                     if fetched_count is not None:
                         is_firewall_logging_enabled = fetched_count > 0
 
-        is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
-        is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
+        # Enabled and Configured are measured only when at least one policy layer was read. Neither read: None.
+        is_firewall_enabled_final = None
+        is_firewall_configured = None
+        layers_read = internet_layer_read or wan_layer_read
+        if layers_read:
+            is_firewall_enabled_final = is_firewall_enabled or (is_internet_firewall_enabled and is_wan_network_enabled)
+            is_firewall_configured = len(internet_firewall_rules) > 0 or len(wan_network_rules) > 0
 
         additional_findings = []
 
@@ -212,8 +249,13 @@ def transform(input):
         else:
             api_errors.append(AUDIT_FEED_NOT_READ)
 
-        # Additional finding: isFirewallEnabled
-        if is_firewall_enabled_final:
+        if not layers_read:
+            api_errors.append(LAYERS_NOT_READ)
+
+        # Additional finding: isFirewallEnabled (none when it was not evaluated)
+        if is_firewall_enabled_final is None:
+            pass
+        elif is_firewall_enabled_final:
             additional_findings.append({
                 "metric": "isFirewallEnabled",
                 "status": "pass",
@@ -227,8 +269,10 @@ def transform(input):
                 "recommendation": "Enable firewall for network security"
             })
 
-        # Additional finding: isFirewallConfigured
-        if is_firewall_configured:
+        # Additional finding: isFirewallConfigured (none when it was not evaluated)
+        if is_firewall_configured is None:
+            pass
+        elif is_firewall_configured:
             additional_findings.append({
                 "metric": "isFirewallConfigured",
                 "status": "pass",
@@ -267,12 +311,12 @@ def transform(input):
     except Exception as e:
         return create_response(
             result={
-                "isFirewallEnabled": False,
+                "isFirewallEnabled": None,
                 "isFirewallLoggingEnabled": None,
-                "isFirewallConfigured": False
+                "isFirewallConfigured": None
             },
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"],
-            api_errors=[AUDIT_FEED_NOT_READ]
+            transformation_errors=[str(e)[:MAX_ERROR_TEXT]],
+            fail_reasons=[f"Transformation error: {str(e)[:MAX_ERROR_TEXT]}"],
+            api_errors=[PROCESSING_FAILED]
         )

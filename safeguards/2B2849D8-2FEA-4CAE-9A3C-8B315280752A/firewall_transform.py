@@ -32,7 +32,8 @@ all, because the deprecated endpoint and a zone that relies on managed rules alo
 partial page that shows no active enforcing rule; or a rule that could enforce whose paused or enabled flag cannot be
 read, with no other rule active and enforcing. A page is partial when result_info says more rules exist (total_count
 above the rules read, total_pages above one unless total_count equals the rules read, a page that does not start at
-the beginning, a cursor still set) or a paging block carries pages above one or a next link. An active enforcing rule
+the beginning, a cursor still set), when result_info or the paging block is present but is not an object, or when a
+paging block carries pages above one or a next link. An active enforcing rule
 that was read still proves True on a partial page.
 
 isFirewallLoggingEnabled is not answered here. Neither API carries a field that evidences firewall event logging
@@ -208,6 +209,8 @@ def more_rules_exist(body, rules_read):
     """True when the body shows rules beyond the ones it carries (a partial page)."""
     info = body.get("result_info")
     if not isinstance(info, dict):
+        if page_cursor(info) is not None:
+            return True  # present but not an object (text, a number, a list): it cannot be read, so it is partial
         info = {}
     paging = body.get("paging")
     if paging is not None and not isinstance(paging, dict):

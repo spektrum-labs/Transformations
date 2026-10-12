@@ -105,7 +105,7 @@ def assert_not_evaluated(out):
 PAUSED_TEXT = ["true", "True", "TRUE", " true ", "\ttrue\n"]
 NOT_PAUSED_TEXT = ["false", "False", "FALSE", " false "]
 ABSENT = [None, "", "  ", "None", "null", "NULL"]
-UNREADABLE = ["maybe", "yes", "no", "1", "0", 1, 0, 2, 1.5, ["true"], [], {"paused": True}, {}]
+UNREADABLE = ["maybe", "yes", "no", "on", "off", "ON", "enabled", "1", "0", 1, 0, 2, 1.5, ["true"], [], {"paused": True}, {}]
 
 
 @pytest.mark.parametrize("value", PAUSED_TEXT)
@@ -299,6 +299,47 @@ def test_a_further_page_does_not_undo_an_enforcing_rule_that_was_read(tx, name, 
     enforcing["rules"] = holder["result"]
     for shape in shapes(enforcing):
         assert_measured(tx(shape), True)
+
+
+def with_result_info(info, rules=None):
+    """The legacy body with result_info replaced by something that is not an object."""
+    body = legacy(rules if rules is not None else [rule("a", action="allow")])
+    body["result_info"] = info
+    return part(body)
+
+
+RESULT_INFO_NOT_AN_OBJECT_PARTIAL = [("text", "page 1 of 2"), ("text for an object", "{'total_count': 1}"), ("a number", 2),
+                                     ("true", True), ("an empty list", []), ("a non-empty list", [1])]
+RESULT_INFO_NOT_AN_OBJECT_COMPLETE = [("null", None), ("empty text", ""), ("stringified null", "None"),
+                                      ("text null", "null"), ("false", False)]
+
+
+@pytest.mark.parametrize("name,info", RESULT_INFO_NOT_AN_OBJECT_PARTIAL,
+                         ids=[c[0] for c in RESULT_INFO_NOT_AN_OBJECT_PARTIAL])
+def test_a_result_info_that_is_present_but_not_an_object_is_partial(tx, name, info):
+    for shape in shapes(with_result_info(info)):
+        assert_not_evaluated(tx(shape))
+
+
+@pytest.mark.parametrize("name,info", RESULT_INFO_NOT_AN_OBJECT_PARTIAL,
+                         ids=[c[0] for c in RESULT_INFO_NOT_AN_OBJECT_PARTIAL])
+def test_a_result_info_that_is_not_an_object_does_not_undo_an_enforcing_rule(tx, name, info):
+    for shape in shapes(with_result_info(info, rules=[rule("a")])):
+        assert_measured(tx(shape), True)
+
+
+@pytest.mark.parametrize("name,info", RESULT_INFO_NOT_AN_OBJECT_COMPLETE,
+                         ids=[c[0] for c in RESULT_INFO_NOT_AN_OBJECT_COMPLETE])
+def test_an_absent_result_info_is_a_complete_read(tx, name, info):
+    for shape in shapes(with_result_info(info)):
+        assert_measured(tx(shape), False)
+
+
+def test_a_body_with_no_result_info_key_is_a_complete_read(tx):
+    body = legacy([rule("a", action="allow")])
+    del body["result_info"]
+    for shape in shapes(part(body)):
+        assert_measured(tx(shape), False)
 
 
 def test_a_further_page_of_paused_rules_is_not_evaluated(tx):
