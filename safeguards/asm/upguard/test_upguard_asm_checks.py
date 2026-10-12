@@ -15,15 +15,56 @@ def load(name):
     return module.transform
 
 
-FAIL_CLOSED = [{}, None, "{}", "", {"error": True, "statusCode": 401}, {"hello": "world"}]
+FAIL_CLOSED = [{}, None, "{}", "", {"error": True, "statusCode": 401}, {"hello": "world"},
+               "not json", {"error": True, "message": "HTTP 503"}, {"data": None}]
+
+ALL_CHECKS = [("nocriticalfindings", "noCriticalFindings"), ("nohighfindings", "noHighFindings"),
+              ("isasmenabled", "isASMEnabled"), ("exploitedfindingscount", "exploitedFindingsCount")]
+
+
+def assert_not_evaluated(out, key):
+    """None for the criterion, and a data collection error so the evaluator shows Not evaluated."""
+    assert out[key] is None
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert collection["errors"] and all(isinstance(e, str) and e for e in collection["errors"])
 
 
 @pytest.mark.parametrize("body", FAIL_CLOSED)
-def test_fail_closed(body):
-    assert load("nocriticalfindings")(body)["noCriticalFindings"] is False
-    assert load("nohighfindings")(body)["noHighFindings"] is False
-    assert load("isasmenabled")(body)["isASMEnabled"] is False
-    assert load("exploitedfindingscount")(body)["exploitedFindingsCount"] is None
+def test_a_body_that_proves_nothing_is_not_evaluated(body):
+    for name, key in ALL_CHECKS:
+        assert_not_evaluated(load(name)(body), key)
+
+
+@pytest.mark.parametrize("name,key,body", [
+    ("nocriticalfindings", "noCriticalFindings", {"risks": "oops"}),
+    ("nocriticalfindings", "noCriticalFindings", {"risks": None}),
+    ("nocriticalfindings", "noCriticalFindings", {"risks": ["x", 1, None]}),
+    ("nohighfindings", "noHighFindings", {"risks": "oops"}),
+    ("nohighfindings", "noHighFindings", {"risks": None}),
+    ("nohighfindings", "noHighFindings", {"risks": ["x", 1, None]}),
+    ("isasmenabled", "isASMEnabled", {"domains": "oops"}),
+    ("isasmenabled", "isASMEnabled", {"domains": None}),
+    ("isasmenabled", "isASMEnabled", {"domains": ["x", 1, None]}),
+])
+def test_a_list_that_is_not_a_list_of_records_is_not_evaluated(name, key, body):
+    assert_not_evaluated(load(name)(body), key)
+
+
+def test_the_text_never_echoes_the_body():
+    for name, key in ALL_CHECKS:
+        out = load(name)("VENDOR-DETAIL-0042 not json")
+        assert "VENDOR-DETAIL-0042" not in repr(out)
+        assert_not_evaluated(out, key)
+
+
+def test_a_measured_answer_carries_no_data_collection_error():
+    for name, body, key in (("nocriticalfindings", {"risks": []}, "noCriticalFindings"),
+                            ("nohighfindings", {"risks": [{"severity": "critical"}]}, "noHighFindings"),
+                            ("isasmenabled", {"domains": []}, "isASMEnabled")):
+        out = load(name)(body)
+        assert out[key] is not None
+        assert "additionalInfo" not in out
 
 
 def test_severity_checks():
