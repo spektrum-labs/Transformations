@@ -158,16 +158,22 @@ def unread_pages(data, item_count):
     body whose pages were joined): a page total says nothing about how many items a page holds, so it
     cannot show the list is whole, with or without a page size. A page total or item total that is present
     but not a whole number ("many", "4.5", a boolean) shows nothing either, so it is partial too; 4.0 and "4.0"
-    are read as 4. Anything computed from the part
+    are read as 4. A pages field that is present but not an object, and a next key at the top of the body, are partial too. Anything computed from the part
     that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
     seen, so it is not reported. A full first page with no cursor is not treated as partial: a
     complete read of a large fleet looks the same.
     """
     if marked_true(data.get("truncated")):
         return PARTIAL_REASON
+    if page_cursor(data.get("nextKey")) is not None:
+        return PARTIAL_REASON
     pages = data.get("pages")
     if not isinstance(pages, dict):
-        return None
+        # An absent pages field (null, an empty string, a stringified null) says nothing and is complete; a pages
+        # field that is present but is not an object (text, a number, a list) cannot be read, so the list may be only part.
+        if page_cursor(pages) is None:
+            return None
+        return PARTIAL_REASON
     if marked_true(pages.get("truncated")):
         return PARTIAL_REASON
     if page_cursor(pages.get("nextKey")) is not None:

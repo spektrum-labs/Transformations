@@ -11,7 +11,8 @@ More than one page (pages.total above 1) is only part of the fleet too, unless p
 many items the whole list holds and that is exactly the number returned (a body whose pages were joined).
 A page total says nothing about how many items a page holds, so page 1 of 4 is partial with or without
 a page size, and so is a page total of 2 beside 2 items when nothing says those are all the items.
-A page total or item total that is present but cannot be read as a whole number (the text "many", "4.5", a
+A pages field that is present but is not an object (text, a number, a list) says nothing about the pages, so it is partial too,
+and so is a next key at the top of the body. A page total or item total that is present but cannot be read as a whole number (the text "many", "4.5", a
 boolean, a list) is partial too: nothing shows the list is whole. Integral floats and decimal strings (4.0, "4.0")
 are read as the number they are; null, an empty string and the stringified nulls count as absent.
 
@@ -117,6 +118,18 @@ PARTIAL_BODIES = [
     ("enveloped partial read", enveloped({"items": UNMANAGED, "pages": {"nextKey": "cursor-abc"}})),
     ("partial read beside an unset flag", {"items": UNMANAGED, "pages": {"nextKey": "cursor-abc"}, "isMDRConfigured": None,
                                            "isEPPConfigured": None}),
+    ("pages as text", {"items": UNMANAGED, "pages": "many"}),
+    ("pages as a number", {"items": UNMANAGED, "pages": 3}),
+    ("pages as a boolean", {"items": UNMANAGED, "pages": True}),
+    ("pages as a list", {"items": UNMANAGED, "pages": [{"total": 3}]}),
+    ("pages as an empty list", {"items": UNMANAGED, "pages": []}),
+    ("pages as stringified json", {"items": UNMANAGED, "pages": '{"nextKey": "cursor-abc"}'}),
+    ("pages as text, wrapped", {"response": {"items": MANY, "pages": "many"}}),
+    ("pages as a list, enveloped", enveloped({"items": MANY, "pages": [4]})),
+    ("top level next key", {"items": UNMANAGED, "nextKey": "cursor-abc"}),
+    ("top level next key as a number", {"items": UNMANAGED, "nextKey": 12345}),
+    ("top level next key beside a clean pages object", {"items": UNMANAGED, "pages": {"size": "2"}, "nextKey": "cursor-abc"}),
+    ("top level next key, wrapped", {"response": {"items": MANAGED, "nextKey": "cursor-abc"}}),
 ]
 
 # No cursor and no marker: a complete read, scored as before.
@@ -152,6 +165,15 @@ COMPLETE_BODIES = [
     ("start key stringified none", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "None"}}),
     ("start key stringified null", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "null"}}),
     ("start key empty", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": ""}}),
+    ("pages null", {"items": UNMANAGED, "pages": None}),
+    ("pages stringified none", {"items": UNMANAGED, "pages": "None"}),
+    ("pages stringified null", {"items": UNMANAGED, "pages": "null"}),
+    ("pages empty text", {"items": UNMANAGED, "pages": ""}),
+    ("pages false", {"items": UNMANAGED, "pages": False}),
+    ("pages empty object", {"items": UNMANAGED, "pages": {}}),
+    ("top level next key null", {"items": UNMANAGED, "nextKey": None}),
+    ("top level next key stringified none", {"items": UNMANAGED, "nextKey": "None"}),
+    ("top level next key empty", {"items": UNMANAGED, "nextKey": ""}),
     ("bare list", UNMANAGED),
     ("enveloped", enveloped({"items": UNMANAGED, "pages": {"size": "2"}})),
 ]
