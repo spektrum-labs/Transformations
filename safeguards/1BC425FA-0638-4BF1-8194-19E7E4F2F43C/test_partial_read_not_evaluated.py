@@ -11,6 +11,9 @@ More than one page (pages.total above 1) is only part of the fleet too, unless p
 many items the whole list holds and that is exactly the number returned (a body whose pages were joined).
 A page total says nothing about how many items a page holds, so page 1 of 4 is partial with or without
 a page size, and so is a page total of 2 beside 2 items when nothing says those are all the items.
+A page total or item total that is present but cannot be read as a whole number (the text "many", "4.5", a
+boolean, a list) is partial too: nothing shows the list is whole. Integral floats and decimal strings (4.0, "4.0")
+are read as the number they are; null, an empty string and the stringified nulls count as absent.
 
 A body that carries only a configured flag has no endpoint list, so every key is None. The configured
 keys (isMDRConfigured, isEPPConfigured) are derived from the endpoint list alone; Sophos documents no such
@@ -85,6 +88,26 @@ PARTIAL_BODIES = [
     ("pages above one with an item total below the items returned", {"items": UNMANAGED, "pages": {"total": "4", "items": "1"}}),
     ("pages above one, wrapped", {"response": {"items": MANY, "pages": {"total": "4"}}}),
     ("pages above one, enveloped", enveloped({"items": MANY, "pages": {"total": "4"}})),
+    ("page total as an integral float", {"items": MANY, "pages": {"total": 4.0}}),
+    ("page total as a decimal string", {"items": MANY, "pages": {"total": "4.0"}}),
+    ("page total as a decimal string with spaces", {"items": MANY, "pages": {"total": " 4.0 "}}),
+    ("page total as text", {"items": MANY, "pages": {"total": "many"}}),
+    ("page total as text beside a one page body", {"items": UNMANAGED, "pages": {"total": "unknown", "size": "2"}}),
+    ("page total as a fraction", {"items": MANY, "pages": {"total": "4.5"}}),
+    ("page total as a float with a fraction", {"items": MANY, "pages": {"total": 4.5}}),
+    ("page total as a boolean", {"items": MANY, "pages": {"total": True}}),
+    ("page total as a list", {"items": MANY, "pages": {"total": [4]}}),
+    ("page total as an object", {"items": MANY, "pages": {"total": {"pages": 4}}}),
+    ("page total as not a number", {"items": MANY, "pages": {"total": float("nan")}}),
+    ("page total as an infinite float", {"items": MANY, "pages": {"total": float("inf")}}),
+    ("item total as text", {"items": UNMANAGED, "pages": {"items": "many"}}),
+    ("item total as a fraction", {"items": UNMANAGED, "pages": {"items": "2.5"}}),
+    ("item total as a boolean", {"items": UNMANAGED, "pages": {"items": True}}),
+    ("item total as a float above the items returned", {"items": UNMANAGED, "pages": {"items": 250.0}}),
+    ("item total as a decimal string above the items returned", {"items": UNMANAGED, "pages": {"items": "250.0"}}),
+    ("item total below the items returned as a float", {"items": UNMANAGED, "pages": {"total": 4.0, "items": 1.0}}),
+    ("page total as text, wrapped", {"response": {"items": MANY, "pages": {"total": "many"}}}),
+    ("page total as a decimal string, enveloped", enveloped({"items": MANY, "pages": {"total": "4.0"}})),
     ("a page that does not start at the beginning", {"items": UNMANAGED, "pages": {"fromKey": "cursor-abc", "size": "2"}}),
     ("a later page with no further cursor", {"items": UNMANAGED, "pages": {"fromKey": "cursor-abc", "nextKey": None}}),
     ("a later page with a numeric key", {"items": UNMANAGED, "pages": {"fromKey": 777}}),
@@ -114,6 +137,17 @@ COMPLETE_BODIES = [
     ("joined pages whose item total matches, enveloped", enveloped({"items": UNMANAGED, "pages": {"total": "2", "items": "2"}})),
     ("joined pages of 100 whose item total matches", {"items": MANY, "pages": {"total": "4", "items": "100"}}),
     ("page total of one, no size", {"items": UNMANAGED, "pages": {"total": "1"}}),
+    ("joined pages whose item total matches, as floats", {"items": UNMANAGED, "pages": {"total": 2.0, "items": 2.0}}),
+    ("joined pages whose item total matches, as decimal strings", {"items": UNMANAGED, "pages": {"total": "2.0", "items": "2.0"}}),
+    ("joined pages of 100 whose totals are floats", {"items": MANY, "pages": {"total": 4.0, "items": 100.0}}),
+    ("page total of one as a float", {"items": UNMANAGED, "pages": {"total": 1.0}}),
+    ("page total of one as a decimal string", {"items": UNMANAGED, "pages": {"total": "1.0"}}),
+    ("item total matches as a float", {"items": UNMANAGED, "pages": {"items": 2.0}}),
+    ("page total stringified none", {"items": UNMANAGED, "pages": {"total": "None"}}),
+    ("page total stringified null", {"items": UNMANAGED, "pages": {"total": "null"}}),
+    ("page total empty", {"items": UNMANAGED, "pages": {"total": ""}}),
+    ("page total null", {"items": UNMANAGED, "pages": {"total": None}}),
+    ("item total null", {"items": UNMANAGED, "pages": {"items": None}}),
     ("start key null", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": None}}),
     ("start key stringified none", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "None"}}),
     ("start key stringified null", {"items": UNMANAGED, "pages": {"size": "2", "fromKey": "null"}}),

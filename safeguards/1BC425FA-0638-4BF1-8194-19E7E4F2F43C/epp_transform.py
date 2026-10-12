@@ -124,13 +124,30 @@ def page_cursor(value):
 
 
 def page_int(value):
-    """An integer page field, or None. Stored replays stringify numbers."""
+    """A whole-number page field, or None. Stored replays stringify numbers: 4, 4.0, "4" and "4.0" are all 4."""
     if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
     try:
-        return int(str(value).strip())
+        number = float(str(value).strip())
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        whole = int(number)
+        if whole != number:
+            return None
+        return whole
     except Exception:
         return None
+
+
+def page_field_unreadable(value):
+    """True when a page total or item total is present but is not a whole number (null, an empty string and the stringified nulls are absent)."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "null"):
+        return False
+    return page_int(value) is None
 
 
 def marked_true(value):
@@ -145,7 +162,9 @@ def unread_pages(data, item_count):
     mean part of the fleet was not read. More than one page (pages.total above 1) is partial unless
     pages.items says how many items the whole list holds and that is exactly the number returned (a
     body whose pages were joined): a page total says nothing about how many items a page holds, so it
-    cannot show the list is whole, with or without a page size. Anything computed from the part
+    cannot show the list is whole, with or without a page size. A page total or item total that is present
+    but not a whole number ("many", "4.5", a boolean) shows nothing either, so it is partial too; 4.0 and "4.0"
+    are read as 4. Anything computed from the part
     that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
     seen, so it is not reported. A full first page with no cursor is not treated as partial: a
     complete read of a large fleet looks the same.
@@ -160,6 +179,8 @@ def unread_pages(data, item_count):
     if page_cursor(pages.get("nextKey")) is not None:
         return PARTIAL_REASON
     if page_cursor(pages.get("fromKey")) is not None:
+        return PARTIAL_REASON
+    if page_field_unreadable(pages.get("items")) or page_field_unreadable(pages.get("total")):
         return PARTIAL_REASON
     total_items = page_int(pages.get("items"))
     if total_items is not None and total_items > item_count:
