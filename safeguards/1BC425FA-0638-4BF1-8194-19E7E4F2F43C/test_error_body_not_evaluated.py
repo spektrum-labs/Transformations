@@ -219,10 +219,13 @@ def test_empty_error_fields_beside_a_real_list_do_not_block_a_read(name):
 
 @pytest.mark.parametrize("name", FILES)
 @pytest.mark.parametrize("flag", [True, False])
-def test_explicit_configured_flag_beside_a_complete_list_keeps_its_reading(name, flag):
-    out = run(name, {"items": [endpoint("e1", ["endpointProtection"])], FLAG_KEY[name]: flag})
-    assert out["transformedResponse"][FLAG_KEY[name]] is flag
-    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+def test_a_configured_flag_beside_a_complete_list_is_ignored(name, flag):
+    """The configured key is derived from the endpoint list alone, so a flag in the body changes nothing."""
+    items = [endpoint("e1", ["endpointProtection"])]
+    plain = run(name, {"items": items})
+    flagged = run(name, {"items": items, FLAG_KEY[name]: flag})
+    assert flagged["transformedResponse"] == plain["transformedResponse"]
+    assert flagged["additionalInfo"]["dataCollection"]["status"] == "success"
 
 
 def test_dark_fleet_of_stale_endpoints_still_reads_false():
