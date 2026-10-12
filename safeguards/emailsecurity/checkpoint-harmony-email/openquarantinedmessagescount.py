@@ -188,21 +188,26 @@ def transform_unmarked(input):
             total = len(records)
         summary = {"entitiesOnFirstPage": len(records), "recordsNumber": "" if total_unreadable else raw_total,
                    "entitiesNotMatchingFilter": stray, "windowDays": 365}
+        # every answer of None names its reason twice: as the failure reason and as the data-collection
+        # error, so the collection status is "error" (not evaluated) even before any wrapper runs
         if unreadable:
-            return create_response(None, fail_reasons=[str(unreadable) + (" entry" if unreadable == 1 else " entries") +
-                                   " in the response could not be read, so the count is unreadable"],
+            reason = (str(unreadable) + (" entry" if unreadable == 1 else " entries") +
+                      " in the response could not be read, so the count is unreadable")
+            return create_response(None, fail_reasons=[reason], api_errors=[reason],
                                    input_summary=dict(summary, unreadableEntries=unreadable))
         if stray:
-            return create_response(None, fail_reasons=[str(stray) + " returned entit(y/ies) are not pending restore "
-                                   "requests, so the vendor did not apply the filter; the count is unreadable"],
-                                   input_summary=summary)
+            reason = (str(stray) + " returned entit(y/ies) are not pending restore requests, so the vendor "
+                      "did not apply the filter; the count is unreadable")
+            return create_response(None, fail_reasons=[reason], api_errors=[reason], input_summary=summary)
         if total_unreadable:
-            return create_response(None, fail_reasons=["The vendor's record total could not be read, so whether the "
-                                   "page is complete is unknown; the count is unreadable"],
+            reason = ("The vendor's record total could not be read, so whether the page is complete is "
+                      "unknown; the count is unreadable")
+            return create_response(None, fail_reasons=[reason], api_errors=[reason],
                                    input_summary=dict(summary, recordsNumberUnreadable=True))
         if total is None or lower_bound:
-            return create_response(None, fail_reasons=["The response is paged and carries no recordsNumber above the "
-                                   "page; the count is unreadable"], input_summary=summary)
+            reason = ("The response is paged and carries no recordsNumber above the page; the count is "
+                      "unreadable")
+            return create_response(None, fail_reasons=[reason], api_errors=[reason], input_summary=summary)
         summary["pendingRestoreRequests"] = total
         if total == 0:
             return create_response(0, pass_reasons=["No quarantined message is awaiting a restore decision"],
