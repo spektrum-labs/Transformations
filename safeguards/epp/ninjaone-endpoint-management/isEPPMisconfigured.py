@@ -60,13 +60,17 @@ def http_error_status(code):
     """The HTTP status as a number when it is an error (400 or more), else None.
 
     A status sent as a string ("500", " 403 ") is an error exactly like the number. A boolean, an empty or
-    non-numeric string and anything below 400 are not an error status.
+    non-numeric string, a digit string longer than nine digits and anything below 400 are not an error status.
     """
     if isinstance(code, bool):
         return None
     if isinstance(code, str):
         code = code.strip()
-        code = int(code) if code.isdecimal() else None
+        # An HTTP status has three digits. A longer digit string is not a status (and int() of thousands of digits
+        # raises), so it is ignored rather than read.
+        if not code.isdecimal() or len(code) > 9:
+            return None
+        code = int(code)
     if isinstance(code, int) and code >= 400:
         return code
     return None
@@ -264,24 +268,36 @@ def transform_report(input):
     conflicting_count = 0
     missing_count = 0
     outdated_count = 0
+    unknown_status_count = 0
+    proven_issue_count = 0
 
     for device_id, records in devices.items():
         on_products = [r for r in records if r.get("productState") == "ON"]
-        outdated_on_products = [r for r in on_products if status_kind(r.get("definitionStatus")) != "up"]
+        outdated_on_products = [r for r in on_products if status_kind(r.get("definitionStatus")) == "out"]
+        unrecognised_on_products = [r for r in on_products if status_kind(r.get("definitionStatus")) is None]
 
         device_issue = False
+        proven_issue = False
         if len(on_products) > 1:
             conflicting_count = conflicting_count + 1
             device_issue = True
+            proven_issue = True
         if len(on_products) == 0:
             missing_count = missing_count + 1
             device_issue = True
         if len(outdated_on_products) > 0:
             outdated_count = outdated_count + 1
             device_issue = True
+            proven_issue = True
 
         if device_issue:
             misconfigured_device_ids.append(device_id)
+        elif len(unrecognised_on_products) > 0:
+            # Its active product reports a status that is neither Up-to-Date nor Out-of-Date (Unknown, empty, absent or
+            # unrecognised): this device is undetermined, not outdated and not healthy.
+            unknown_status_count = unknown_status_count + 1
+        if proven_issue:
+            proven_issue_count = proven_issue_count + 1
 
     total_devices = len(devices)
     misconfigured_count = len(misconfigured_device_ids)
@@ -293,12 +309,24 @@ def transform_report(input):
         "conflictingProductDevices": conflicting_count,
         "noActiveAVDevices": missing_count,
         "outdatedDefinitionDevices": outdated_count,
+        "unknownStatusDevices": unknown_status_count,
     }
+
+    if not is_misconfigured and unknown_status_count > 0:
+        # No device has a proven issue, but a device's active product did not say whether its definitions are current. A
+        # verdict that rests on it would be a guess, so this is not evaluated: missing is never a pass.
+        nothing = ("%d of %d devices have an active product whose definition status is neither Up-to-Date nor Out-of-Date "
+                   "(Unknown, empty or unrecognised), so whether they are misconfigured cannot be confirmed and this is not "
+                   "evaluated here." % (unknown_status_count, total_devices))
+        return create_response(result=dict(scope, isEPPMisconfigured=None, totalDevicesObserved=total_devices,
+                                           misconfiguredDevices=0, unknownStatusDevices=unknown_status_count),
+                               validation=validation, api_errors=[nothing], fail_reasons=[nothing],
+                               recommendations=["Verify that the antivirus products report a definition status to NinjaOne."])
 
     if is_misconfigured:
         sample_ids = misconfigured_device_ids[:5]
         fail_reasons = [
-            "Found %d of %d observed devices with an AV health condition: %d with no active (ON) AV product, %d with multiple conflicting ON AV products, and %d with an active product reporting definitionStatus != 'Up-to-Date'. Sample affected deviceIds: %s"
+            "Found %d of %d observed devices with an AV health condition: %d with no active (ON) AV product, %d with multiple conflicting ON AV products, and %d with an active product reporting definitionStatus 'Out-of-Date'. Sample affected deviceIds: %s"
             % (misconfigured_count, total_devices, missing_count, conflicting_count, outdated_count, sample_ids)
         ]
         pass_reasons = []
@@ -317,6 +345,8 @@ def transform_report(input):
         "isEPPMisconfigured": is_misconfigured,
         "totalDevicesObserved": total_devices,
         "misconfiguredDevices": misconfigured_count,
+        "provenIssueDevices": proven_issue_count,
+        "unknownStatusDevices": unknown_status_count,
     }
 
     return create_response(
@@ -335,11 +365,14 @@ def transform_report(input):
 
 
 ANSWER_KEY = "isEPPMisconfigured"
-AT_LEAST_KEY = "misconfiguredDevices"
+AT_LEAST_FROM = "provenIssueDevices"
+AT_LEAST_NAME = "misconfiguredDevicesAtLeast"
 
 
 def proven_by_a_seen_row(result):
-    return result.get(ANSWER_KEY) is True
+    # True is proven by two ON products on one device, or an ON product that reports Out-of-Date: an unread row cannot undo
+    # either. "No ON product" is not: the device's ON product can be on a page nobody read.
+    return result.get(ANSWER_KEY) is True and (result.get("provenIssueDevices") or 0) > 0
 
 
 def status_kind(value):
@@ -355,6 +388,8 @@ def status_kind(value):
 # A report that holds fewer rows than the vendor says exist is only part of the fleet. A verdict that rests on the ABSENCE
 # of a row (no Out-of-Date device, no device left off, no misconfigured device, no active product) is not proven by the
 # rows that were read, so it reads None. A verdict that a row which WAS read proves stays, with its counts left unknown.
+# The report holds one row per product per device and nothing says a device's rows sit together, so a negative about a
+# device (no active product, a product that is not ON) can be undone by a row on an unread page: it is not a proof.
 PARTIAL_REASON = ("The NinjaOne antivirus-status report is only part of the fleet (a cursor count or a next-page marker "
                   "shows rows that were not read), so a verdict that rests on the rows that were not seen is not proven "
                   "and this is not evaluated here.")
@@ -387,9 +422,10 @@ def marker_set(value):
 def shows_more_rows(body, received):
     """True when a body that carries rows says there are more rows than it holds.
 
-    A next-page marker or a more-pages flag that is set, a cursor.count above the rows received, a cursor that names
-    itself but gives no count (it cannot show the read is whole), or a cursor that is a set value. The live joined body
-    has "cursor": [] and no marker, which is a complete read.
+    A next-page marker or a more-pages flag that is set, a cursor.count (the total the query holds) above the rows
+    received, a cursor.offset above zero (the body starts after the first row), a cursor that names itself but gives no
+    count (it cannot show the read is whole), or a cursor that is a set value. The live joined body has "cursor": [] and
+    no marker, which is a complete read.
     """
     if not isinstance(body, dict):
         return False
@@ -400,6 +436,9 @@ def shows_more_rows(body, received):
     if isinstance(cursor, dict):
         count = count_of(cursor.get("count"))
         if count is not None and count > received:
+            return True
+        offset = count_of(cursor.get("offset"))
+        if offset is not None and offset > 0:
             return True
         if count is None and marker_set(cursor.get("name")):
             return True
@@ -423,14 +462,14 @@ def partial_answer(answer, validation):
     """The answer for a partial report: a verdict a seen row proves stays (counts unknown), any other verdict reads None."""
     result = answer["transformedResponse"]
     if proven_by_a_seen_row(result):
-        lower_bound = result.get(AT_LEAST_KEY) if AT_LEAST_KEY else None
+        lower_bound = result.get(AT_LEAST_FROM) if AT_LEAST_FROM else None
         for name in list(result.keys()):
             found = result.get(name)
             if name != ANSWER_KEY and isinstance(found, int) and not isinstance(found, bool):
                 result[name] = None
         result["partialRead"] = True
-        if AT_LEAST_KEY:
-            result[AT_LEAST_KEY + "AtLeast"] = lower_bound
+        if AT_LEAST_NAME:
+            result[AT_LEAST_NAME] = lower_bound
         answer["additionalInfo"]["evaluation"]["additionalFindings"] = [PARTIAL_NOTE]
         return answer
     return create_response(result={ANSWER_KEY: None, "partialRead": True}, validation=validation,
