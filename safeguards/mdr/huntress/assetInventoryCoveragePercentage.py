@@ -144,15 +144,29 @@ def complete_list(input, list_key, noun):
     return items, None
 
 
-def agent_windows(agents):
-    """(fresh, stale, undated) agents judged against the newest last_callback_at in the response."""
+def now_utc():
+    """Evaluation time as a naive UTC datetime (the same clock as evaluatedAt)."""
+    return datetime.utcnow()
+
+
+def newest_callback(agents):
+    """The newest parseable last_callback_at across every agent in the list, or None."""
+    times = [parse_time(a.get("last_callback_at")) for a in agents]
+    times = [t for t in times if t is not None]
+    return max(times) if times else None
+
+
+def agent_windows(agents, now=None):
+    """(fresh, stale, undated) agents judged against evaluation time, not against each other.
+
+    An agent is fresh when its last_callback_at is within STALE_DAYS of now. Judging against the
+    newest callback in the response would always call the newest agent fresh, so a fleet that
+    went dark months ago would still read as active.
+    """
+    now = now or now_utc()
     dated = [(a, parse_time(a.get("last_callback_at"))) for a in agents]
-    times = [t for a, t in dated if t is not None]
-    if not times:
-        return [], [], [a for a, t in dated]
-    newest = max(times)
-    fresh = [a for a, t in dated if t is not None and (newest - t).days <= STALE_DAYS]
-    stale = [a for a, t in dated if t is not None and (newest - t).days > STALE_DAYS]
+    fresh = [a for a, t in dated if t is not None and (now - t).days <= STALE_DAYS]
+    stale = [a for a, t in dated if t is not None and (now - t).days > STALE_DAYS]
     undated = [a for a, t in dated if t is None]
     return fresh, stale, undated
 
@@ -168,7 +182,7 @@ def transform(input):
     fresh, stale, undated = agent_windows(agents)
     value = pct(len(fresh), len(agents))
     text = (str(len(fresh)) + " of " + str(len(agents)) + " Huntress agents (" + str(value) + "%) called back within "
-            + str(STALE_DAYS) + " days of the newest callback.")
+            + str(STALE_DAYS) + " days of the evaluation time.")
     return create_response(
         result={key: value, "totalAgents": len(agents), "activeAgents": len(fresh), "staleAgents": len(stale) + len(undated)},
         validation=validation,
