@@ -17,11 +17,14 @@ a subfinder call that errors or times out is swallowed into an empty list (IS sr
 nuclei.py _run_asm_async_in_thread). A failed discovery therefore looks like totalDiscovered == 1 with only the
 seed in domainResults. The only positive evidence that discovery ran is a discovered host other than the seed.
 
-Fails closed (False, reason in dataCollection.errors and transformation.errors), matching the sibling
-knownExploitedVulnCount scan gate: a scan that did not complete (error envelope, rate-limited 429, timeout,
-template-list fallback), scanned zero hosts or zero templates, reports a failed host or an error, carries no
-findings list or a findings list shorter or longer than its own total (truncated), whose host counts disagree with
-its own domainResults, that discovered no host beyond the seed, or that carries no timestamp within the last 48 h.
+Fails closed, matching the sibling knownExploitedVulnCount scan gate, and never reports False for a scan that
+measured nothing. A scan that did not complete (error envelope, rate-limited 429, timeout, template-list
+fallback), scanned zero hosts or zero templates, reports a failed host or an error, carries no findings list or
+one shorter or longer than its own total, or whose host counts disagree with its own domainResults: None
+(Not evaluated), with the reason in dataCollection.errors and transformation.errors. So is an input that failed
+validation, and so is an exception inside the transform. A scan that completed with counts that agree is measured:
+False, with the same two places carrying the reason, when it discovered no host beyond the seed or has no timestamp
+within the last 48 h; otherwise True.
 A capped scan (more hosts discovered than the 25 nuclei scanned) still passes: the cap trims the nuclei step, not
 discovery, and totalDiscovered is the full subfinder count.
 """
@@ -101,9 +104,9 @@ def to_int(value):
 # "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
 # produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
 # asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
-# that is still running from a broken integration. Any asm_scan_ code means nothing was measured, so the
-# criterion stays None (Not evaluated), never False. A reply with any other reason keeps its answer and gains
-# the code; one with no reason, or a reason that is not a plain code, reads exactly as before.
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
 SCAN_REASON_MAX_LENGTH = 60
 SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 SCAN_REASON_TEXT = {
@@ -129,12 +132,6 @@ def scan_reason(data):
         if ch not in SCAN_REASON_CHARS:
             return None
     return reason
-
-
-def scan_not_measured(data):
-    """True when the Integration Service says no scan result exists (an asm_scan_ reason): nothing was measured."""
-    reason = scan_reason(data)
-    return reason is not None and reason.startswith("asm_scan_")
 
 
 def scan_status_problem(status, domain, reason):
@@ -189,8 +186,9 @@ def host_name(value):
     return str(value or "").strip().lower().rstrip(".")
 
 
-def discovery_problem(data):
-    """None when subfinder discovery of the passport domain demonstrably returned hosts; else the reason."""
+def discovery_shape_problem(data):
+    """None when the scan's own host counts and per-host results agree and name the passport domain; else the
+    reason. A scan whose counts cannot be trusted measured nothing about discovery."""
     seed = host_name(data.get("primaryDomain"))
     if not seed:
         return "Scan carries no primaryDomain, so it is not a subfinder discovery of the passport domain"
@@ -211,8 +209,16 @@ def discovery_problem(data):
     if (capped and discovered <= scanned) or (not capped and discovered != scanned):
         return ("Scan of " + seed + " is truncated or inconsistent: totalDiscovered " + str(discovered)
                 + " against " + str(scanned) + " scanned (domainsCapped " + str(capped) + ")")
-    beyond_seed = [h for h in hosts if h != seed]
-    if not beyond_seed or discovered < 2:
+    return None
+
+
+def no_discovery_problem(data):
+    """None when subfinder discovered at least one host beyond the seed domain; else the reason. Only called on
+    a scan that passed scan_problem and discovery_shape_problem, so it completed and its counts agree."""
+    seed = host_name(data.get("primaryDomain"))
+    hosts = [host_name(r.get("domain")) for r in data.get("domainResults")]
+    discovered = to_int(data.get("totalDiscovered"))
+    if not [h for h in hosts if h != seed] or discovered < 2:
         return ("Subfinder discovered no host beyond the seed domain " + seed
                 + " (discovery failed, timed out or found nothing)")
     return None
@@ -247,18 +253,23 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={CRITERIA_KEY: False}, validation=validation,
-                                   transformation_errors=["Input validation failed"],
-                                   fail_reasons=["Input validation failed"])
+            reason = "Input validation failed: the scan response did not match its schema, so discovery is unknown"
+            return create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
+                                   transformation_errors=[reason], fail_reasons=[reason])
         domain = (data.get("primaryDomain") or data.get("domain") or "unknown") if isinstance(data, dict) else "unknown"
         summary = {"domain": domain,
                    "domainsScanned": to_int(data.get("domainsScanned")) if isinstance(data, dict) else None,
                    "totalDiscovered": to_int(data.get("totalDiscovered")) if isinstance(data, dict) else None,
                    "templatesScanned": to_int(data.get("templatesScanned")) if isinstance(data, dict) else None}
-        problem = scan_problem(data) or discovery_problem(data)
-        if problem:
-            return failed(problem, validation, summary, scan_reason(data),
-                          None if scan_not_measured(data) else False)
+        # A scan that did not complete, or whose own counts disagree, measured nothing about discovery: None.
+        # One that completed with consistent counts is measured: False when it shows no host beyond the seed
+        # or is not from this evaluation (no parseable timestamp, or older than MAX_SCAN_AGE_HOURS), else True.
+        unmeasured = scan_problem(data) or discovery_shape_problem(data)
+        if unmeasured:
+            return failed(unmeasured, validation, summary, scan_reason(data), None)
+        no_discovery = no_discovery_problem(data)
+        if no_discovery:
+            return failed(no_discovery, validation, summary)
         age = scan_age_hours(data)
         if age is None:
             return failed("Scan of " + str(domain) + " carries no parseable timestamp", validation, summary)
@@ -280,6 +291,7 @@ def transform(input):
         return create_response(result=result, validation=validation, pass_reasons=reasons,
                                additional_findings=notes, input_summary=summary)
     except Exception as e:
-        return create_response(result={CRITERIA_KEY: False},
+        reason = "Transformation error, so discovery is unknown: " + str(e)
+        return create_response(result={CRITERIA_KEY: None},
                                validation={"status": "error", "errors": [], "warnings": []},
-                               transformation_errors=[str(e)], fail_reasons=["Transformation error: " + str(e)])
+                               api_errors=[reason], transformation_errors=[str(e)], fail_reasons=[reason])

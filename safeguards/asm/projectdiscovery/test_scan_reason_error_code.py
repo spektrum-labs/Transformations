@@ -8,7 +8,9 @@ asm_scan_max_duration_exceeded. Every Project Discovery check used to reduce tha
 error" and drop the reason, so a scan that was simply still running read like a broken integration.
 
 Each transform must now:
-  * leave the criterion as None (Not evaluated), never False, for a reason in the asm_scan_ family;
+  * leave the criterion as None (Not evaluated), never False, whenever dataCollection carries an error: any
+    reason, no reason, a malformed reason, an input that failed validation, a scan with zero or failed hosts,
+    and an exception inside the transform;
   * report dataCollection.status "error" with the reason as dataCollection.errorCode, so a reader can tell
     "still running" from "failed";
   * pass any other reason through as errorCode too, sanitised (lower-case letters, digits and underscores,
@@ -25,7 +27,6 @@ import pytest
 
 HERE = Path(__file__).parent
 
-# file name -> True when a reason in the asm_scan_ family must leave the key None, which every file now does.
 FILES = [
     "nuclei_transform.py",
     "criticalvulnerabilitycount.py",
@@ -95,10 +96,11 @@ def test_the_reason_is_read_in_any_letter_case(name):
 
 
 @pytest.mark.parametrize("name", FILES)
-def test_another_reason_is_passed_through_and_never_passes(name):
+def test_another_reason_is_passed_through_and_is_not_evaluated(name):
     values, info = run(name, reply("upstream_unavailable"))
+    assert values, name
     for key, value in values.items():
-        assert value in (None, False), (name, key, value)
+        assert value is None, (name, key, value)
     dc = collection(info)
     assert dc["status"] == "error", name
     assert dc["errorCode"] == "upstream_unavailable", (name, dc)
@@ -108,8 +110,9 @@ def test_another_reason_is_passed_through_and_never_passes(name):
 @pytest.mark.parametrize("name", FILES)
 def test_an_error_reply_with_no_reason_reads_as_before(name):
     values, info = run(name, reply(None, message="No host was scanned: of 2 domain(s), 2 unresponsive"))
+    assert values, name
     for key, value in values.items():
-        assert value in (None, False), (name, key, value)
+        assert value is None, (name, key, value)
     dc = collection(info)
     assert dc["status"] == "error", name
     assert dc["errors"][0].startswith(GENERIC), (name, dc["errors"])
@@ -133,8 +136,9 @@ def test_an_error_reply_with_no_reason_reads_as_before(name):
 ])
 def test_a_reason_that_is_not_a_plain_code_is_dropped(name, reason):
     values, info = run(name, {"status": "error", "reason": reason, "message": "synthetic"})
+    assert values, name
     for key, value in values.items():
-        assert value in (None, False), (name, key, value)
+        assert value is None, (name, key, value)
     dc = collection(info)
     assert dc["status"] == "error", name
     assert "errorCode" not in dc, (name, reason, dc)
@@ -204,3 +208,142 @@ def test_nuclei_transform_scan_in_progress_leaves_both_keys_none():
     values, info = run("nuclei_transform.py", reply("asm_scan_in_progress"))
     assert values == {"noCriticalFindings": None, "noHighFindings": None}
     assert collection(info)["errorCode"] == "asm_scan_in_progress"
+
+
+# -- every error path is None with api_errors, never False --------------------------------------------------
+
+
+class Poisoned(dict):
+    """A non-empty object whose reads raise: it drives a transform down its except path."""
+
+    def __init__(self):
+        super().__init__(poisoned=True)
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("poisoned read")
+
+    def __getitem__(self, key):
+        raise RuntimeError("poisoned read")
+
+
+def assert_not_evaluated(name, values, info, where):
+    assert values, (name, where)
+    for key, value in values.items():
+        assert value is None, (name, where, key, value)
+    dc = collection(info)
+    assert dc["status"] == "error", (name, where)
+    assert dc["errors"], (name, where)
+
+
+@pytest.mark.parametrize("name", FILES)
+def test_input_that_failed_validation_is_none_with_an_error(name):
+    body = {"data": success_body(), "validation": {"status": "failed", "errors": ["synthetic"], "warnings": []}}
+    values, info = run(name, body)
+    assert_not_evaluated(name, values, info, "validation failed")
+
+
+@pytest.mark.parametrize("name", FILES)
+def test_an_exception_inside_the_transform_is_none_with_an_error(name):
+    values, info = run(name, Poisoned())
+    assert_not_evaluated(name, values, info, "exception")
+    assert info["transformation"]["status"] == "error", name
+
+
+NOT_A_SCAN = [[], "[]", "null", {}, {"status": "success"}, {"status": ["error"]}]
+# A bare {"status": "success"} carries no counts at all; nuclei_transform has always read that as a scan with
+# no findings (it only doubts a scan whose own counts say it scanned nothing), and that is not changed here.
+NOT_A_SCAN_CASES = [(name, body) for name in FILES for body in NOT_A_SCAN
+                    if not (name == "nuclei_transform.py" and body == {"status": "success"})]
+
+
+@pytest.mark.parametrize("name,body", NOT_A_SCAN_CASES)
+def test_a_body_that_is_not_a_scan_is_none_with_an_error(name, body):
+    values, info = run(name, body)
+    assert_not_evaluated(name, values, info, repr(body))
+
+
+def test_nuclei_zero_hosts_scanned_is_none():
+    values, info = run("nuclei_transform.py", {**success_body(), "domainsScanned": "0", "domainResults": []})
+    assert values == {"noCriticalFindings": None, "noHighFindings": None}
+    assert collection(info)["status"] == "error"
+
+
+def test_nuclei_a_failed_host_is_none():
+    results = [{"domain": "example.com", "findingsCount": 0, "status": "success"},
+               {"domain": "www.example.com", "findingsCount": 0, "status": "error"}]
+    values, info = run("nuclei_transform.py", {**success_body(), "domainResults": results})
+    assert values == {"noCriticalFindings": None, "noHighFindings": None}
+    assert collection(info)["status"] == "error"
+
+
+def test_nuclei_a_scan_error_entry_is_none():
+    values, info = run("nuclei_transform.py", {**success_body(), "errors": [{"domain": "example.com", "error": "x"}]})
+    assert values == {"noCriticalFindings": None, "noHighFindings": None}
+    assert collection(info)["status"] == "error"
+
+
+def test_nuclei_findings_still_fail_and_a_clean_scan_still_passes():
+    clean, clean_info = run("nuclei_transform.py", success_body())
+    assert clean["noCriticalFindings"] is True and clean["noHighFindings"] is True
+    assert collection(clean_info)["status"] == "success"
+    found, found_info = run("nuclei_transform.py", {**success_body(), "total": "1", "findings": [
+        {"info": {"severity": "critical", "name": "Synthetic finding"}, "matched-at": "https://example.com/x"}]})
+    assert found["noCriticalFindings"] is False
+    assert found["noHighFindings"] is True
+    assert collection(found_info)["status"] == "success"
+
+
+def stamp(hours_ago):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+DISCOVERY = "iscontinuousdiscoveryenabled_scan.py"
+
+
+def discovery_body(**overrides):
+    # a completed scan that did discover a host beyond the seed
+    return {**success_body(), **overrides}
+
+
+def test_discovery_a_stale_completed_scan_stays_a_false_with_its_reason():
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(200)))
+    assert values == {"isContinuousDiscoveryEnabled": False}
+    assert collection(info)["errors"]
+
+
+def test_discovery_a_completed_scan_with_no_timestamp_stays_a_false_with_its_reason():
+    body = discovery_body()
+    del body["timestamp"]
+    values, info = run(DISCOVERY, body)
+    assert values == {"isContinuousDiscoveryEnabled": False}
+    assert collection(info)["errors"]
+
+
+def test_discovery_a_completed_scan_that_found_nothing_beyond_the_seed_stays_a_false():
+    values, _ = run(DISCOVERY, discovery_body(
+        domainsScanned="1", totalDiscovered="1",
+        domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"}]))
+    assert values == {"isContinuousDiscoveryEnabled": False}
+
+
+@pytest.mark.parametrize("overrides", [
+    {"status": "error"},
+    {"status": "error", "reason": "asm_scan_in_progress"},
+    {"status": "error", "reason": "upstream_unavailable"},
+    {"status": "error", "reason": "<script>"},
+    {"status": "success", "domainsScanned": "0"},
+    {"status": "success", "templatesScanned": "0"},
+    {"status": "success", "errors": [{"domain": "example.com", "error": "x"}]},
+])
+def test_discovery_a_scan_that_did_not_complete_is_none_even_when_stale_or_untimed(overrides):
+    for extra in ({}, {"timestamp": stamp(200)}, {"timestamp": ""}):
+        values, info = run(DISCOVERY, discovery_body(**overrides, **extra))
+        assert values == {"isContinuousDiscoveryEnabled": None}, (overrides, extra, values)
+        assert collection(info)["status"] == "error"
+
+
+def test_discovery_a_fresh_complete_scan_still_passes():
+    values, info = run(DISCOVERY, discovery_body(timestamp=stamp(1)))
+    assert values["isContinuousDiscoveryEnabled"] is True
+    assert collection(info)["status"] == "success"
