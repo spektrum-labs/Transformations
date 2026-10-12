@@ -797,3 +797,29 @@ def test_a_missing_or_blank_match_field_is_a_readable_non_match(name, empty):
         assert_measured(out, expected)
     gone = {k: v for k, v in ev().items() if k != field}
     assert_measured(run(name, envelope([gone])), expected)
+
+
+# --- openQuarantinedMessagesCount: every None return reports the error itself --------------------------
+
+# The four paths that answer None. Each one must set dataCollection.status "error" with the reason in
+# dataCollection.errors from the inner function too, not only through the public wrapper.
+QUARANTINE_NONE_PATHS = [
+    ("unreadable entry", lambda: envelope([pending(), "garbled"])),
+    ("stray entity", lambda: envelope([pending(isRestored="true")])),
+    ("unreadable total", lambda: raw_total_body([pending()], "many")),
+    ("paged, total not above the page", lambda: envelope([pending()], scroll="tok", total=1)),
+    ("paged, no total", lambda: {"responseEnvelope": {"scrollId": "tok"}, "responseData": [pending()]}),
+]
+
+
+@pytest.mark.parametrize("entry", ["transform_unmarked", "transform"])
+@pytest.mark.parametrize("label,make", QUARANTINE_NONE_PATHS, ids=[p[0] for p in QUARANTINE_NONE_PATHS])
+def test_open_quarantined_none_return_sets_the_data_collection_error(entry, label, make):
+    out = getattr(load(QUARANTINE), entry)(make())
+    assert value(out) is None
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert collection["errors"]
+    assert all(isinstance(e, str) and e for e in collection["errors"])
+    assert collection["errors"] == out["additionalInfo"]["evaluation"]["failReasons"]
+    assert SENTINEL not in json.dumps(out)
