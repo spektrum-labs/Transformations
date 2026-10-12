@@ -1,5 +1,5 @@
 """ThreatDown isEPPEnabled / requiredCoveragePercentage (from getEndpoints, in isrealtimeprotectionenabled.py)
-and isEPPLoggingEnabled (from getEvents). Shapes follow the Nebula OpenAPI and the live Trebron read of
+and isEPPLoggingEnabled (from getEvents). Shapes follow the Nebula OpenAPI and a live read of
 2026-09-28 (2 judged endpoints, both Protected)."""
 import copy
 import importlib.util
