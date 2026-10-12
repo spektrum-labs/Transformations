@@ -5,9 +5,9 @@
   "definition": "The number of currently open vulnerabilities the scanner places in its high EPSS (exploit prediction) bucket across the in-scope assets; 0 only from a complete read.",
   "valueType": "integer",
   "unit": "count",
-  "population": "every non-deprecated asset the scanner lists, across every company the API user can see; the value is the sum over that population",
+  "population": "every non-deprecated asset the scanner lists for one company (the passport's); a read whose rows span more than one company_id, or a row with none, is not measured; the value is the sum over that population",
   "polarity": "lower_is_better",
-  "evidenceRequiredForTrue": "A complete read (every page, no truncation flag, row total reached) of every active asset, each reporting an integer count; zero only when every active asset reports zero.",
+  "evidenceRequiredForTrue": "A complete read (every page, no truncation flag, row total reached) of every active asset of one company, each reporting an integer count; zero only when every active asset reports zero.",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,
