@@ -74,6 +74,7 @@ def test_fail_closed(key, body):
 def test_groups():
     assert run("isBackupEnabled", GROUPS) is True
     assert run("isBackupEnabled", {"protectionGroups": [group(0, status="Failed"), group(1, isPaused=True)]}) is False
+    assert run("isBackupEnabled", {"protectionGroups": [group(0, isPaused=True), group(1, isActive=False)]}) is False
     assert run("isBackupEnabled", {"response": json.loads(json.dumps(GROUPS))}) is True
     assert run("failedBackupJobsCount", GROUPS) == 1
     assert run("failedBackupJobsCount", {"protectionGroups": [group(0), group(1)]}) == 0
@@ -87,6 +88,13 @@ def test_groups():
     assert run("staleProtectionJobsCount", GROUPS) == 1
     assert run("staleProtectionJobsCount", {"protectionGroups": [group(0), group(1, age_days=9)]}) == 1
     assert run("staleProtectionJobsCount", {"protectionGroups": [group(0), group(1, isDeleted=True, status="Failed")]}) == 0
+    # Helios returned the groups with no last-run record on any of them (seen at a live tenant, 64 groups): that proves
+    # nothing, so both checks are not measured. One group missing a record among groups that have one is still stale.
+    bare = {"protectionGroups": [{"id": "1:2:%d" % i, "name": "pg%d" % i, "policyId": "p1", "environment": "kVMware", "sla": None} for i in range(3)]}
+    assert run("isBackupEnabled", bare) is None
+    assert run("staleProtectionJobsCount", bare) is None
+    assert run("staleProtectionJobsCount", {"protectionGroups": [group(0), {"name": "x", "isActive": True}]}) == 1
+    assert run("isBackupEnabled", {"protectionGroups": [group(0), {"name": "x", "isActive": True}]}) is True
 
 
 def test_policies():

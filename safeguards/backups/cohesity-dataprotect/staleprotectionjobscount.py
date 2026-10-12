@@ -96,6 +96,10 @@ def transform_unmarked(input):
             return {key: None, "reason": problem}
         if not live:
             return {key: None, "reason": "No active protection group"}
+        if all([last_backup(g) is None for g in live]):
+            # No group carries a last-run record at all: the list did not carry run data, so nothing can be
+            # called stale. A group missing a record while others have one still counts as stale below.
+            return {key: None, "reason": "Helios returned no last-run record for any protection group, so staleness could not be read"}
         now_us = int(datetime.now(timezone.utc).timestamp() * 1000000)
         limit = now_us - 7 * 24 * 3600 * 1000000
         stale = []
