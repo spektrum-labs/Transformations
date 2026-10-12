@@ -1,10 +1,10 @@
-"""NinjaOne isSignatureUpToDate: a pass needs at least one device that reports Up-to-Date.
+"""NinjaOne isSignatureUpToDate: a pass needs every judged device to report Up-to-Date.
 
 The check reads the definitionStatus each antivirus product reports. "Out-of-Date" fails it. "Up-to-Date" is the only
 status that shows signatures are current. A product that reports "Unknown" (or any other status that is not one of those
-two) has not said its signatures are current, so a fleet where every reporting device says Unknown shows nothing: the check
-reads None (Not evaluated, with a data-collection error), never True. One Up-to-Date device still passes beside Unknown
-ones, and an Out-of-Date device still fails whatever else reports. Synthetic data only."""
+two) has not said its signatures are current, so missing is never a pass: Up-to-Date mixed with Unknown and no Out-of-Date
+reads None (Not evaluated, with a data-collection error), and so does a fleet where every reporting device says Unknown.
+An Out-of-Date device still fails whatever else reports, because a row that was read proves it. Synthetic data only."""
 import importlib.util
 import pathlib
 import time
@@ -53,10 +53,12 @@ class TestEveryReportingDeviceWithoutAKnownStatus:
         assert out["transformedResponse"]["unknownStatusCount"] == 7
         assert out["transformedResponse"]["upToDateCount"] == 0
 
-    def test_an_up_to_date_device_beside_them_is_a_pass(self, status):
+    def test_an_up_to_date_device_beside_them_is_not_a_pass(self, status):
         out = run({"results": [row(1, status), row(2, "Up-to-Date")]})
-        assert value(out) is True
-        assert not not_evaluated(out)
+        assert value(out) is None
+        assert not_evaluated(out)
+        assert out["transformedResponse"]["unknownStatusCount"] == 1
+        assert out["transformedResponse"]["upToDateCount"] == 1
 
     def test_an_out_of_date_device_beside_them_is_a_proven_fail(self, status):
         out = run({"results": [row(1, status), row(2, "Out-of-Date")]})
@@ -75,11 +77,17 @@ class TestUnchangedAnswers:
         assert value(out) is False
         assert not not_evaluated(out)
 
-    def test_one_up_to_date_and_unknowns_passes_and_counts_the_unknowns(self):
+    def test_one_up_to_date_and_unknowns_is_not_evaluated_and_counts_the_unknowns(self):
         out = run({"results": [row(1, "Up-to-Date"), row(2, "Unknown"), row(3, "Unknown")]})
-        assert value(out) is True
+        assert value(out) is None
+        assert not_evaluated(out)
         assert out["transformedResponse"]["upToDateCount"] == 1
         assert out["transformedResponse"]["unknownStatusCount"] == 2
+
+    def test_an_out_of_date_device_still_fails_beside_unknown_and_up_to_date_ones(self):
+        out = run({"results": [row(1, "Up-to-Date"), row(2, "Unknown"), row(3, "Out-of-Date")]})
+        assert value(out) is False
+        assert not not_evaluated(out)
 
     def test_the_not_evaluated_reason_says_nothing_confirmed_the_signatures_are_current(self):
         out = run({"results": [row(1, "Unknown")]})

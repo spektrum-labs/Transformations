@@ -10,7 +10,16 @@ Partial reads. A report whose cursor.count is above the rows received, a cursor 
 next-page marker or a truncation flag is only part of the fleet. A verdict that rests on the absence of a row (no
 Out-of-Date device, no device left off, no misconfigured device, no active product) is then None with a data-collection
 error. A verdict proven by a row that WAS read stays (an Out-of-Date row keeps isSignatureUpToDate False; an active
-product keeps isEPPDeployed True), with its counts left unknown. The live "cursor": [] is a complete read. Synthetic data."""
+product keeps isEPPDeployed True), with its counts left unknown. The live "cursor": [] is a complete read.
+
+Per device. The report holds one row per product per device and nothing says a device's rows sit together, so a negative
+about a device (no active product, a product that is not ON) can be undone by a row on an unread page. On a partial read
+isEPPEnabled False and the "no active product" case of isEPPMisconfigured therefore read None; a conflicting pair of ON
+rows or an ON product that reports Out-of-Date is proven by the rows that were read and stays True.
+
+A status that is neither Up-to-Date nor Out-of-Date (Unknown, empty, "Current") is unknown, not out of date: on
+isEPPMisconfigured an unrecognised status on an ON product leaves that device undetermined, and a verdict that rests on it
+reads None. Synthetic data."""
 import importlib.util
 import pathlib
 import time
@@ -95,25 +104,59 @@ class TestUpToDateAnyWayItIsSpelled:
         assert value(MIS, out) is False
 
     @pytest.mark.parametrize("word", ["Unknown", "Outdated", "Up-to-Date-ish", "Out-of-Date soon", "Current", ""])
-    def test_any_other_status_stays_unknown_on_the_signature_check(self, word):
+    def test_any_other_status_beside_an_up_to_date_device_is_not_a_pass_on_the_signature_check(self, word):
         out = run(SIG, {"results": [row(1), row(2, status=word or "N/A")]})
-        assert value(SIG, out) is True
+        assert value(SIG, out) is None
+        assert not_evaluated(out)
         assert out["transformedResponse"]["unknownStatusCount"] == 1
         assert out["transformedResponse"]["upToDateCount"] == 1
 
-    @pytest.mark.parametrize("word", ["Unknown", "Outdated", "Current"])
-    def test_any_other_status_is_still_an_outdated_definition_on_the_misconfigured_check(self, word):
-        assert value(MIS, run(MIS, {"results": [row(1, status=word)]})) is True
+    @pytest.mark.parametrize("word", ["Unknown", "Outdated", "Current", "", "N/A"])
+    def test_an_unrecognised_status_on_an_active_product_is_undetermined_not_outdated_on_the_misconfigured_check(self, word):
+        out = run(MIS, {"results": [row(1, status=word)]})
+        assert value(MIS, out) is None
+        assert not_evaluated(out)
+        assert out["transformedResponse"]["unknownStatusDevices"] == 1
+
+    def test_an_active_product_with_no_definition_status_at_all_is_undetermined_on_the_misconfigured_check(self):
+        silent = {"deviceId": 1, "productName": "Defender", "productState": "ON", "timestamp": NOW}
+        out = run(MIS, {"results": [silent]})
+        assert value(MIS, out) is None
+        assert not_evaluated(out)
+
+    def test_an_unrecognised_status_beside_up_to_date_devices_is_not_a_pass_on_the_misconfigured_check(self):
+        out = run(MIS, {"results": [row(1), row(2, status="Unknown"), row(3)]})
+        assert value(MIS, out) is None
+        assert not_evaluated(out)
+
+    def test_an_unrecognised_status_beside_a_proven_issue_does_not_hide_it(self):
+        out = run(MIS, {"results": [row(1, status="Unknown"), row(2, status="Out-of-Date"), row(3, state="OFF")]})
+        assert value(MIS, out) is True
+        assert out["transformedResponse"]["misconfiguredDevices"] == 2
+        assert out["transformedResponse"]["unknownStatusDevices"] == 1
+        assert not not_evaluated(out)
+
+    def test_a_device_with_no_active_product_beside_an_unrecognised_status_is_still_misconfigured(self):
+        out = run(MIS, {"results": [row(1, status="Unknown"), row(2, state="OFF")]})
+        assert value(MIS, out) is True
+        assert not not_evaluated(out)
+
+    def test_two_active_products_are_a_conflict_whatever_their_status(self):
+        out = run(MIS, {"results": [row(1, status="Unknown"), row(1, status="Unknown", product="Other AV")]})
+        assert value(MIS, out) is True
+        assert not not_evaluated(out)
 
 
 # Per check: (rows, answer) for a verdict that rests on the absence of a row, and (rows, answer) for a verdict a row proves.
+# isEPPEnabled has no verdict a row proves: its False says some device has no ON product, and an unread row can be that ON product.
 BENIGN_AND_PROVEN = {
     SIG: ([row(1), row(2)], True, [row(1), row(2, status="Out-of-Date")], False),
     DEP: ([row(1, state="OFF"), row(2, state="OFF")], False, [row(1, state="OFF"), row(2)], True),
-    ENA: ([row(1), row(2)], True, [row(1), row(2, state="OFF")], False),
+    ENA: ([row(1), row(2)], True, [row(1), row(2, state="OFF")], None),
     EDR: ([row(1, product="Defender"), row(2, product="Defender")], False, [row(1, product=EDR_PRODUCT), row(2)], True),
-    MIS: ([row(1), row(2)], False, [row(1), row(2, state="OFF")], True),
+    MIS: ([row(1), row(2)], False, [row(1), row(2, status="Out-of-Date")], True),
 }
+PROVABLE = [SIG, DEP, EDR, MIS]
 MARKERS = [
     ("cursor count above the rows", {"cursor": cursor(40)}),
     ("cursor count as text above the rows", {"cursor": cursor("40")}),
@@ -148,6 +191,10 @@ class TestAPartialReport:
     def test_a_verdict_a_seen_row_proves_stays_with_its_counts_unknown(self, name, label, marker):
         _rows, _answer, rows, proof = BENIGN_AND_PROVEN[name]
         out = run(name, dict({"results": rows}, **marker))
+        if proof is None:
+            assert value(name, out) is None
+            assert not_evaluated(out)
+            return
         assert value(name, out) is proof
         assert out["transformedResponse"]["partialRead"] is True
         for key, found in out["transformedResponse"].items():
@@ -195,3 +242,119 @@ class TestSignatureProofSurvivesAPartialRead:
         out = run(SIG, {"results": [row(1, status="Unknown")], "cursor": {"name": "c1"}})
         assert value(SIG, out) is None
         assert not_evaluated(out)
+
+
+class TestAPerDeviceNegativeIsNotProvenByAPartialRead:
+    """The report holds one row per product per device, so the product that makes a seen device protected can be on a page
+    nobody read. A negative about a device is None on a partial read; a positive a seen row proves stays."""
+    PARTIAL = {"cursor": cursor(500)}
+
+    def test_enabled_false_on_a_partial_read_is_none(self):
+        out = run(ENA, dict({"results": [row(1), row(2, state="OFF")]}, **self.PARTIAL))
+        assert value(ENA, out) is None
+        assert not_evaluated(out)
+
+    def test_enabled_true_on_a_partial_read_is_none(self):
+        out = run(ENA, dict({"results": [row(1), row(2)]}, **self.PARTIAL))
+        assert value(ENA, out) is None
+        assert not_evaluated(out)
+
+    def test_enabled_false_on_a_complete_read_is_unchanged(self):
+        out = run(ENA, {"results": [row(1), row(2, state="OFF")], "cursor": []})
+        assert value(ENA, out) is False
+        assert not not_evaluated(out)
+
+    def test_no_active_product_alone_is_none_on_a_partial_read(self):
+        out = run(MIS, dict({"results": [row(1), row(2, state="OFF")]}, **self.PARTIAL))
+        assert value(MIS, out) is None
+        assert not_evaluated(out)
+
+    def test_no_active_product_is_still_misconfigured_on_a_complete_read(self):
+        out = run(MIS, {"results": [row(1), row(2, state="OFF")], "cursor": []})
+        assert value(MIS, out) is True
+        assert out["transformedResponse"]["misconfiguredDevices"] == 1
+
+    def test_a_conflict_of_two_on_products_is_proven_on_a_partial_read(self):
+        rows = [row(1), row(1, product="Other AV"), row(2, state="OFF")]
+        out = run(MIS, dict({"results": rows}, **self.PARTIAL))
+        assert value(MIS, out) is True
+        result = out["transformedResponse"]
+        assert result["partialRead"] is True
+        assert result["misconfiguredDevices"] is None
+        assert result["misconfiguredDevicesAtLeast"] == 1
+        assert not not_evaluated(out)
+
+    def test_an_out_of_date_active_product_is_proven_on_a_partial_read(self):
+        out = run(MIS, dict({"results": [row(1, status="Out-of-Date"), row(2), row(3, state="OFF")]}, **self.PARTIAL))
+        assert value(MIS, out) is True
+        assert out["transformedResponse"]["misconfiguredDevicesAtLeast"] == 1
+        assert not not_evaluated(out)
+
+    def test_the_floor_counts_each_proven_device_once(self):
+        rows = [row(1, status="Out-of-Date"), row(1, product="Other AV", status="Out-of-Date"), row(2, status="Out-of-Date"),
+                row(3, state="OFF"), row(4, status="Unknown")]
+        out = run(MIS, dict({"results": rows}, **self.PARTIAL))
+        assert value(MIS, out) is True
+        assert out["transformedResponse"]["misconfiguredDevicesAtLeast"] == 2
+
+    def test_an_unrecognised_status_alone_on_a_partial_read_is_none(self):
+        out = run(MIS, dict({"results": [row(1, status="Unknown")]}, **self.PARTIAL))
+        assert value(MIS, out) is None
+        assert not_evaluated(out)
+
+
+class TestUpToDateNeedsEveryJudgedDeviceToSayIt:
+    """Missing is never a pass: a device that is judged but reports no definition status cannot show its signatures are
+    current, so Up-to-Date beside it is not a pass. An Out-of-Date row still fails, whatever else is silent."""
+
+    @staticmethod
+    def silent(did, product="Defender"):
+        return {"deviceId": did, "productName": product, "productState": "ON", "timestamp": NOW}
+
+    def test_all_up_to_date_with_a_silent_device_is_none(self):
+        out = run(SIG, {"results": [row(1), row(2), self.silent(3)]})
+        assert value(SIG, out) is None
+        assert not_evaluated(out)
+        assert out["transformedResponse"]["devicesWithNoDefinitionStatus"] == 1
+
+    def test_a_silent_device_with_a_status_on_another_row_is_not_silent(self):
+        out = run(SIG, {"results": [row(1), self.silent(1, "Other AV"), row(2)]})
+        assert value(SIG, out) is True
+        assert not not_evaluated(out)
+
+    def test_a_device_with_no_product_at_all_is_not_a_silent_device(self):
+        nothing = {"deviceId": 3, "productName": "NONE", "timestamp": NOW}
+        out = run(SIG, {"results": [row(1), row(2), nothing]})
+        assert value(SIG, out) is True
+        assert not not_evaluated(out)
+
+    def test_an_out_of_date_row_fails_beside_silent_and_unknown_devices(self):
+        out = run(SIG, {"results": [row(1, status="Out-of-Date"), self.silent(2), row(3, status="Unknown")]})
+        assert value(SIG, out) is False
+        assert not not_evaluated(out)
+
+    def test_all_up_to_date_is_still_a_pass(self):
+        out = run(SIG, {"results": [row(1), row(2), row(3)]})
+        assert value(SIG, out) is True
+        assert not not_evaluated(out)
+
+
+@pytest.mark.parametrize("name", ALL)
+class TestACursorOffsetAboveZeroIsPartial:
+    @pytest.mark.parametrize("offset", [50, "50", 1])
+    def test_a_body_that_starts_after_the_first_row_is_partial(self, name, offset):
+        _benign, _answer, rows, proof = BENIGN_AND_PROVEN[name]
+        out = run(name, {"results": rows, "cursor": {"name": "c1", "offset": offset, "count": 2, "expires": 0}})
+        if proof is None:
+            assert value(name, out) is None
+            assert not_evaluated(out)
+        else:
+            assert value(name, out) is proof
+            assert out["transformedResponse"]["partialRead"] is True
+
+    @pytest.mark.parametrize("offset", [0, "0", None, "", "n/a"])
+    def test_an_offset_of_zero_or_unreadable_is_not_a_partial_signal_on_its_own(self, name, offset):
+        rows, answer, _proof_rows, _proof = BENIGN_AND_PROVEN[name]
+        out = run(name, {"results": rows, "cursor": {"name": "c1", "offset": offset, "count": 2, "expires": 0}})
+        assert value(name, out) is answer
+        assert "partialRead" not in out["transformedResponse"]

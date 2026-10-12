@@ -60,13 +60,17 @@ def http_error_status(code):
     """The HTTP status as a number when it is an error (400 or more), else None.
 
     A status sent as a string ("500", " 403 ") is an error exactly like the number. A boolean, an empty or
-    non-numeric string and anything below 400 are not an error status.
+    non-numeric string, a digit string longer than nine digits and anything below 400 are not an error status.
     """
     if isinstance(code, bool):
         return None
     if isinstance(code, str):
         code = code.strip()
-        code = int(code) if code.isdecimal() else None
+        # An HTTP status has three digits. A longer digit string is not a status (and int() of thousands of digits
+        # raises), so it is ignored rather than read.
+        if not code.isdecimal() or len(code) > 9:
+            return None
+        code = int(code)
     if isinstance(code, int) and code >= 400:
         return code
     return None
@@ -370,7 +374,8 @@ def transform_report(input):
 
 
 ANSWER_KEY = "isEDRDeployed"
-AT_LEAST_KEY = None
+AT_LEAST_FROM = None
+AT_LEAST_NAME = None
 
 
 def proven_by_a_seen_row(result):
@@ -380,6 +385,8 @@ def proven_by_a_seen_row(result):
 # A report that holds fewer rows than the vendor says exist is only part of the fleet. A verdict that rests on the ABSENCE
 # of a row (no Out-of-Date device, no device left off, no misconfigured device, no active product) is not proven by the
 # rows that were read, so it reads None. A verdict that a row which WAS read proves stays, with its counts left unknown.
+# The report holds one row per product per device and nothing says a device's rows sit together, so a negative about a
+# device (no active product, a product that is not ON) can be undone by a row on an unread page: it is not a proof.
 PARTIAL_REASON = ("The NinjaOne antivirus-status report is only part of the fleet (a cursor count or a next-page marker "
                   "shows rows that were not read), so a verdict that rests on the rows that were not seen is not proven "
                   "and this is not evaluated here.")
@@ -412,9 +419,10 @@ def marker_set(value):
 def shows_more_rows(body, received):
     """True when a body that carries rows says there are more rows than it holds.
 
-    A next-page marker or a more-pages flag that is set, a cursor.count above the rows received, a cursor that names
-    itself but gives no count (it cannot show the read is whole), or a cursor that is a set value. The live joined body
-    has "cursor": [] and no marker, which is a complete read.
+    A next-page marker or a more-pages flag that is set, a cursor.count (the total the query holds) above the rows
+    received, a cursor.offset above zero (the body starts after the first row), a cursor that names itself but gives no
+    count (it cannot show the read is whole), or a cursor that is a set value. The live joined body has "cursor": [] and
+    no marker, which is a complete read.
     """
     if not isinstance(body, dict):
         return False
@@ -425,6 +433,9 @@ def shows_more_rows(body, received):
     if isinstance(cursor, dict):
         count = count_of(cursor.get("count"))
         if count is not None and count > received:
+            return True
+        offset = count_of(cursor.get("offset"))
+        if offset is not None and offset > 0:
             return True
         if count is None and marker_set(cursor.get("name")):
             return True
@@ -448,14 +459,14 @@ def partial_answer(answer, validation):
     """The answer for a partial report: a verdict a seen row proves stays (counts unknown), any other verdict reads None."""
     result = answer["transformedResponse"]
     if proven_by_a_seen_row(result):
-        lower_bound = result.get(AT_LEAST_KEY) if AT_LEAST_KEY else None
+        lower_bound = result.get(AT_LEAST_FROM) if AT_LEAST_FROM else None
         for name in list(result.keys()):
             found = result.get(name)
             if name != ANSWER_KEY and isinstance(found, int) and not isinstance(found, bool):
                 result[name] = None
         result["partialRead"] = True
-        if AT_LEAST_KEY:
-            result[AT_LEAST_KEY + "AtLeast"] = lower_bound
+        if AT_LEAST_NAME:
+            result[AT_LEAST_NAME] = lower_bound
         answer["additionalInfo"]["evaluation"]["additionalFindings"] = [PARTIAL_NOTE]
         return answer
     return create_response(result={ANSWER_KEY: None, "partialRead": True}, validation=validation,
