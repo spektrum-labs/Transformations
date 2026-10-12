@@ -1,6 +1,6 @@
-"""Keepit checks built for the Atlas (Permasteelisa) gap: job history, retention, schedule and
-multi-geo, on bodies shaped as Integration-Service hands them over (Keepit XML parsed by
-xmltodict: one element is a dict, several a list, empty is None, booleans are strings).
+"""Keepit checks for job history, retention, schedule and multi-geo, on bodies shaped as
+Integration-Service hands them over (Keepit XML parsed by xmltodict: one element is a dict,
+several a list, empty is None, booleans are strings).
 
 The listDevices shape copies a real Keepit response (four gsuite connectors plus a system
 device, no <enabled> and no <backup-retention>), with names and GUIDs replaced. The /jobs,
