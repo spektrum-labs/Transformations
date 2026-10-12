@@ -156,6 +156,27 @@ class AzureBackupEnabled(unittest.TestCase):
                 self.assertEqual(collection["status"], "success")
                 self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
 
+    def test_a_stopped_item_with_a_healthy_status_is_not_protected(self):
+        # Recovery Services keeps protectionStatus Healthy on an item whose backup was stopped with data
+        # retained; the lifecycle in protectionState is what says nothing is being backed up.
+        def item(name, **props):
+            return {"value": [{"name": name, "properties": props}]}
+        cases = (
+            ("stopped_healthy", [item("a", protectionStatus="Healthy", protectionState="ProtectionStopped")], False),
+            ("paused_healthy", [item("a", protectionStatus="Healthy", protectionState="ProtectionPaused")], False),
+            ("error_healthy", [item("a", protectionStatus="Healthy", protectionState="ProtectionError")], False),
+            ("protected_unhealthy", [item("a", protectionStatus="Unhealthy", protectionState="Protected")], True),
+            ("protected_healthy", [item("a", protectionStatus="Healthy", protectionState="Protected")], True),
+            ("stopped_plus_protected", [item("a", protectionStatus="Healthy", protectionState="ProtectionStopped"),
+                                        item("b", protectionStatus="Healthy", protectionState="Protected")], True),
+        )
+        for label, path in ENABLED_PATHS:
+            for name, pages, expected in cases:
+                with self.subTest(copy=label, case=name):
+                    value, collection, _ = self.run_body(label, path, {"protectedItems": pages})
+                    self.assertIs(value, expected)
+                    self.assertEqual(collection["status"], "success")
+
     def test_vault_rows_prove_a_vault_exists_not_a_backup(self):
         bodies = (
             ("rows_of_lists", {"data": {"rows": [["vault-1"]]}}),

@@ -81,8 +81,12 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-# Azure uses 'Protected', 'ProtectionConfigured' (protectionState) and 'Healthy' (protectionStatus).
-ACTIVE_STATUSES = ("protected", "protectionconfigured", "healthy")
+# Azure reports two separate fields. protectionState is the lifecycle ('Protected', 'ProtectionConfigured',
+# 'IRPending', 'ProtectionStopped', 'ProtectionPaused', 'ProtectionError'). protectionStatus is health
+# ('Healthy' or not). A stopped item keeps a 'Healthy' status while nothing is being backed up, so the
+# lifecycle decides when it is present, and health is only the fallback for an item that has no state.
+ACTIVE_STATES = ("protected", "protectionconfigured")
+HEALTHY_STATUSES = ("healthy",)
 
 
 def not_evaluated(validation, api_error, recommendation, transformation_errors=None):
@@ -170,8 +174,10 @@ def transform(input):
                     continue
                 total_items += 1
                 props = item["properties"]
-                status = str(props.get("protectionStatus") or props.get("protectionState") or "").lower()
-                if status in ACTIVE_STATUSES:
+                state = str(props.get("protectionState") or "").lower()
+                health = str(props.get("protectionStatus") or "").lower()
+                active = state in ACTIVE_STATES if state else health in HEALTHY_STATUSES
+                if active:
                     active_items.append(item.get("name", "Unknown"))
 
         if len(active_items) == 0 and unreadable > 0:
