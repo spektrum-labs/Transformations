@@ -39,12 +39,18 @@ def usable_row(row, need_state):
 
     A row must name its product, and (when the caller reads the state) state that product's state. A missing
     or null name or state is not "no product" and not OFF: it is unreadable. productName "NONE" is a real
-    answer (the device has no product) and needs no state.
+    answer (the device has no product) and needs no state. A caller that does not read the state (the
+    signature check reads definitionStatus) also accepts a row that carries a definitionStatus, with or
+    without a product name: that field is the evidence it reads.
     """
     name = row.get("productName")
-    if name is None or str(name).strip() == "":
+    named = name is not None and str(name).strip() != ""
+    if not need_state:
+        status = row.get("definitionStatus")
+        return named or (status is not None and str(status).strip() != "")
+    if not named:
         return False
-    if not need_state or str(name).strip().upper() == "NONE":
+    if str(name).strip().upper() == "NONE":
         return True
     state = row.get("productState")
     return state is not None and str(state).strip() != ""
@@ -222,9 +228,11 @@ def transform(input):
         results = []
 
     results, scope = endpoint_rows(results, data, True)
-    if scope["devicesReported"] and not scope["devicesJudged"]:
+    if not scope["devicesJudged"]:
         nothing = ("Every device in the antivirus-status report was left out (stale, phone or tablet, without a readable product state, or a Mac "
                    "whose third-party AV NinjaOne cannot read), so this is not evaluated here.")
+        if not scope["devicesReported"]:
+            nothing = "NinjaOne returned no antivirus-status rows for any device, so there is nothing to judge and this is not evaluated here."
         return create_response(result=dict(scope, isEPPMisconfigured=None), validation=validation,
                                api_errors=[nothing], fail_reasons=[nothing])
     devices = {}
