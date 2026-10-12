@@ -29,7 +29,8 @@ def transform_unmarked(input):
     isSSOEnabled = true when the Platform tenant has at least one ENABLED SAML identity provider, so users sign in
     through an external IdP. False only when the complete providers list was read and none is enabled. None (not
     evaluated) on an error body, no records list, a partial read (totalCount above the records read) with none
-    enabled, or an exception.
+    enabled, a totalCount that is not a non-negative whole number, an empty list without an explicit totalCount
+    of 0, or an exception.
     """
     key = "isSSOEnabled"
 
@@ -85,8 +86,12 @@ def transform_unmarked(input):
             return {key: True, "reason": str(len(enabled)) + " enabled SAML identity provider(s)",
                     "providers": [str(r.get("entityId") or r.get("id")) for r in enabled][:25]}
         total = data.get("totalCount")
-        if isinstance(total, int) and not isinstance(total, bool) and total > len(records):
+        if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
+            return {key: None, "reason": "totalCount is not a count, so whether all SAML providers were read is unknown"}
+        if isinstance(total, int) and total > len(records):
             return {key: None, "reason": "Only " + str(len(records)) + " of " + str(total) + " SAML providers were read"}
+        if len(records) == 0 and total != 0:
+            return {key: None, "reason": "No SAML providers were returned and no completed count of 0 was given"}
         return {key: False, "reason": "No enabled SAML identity provider", "providers": len(records)}
     except Exception as e:
         return {key: None, "error": str(e)}

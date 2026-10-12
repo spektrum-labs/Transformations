@@ -27,9 +27,10 @@ def criteria_unmeasured(result):
 def transform_unmarked(input):
     """
     isWorkflowAutomationEnabled = true when at least one ACTIVE access-request workflow template exists, so access
-    requests and approvals run through a defined workflow. False only when the records are complete (no next page)
-    and none is active. None (not evaluated) on an error body, no records list, no active template while more
-    pages were not read, or an exception.
+    requests and approvals run through a defined workflow. False only when the records are complete (no next page,
+    and no total above the records read) and none is active. None (not evaluated) on an error body, no records
+    list, no active template while more templates were not read, a total that is not a non-negative whole number,
+    an empty list without an explicit total of 0, or an exception.
     """
     key = "isWorkflowAutomationEnabled"
 
@@ -87,6 +88,13 @@ def transform_unmarked(input):
                     "templates": [str(r.get("name")) for r in active][:25]}
         if data.get("hasNext") is True:
             return {key: None, "reason": "No active template on the first page and more pages were not read"}
+        total = data.get("total")
+        if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
+            return {key: None, "reason": "total is not a count, so whether all workflow templates were read is unknown"}
+        if isinstance(total, int) and total > len(records):
+            return {key: None, "reason": "Only " + str(len(records)) + " of " + str(total) + " workflow templates were read"}
+        if len(records) == 0 and total != 0:
+            return {key: None, "reason": "No workflow templates were returned and no completed count of 0 was given"}
         return {key: False, "reason": "No active access-request workflow template", "templates": len(records)}
     except Exception as e:
         return {key: None, "error": str(e)}
