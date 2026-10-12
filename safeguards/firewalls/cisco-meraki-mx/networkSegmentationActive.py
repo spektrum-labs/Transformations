@@ -133,27 +133,31 @@ def evaluate(data):
         else:
             flat.append(name)
     measured = len(segmented) + len(flat)
+    if not reached or measured == 0:
+        verdict = None
+    elif flat:
+        verdict = False
+    elif unreadable:
+        verdict = None
+    else:
+        verdict = True
     result = {
-        "networkSegmentationActive": reached and measured > 0 and not flat and not unreadable,
+        "networkSegmentationActive": verdict,
         "vlanCoveragePercentage": pct(len(segmented), measured),
         "networksEvaluated": measured,
         "flatNetworks": flat[:25],
         "networksNotMeasured": unreadable[:25],
         "endpointReached": reached,
     }
-    passes, fails, recs = [], [], []
+    passes, fails, recs, api_errors = [], [], [], []
     if not reached:
-
-        fails.append(
-            "The response carries no appliance network list and no per-network results, "
-            "so it is indistinguishable from an authentication failure. Not measured."
+        api_errors.append(
+            "The Meraki response carries no appliance network list and no per-network results; "
+            "nothing to measure."
         )
-
     elif measured == 0:
-        fails.append("No appliance network returned VLAN settings, so segmentation could not be measured.")
-    elif not flat and not unreadable:
-        passes.append("All %d appliance network(s) have VLANs enabled." % measured)
-    else:
+        api_errors.append("No appliance network returned VLAN settings; nothing to measure.")
+    elif flat:
         fails.append(
             "%d of %d appliance network(s) run a single flat LAN with VLANs disabled: %s."
             % (len(flat), measured, ", ".join(flat[:10]))
@@ -162,13 +166,26 @@ def evaluate(data):
             "Enable VLANs under Security & SD-WAN > Addressing & VLANs and separate user, "
             "server and OT/IoT traffic on each network listed."
         )
-    return result, passes, fails, recs, {"networksEvaluated": measured}
+    elif unreadable:
+        api_errors.append(
+            "%d of %d appliance network(s) could not be read (%s), so VLAN segmentation cannot be confirmed on every network."
+            % (len(unreadable), len(unreadable) + measured, ", ".join(unreadable[:10]))
+        )
+    else:
+        passes.append(
+            "All %d appliance network(s) have VLANs enabled." % measured
+        )
+    if api_errors:
+        fails = list(api_errors)
+    elif unreadable:
+        fails.append("%d more network(s) could not be read and were not counted: %s." % (len(unreadable), ", ".join(unreadable[:10])))
+    return result, passes, fails, recs, api_errors, {"networksEvaluated": measured}
 
 
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
-    result, pass_reasons, fail_reasons, recommendations, input_summary = evaluate(data)
+    result, pass_reasons, fail_reasons, recommendations, api_errors, input_summary = evaluate(data)
     return create_response(
         result=result,
         validation=validation,
@@ -176,6 +193,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "networkSegmentationActive",
             "vendor": "Cisco Meraki MX",
