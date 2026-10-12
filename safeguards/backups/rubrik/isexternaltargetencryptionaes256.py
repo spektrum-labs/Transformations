@@ -6,8 +6,11 @@ API Source: listArchivalTargets (POST https://<account>.my.rubrik.com/api/graphq
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/targets/
 Note: UNVERIFIED MAPPING: encryptionType -> AES-256 is from Rubrik documentation, not an API field.
+Note: RCS/Azure/Glacier targets expose no encryptionType in the RSC schema, so for them the encryption cannot be read. That is
+Not evaluated (None), never a gap: a reported encryption type outside the AES-256 set is still False, and False wins when both occur.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
-unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
+unrecognised body is None with dataCollection status "error", so Token-Service records it as not
+evaluated rather than as a gap. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
@@ -47,10 +50,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
+    # Not measured is read off the value, so every path that leaves the criterion None -- the except
+    # branch included -- reports it to Token-Service as not evaluated rather than as a gap.
+    measured = result.get(KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else (fail_reasons or errors or ["No reading."])},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -79,7 +86,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -224,14 +231,18 @@ def active_targets(input):
 
 
 def encryption_gaps(targets, allowed):
+    """(gaps, unread). gaps are targets whose reported encryptionType is not an allowed one; unread are targets whose type RSC
+    does not report at all, which says nothing about encryption either way."""
     gaps = []
+    unread = []
     for t in targets:
         enc = t.get("encryptionType")
         if enc is None:
-            gaps.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): RSC does not report an encryption type for this target type")
+            unread.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): RSC does not report an encryption type for this target type")
         elif enc not in allowed:
             gaps.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): encryptionType " + str(enc))
-    return gaps
+    return gaps, unread
+
 
 def evaluate(input):
     targets, validation, failure = active_targets(input)
@@ -239,9 +250,12 @@ def evaluate(input):
         return failure
     summary = {"activeTargets": len(targets)}
     if not targets:
-        return fail(validation, "No active archival location exists.", None, summary)
-    gaps = encryption_gaps(targets, AES256_TYPES)
+        return fail(validation, "No active archival location exists.", None, summary, value=False)
+    gaps, unread = encryption_gaps(targets, AES256_TYPES)
     summary["gaps"] = gaps
+    summary["unread"] = unread
     if gaps:
-        return fail(validation, "AES-256 is not evidenced for every active archival location: " + "; ".join(gaps) + ".", None, summary)
+        return fail(validation, "AES-256 is not evidenced for every active archival location: " + "; ".join(gaps) + ".", None, summary, value=False)
+    if unread:
+        return fail(validation, "Encryption could not be read for: " + "; ".join(unread) + ". The control's state is unknown, so this is Not evaluated, not a gap.", None, summary)
     return ok(validation, True, "All " + str(len(targets)) + " active archival locations use a Rubrik or provider AES-256 encryption type.", summary)

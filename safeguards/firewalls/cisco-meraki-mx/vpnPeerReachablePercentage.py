@@ -65,15 +65,46 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def not_measured(problem, validation):
+    """Nothing usable was read: the criterion is None with a dataCollection error, never a fail."""
+    return create_response(
+        result={"vpnPeerReachablePercentage": None},
+        validation=validation,
+        fail_reasons=[problem],
+        recommendations=[
+            "Verify the Meraki site-to-site VPN status is readable with this key "
+            "(getOrganizationApplianceVpnStatuses)."
+        ],
+        api_errors=[problem],
+        metadata={"transformationId": "vpnPeerReachablePercentage", "vendor": "Cisco Meraki MX", "category": "firewalls"},
+    )
+
+
+def network_status_objects(data):
+    """The per-network VPN status objects in the body, or [] when the body is not that list.
+
+    An empty body, an error body and text are not a read. A network status object carries its
+    network id or name and its peer lists."""
+    networks = None
+    if isinstance(data, list):
+        networks = data
+    elif isinstance(data, dict):
+        networks = data.get("apiResponse")
+        if networks is None:
+            networks = data.get("data")
+    if not isinstance(networks, list):
+        return []
+    keys = ("networkId", "networkName", "merakiVpnPeers", "thirdPartyVpnPeers")
+    return [n for n in networks if isinstance(n, dict) and any(k in n for k in keys)]
+
+
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, dict) else {}
-
-    networks = data.get("apiResponse")
-    if networks is None:
-        networks = data.get("data")
-    if not isinstance(networks, list):
-        networks = []
+    networks = network_status_objects(data)
+    if not networks:
+        return not_measured(
+            "No per-network VPN status was returned by Meraki; nothing to measure.", validation
+        )
 
     total_peers = 0
     reachable_peers = 0
