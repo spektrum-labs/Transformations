@@ -38,8 +38,16 @@ def av_row(did, product="Defender", state="ON", seen=None):
             "timestamp": NOW if seen is None else seen}
 
 
-def report(rows, devices=None):
+def report(rows, devices="roster"):
+    """A report body. By default the device list holds exactly the devices the rows mention (a complete roster);
+    pass devices=None for a body with no device list at all, or any other value to send that as the list."""
     body = {"results": rows}
+    if isinstance(devices, str) and devices == "roster":
+        ids = []
+        for r in rows:
+            if isinstance(r, dict) and r.get("deviceId") is not None and r.get("deviceId") not in ids:
+                ids.append(r.get("deviceId"))
+        devices = [device(i) for i in ids]
     if devices is not None:
         body["devices"] = devices
     return body
@@ -47,6 +55,10 @@ def report(rows, devices=None):
 
 def value(out):
     return out["transformedResponse"]["isEPPConfigured"]
+
+
+def fleet_of(n):
+    return [device(i + 1) for i in range(n)]
 
 
 def not_evaluated(out):
@@ -195,17 +207,70 @@ class TestDevicesMissingFromTheReportCountAgainst:
         assert scope["devicesLeftOutStale"] == 1
         assert scope["devicesNotInReport"] == 0
 
-    def test_without_a_device_list_the_report_alone_is_judged(self):
-        out = run(report([av_row(1), av_row(2)]))
-        assert value(out) == 100
-        assert out["transformedResponse"]["deviceListRead"] is False
-
-    def test_an_unreadable_device_list_is_treated_as_not_read(self):
-        out = run({"results": [av_row(1), av_row(2)], "devices": "not a list"})
-        assert value(out) == 100
-        assert out["transformedResponse"]["deviceListRead"] is False
 
     def test_the_missing_count_is_in_the_reason(self):
         out = run(report([av_row(1)], self.fleet(4)))
         text = " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
         assert "3" in text and "no antivirus-status row" in text
+
+
+class TestUnreadableDeviceListIsNotEvaluated:
+    """The device list is the roster the percentage is measured against. Without a readable one a device the
+    report does not mention cannot be counted, so the report-only percentage could pass a fleet it never saw.
+    The answer is None (not evaluated), never a value."""
+
+    ROWS = [av_row(1), av_row(2)]
+
+    @pytest.mark.parametrize("devices", [
+        None,
+        "not a list",
+        42,
+        True,
+        {},
+        {"error": "Forbidden"},
+        {"errors": ["Forbidden"]},
+        {"status": 403},
+        {"statusCode": 500, "message": "boom"},
+        {"data": "nope"},
+        {"results": None},
+        {"data": fleet_of(3), "error": "Forbidden"},
+    ])
+    def test_an_absent_or_unreadable_device_list_is_not_evaluated(self, devices):
+        body = report(self.ROWS, devices)
+        if devices is None:
+            assert "devices" not in body
+        out = run(body)
+        assert value(out) is None
+        assert not_evaluated(out)
+
+    def test_the_reason_names_the_device_list(self):
+        out = run(report(self.ROWS, None))
+        errors = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+        assert "device list" in errors
+
+    def test_a_bare_list_of_rows_has_no_device_list_and_is_not_evaluated(self):
+        out = run(self.ROWS)
+        assert value(out) is None
+        assert not_evaluated(out)
+
+    def test_a_well_formed_empty_list_with_report_rows_is_a_real_value(self):
+        out = run(report(self.ROWS, []))
+        assert value(out) == 100
+        assert out["transformedResponse"]["devicesNotInReport"] == 0
+        assert out["transformedResponse"]["deviceListRead"] is True
+
+    def test_a_well_formed_empty_list_inside_a_data_wrapper_is_a_real_value(self):
+        out = run(report(self.ROWS, {"data": []}))
+        assert value(out) == 100
+
+    @pytest.mark.parametrize("rows", [[], None])
+    def test_a_well_formed_empty_list_without_report_rows_is_not_evaluated(self, rows):
+        body = {"devices": []} if rows is None else {"results": rows, "devices": []}
+        out = run(body)
+        assert value(out) is None
+        assert not_evaluated(out)
+
+    def test_a_readable_list_beside_rows_is_measured(self):
+        out = run(report(self.ROWS, fleet_of(4)))
+        assert value(out) == 50
+        assert not not_evaluated(out)

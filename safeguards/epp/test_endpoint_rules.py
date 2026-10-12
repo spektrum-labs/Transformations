@@ -116,7 +116,8 @@ class TestNinjaOneDeviceRules:
 
     def test_dark_fleet_protection_percentage_is_not_evaluated(self):
         rows = [av_row(1, "Defender", "ON", 30), av_row(2, "Defender", "ON", 31)]
-        result = out(NINJA / "isEPPConfigured.py", {"results": rows})
+        devices = [device(1, "WINDOWS_WORKSTATION", [], 30), device(2, "WINDOWS_WORKSTATION", [], 31)]
+        result = out(NINJA / "isEPPConfigured.py", {"results": rows, "devices": devices})
         assert result["isEPPConfigured"] is None
         assert result["fleetDark"] is True
 
