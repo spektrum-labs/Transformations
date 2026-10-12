@@ -117,9 +117,11 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            # No value beside an error: the None reaches the evaluator as Not evaluated through the collection error.
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
+                api_errors=["Could not read the response: input validation failed"],
                 fail_reasons=["Input validation failed"]
             )
 
@@ -139,7 +141,7 @@ def transform(input):
                 )
             api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
                 api_errors=[api_error],
                 fail_reasons=["Could not retrieve data from Microsoft 365"],
@@ -198,9 +200,11 @@ def transform(input):
         )
 
     except Exception as e:
+        # The evaluator reads Not evaluated from the collection status, not from the transformation errors.
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
+            api_errors=["Could not evaluate the response"],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )

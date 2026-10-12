@@ -94,7 +94,8 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                     ["Complete Exchange access in Microsoft One-Click, then re-evaluate this check."],
                 )
 
-    def test_unrelated_errors_keep_the_generic_copy_and_match_the_legacy_file(self):
+    def test_unrelated_errors_keep_the_generic_copy_and_differ_from_the_legacy_file_only_in_the_value(self):
+        """Same copy and collection error as the legacy file; the criterion carries no value (legacy says False)."""
         for raw_error in (
             "Request timed out",
             "Failed to connect to Exchange Online: Request timed out",
@@ -108,7 +109,8 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                 evaluation = response["additionalInfo"]["evaluation"]
                 self.assertEqual(evaluation["failReasons"], ["Could not retrieve data from Microsoft 365"])
                 self.assertNotIn("Complete Exchange access", " ".join(evaluation["recommendations"]))
-                self.assertEqual(response["transformedResponse"], legacy["transformedResponse"])
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
                 self.assertEqual(response["additionalInfo"]["dataCollection"], legacy["additionalInfo"]["dataCollection"])
                 self.assertEqual(evaluation, legacy["additionalInfo"]["evaluation"])
 
@@ -176,12 +178,34 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                 self.assertEqual(response["additionalInfo"]["dataCollection"]["errors"], ["Could not read transport rules"])
                 self.assertEqual(response["additionalInfo"]["transformation"]["status"], "success")
 
-    def test_malformed_json_returns_a_failure_with_a_transformation_error(self):
+    def test_malformed_json_is_not_evaluated_with_a_transformation_error(self):
         response = self.transformation.transform("{not-json")
 
-        self.assertFalse(response["transformedResponse"][KEY])
+        self.assertIsNone(response["transformedResponse"][KEY])
         self.assertEqual(response["additionalInfo"]["transformation"]["status"], "error")
         self.assertTrue(response["additionalInfo"]["transformation"]["errors"])
+        # The None must reach the evaluator as Not evaluated, which it reads from the collection status.
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_failed_input_validation_is_not_evaluated(self):
+        response = self.transformation.transform({
+            "data": {"transportRules": [banner_rule()]},
+            "validation": {"status": "failed", "errors": ["unexpected shape"], "warnings": []},
+        })
+
+        self.assertIsNone(response["transformedResponse"][KEY])
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], ["Input validation failed"])
+
+    def test_a_rule_the_code_cannot_read_is_not_evaluated_not_a_pass_or_a_fail(self):
+        """The outer except: a rule entry that is not an object raises while the rules are read."""
+        for rules in ([123], ["not an object"], [banner_rule(), None]):
+            with self.subTest(rules=rules):
+                response = self.transformation.transform({"Output": {"transportRules": rules}})
+
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(response["additionalInfo"]["transformation"]["status"], "error")
+                self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
 
 
 if __name__ == "__main__":
