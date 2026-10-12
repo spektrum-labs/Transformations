@@ -132,6 +132,20 @@ def is_truncated(body):
     return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
 
 
+def enforcement_state(record):
+    """True or False when the user record states whether 2-Step Verification is enforced; None when it does
+    not (no field, null, blank or an unrecognised value). Silence is not "not enforced"."""
+    value = record.get("isEnforcedIn2Sv")
+    if value is True or value is False:
+        return value
+    text = str(value).strip().lower() if isinstance(value, str) else ""
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
+
+
 def unmeasured(reason, validation, summary=None):
     """The read could not answer: the key and the counts are None and a dataCollection error says why."""
     return create_response(
@@ -172,6 +186,7 @@ def transform(input):
         mfa_enrolled_users = 0
         measured = False
         truncated = False
+        silent_users = 0
 
         # The user list is the only evidence. The criterion itself is not read out of the body it judges.
         raw_data = data.get('rawResponse', data)
@@ -184,9 +199,11 @@ def transform(input):
                 measured = len(records) > 0
                 if measured:
                     total_users = len(records)
-                    mfa_enrolled = [obj for obj in records if 'isEnforcedIn2Sv' in obj and str(obj['isEnforcedIn2Sv']).lower() == "true"]
+                    mfa_enrolled = [obj for obj in records if enforcement_state(obj) is True]
                     mfa_enrolled_users = len(mfa_enrolled)
                     isMFAEnforcedForUsers = mfa_enrolled_users > 0
+                    # A record that states nothing could be enforced: it is unknown, not "not enforced".
+                    silent_users = len([obj for obj in records if enforcement_state(obj) is None])
                     truncated = is_truncated(raw_data) or is_truncated(data)
 
         if not measured:
@@ -198,6 +215,12 @@ def transform(input):
             return unmeasured("The user list was truncated (nextPageToken present) before an enforced user was "
                               "found; enforcement not evaluated across all users", validation,
                               {"truncated": True})
+
+        if not isMFAEnforcedForUsers and silent_users > 0:
+            # No user states that enforcement is on, and some state nothing: False needs every record to
+            # state that it is off.
+            return unmeasured("%d of %d users do not state whether 2-Step Verification is enforced, and none states "
+                              "that it is; enforcement could not be confirmed" % (silent_users, total_users), validation)
 
         # Counts are totals only for a complete list; a truncated list gives a partial page, so None.
         reported_total = None if truncated else total_users

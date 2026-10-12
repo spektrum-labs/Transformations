@@ -15,7 +15,10 @@ Not measured (all four keys None and a dataCollection error, so Token-Service sh
 never Failed): an error or refusal body, a body that is not JSON or not an object, an object that
 carries none of the DMARC, DKIM or SPF answers (so it is not a DNS lookup result), a failed input
 validation, and this transform's own exception. A lookup that reports only some of the three answers
-is partly not measured: the keys it did not report are None, with a dataCollection error naming them.
+is partly measured: the keys it did not report are None. When a reported key is false, isDNSConfigured
+is false and no dataCollection error is set, so a missing key cannot hide a measured false. Only when no
+reported key is false and a key is missing or null is isDNSConfigured None, and only then does the
+dataCollection error name the keys that were not reported.
 """
 
 import json
@@ -269,9 +272,10 @@ def transform(input):
                 })
 
         api_errors = None
-        if unreported:
-            # A key the lookup did not report is None, so say it was not measured instead of letting the
-            # evaluator grade it as a failure.
+        if is_dns_configured is None:
+            # No key is measured False and a key was not reported, so isDNSConfigured itself is None: say it
+            # was not measured instead of letting the evaluator grade it as a failure. When a reported key
+            # is measured False, isDNSConfigured is False and is not hidden by a missing key.
             api_errors = ["The DNS lookup did not report %s, so %s not evaluated" % (
                 ", ".join(unreported), "it was" if len(unreported) == 1 else "they were")]
 
