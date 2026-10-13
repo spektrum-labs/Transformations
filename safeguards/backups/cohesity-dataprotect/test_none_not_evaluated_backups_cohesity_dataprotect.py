@@ -34,6 +34,8 @@ class Poisoned(dict):
 
 
 CASES = [
+    ('isbackupenabled', ('isBackupEnabled',), 'empty_dict', lambda: {}),
+    ('isbackupenabled', ('isBackupEnabled',), 'poisoned', lambda: Poisoned()),
     ('backupslacomplianceratepercentage', ('backupSlaComplianceRatePercentage',), 'empty_dict', lambda: {}),
     ('backupslacomplianceratepercentage', ('backupSlaComplianceRatePercentage',), 'poisoned', lambda: Poisoned()),
     ('backupsuccessratepercentage', ('backupSuccessRatePercentage',), 'empty_dict', lambda: {}),
