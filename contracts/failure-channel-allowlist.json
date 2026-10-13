@@ -340,7 +340,6 @@
     "safeguards/cloudsecurity/appomni/isssoenforced.py",
     "safeguards/cloudsecurity/appomni/isthirdpartymonitoringenabled.py",
     "safeguards/cloudsecurity/appomni/isviolationalertingenabled.py",
-    "safeguards/cloudsecurity/awssecurityhub/confirmedlicensepurchased.py",
     "safeguards/cloudsecurity/cloudflare/confirmedlicensepurchased.py",
     "safeguards/cloudsecurity/cloudflare/isdnsfilteringenabled.py",
     "safeguards/cloudsecurity/cloudflare/isdnssecenabled.py",
