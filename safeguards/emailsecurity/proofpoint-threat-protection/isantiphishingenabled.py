@@ -25,7 +25,7 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None):
+                    api_errors=None, error_code=None):
     # A None criterion was not measured. Token-Service grades None as FAILED unless
     # dataCollection.status is "error", which needs a non-empty api_errors: carry the reason.
     if not api_errors and isinstance(result, dict) and "isAntiPhishingEnabled" in result and result["isAntiPhishingEnabled"] is None:
@@ -33,10 +33,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                       or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    data_collection = {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []}
+    if error_code and api_errors:
+        # Machine-readable reason beside the prose (e.g. "no_volume"): a quiet window is not a failure.
+        data_collection["errorCode"] = error_code
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": data_collection,
             "validation": validation,
             "transformation": {"status": "error" if (transformation_errors or []) else "success",
                                "errors": transformation_errors or [], "inputSummary": input_summary or {}},
@@ -68,7 +72,7 @@ def evaluate(data):
     if detected <= 0:
         return {"isAntiPhishingEnabled": None, "reason": "No phishing, BEC or TOAD detections in the report window; no volume to measure, so not evaluated",
                 "phishingVolume": phishing, "becVolume": bec, "toadVolume": toad,
-                "totalVolume": data.get("totalVolume") or 0}
+                "totalVolume": data.get("totalVolume") or 0, "reasonCode": "no_volume"}
     return {"isAntiPhishingEnabled": True,
             "phishingVolume": phishing, "becVolume": bec, "toadVolume": toad,
             "totalVolume": data.get("totalVolume") or 0}
@@ -93,6 +97,6 @@ def transform(input):
             fr = [res.get("reason", "No phishing, BEC or TOAD detections were reported")]
         return create_response({key: value, **extra}, validation, pr, fr,
                                [] if value is not False else ["Verify impostor and phishing detection modules are enabled"],
-                               {key: value, **extra})
+                               {key: value, **extra}, None, None, res.get("reasonCode"))
     except Exception as e:
         return create_response({key: None}, None, [], ["Transformation error: " + str(e)], [], {}, [str(e)])
