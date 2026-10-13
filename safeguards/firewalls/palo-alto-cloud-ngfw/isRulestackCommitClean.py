@@ -6,6 +6,10 @@ Integration-Service workflow getNgfwRulestackPosture, legs used:
   firewalls     <- describeFirewall: GET /v1/config/ngfirewalls/{name}, per firewall
   rulestackList <- listRulestacks:   GET /v1/config/rulestacks (asks for the uncommitted list)
 
+NOT WIRED: this key is not in the Integration-Service definition's retrievalTransformationArray, so
+it shows as not covered. The file stays as a documented placeholder until a real read-only connection
+proves that the pending-change filter (Uncommitted) is honoured on the list read; then re-wire it.
+
 Value: False when a rulestack that a firewall uses appears in the list's RuleStackUncommitted
 array (each entry {RuleStackName, Operation: add | delete | update}): the vendor itself names a
 pending change, so the policy a firewall enforces differs from the last committed configuration.
