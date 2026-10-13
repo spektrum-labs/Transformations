@@ -11,7 +11,7 @@ The licence is confirmed when at least one endpoint carries that evidence.
 
 A read that proves nothing is Not evaluated (None with a data-collection error), never False:
 an error, refusal or HTTP 4xx/5xx body (also when the status sits beside a response/result
-wrapper), a failed input validation, an empty, null or unreadable body, an empty endpoint list,
+wrapper, at any level), a failed input validation, an empty, null or unreadable body, an empty endpoint list,
 a list with no endpoint record, and an exception. So is a partial
 read (pages left unread) that shows no MDR endpoint: the licence may sit on an endpoint nobody
 has seen. False is only the answer to a complete, readable endpoint list in which no endpoint
@@ -35,6 +35,7 @@ PARTIAL_REASON = (
 VALIDATION_REASON = "Not evaluated: the response failed input validation; nothing was measured."
 EXCEPTION_REASON = "Not evaluated: the transformation could not read the response; nothing was measured."
 RECOMMENDATION = "Check that the Sophos Central credential can read endpoints"
+WRAPPER_KEYS = ["api_response", "response", "result", "apiResponse", "Output"]
 
 
 def error_reason(body):
@@ -49,6 +50,30 @@ def error_reason(body):
             code = int(code.strip())
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
             return "Not evaluated: Sophos answered the endpoint read with HTTP " + str(code) + "; nothing was measured."
+    return None
+
+
+def wrapper_error(body):
+    """A fixed-text reason when the body as received, or any level of a response/result wrapper chain, is an error body.
+
+    The transform unwraps up to three wrapper levels before it reads the endpoint list; an error status or error body
+    that sits beside a wrapper is dropped with that level, so every level is checked on the way down.
+    """
+    current = body
+    for attempt in range(4):
+        reason = error_reason(current)
+        if reason is not None:
+            return reason
+        if not isinstance(current, dict):
+            return None
+        inner = None
+        for key in WRAPPER_KEYS:
+            if key in current and isinstance(current.get(key), (dict, list)):
+                inner = current[key]
+                break
+        if inner is None:
+            return None
+        current = inner
     return None
 
 
@@ -174,7 +199,7 @@ def transform(input):
             return input_data["data"], input_data["validation"]
         data = input_data
         if isinstance(data, dict):
-            wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
+            wrapper_keys = WRAPPER_KEYS
             for attempt in range(3):
                 unwrapped = False
                 for key in wrapper_keys:
@@ -257,8 +282,8 @@ def transform(input):
             return not_evaluated(validation, VALIDATION_REASON)
 
         # An error status or error body that sits beside a wrapper (response, result, ...) is dropped when the
-        # wrapper is unwrapped, so the body as received is checked too.
-        outer = error_reason(input)
+        # wrapper is unwrapped, so the body as received and every wrapper level are checked.
+        outer = wrapper_error(input)
         if outer is not None:
             return not_evaluated(validation, outer)
 
