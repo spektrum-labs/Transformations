@@ -5,9 +5,11 @@ Category: Licensing
 Method: getEndpoints (GET /endpoint/v1/endpoints)
 
 Confirms an active Sophos MDR licence from evidence in the tenant, not from whether a
-response arrived. Sophos only assigns the MDR products ("mtr" = Managed Threat Response,
-"xdr") to endpoints on a licensed MDR subscription, and marks such endpoints mdrManaged.
-The licence is confirmed when at least one endpoint carries that evidence.
+response arrived. MDR here is the managed service only, counted the same way as mdr_transform.py
+and epp_transform.py in this folder: the "mtr" product (Managed Threat Response) or an explicit
+mdrManaged true. The "xdr" product is the self-service XDR licence, not a managed service, so a
+tenant with only the XDR licence has no MDR licence. The licence is confirmed when at least one
+endpoint carries that evidence.
 
 A read that proves nothing is Not evaluated (None with a data-collection error), never False:
 an error, refusal or HTTP 4xx/5xx body (also when the status sits beside a response/result
@@ -192,7 +194,9 @@ def unread_pages(data, item_count):
 
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
-    mdr_product_codes = ("mtr", "xdr")
+    # The managed-service product code only ("mtr", Managed Threat Response), as in mdr_transform.py and
+    # epp_transform.py. The "xdr" product is the self-service XDR licence, never MDR evidence.
+    managed_product_code = "mtr"
 
     def extract_input(input_data):
         if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -305,7 +309,7 @@ def transform(input):
                 if code and code not in codes_seen:
                     codes_seen.append(code)
             managed = str(endpoint.get("mdrManaged")).strip().lower() == "true"
-            if managed or any(code in mdr_product_codes for code in codes):
+            if managed_product_code in codes or managed:
                 mdr_endpoints = mdr_endpoints + 1
 
         licensed = mdr_endpoints > 0
@@ -315,7 +319,7 @@ def transform(input):
             return create_response(
                 result={criteriaKey: True},
                 validation=validation,
-                pass_reasons=[f"Sophos MDR licence confirmed: {mdr_endpoints} of {len(items)} endpoints carry the MDR product (mtr/xdr) or are MDR-managed"],
+                pass_reasons=[f"Sophos MDR licence confirmed: {mdr_endpoints} of {len(items)} endpoints carry the managed MDR product (mtr) or are MDR-managed"],
                 input_summary=summary
             )
 
@@ -328,7 +332,7 @@ def transform(input):
         return create_response(
             result={criteriaKey: False},
             validation=validation,
-            fail_reasons=[f"None of the {len(items)} endpoints carry the Sophos MDR product (mtr/xdr) or are MDR-managed"],
+            fail_reasons=[f"None of the {len(items)} endpoints carry the Sophos managed MDR product (mtr) or are MDR-managed"],
             recommendations=["Confirm the Sophos MDR subscription is active and assigned to endpoints"],
             input_summary=summary
         )
