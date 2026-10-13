@@ -10,8 +10,9 @@ response arrived. Sophos only assigns the MDR products ("mtr" = Managed Threat R
 The licence is confirmed when at least one endpoint carries that evidence.
 
 A read that proves nothing is Not evaluated (None with a data-collection error), never False:
-an error, refusal or HTTP 4xx/5xx body, a failed input validation, an empty, null or unreadable
-body, an empty endpoint list, a list with no endpoint record, and an exception. So is a partial
+an error, refusal or HTTP 4xx/5xx body (also when the status sits beside a response/result
+wrapper), a failed input validation, an empty, null or unreadable body, an empty endpoint list,
+a list with no endpoint record, and an exception. So is a partial
 read (pages left unread) that shows no MDR endpoint: the licence may sit on an endpoint nobody
 has seen. False is only the answer to a complete, readable endpoint list in which no endpoint
 carries the MDR product.
@@ -254,6 +255,12 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return not_evaluated(validation, VALIDATION_REASON)
+
+        # An error status or error body that sits beside a wrapper (response, result, ...) is dropped when the
+        # wrapper is unwrapped, so the body as received is checked too.
+        outer = error_reason(input)
+        if outer is not None:
+            return not_evaluated(validation, outer)
 
         items = endpoint_items(data)
         problem = read_problem(data, items)
