@@ -243,3 +243,64 @@ def test_unreadable_org_rulesets_only_note_that_bypass_is_unknown():
 def test_only_the_criteria_key_is_emitted():
     out = run(body([repo("api")], [[pr_rule()]], [NOT_PROTECTED]))
     assert list(out["transformedResponse"]) == [KEY]
+
+
+# ----------------------------------------------------------------------------- layer aggregation
+# GitHub applies every active layer (org rulesets, repo rulesets, classic protection) and the
+# strictest value of each parameter: the repository passes when the max required count across
+# its active layers is >= 1 and any active layer requires last-push approval.
+
+
+def test_count_on_classic_and_last_push_on_org_ruleset_pass_together():
+    out = run(body([repo("api")], [[pr_rule(count=0, last_push=True)]], [classic(count=2, last_push=False)]))
+    assert value(out) is True
+    text = reasons(out)
+    assert "classic branch protection" in text and "organization ruleset" in text
+
+
+def test_count_on_repo_ruleset_and_last_push_on_classic_pass_together():
+    out = run(body([repo("api")], [[pr_rule(count=1, last_push=False, source="Repository", ruleset_id=9)]],
+                   [classic(count=0, last_push=True)]))
+    assert value(out) is True
+    assert "repository ruleset" in reasons(out)
+
+
+def test_count_zero_on_every_layer_still_fails():
+    out = run(body([repo("api")], [[pr_rule(count=0, last_push=True)]], [classic(count=0, last_push=True)]))
+    assert value(out) is False
+    assert "0 required approvals" in reasons(out)
+
+
+def test_last_push_on_without_any_required_count_still_fails():
+    out = run(body([repo("api")], [[pr_rule(count=0, last_push=True, source="Repository", ruleset_id=9)]],
+                   [NOT_PROTECTED]))
+    assert value(out) is False
+    assert "0 required approvals" in reasons(out)
+
+
+def test_a_ruleset_in_evaluate_mode_does_not_count():
+    details = [{"id": 7, "enforcement": "active", "bypass_actors": []},
+               {"id": 8, "enforcement": "evaluate", "bypass_actors": []}]
+    out = run(body([repo("api")], [[pr_rule(count=0, last_push=True, ruleset_id=8)]],
+                   [classic(count=1, last_push=False)], details=details))
+    assert value(out) is False
+    assert "last-push approval off" in reasons(out)
+
+
+def test_a_rule_marked_disabled_in_the_rules_body_does_not_count():
+    rule = pr_rule(count=1, last_push=True, source="Repository", ruleset_id=9)
+    rule["enforcement"] = "disabled"
+    out = run(body([repo("api")], [[rule]], [NOT_PROTECTED]))
+    assert value(out) is False
+    assert "no approval rule" in reasons(out)
+
+
+def test_read_layers_that_together_pass_are_enough_when_another_layer_is_unreadable():
+    out = run(body([repo("api")], [[pr_rule(count=0, last_push=True), pr_rule(count=1, last_push=False, source="Repository", ruleset_id=9)]],
+                   [item_error(403, "api")]))
+    assert value(out) is True
+
+
+def test_read_layers_that_do_not_pass_with_another_unreadable_are_not_evaluated():
+    out = run(body([repo("api")], [[pr_rule(count=1, last_push=False)]], [item_error(403, "api")]))
+    assert value(out) is None

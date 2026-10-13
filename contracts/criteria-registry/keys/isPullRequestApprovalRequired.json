@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "every active (not archived, not disabled) repository the organization read lists; one default branch each. Archived and disabled repositories are excluded and counted in the reasons",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of every active repository's default-branch rules (effective ruleset rules and classic branch protection) showing, for each, one pull request rule with required_approving_review_count >= 1 and require_last_push_approval true. A cut-off repository list or any repository whose rules could not be read is not measured.",
+  "evidenceRequiredForTrue": "A complete read of every active repository's default-branch rules (effective ruleset rules and classic branch protection) showing, for each, across every layer in active enforcement (organization rulesets, repository rulesets, classic protection; GitHub applies the strictest value of each parameter), a highest required_approving_review_count >= 1 and require_last_push_approval true on at least one layer. Rulesets in evaluate or disabled enforcement do not count. A cut-off repository list or any repository whose rules could not be read is not measured.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -45,6 +45,7 @@
   "citations": [
     "safeguards/devsecops/github/isPullRequestApprovalRequired.py (reads the Integration-Service GitHub workflow isPullRequestApprovalRequired: GET /orgs/{org}/repos, GET /repos/{owner}/{repo}/rules/branches/{branch}, GET /repos/{owner}/{repo}/branches/{branch}/protection, GET /orgs/{org}/rulesets and /rulesets/{id})",
     "https://docs.github.com/en/rest/branches/branch-protection (required_pull_request_reviews.require_last_push_approval: whether the most recent push must be approved by someone other than the person who pushed it; retrieved 2026-10-13)",
+    "https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch (returns all active rules from every level; rules in rulesets with evaluate or disabled enforcement are not returned; retrieved 2026-10-13)",
     "https://docs.github.com/en/rest/orgs/rules (bypass_actors is only returned to a user with write access to the ruleset; retrieved 2026-10-13)"
   ],
   "changeLog": [
