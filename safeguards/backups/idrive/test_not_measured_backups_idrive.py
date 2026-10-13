@@ -287,5 +287,60 @@ class CountsFailClosed(unittest.TestCase):
         self.assertEqual(run("unprotectedResourcesCount", "unprotectedResourcesCount", body)[0], 1)
 
 
+
+# Counts derived from a read that measured nothing. In a not-measured result these must be None, not
+# the 0 the loop started from, wherever they are published (inputSummary and the transformedResponse
+# side fields). Record counts (plans or devices scanned) are real and stay as read.
+DERIVED_COUNTS = {
+    "failedBackupJobsCount": ("failedBackupJobsCount", "plansWithFailures"),
+    "backupSuccessRatePercentage": ("totalApplied", "totalFailed", "totalPending", "attempted"),
+    "staleProtectionJobsCount": ("staleDevices",),
+    "unprotectedResourcesCount": ("totalDevicesAssignedToPlans", "totalPendingDeviceIds"),
+}
+
+# Bodies whose counts were fully read even though the criterion is not measured.
+COUNTS_WERE_READ = {("backupSuccessRatePercentage", "no_attempts")}
+
+VENDOR_TEXT = "vendor-detail-" + "x" * 300
+
+
+class NotMeasuredDetail(unittest.TestCase):
+    def test_derived_counts_are_none_when_not_measured(self):
+        for name in COUNT_FILES:
+            for case, body in count_not_measured_cases(name):
+                if (name, case) in COUNTS_WERE_READ:
+                    continue
+                with self.subTest(transform=name, body=case):
+                    out = load(name).transform(body())
+                    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+                    result = out["transformedResponse"]
+                    for field in DERIVED_COUNTS[name]:
+                        if field in summary:
+                            self.assertIsNone(summary[field], "inputSummary." + field)
+                        if field in result and field != name:
+                            self.assertIsNone(result[field], "transformedResponse." + field)
+
+    def test_derived_counts_stay_as_read_when_measured(self):
+        for name in COUNT_FILES:
+            for case, body, _expected in MEASURED[name]:
+                with self.subTest(transform=name, body=case):
+                    summary = load(name).transform(body())["additionalInfo"]["transformation"]["inputSummary"]
+                    for field in DERIVED_COUNTS[name]:
+                        if field in summary:
+                            self.assertIsInstance(summary[field], int)
+                            self.assertNotIsInstance(summary[field], bool)
+
+    def test_error_reason_does_not_echo_vendor_text(self):
+        for name in COUNT_FILES:
+            for body in ({"error": VENDOR_TEXT}, {"error": {"message": VENDOR_TEXT}},
+                         {"errors": [VENDOR_TEXT]}, {"Error": {"Code": "AccessDenied", "Message": VENDOR_TEXT}}):
+                with self.subTest(transform=name, body=str(body)[:40]):
+                    out = load(name).transform(body)
+                    self.assertIsNone(out["transformedResponse"][name])
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                    self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                    self.assertNotIn("vendor-detail", json.dumps(out))
+
+
 if __name__ == "__main__":
     unittest.main()
