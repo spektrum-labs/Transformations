@@ -1,4 +1,4 @@
-"""Halcyon (Endpoint Security): fail-closed checks over getDeviceMetrics.
+"""Halcyon (Endpoint Security): fail-closed checks over checkInstalled (GET /search/devices/metrics).
 
 Bodies are SYNTHETIC: Halcyon's public OpenAPI (api.halcyon.ai/docs) names the three fields of
 GET /search/devices/metrics (DeviceMetrics: total, no_heartbeats, need_updates, all required int32) but
