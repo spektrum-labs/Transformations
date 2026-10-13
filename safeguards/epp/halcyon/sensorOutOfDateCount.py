@@ -2,7 +2,7 @@
 Transformation: sensorOutOfDateCount
 Vendor: Halcyon  |  Category: Endpoint Security
 
-Integration-Service method getDeviceMetrics: GET https://api.halcyon.ai/search/devices/metrics (header X-TenantID).
+Integration-Service method checkInstalled (the EPP base method for a tenant's installation status): GET https://api.halcyon.ai/search/devices/metrics (header X-TenantID).
 Source: the vendor's public OpenAPI, api.halcyon.ai/docs, operation "GET /search/devices/metrics", whose
 response DeviceMetrics holds three required int32 fields: total, no_heartbeats and need_updates.
 Value: the vendor's own `need_updates` count, the devices the vendor reports as needing an agent update (out of date).
