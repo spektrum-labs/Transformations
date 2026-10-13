@@ -13,7 +13,7 @@ def error_reason(body):
     for key in ("error", "Error", "errors"):
         err = body.get(key)
         if err:
-            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured: " + str(err)[:200]
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
     for key in ("statusCode", "status_code", "status", "httpStatus"):
         code = body.get(key)
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
@@ -216,7 +216,8 @@ def evaluate(input):
 
     input_summary = {
         "totalDevices": total_devices,
-        "staleDevices": stale_count,
+        # Not measured: the stale count was never read, so it is not 0.
+        "staleDevices": stale_count if result_count is not None else None,
     }
 
     return create_response(
