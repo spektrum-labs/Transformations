@@ -97,9 +97,10 @@ def open_critical(input):
     if not isinstance(nodes, list):
         return None, "the issues connection has no node list"
     page = connection.get("pageInfo")
-    if not isinstance(page, dict) or not isinstance(page.get("hasNextPage"), bool):
+    more = page.get("hasNextPage") if isinstance(page, dict) else None
+    if not isinstance(more, bool):
         return None, "the read does not say whether it is complete (no pageInfo.hasNextPage), so it is not scored"
-    if page["hasNextPage"]:
+    if more:
         return None, "the read holds one page of " + str(len(nodes)) + " issues and more exist, so a count of it could be short"
     count = 0
     for node in nodes:
