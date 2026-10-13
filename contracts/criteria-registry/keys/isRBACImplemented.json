@@ -1,0 +1,38 @@
+{
+  "name": "isRBACImplemented",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when access is granted through defined roles with least privilege rather than per-person grants, across the systems in scope.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the access grants of the systems in scope; denominator = every grant or account the read lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read showing access assigned through roles, with no standing per-person privilege outside a role, or a passing test of the same fact over the full population.",
+  "evidenceClass": "unknown",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "Validate RBAC is properly implemented (integrationservice criteriakey-defaults.json)",
+    "safeguards/compliancemanagement/vanta/ and safeguards/compliancemanagement/drata/ isrbacimplemented.py (third-party proof sources: the GRC platform's own test result, level 3 in the proof ladder)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the GRC-platform proof-source transforms can emit it. The meaning is the existing catalogue description made precise; the roughly twenty existing implementations in other categories were not reviewed, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Registered for the Vanta and Drata proof-source transforms. Those answer from a GRC platform's own test results (third-party proof, level 3), never from a read of the tool, so allowedCategories is empty (cross-category evidence). Whether the other implementations of this key measure the same thing is not ruled; that review is open and the owner is not yet named."
+}
