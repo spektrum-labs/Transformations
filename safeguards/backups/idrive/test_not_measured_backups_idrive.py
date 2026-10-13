@@ -66,6 +66,10 @@ FILES = [
     ("isJobExecutionLogAccessible", "isJobExecutionLogAccessible"),
     ("isPrivateKeyEncryptionEnforced", "isPrivateKeyEncryptionEnforced"),
     ("isSubCompanyDataIsolationEnforced", "isSubCompanyDataIsolationEnforced"),
+    ("failedBackupJobsCount", "failedBackupJobsCount"),
+    ("backupSuccessRatePercentage", "backupSuccessRatePercentage"),
+    ("staleProtectionJobsCount", "staleProtectionJobsCount"),
+    ("unprotectedResourcesCount", "unprotectedResourcesCount"),
 ]
 
 EXTRA_UNMEASURED = {
@@ -112,6 +116,22 @@ MEASURED = {
         ("sub_shares_parent_id", lambda: {"company_id": 1, "name": "c", "sub_company_list": [{"company_id": 1}]}, False),
         ("distinct_sub_ids", lambda: {"company_id": 1, "name": "c", "sub_company_list": [{"company_id": 2}]}, True),
     ],
+    "failedBackupJobsCount": [
+        ("no_failures", lambda: plan(backup_failed_on=[]), 0),
+        ("two_failures", lambda: plan(backup_failed_on=["dev-a", "dev-b"]), 2),
+    ],
+    "backupSuccessRatePercentage": [
+        ("all_failed", lambda: plan(backup_applied_on=[], backup_failed_on=["dev-a"]), 0.0),
+        ("three_of_four", lambda: plan(backup_applied_on=["dev-a", "dev-b", "dev-c"], backup_failed_on=["dev-d"]), 75.0),
+    ],
+    "staleProtectionJobsCount": [
+        ("healthy", lambda: {"data": [{"device_id": "d1", "backup_status": "success", "last_backup": days_ago(1), "next_backup": days_ago(-1)}]}, 0),
+        ("one_failed", lambda: {"data": [{"device_id": "d1", "backup_status": "Failed", "last_backup": days_ago(3), "next_backup": days_ago(-1)}]}, 1),
+    ],
+    "unprotectedResourcesCount": [
+        ("none_pending", lambda: plan(backup_pending_on=[], devices=["dev-a"]), 0),
+        ("two_pending", lambda: plan(backup_pending_on=["dev-a", "dev-b"], devices=["dev-a", "dev-b", "dev-c"]), 2),
+    ],
 }
 
 
@@ -138,14 +158,133 @@ class NotMeasuredIsNotGraded(unittest.TestCase):
                     value, collection = run(name, key, body())
                     if expected is ANY_VALUE:
                         self.assertIsNotNone(value)
-                    else:
+                    elif isinstance(expected, bool):
                         self.assertIs(value, expected)
+                    else:
+                        self.assertNotIsInstance(value, bool)
+                        self.assertEqual(value, expected)
                     self.assertEqual(collection["status"], "success")
                     self.assertEqual(collection["errors"], [])
 
     def test_every_file_has_a_measured_case(self):
         for name, _key in FILES:
             self.assertTrue(MEASURED.get(name), name)
+
+
+# The four count/rate files. Each lambda returns a body; every one of these proves nothing, so the
+# count must be None with a dataCollection error -- never 0, which a "0 failed" requirement grades
+# as a pass. Field names follow the IDrive getBackupPlan / getDeviceSummary bodies the transforms read.
+COUNT_FIELDS = {
+    "failedBackupJobsCount": ("backup_failed_on",),
+    "backupSuccessRatePercentage": ("backup_applied_on", "backup_failed_on"),
+    "unprotectedResourcesCount": ("backup_pending_on",),
+}
+
+
+def plan_with(fields, value):
+    return plan(**{f: value for f in fields})
+
+
+def count_not_measured_cases(name):
+    """(case, body) pairs that must read as not measured for one of the four files."""
+    cases = [
+        ("error", lambda: {"error": True, "statusCode": 500, "message": "internal error"}),
+        ("error_string", lambda: {"error": "upstream timeout"}),
+        ("error_flag_with_data", lambda: dict(plan_with(COUNT_FIELDS.get(name, ("backup_failed_on",)), []), error="partial read")),
+        ("forbidden_403", lambda: {"statusCode": 403, "message": "Forbidden"}),
+        ("forbidden_403_typed", lambda: {"error": {"type": "permission_error", "message": "Missing required scopes"}}),
+        ("unauthorized_401", lambda: {"status_code": 401, "message": "invalid api key"}),
+        ("empty_list", lambda: []),
+        ("empty_dict", lambda: {}),
+        ("empty_data_list", lambda: {"data": []}),
+        ("no_list_in_body", lambda: {"message": "ok"}),
+        ("data_null", lambda: {"data": None}),
+        ("data_empty_string", lambda: {"data": ""}),
+        ("unreadable_body", lambda: "<html>bad gateway</html>"),
+    ]
+    if name == "staleProtectionJobsCount":
+        cases = cases[:2] + cases[3:] + [
+            ("missing_count", lambda: {"data": [{"device_id": "d1"}]}),
+            ("empty_count", lambda: {"data": [{"device_id": "d1", "backup_status": "", "last_backup": None, "next_backup": ""}]}),
+            ("one_device_unreadable", lambda: {"data": [
+                {"device_id": "d1", "backup_status": "success", "last_backup": days_ago(1), "next_backup": days_ago(-1)},
+                {"device_id": "d2"},
+            ]}),
+        ]
+    else:
+        fields = COUNT_FIELDS[name]
+        cases = cases + [
+            ("missing_count", lambda: plan(is_enabled=True)),
+            ("empty_count_null", lambda: plan_with(fields, None)),
+            ("empty_count_string", lambda: plan_with(fields, "")),
+            ("one_plan_missing_count", lambda: {"data": [
+                dict({"id": "plan-1"}, **{f: [] for f in fields}),
+                {"id": "plan-2", "is_enabled": True},
+            ]}),
+        ]
+        if name == "backupSuccessRatePercentage":
+            cases = cases + [
+                ("no_attempts", lambda: plan(backup_applied_on=[], backup_failed_on=[], backup_pending_on=["dev-a"])),
+                ("failed_list_missing", lambda: plan(backup_applied_on=["dev-a"])),
+            ]
+    return cases
+
+
+COUNT_FILES = ["failedBackupJobsCount", "backupSuccessRatePercentage", "staleProtectionJobsCount", "unprotectedResourcesCount"]
+
+
+class CountsFailClosed(unittest.TestCase):
+    def assert_not_measured(self, name, case, body):
+        with self.subTest(transform=name, body=case):
+            value, collection = run(name, name, body)
+            self.assertIsNone(value)
+            self.assertEqual(collection["status"], "error")
+            self.assertTrue(collection["errors"])
+            self.assertTrue(all(isinstance(e, str) and e for e in collection["errors"]))
+
+    def test_no_evidence_counts_are_none_not_zero(self):
+        for name in COUNT_FILES:
+            for case, body in count_not_measured_cases(name):
+                self.assert_not_measured(name, case, body())
+
+    def test_zero_is_not_returned_on_an_error(self):
+        for name in COUNT_FILES:
+            for body in ({"error": True, "statusCode": 500, "message": "internal error"},
+                         {"statusCode": 403, "message": "Forbidden"}):
+                with self.subTest(transform=name, body=body):
+                    value, collection = run(name, name, body)
+                    self.assertNotEqual(value, 0)
+                    self.assertIsNot(value, False)
+                    self.assertIsNone(value)
+                    self.assertEqual(collection["status"], "error")
+
+    def test_real_zero_stays_zero(self):
+        for name in COUNT_FILES:
+            case, body, expected = MEASURED[name][0]
+            with self.subTest(transform=name, body=case):
+                value, collection = run(name, name, body())
+                self.assertEqual(expected, 0)
+                self.assertIsNotNone(value)
+                self.assertNotIsInstance(value, bool)
+                self.assertEqual(value, 0)
+                self.assertEqual(collection["status"], "success")
+                self.assertEqual(collection["errors"], [])
+
+    def test_real_value_stays_its_value(self):
+        for name in COUNT_FILES:
+            case, body, expected = MEASURED[name][1]
+            with self.subTest(transform=name, body=case):
+                value, collection = run(name, name, body())
+                self.assertNotIsInstance(value, bool)
+                self.assertEqual(value, expected)
+                self.assertEqual(collection["status"], "success")
+
+    def test_real_zero_through_a_wrapper(self):
+        # The enriched {"data", "validation"} input and an apiResponse wrapper must still measure.
+        body = {"data": plan(backup_failed_on=[]), "validation": {"status": "valid", "errors": [], "warnings": []}}
+        self.assertEqual(run("failedBackupJobsCount", "failedBackupJobsCount", body)[0], 0)
+        body = {"apiResponse": {"data": [{"id": "p", "backup_pending_on": ["dev-a"]}]}}
+        self.assertEqual(run("unprotectedResourcesCount", "unprotectedResourcesCount", body)[0], 1)
 
 
 if __name__ == "__main__":
