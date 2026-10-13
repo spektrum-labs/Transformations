@@ -65,9 +65,10 @@ def test_a_low_score_is_still_a_measurement_not_an_error():
 
 
 def test_the_finding_names_the_domain_the_score_and_the_grade():
-    out = result(card(domain="example.org", grade="C", score=75))
+    domain = "example.org"
+    out = result(card(domain=domain, grade="C", score=75))
     finding = out["additionalInfo"]["evaluation"]["additionalFindings"][0]
-    assert "example.org" in finding and "75" in finding and "C" in finding
+    assert finding == f"SecurityScorecard rates {domain} 75 out of 100 (grade C)"
 
 
 def test_only_the_key_is_returned_so_no_second_criterion_leaks():
