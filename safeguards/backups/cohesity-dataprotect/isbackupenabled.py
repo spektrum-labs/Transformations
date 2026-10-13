@@ -10,11 +10,49 @@
 import json
 from datetime import datetime, timezone
 
+VENDOR = "Cohesity"
+PRODUCT = "DataProtect"
+METHOD = "getProtectionGroups"
+
+#: dataCollection.errorCode when no protection group in the response carries last-run information (lastRun),
+#: so the response cannot say whether any backup ran. Set only then, never for an error body or a partial answer.
+VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
+
+
+def respond(key, value, reason, extra=None, error_code=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured.
+    error_code is added to dataCollection only for a None answer."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    collection = {"status": "success" if measured else "error", "errors": [] if measured else [reason]}
+    if error_code and not measured:
+        collection["errorCode"] = error_code
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": collection,
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
     Returns isBackupEnabled = True when at least one protection group is active, not paused and not deleted, and its
-    last run's local backup finished Succeeded or SucceededWithWarning. False on any unreadable body.
+    last run's local backup finished Succeeded or SucceededWithWarning; False when run information is present and no
+    such group exists. None (not evaluated) when the body is unreadable or an error envelope, or when no group carries
+    last-run information at all (the response cannot say whether any backup ran).
     """
     key = "isBackupEnabled"
 
@@ -75,19 +113,26 @@ def transform(input):
     try:
         body, problem = body_with(input, ["protectionGroups"])
         if body is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         pgs = body.get("protectionGroups")
         if not isinstance(pgs, list):
-            return {key: False, "reason": "protectionGroups has an unexpected shape"}
+            return respond(key, None, "protectionGroups has an unexpected shape")
         good = []
+        live = 0
+        with_info = 0
         for g in pgs:
             if not isinstance(g, dict) or g.get("isDeleted") is True or g.get("isActive") is False or g.get("isPaused") is True:
                 continue
+            live = live + 1
             info = last_backup(g)
+            if info is not None:
+                with_info = with_info + 1
             if info is not None and info.get("status") in ["Succeeded", "SucceededWithWarning"]:
                 good.append(str(g.get("name")))
+        if live > 0 and with_info == 0:
+            return respond(key, None, "None of the " + str(live) + " active protection groups carries last-run information (lastRun), so it cannot be told whether any backup ran from this response (was includeLastRunInfo honored?)", {"runInfoReturned": False}, VENDOR_DATA_NOT_EXPOSED)
         if not good:
-            return {key: False, "reason": "No active protection group has a successful last backup run"}
-        return {key: True, "reason": str(len(good)) + " active protection groups have a successful last backup run", "groups": good[:20]}
+            return respond(key, False, "No active protection group has a successful last backup run")
+        return respond(key, True, str(len(good)) + " active protection groups have a successful last backup run", {"groups": good[:20]})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
