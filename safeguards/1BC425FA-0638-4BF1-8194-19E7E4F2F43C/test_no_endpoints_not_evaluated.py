@@ -160,6 +160,10 @@ UNREADABLE_BODIES = [
     ("refusal marker beside a wrapper", {"vendorErrorAsResponse": {"status": 403}, "response": {"items": NO_MDR_PAGE}}),
     ("error beside a wrapper holding an MDR endpoint", {"statusCode": 500, "response": {"items": MDR_PAGE}}),
     ("500 beside a doubly wrapped list", {"statusCode": 500, "response": {"result": {"items": NO_MDR_PAGE}}}),
+    ("500 on the middle of two wrappers", {"response": {"statusCode": 500, "result": {"items": NO_MDR_PAGE}}}),
+    ("error on the middle of two wrappers", {"response": {"error": "forbidden " + SENTINEL, "result": {"items": NO_MDR_PAGE}}}),
+    ("401 as text on the first of two wrappers", {"result": {"status": "401", "response": {"items": NO_MDR_PAGE}}}),
+    ("403 on the second of three wrappers", {"response": {"result": {"statusCode": 403, "Output": {"items": NO_MDR_PAGE}}}}),
     ("failed validation", enveloped({"items": MDR_PAGE},
                                     {"status": "failed", "errors": ["body did not match the schema"], "warnings": []})),
     ("failed validation on an error body", enveloped(SOPHOS_ERROR, {"status": "failed", "errors": [], "warnings": []})),
@@ -261,8 +265,11 @@ def test_licence_full_first_page_without_a_cursor_is_not_partial():
     ({"status_code": "200", "response": {"items": MDR_PAGE}}, True),
     ({"error": None, "errors": [], "response": {"items": MDR_PAGE}}, True),
     ({"status": "ok", "api_response": {"items": NO_MDR_PAGE}}, False),
+    ({"response": {"statusCode": 200, "result": {"items": NO_MDR_PAGE}}}, False),
+    ({"response": {"status": "ok", "result": {"items": MDR_PAGE}}}, True),
 ], ids=["200 beside a wrapper, no MDR", "success beside a wrapper, no MDR", "200 as text beside a wrapper, MDR",
-        "empty error fields beside a wrapper, MDR", "ok beside a wrapper, no MDR"])
+        "empty error fields beside a wrapper, MDR", "ok beside a wrapper, no MDR",
+        "200 on the middle of two wrappers, no MDR", "ok on the middle of two wrappers, MDR"])
 def test_licence_ok_status_beside_a_wrapper_does_not_move(body, expected):
     out = licence_run(body)
     assert out["transformedResponse"] == {LICENCE_KEY: expected}
