@@ -152,6 +152,14 @@ UNREADABLE_BODIES = [
     ("list of strings", ["error", "forbidden"]),
     ("list of error objects", [{"error": "forbidden"}]),
     ("items of error objects", {"items": [{"error": "forbidden"}]}),
+    ("500 beside a response wrapper", {"statusCode": 500, "response": {"items": NO_MDR_PAGE}}),
+    ("401 beside a result wrapper", {"status_code": 401, "result": {"items": NO_MDR_PAGE}}),
+    ("403 as text beside an api_response wrapper", {"status": "403", "api_response": {"items": NO_MDR_PAGE}}),
+    ("error beside a wrapper", {"error": "forbidden " + SENTINEL, "response": {"items": NO_MDR_PAGE}}),
+    ("errors beside a wrapper", {"errors": [{"message": SENTINEL}], "Output": {"items": NO_MDR_PAGE}}),
+    ("refusal marker beside a wrapper", {"vendorErrorAsResponse": {"status": 403}, "response": {"items": NO_MDR_PAGE}}),
+    ("error beside a wrapper holding an MDR endpoint", {"statusCode": 500, "response": {"items": MDR_PAGE}}),
+    ("500 beside a doubly wrapped list", {"statusCode": 500, "response": {"result": {"items": NO_MDR_PAGE}}}),
     ("failed validation", enveloped({"items": MDR_PAGE},
                                     {"status": "failed", "errors": ["body did not match the schema"], "warnings": []})),
     ("failed validation on an error body", enveloped(SOPHOS_ERROR, {"status": "failed", "errors": [], "warnings": []})),
@@ -245,6 +253,20 @@ def test_licence_full_first_page_without_a_cursor_is_not_partial():
     page = [licence_endpoint("e" + str(n), ["endpointProtection"]) for n in range(500)]
     out = licence_run({"items": page, "pages": {"size": "500", "maxSize": "500"}})
     assert out["transformedResponse"] == {LICENCE_KEY: False}
+
+
+@pytest.mark.parametrize("body,expected", [
+    ({"statusCode": 200, "response": {"items": NO_MDR_PAGE}}, False),
+    ({"status": "success", "result": {"items": NO_MDR_PAGE}}, False),
+    ({"status_code": "200", "response": {"items": MDR_PAGE}}, True),
+    ({"error": None, "errors": [], "response": {"items": MDR_PAGE}}, True),
+    ({"status": "ok", "api_response": {"items": NO_MDR_PAGE}}, False),
+], ids=["200 beside a wrapper, no MDR", "success beside a wrapper, no MDR", "200 as text beside a wrapper, MDR",
+        "empty error fields beside a wrapper, MDR", "ok beside a wrapper, no MDR"])
+def test_licence_ok_status_beside_a_wrapper_does_not_move(body, expected):
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: expected}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
 
 
 def test_licence_not_evaluated_reason_is_fixed_text():
