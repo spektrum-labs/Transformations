@@ -141,8 +141,16 @@ def evaluate(data):
                         found = True
         (covered if found else missing).append(name)
     measured = len(covered) + len(missing)
+    if not reached or measured == 0:
+        verdict = None
+    elif missing:
+        verdict = False
+    elif unreadable:
+        verdict = None
+    else:
+        verdict = True
     result = {
-        "isNetworkSecurityLoggingEnabled": reached and measured > 0 and not missing and not unreadable,
+        "isNetworkSecurityLoggingEnabled": verdict,
         "syslogCoveragePercentage": pct(len(covered), measured),
         "networksEvaluated": measured,
         "networksWithoutRole": missing[:25],
@@ -150,33 +158,40 @@ def evaluate(data):
         "requiredRoles": ['IDS alerts', 'Security events'],
         "endpointReached": reached,
     }
-    passes, fails, recs = [], [], []
+    passes, fails, recs, api_errors = [], [], [], []
     if not reached:
-
-        fails.append(
-            "The response carries no appliance network list and no per-network results, "
-            "so it is indistinguishable from an authentication failure. Not measured."
+        api_errors.append(
+            "The Meraki response carries no appliance network list and no per-network results; "
+            "nothing to measure."
         )
-
     elif measured == 0:
-        fails.append("No appliance network returned syslog server settings.")
-    elif not missing and not unreadable:
-        passes.append(
-            "All %d appliance network(s) forward security events or IDS alerts to a syslog server." % measured
-        )
-    else:
+        api_errors.append("No appliance network returned syslog server settings; nothing to measure.")
+    elif missing:
         fails.append(
             "%d of %d appliance network(s) forward no security events or IDS alerts to syslog: %s."
             % (len(missing), measured, ", ".join(missing[:10]))
         )
         recs.append('Add the Security events and IDS alerts roles to a syslog server under Network-wide > General on each network listed.')
-    return result, passes, fails, recs, {"networksEvaluated": measured}
+    elif unreadable:
+        api_errors.append(
+            "%d of %d appliance network(s) could not be read (%s), so security-event forwarding cannot be confirmed on every network."
+            % (len(unreadable), len(unreadable) + measured, ", ".join(unreadable[:10]))
+        )
+    else:
+        passes.append(
+            "All %d appliance network(s) forward security events or IDS alerts to a syslog server." % measured
+        )
+    if api_errors:
+        fails = list(api_errors)
+    elif unreadable:
+        fails.append("%d more network(s) could not be read and were not counted: %s." % (len(unreadable), ", ".join(unreadable[:10])))
+    return result, passes, fails, recs, api_errors, {"networksEvaluated": measured}
 
 
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
-    result, pass_reasons, fail_reasons, recommendations, input_summary = evaluate(data)
+    result, pass_reasons, fail_reasons, recommendations, api_errors, input_summary = evaluate(data)
     return create_response(
         result=result,
         validation=validation,
@@ -184,6 +199,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "isNetworkSecurityLoggingEnabled",
             "vendor": "Cisco Meraki MX",
