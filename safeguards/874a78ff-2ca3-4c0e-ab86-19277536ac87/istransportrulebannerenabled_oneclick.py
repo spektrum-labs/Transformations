@@ -30,16 +30,22 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None,
+                    error_code=None, required_scope=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    data_collection = {
+        "status": "error" if (api_errors or []) else "success",
+        "errors": api_errors or []
+    }
+    if error_code:
+        data_collection["errorCode"] = error_code
+        if required_scope:
+            data_collection["requiredScope"] = required_scope
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
-            },
+            "dataCollection": data_collection,
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -137,7 +143,10 @@ def transform(input):
                     validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
                     api_errors=["Could not connect to Microsoft 365: Exchange access is not complete"],
                     fail_reasons=["Exchange access is required for this check."],
-                    recommendations=["Complete Exchange access in Microsoft One-Click, then re-evaluate this check."]
+                    recommendations=["Complete Exchange access in Microsoft One-Click, then re-evaluate this check."],
+                    # Names what to grant, so the platform and the CLI say "grant the role", not "fix the connection".
+                    error_code="scope_not_granted",
+                    required_scope="Global Reader (Microsoft Entra directory role) assigned to the Spektrum application"
                 )
             api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
             return create_response(
