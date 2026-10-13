@@ -7,7 +7,8 @@ A populated list and an explicit verdict key keep their earlier readings. Synthe
 
 The second half of this file covers the Sophos MDR licence read, confirmedlicensepurchased_endpoints.py:
 a failed, refused, empty or partial endpoint read is Not evaluated there too, and only a complete,
-readable list with no MDR endpoint is False.
+readable list with no MDR endpoint is False. MDR there means the managed service only, the same rule as
+mdr_transform.py: the "mtr" product or an explicit mdrManaged true, never the self-service "xdr" product.
 """
 import importlib.util
 import json
@@ -280,3 +281,121 @@ def test_licence_not_evaluated_reason_is_fixed_text():
     out = licence_run(SOPHOS_ERROR)
     reasons = out["additionalInfo"]["evaluation"]["failReasons"] + out["additionalInfo"]["dataCollection"]["errors"]
     assert all(reason.startswith("Not evaluated") for reason in reasons)
+
+
+# ---------------------------------------------------------------------------------------------
+# MDR means the managed service only, the same rule as mdr_transform.py and epp_transform.py:
+# the "mtr" product (Managed Threat Response) or an explicit mdrManaged true. The "xdr" product
+# is the self-service XDR licence, not a managed service, so a tenant with only the XDR licence
+# has no MDR licence. A failed, empty or partial read still reads None.
+# ---------------------------------------------------------------------------------------------
+XDR_PAGE = [licence_endpoint("e1", ["endpointProtection", "xdr"])]
+MTR_AND_XDR_ONE_ENDPOINT = [licence_endpoint("e1", ["endpointProtection", "mtr", "xdr"])]
+MTR_AND_XDR_TWO_ENDPOINTS = [licence_endpoint("e1", ["endpointProtection", "xdr"]),
+                             licence_endpoint("e2", ["endpointProtection", "mtr"])]
+
+
+@pytest.mark.parametrize("body", [
+    {"items": XDR_PAGE},
+    XDR_PAGE,
+    {"endpoints": XDR_PAGE},
+    enveloped({"items": XDR_PAGE}),
+    {"response": {"items": XDR_PAGE}},
+    {"items": XDR_PAGE + [licence_endpoint("e2", ["endpointProtection", "xdr"])]},
+    {"items": [licence_endpoint("e1", ["xdr"], mdrManaged=False)]},
+    {"items": [licence_endpoint("e1", ["xdr"], mdrManaged=None)]},
+    {"items": [licence_endpoint("e1", ["xdr"], mdrManaged="false")]},
+    {"items": XDR_PAGE, "pages": {"size": "1", "maxSize": "500", "nextKey": "None", "total": 1}},
+], ids=["items", "bare list", "endpoints key", "enveloped", "response wrapper", "two XDR endpoints",
+        "mdrManaged false", "mdrManaged null", "mdrManaged false as text", "one complete page"])
+def test_licence_xdr_only_is_false(body):
+    # The read succeeded and is complete; the only MDR-like evidence is the self-service XDR product.
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: False}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert out["additionalInfo"]["dataCollection"]["errors"] == []
+    assert out["additionalInfo"]["evaluation"]["passReasons"] == []
+    assert "None of the" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+@pytest.mark.parametrize("body", [
+    {"items": [licence_endpoint("e1", ["mtr"])]},
+    {"items": [licence_endpoint("e1", ["endpointProtection", "mtr"])]},
+    [licence_endpoint("e1", ["endpointProtection", "interceptX", "mtr"])],
+    enveloped({"items": [licence_endpoint("e1", ["endpointProtection", "mtr"])]}),
+    {"result": {"items": [licence_endpoint("e1", ["endpointProtection", "mtr"])]}},
+    {"items": [licence_endpoint("e1", ["endpointProtection"]), licence_endpoint("e2", ["endpointProtection", "mtr"])]},
+], ids=["mtr only", "mtr with endpoint protection", "bare list", "enveloped", "result wrapper", "mtr on the second endpoint"])
+def test_licence_mtr_is_true(body):
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: True}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
+
+
+@pytest.mark.parametrize("body", [
+    {"items": MTR_AND_XDR_ONE_ENDPOINT},
+    {"items": MTR_AND_XDR_TWO_ENDPOINTS},
+    {"items": list(reversed(MTR_AND_XDR_TWO_ENDPOINTS))},
+    enveloped({"items": MTR_AND_XDR_TWO_ENDPOINTS}),
+], ids=["both on one endpoint", "both on two endpoints", "both on two endpoints, mtr first", "enveloped"])
+def test_licence_mtr_and_xdr_together_is_true(body):
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: True}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_licence_pass_reason_counts_only_managed_endpoints():
+    # One of the two endpoints carries mtr; the XDR endpoint is not part of the MDR figure.
+    out = licence_run({"items": MTR_AND_XDR_TWO_ENDPOINTS})
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["mdrEndpoints"] == 1
+    assert "1 of 2 endpoints" in out["additionalInfo"]["evaluation"]["passReasons"][0]
+
+
+@pytest.mark.parametrize("flag", [True, "true", "True"])
+def test_licence_xdr_with_explicit_mdr_managed_true_is_true(flag):
+    # An explicit managed flag still counts, as in mdr_transform.py.
+    out = licence_run({"items": [licence_endpoint("e1", ["endpointProtection", "xdr"], mdrManaged=flag)]})
+    assert out["transformedResponse"] == {LICENCE_KEY: True}
+
+
+XDR_ONLY_UNREADABLE = [
+    ("error body beside an XDR endpoint", dict(SOPHOS_ERROR, items=XDR_PAGE)),
+    ("401 body", {"statusCode": 401, "error": "Unauthorized"}),
+    ("500 beside a wrapper holding an XDR endpoint", {"statusCode": 500, "response": {"items": XDR_PAGE}}),
+    ("failed validation on an XDR endpoint", enveloped({"items": XDR_PAGE},
+                                                        {"status": "failed", "errors": ["bad body"], "warnings": []})),
+    ("empty endpoint list", {"items": []}),
+    ("XDR only, next-page cursor", {"items": XDR_PAGE, "pages": {"size": "1", "maxSize": "500", "nextKey": "abc123"}}),
+    ("XDR only, truncated", {"items": XDR_PAGE, "truncated": True}),
+    ("XDR only, more than one page", {"items": XDR_PAGE, "pages": {"size": "1", "total": 3}}),
+    ("XDR only, page does not start at the beginning", {"items": XDR_PAGE, "pages": {"fromKey": "abc123"}}),
+]
+
+
+@pytest.mark.parametrize("label,body", XDR_ONLY_UNREADABLE, ids=[label for label, _ in XDR_ONLY_UNREADABLE])
+def test_licence_xdr_only_with_an_error_or_partial_read_is_still_not_evaluated(label, body):
+    assert_licence_not_evaluated(licence_run(body))
+
+
+AGREEMENT_FLEETS = [
+    ("no products", [licence_endpoint("e1", [])]),
+    ("endpoint protection only", [licence_endpoint("e1", ["endpointProtection"])]),
+    ("mtr", [licence_endpoint("e1", ["mtr"])]),
+    ("xdr", [licence_endpoint("e1", ["xdr"])]),
+    ("mtr and xdr", [licence_endpoint("e1", ["mtr", "xdr"])]),
+    ("xdr and mdrManaged true", [licence_endpoint("e1", ["xdr"], mdrManaged=True)]),
+    ("xdr and mdrManaged false", [licence_endpoint("e1", ["xdr"], mdrManaged=False)]),
+    ("mdrManaged true as text", [licence_endpoint("e1", [], mdrManaged="true")]),
+    ("mdrManaged null", [licence_endpoint("e1", [], mdrManaged=None)]),
+    ("mixed fleet", [licence_endpoint("e1", ["xdr"]), licence_endpoint("e2", []), licence_endpoint("e3", ["mtr"])]),
+    ("xdr fleet", [licence_endpoint("e1", ["xdr"]), licence_endpoint("e2", ["xdr"])]),
+]
+
+
+@pytest.mark.parametrize("label,items", AGREEMENT_FLEETS, ids=[label for label, _ in AGREEMENT_FLEETS])
+def test_licence_agrees_with_mdr_transform_on_what_counts_as_mdr(label, items):
+    # The licence check and the MDR coverage check must not drift apart on what an MDR endpoint is.
+    licence = licence_run({"items": items})["transformedResponse"][LICENCE_KEY]
+    coverage = run("mdr_transform.py", {"items": items})["transformedResponse"]
+    assert licence is coverage["isMDREnabled"]
