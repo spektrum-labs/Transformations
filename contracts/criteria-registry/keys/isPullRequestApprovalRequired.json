@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "every active (not archived, not disabled) repository the organization read lists; one default branch each. Archived and disabled repositories are excluded and counted in the reasons",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "A complete read of every active repository's default-branch rules (effective ruleset rules and classic branch protection) showing, for each, across every layer in active enforcement (organization rulesets, repository rulesets, classic protection; GitHub applies the strictest value of each parameter), a highest required_approving_review_count >= 1 and require_last_push_approval true on at least one layer. Rulesets in evaluate or disabled enforcement do not count. A cut-off repository list or any repository whose rules could not be read is not measured.",
+  "evidenceRequiredForTrue": "A complete read of every active repository's default-branch rules (effective ruleset rules and classic branch protection) showing, for each, across every layer in active enforcement (organization rulesets, repository rulesets, classic protection; GitHub applies the strictest value of each parameter), a highest required_approving_review_count >= 1 and require_last_push_approval true on at least one layer. Rulesets in evaluate or disabled enforcement do not count. A layer that does not state its count or last-push setting cannot prove a failure (not measured unless the other layers pass); repositories with no default branch commit (classic protection 404 Branch not found) are skipped and counted. A cut-off repository list or any repository whose rules could not be read is not measured.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
