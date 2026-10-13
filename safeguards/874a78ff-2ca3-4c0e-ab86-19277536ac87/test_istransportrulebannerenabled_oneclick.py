@@ -70,6 +70,9 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
         # The vendor text (which names the application) is not echoed, and an id digit run is not read as an HTTP code.
         self.assertNotIn(EXAMPLE_APP_ID, collection["errors"][0])
         self.assertNotIn("HTTP", collection["errors"][0])
+        # The platform and the CLI read this code to say "grant the role" rather than "fix the connection".
+        self.assertEqual(collection["errorCode"], "scope_not_granted")
+        self.assertIn("Global Reader", collection["requiredScope"])
         self.assertEqual(response["additionalInfo"]["transformation"]["status"], "success")
         # Never a False beside an error: the check carries no value at all.
         self.assertIsNone(response["transformedResponse"][KEY])
@@ -111,6 +114,7 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                 self.assertNotIn("Complete Exchange access", " ".join(evaluation["recommendations"]))
                 self.assertIsNone(response["transformedResponse"][KEY])
                 self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertNotIn("errorCode", response["additionalInfo"]["dataCollection"])
                 self.assertEqual(response["additionalInfo"]["dataCollection"], legacy["additionalInfo"]["dataCollection"])
                 self.assertEqual(evaluation, legacy["additionalInfo"]["evaluation"])
 

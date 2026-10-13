@@ -14,6 +14,11 @@ from datetime import datetime, timezone
 NONE_MEANS_NOT_EVALUATED = ('staleProtectionJobsCount',)
 
 
+#: dataCollection.errorCode when no protection group in the response carries last-run information (lastRun),
+#: so the response cannot say whether any backup ran. Set only then, never for an error body or a partial answer.
+VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
+
+
 def criteria_unmeasured(result):
     """True when every criterion this file answers that the result carries is None.
 
@@ -96,6 +101,8 @@ def transform_unmarked(input):
             return {key: None, "reason": problem}
         if not live:
             return {key: None, "reason": "No active protection group"}
+        if len([g for g in live if last_backup(g) is not None]) == 0:
+            return {key: None, "reason": "None of the " + str(len(live)) + " active protection groups carries last-run information (lastRun), so stale protection groups cannot be counted from this response (was includeLastRunInfo honored?)", "runInfoReturned": False}
         now_us = int(datetime.now(timezone.utc).timestamp() * 1000000)
         limit = now_us - 7 * 24 * 3600 * 1000000
         stale = []
@@ -138,4 +145,6 @@ def transform(input):
     why = why + [str(e) for e in errors if e] if isinstance(errors, list) else why
     marked = dict(collection if isinstance(collection, dict) else {}, status="error",
                   errors=why or ["The response could not answer this check, so it was not evaluated."])
+    if inner.get("runInfoReturned") is False:
+        marked = dict(marked, errorCode=VENDOR_DATA_NOT_EXPOSED)
     return dict(out, additionalInfo=dict(info, dataCollection=marked))
