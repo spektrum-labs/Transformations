@@ -123,14 +123,25 @@ def repo_label(r):
     return login + "/" + str(r.get("name") or "unknown")
 
 
-def ruleset_candidates(rules):
-    """Approval requirements from the effective rules list: (count, last_push, source, id)."""
+def ruleset_candidates(rules, inactive_ids):
+    """Approval requirements from the effective rules list: (count, last_push, source, id).
+
+    GET /repos/{owner}/{repo}/rules/branches/{branch} returns only rules from rulesets in
+    "active" enforcement (GitHub: rules in rulesets with "evaluate" or "disabled" enforcement
+    are not returned). As a guard, a rule that carries its own non-active "enforcement", or
+    whose organization ruleset detail says it is not active, is skipped too.
+    """
     out = []
     for rule in rules:
         if not isinstance(rule, dict) or rule.get("type") != "pull_request":
             continue
-        params = rule.get("parameters") if isinstance(rule.get("parameters"), dict) else {}
+        enforcement = rule.get("enforcement")
+        if isinstance(enforcement, str) and enforcement != "active":
+            continue
         source_type = rule.get("ruleset_source_type")
+        if source_type == "Organization" and rule.get("ruleset_id") in inactive_ids:
+            continue
+        params = rule.get("parameters") if isinstance(rule.get("parameters"), dict) else {}
         source = "organization ruleset" if source_type == "Organization" else (
             "repository ruleset" if source_type == "Repository" else "ruleset")
         out.append({
@@ -195,14 +206,35 @@ def ruleset_bypass_index(details):
     return index
 
 
-def judge_repo(rules_item, protection_item):
-    """One repository: ("pass", source, candidate) | ("fail", missing, None) | ("unreadable", why, None)."""
+def inactive_org_ruleset_ids(details):
+    ids = {}
+    if not isinstance(details, list):
+        return ids
+    for d in details:
+        if isinstance(d, dict) and d.get("error") is not True:
+            enforcement = d.get("enforcement")
+            if isinstance(enforcement, str) and enforcement != "active":
+                ids[d.get("id")] = True
+    return ids
+
+
+def judge_repo(rules_item, protection_item, inactive_ids):
+    """One repository, aggregated across every active layer that targets the default branch.
+
+    GitHub applies all of them and the strictest value of each parameter, so the repository
+    passes when the highest required approving count across the layers read is >= 1 AND any
+    layer read requires approval of the most recent push. Layers that were read can pass on
+    their own even when another layer is unreadable; otherwise an unreadable layer means the
+    repository is not evaluated.
+
+    Returns ("pass", layers, contributing) | ("fail", missing, []) | ("unreadable", why, []).
+    """
     unreadable = []
     candidates = []
 
     rules_status = item_status(rules_item)
     if isinstance(rules_item, list):
-        candidates.extend(ruleset_candidates(rules_item))
+        candidates.extend(ruleset_candidates(rules_item, inactive_ids))
     elif rules_status is not None:
         unreadable.append("branch rules HTTP " + str(rules_status))
     else:
@@ -223,20 +255,31 @@ def judge_repo(rules_item, protection_item):
     else:
         unreadable.append("classic protection not returned")
 
-    for c in candidates:
-        if c["count"] is not None and c["count"] >= 1 and c["lastPush"]:
-            return "pass", c["source"], c
-    if unreadable:
-        return "unreadable", ", ".join(unreadable), None
-
     counts = [c["count"] for c in candidates if c["count"] is not None]
+    max_count = max(counts) if counts else None
+    count_layers = [c for c in candidates if max_count is not None and max_count >= 1 and c["count"] == max_count]
+    push_layers = [c for c in candidates if c["lastPush"]]
+
+    if count_layers and push_layers:
+        count_from = count_layers[0]["source"]
+        push_from = push_layers[0]["source"]
+        if count_from == push_from:
+            detail = count_from
+        else:
+            detail = str(max_count) + " required approval(s) from " + count_from + ", last-push approval from " + push_from
+        return "pass", detail, count_layers + push_layers
+    if unreadable:
+        return "unreadable", ", ".join(unreadable), []
+
     if not candidates:
         missing = "no approval rule"
-    elif not counts or max(counts) < 1:
+    elif max_count is None or max_count < 1:
         missing = "0 required approvals"
+        if not push_layers:
+            missing = missing + " and last-push approval off"
     else:
         missing = "last-push approval off"
-    return "fail", missing, None
+    return "fail", missing, []
 
 
 def transform(input):
@@ -246,11 +289,13 @@ def transform(input):
     GitHub always blocks an author approving their own pull request, so that is not a setting.
     What an organization controls is whether the default branch requires at least one approving
     review AND "require approval of the most recent reviewable push", so whoever pushed last
-    cannot be the approver. A repository passes when one rule carries both, from an organization
-    ruleset or a repository ruleset (GET /repos/{owner}/{repo}/rules/branches/{branch}, the
-    effective rules) or classic branch protection (GET .../branches/{branch}/protection,
-    required_pull_request_reviews). A count on one rule and last-push approval on another are not
-    combined: the check needs one rule that shows both (conservative).
+    cannot be the approver. The layers are organization rulesets and repository rulesets
+    (GET /repos/{owner}/{repo}/rules/branches/{branch}, which returns only rules from rulesets in
+    active enforcement) and classic branch protection (GET .../branches/{branch}/protection,
+    required_pull_request_reviews). GitHub applies every active layer and the strictest value of
+    each parameter, so a repository passes when the highest required approving count across the
+    layers read is >= 1 AND any layer read requires approval of the most recent push. A ruleset
+    in evaluate or disabled enforcement does not count.
 
     Input, from the Integration-Service workflow of the same name: repositories (the org list),
     branchRules and branchProtection (one slot per repository, same order; a failed read is
@@ -306,6 +351,7 @@ def transform(input):
     unreadable = []
     not_read = []
     org_rulesets_used = {}
+    inactive_ids = inactive_org_ruleset_ids(body.get("orgRulesetDetails"))
     for index, r in enumerate(repos):
         if not isinstance(r, dict):
             continue
@@ -318,13 +364,16 @@ def transform(input):
             continue
         rules_item = rules[index] if index < len(rules) else None
         protection_item = protection[index] if index < len(protection) else None
-        verdict, detail, cand = judge_repo(rules_item, protection_item)
+        verdict, detail, layers = judge_repo(rules_item, protection_item, inactive_ids)
         if verdict == "pass":
             passing.append(label + " (" + detail + ")")
-            if cand and detail == "organization ruleset":
-                org_rulesets_used[cand.get("rulesetId")] = True
-            if cand and detail == "repository ruleset":
-                findings.append(label + ": the passing rule is a repository ruleset; its bypass list was not read.")
+            repo_ruleset_noted = False
+            for layer in layers:
+                if layer["source"] == "organization ruleset":
+                    org_rulesets_used[layer.get("rulesetId")] = True
+                elif layer["source"] == "repository ruleset" and not repo_ruleset_noted:
+                    repo_ruleset_noted = True
+                    findings.append(label + ": a passing layer is a repository ruleset; its bypass list was not read.")
         elif verdict == "fail":
             failing.append(label + ": " + detail)
         else:
@@ -373,7 +422,7 @@ def transform(input):
     if excluded:
         findings.append(str(excluded) + " archived or disabled repositories were excluded.")
     if result is True:
-        pass_reasons.append("All " + str(len(passing)) + " active repositories require at least one approving review and approval of the most recent push on their default branch (e.g. "
+        pass_reasons.append("All " + str(len(passing)) + " active repositories require at least one approving review and approval of the most recent push on their default branch, across their active rulesets and classic protection (e.g. "
                             + "; ".join(passing[:5]) + ").")
     elif result is False:
         fail_reasons.append(str(len(failing)) + " of " + str(active) + " active repositories do not require an approval from someone other than the last pusher on their default branch: "
