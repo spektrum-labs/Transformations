@@ -125,7 +125,7 @@ MEASURED = {
         ("three_of_four", lambda: plan(backup_applied_on=["dev-a", "dev-b", "dev-c"], backup_failed_on=["dev-d"]), 75.0),
     ],
     "staleProtectionJobsCount": [
-        ("healthy", lambda: {"data": [{"device_id": "d1", "backup_status": "success", "last_backup": days_ago(1), "next_backup": days_ago(-1)}]}, 0),
+        ("healthy", lambda: {"data": [{"device_id": "d1", "backup_status": "success", "last_backup": days_ago(1, "%Y-%m-%d %H:%M:%S"), "next_backup": days_ago(-1, "%Y-%m-%d %H:%M:%S")}]}, 0),
         ("one_failed", lambda: {"data": [{"device_id": "d1", "backup_status": "Failed", "last_backup": days_ago(3), "next_backup": days_ago(-1)}]}, 1),
     ],
     "unprotectedResourcesCount": [
