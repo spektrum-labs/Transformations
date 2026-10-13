@@ -12,7 +12,7 @@ def error_reason(body):
     for key in ("error", "Error", "errors"):
         err = body.get(key)
         if err:
-            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured: " + str(err)[:200]
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
     for key in ("statusCode", "status_code", "status", "httpStatus"):
         code = body.get(key)
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
@@ -179,6 +179,12 @@ def evaluate(input):
         ]
         fail_reasons = []
         recommendations = []
+
+    if result_count is None:
+        # Not measured: the derived counts were never read, so they are not 0.
+        plans_with_failures = None
+        input_summary["failedBackupJobsCount"] = None
+        input_summary["plansWithFailures"] = None
 
     return create_response(
         result={
