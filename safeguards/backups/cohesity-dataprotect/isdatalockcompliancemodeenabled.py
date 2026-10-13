@@ -12,6 +12,34 @@
 import json
 from datetime import datetime, timezone
 
+VENDOR = "Cohesity"
+PRODUCT = "DataProtect"
+METHOD = "getProtectionPosture"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -78,13 +106,13 @@ def transform(input):
     try:
         body, problem = body_with(input, ["protectionGroups", "policies"])
         if body is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         live, problem = groups_in(body)
         if live is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         pols = body.get("policies")
         if not isinstance(pols, list):
-            return {key: False, "reason": "policies has an unexpected shape"}
+            return respond(key, None, "policies has an unexpected shape")
         by_id = {}
         for p in pols:
             if isinstance(p, dict) and p.get("id") is not None:
@@ -93,11 +121,11 @@ def transform(input):
         for g in live:
             pid = str(g.get("policyId"))
             if pid not in by_id:
-                return {key: False, "reason": "Protection group " + str(g.get("name")) + " uses policy " + pid + ", which was not returned"}
+                return respond(key, None, "Protection group " + str(g.get("name")) + " uses policy " + pid + ", which was not returned")
             if by_id[pid] not in used:
                 used.append(by_id[pid])
         if not used:
-            return {key: False, "reason": "No active protection group, so no policy is in use"}
+            return respond(key, False, "No active protection group, so no policy is in use")
 
         def regular(p):
             bp = p.get("backupPolicy")
@@ -119,7 +147,7 @@ def transform(input):
         for p in used:
             mode = lock(p)
             if mode != "Compliance":
-                return {key: False, "reason": "Policy " + str(p.get("name")) + " DataLock mode is " + str(mode)}
-        return {key: True, "reason": "All " + str(len(used)) + " in-use policies lock regular backups in Compliance mode"}
+                return respond(key, False, "Policy " + str(p.get("name")) + " DataLock mode is " + str(mode))
+        return respond(key, True, "All " + str(len(used)) + " in-use policies lock regular backups in Compliance mode")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
