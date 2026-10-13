@@ -687,6 +687,9 @@ JUNK_SIGNERS = [
     "arn:aws:secretsmanager:us-east-1:111122223333:notasecret:abcd",
     "arn:garbage:secretsmanager:us-east-1:111122223333:secret:abcd",
     "arn:aws:secretsmanager:us-east-1:1234:secret:abcd",
+    "arn:aws:secretsmanager::111122223333:secret:abcd",
+    "arn:aws:secretsmanager:us-east-1::secret:abcd",
+    "arn:aws:secretsmanager:::secret:abcd",
     "null",
     "0",
     "false",
@@ -728,11 +731,41 @@ def test_certificates_junk_alone_never_fails_the_key():
         assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is None
 
 
+@pytest.mark.parametrize("arn", [
+    "arn:aws:secretsmanager::111122223333:secret:ca-AbCdEf",
+    "arn:aws:secretsmanager:us-east-1::secret:ca-AbCdEf",
+    "arn:aws:secretsmanager:::secret:ca-AbCdEf",
+])
+def test_certificates_a_secrets_manager_arn_with_an_empty_region_or_account_is_not_true(arn):
+    # A real Secrets Manager secret ARN always carries both a region and an account.
+    assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is None
+    not_evaluated("hasCertificatesManagedExternally", cert_body([cert(SM_ARN, "a"), cert(arn, "b")]))
+
+
 def test_certificates_a_secrets_manager_signer_in_each_partition_is_true():
     for arn in ("arn:aws:secretsmanager:us-east-1:111122223333:secret:ca-AbCdEf",
                 "arn:aws-us-gov:secretsmanager:us-gov-west-1:111122223333:secret:ca-AbCdEf",
                 "arn:aws-cn:secretsmanager:cn-north-1:111122223333:secret:ca-AbCdEf"):
         assert run("hasCertificatesManagedExternally", cert_body([cert(arn)])) is True
+
+
+# --- the four keys that are not wired -----------------------------------------------------
+# ipsEnabled, sslDeepInspectionEnabled, restApiTokenExpiryEnforced and isRulestackCommitClean are not
+# in the Integration-Service retrievalTransformationArray, so they show as not covered. Each file
+# says so at the top, so nobody reads it as a live check.
+
+NOT_WIRED_KEYS = ["ipsEnabled", "sslDeepInspectionEnabled", "restApiTokenExpiryEnforced",
+                  "isRulestackCommitClean"]
+
+
+@pytest.mark.parametrize("name", NOT_WIRED_KEYS)
+def test_a_not_wired_key_file_says_not_wired_in_its_docstring(name):
+    assert "NOT WIRED" in (load(name).__doc__ or "")
+
+
+def test_the_commit_clean_file_names_the_condition_for_wiring_it_again():
+    doc = load("isRulestackCommitClean").__doc__
+    assert "real read-only connection" in doc and "re-wire" in doc
 
 
 # --- restApiTokenExpiryEnforced ---------------------------------------------------------
