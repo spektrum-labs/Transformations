@@ -2,6 +2,24 @@ import json
 from datetime import datetime
 
 
+CRITERIA_KEY = "failedBackupJobsCount"
+
+
+def error_reason(body):
+    """A reason string when the body is an API error or refusal (any 4xx/5xx), else None."""
+    if not isinstance(body, dict):
+        return None
+    for key in ("error", "Error", "errors"):
+        err = body.get(key)
+        if err:
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured: " + str(err)[:200]
+    for key in ("statusCode", "status_code", "status", "httpStatus"):
+        code = body.get(key)
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "IDrive API returned HTTP " + str(code) + "; " + CRITERIA_KEY + " was not measured."
+    return None
+
+
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -30,9 +48,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    api_err_list = api_errors or []
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    api_err_list = [] if measured else (api_errors or transformation_errors or fail_reasons
+                                        or [CRITERIA_KEY + " could not be measured from the response"])
     transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
+    data_collection_status = "success" if measured else "error"
     transformation_status = "error" if transform_err_list else "success"
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
@@ -65,7 +88,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def evaluate(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -83,22 +106,29 @@ def transform(input):
         elif isinstance(candidate, dict):
             plans = [candidate]
 
+    api_error = error_reason(input) or error_reason(data)
+    if api_error:
+        plans = []
+
     total_plans = len(plans)
     failed_count = 0
     plans_with_failures = 0
+    plans_without_list = 0
     failed_device_ids = []
 
     for plan in plans:
-        if not isinstance(plan, dict):
+        failed_on = plan.get("backup_failed_on") if isinstance(plan, dict) else None
+        if not isinstance(failed_on, list):
+            # Missing, null or "" backup_failed_on proves nothing about this plan's failures.
+            plans_without_list = plans_without_list + 1
             continue
-        failed_on = plan.get("backup_failed_on")
-        if isinstance(failed_on, list) and len(failed_on) > 0:
+        if len(failed_on) > 0:
             failed_count = failed_count + len(failed_on)
             plans_with_failures = plans_with_failures + 1
             failed_device_ids = failed_device_ids + failed_on
 
     transformation_errors = []
-    if total_plans == 0:
+    if total_plans == 0 and not api_error:
         transformation_errors.append("No backup plan records found in response")
 
     input_summary = {
@@ -109,13 +139,31 @@ def transform(input):
 
     plan_ids = [p.get("id") for p in plans if isinstance(p, dict)]
 
-    if total_plans == 0:
+    result_count = failed_count
+    if api_error:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = [api_error]
+        recommendations = [
+            "Check the IDrive API credentials and permissions for getBackupPlan, then re-run the check."
+        ]
+    elif total_plans == 0:
+        result_count = None
         pass_reasons = []
         fail_reasons = [
             "No backup plan records were returned by the API; failed backup job count could not be determined from any plan data."
         ]
         recommendations = [
             "Verify the company_id is correct and that backup plans exist for this tenant."
+        ]
+    elif plans_without_list > 0:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = [
+            f"{plans_without_list} of {total_plans} backup plan record(s) carry no backup_failed_on list; the failed backup job count cannot be determined, so it is not evaluated."
+        ]
+        recommendations = [
+            "Confirm getBackupPlan returns backup_failed_on for every plan for this tenant."
         ]
     elif failed_count > 0:
         pass_reasons = []
@@ -134,7 +182,7 @@ def transform(input):
 
     return create_response(
         result={
-            "failedBackupJobsCount": failed_count,
+            "failedBackupJobsCount": result_count,
             "totalBackupPlansEvaluated": total_plans,
             "plansWithFailures": plans_with_failures,
         },
@@ -143,5 +191,19 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        metadata={"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup"},
         transformation_errors=transformation_errors,
+        api_errors=[api_error] if api_error else None,
     )
+
+
+def transform(input):
+    try:
+        return evaluate(input)
+    except Exception as e:
+        return create_response(
+            result={CRITERIA_KEY: None},
+            fail_reasons=["Transformation error: " + str(e)],
+            transformation_errors=["Transformation error: " + str(e)],
+            metadata={"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup"},
+        )
