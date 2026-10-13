@@ -4,8 +4,13 @@ The read returns {"items": [], "pages": {...}} when the tenant has no endpoints.
 nothing to measure, so isBehavioralMonitoringValid, isRemovableMediaControlled and
 isPatchManagementEnabled / isPatchManagementValid now read None with "no endpoints returned".
 A populated list and an explicit verdict key keep their earlier readings. Synthetic bodies only.
+
+The second half of this file covers the Sophos MDR licence read, confirmedlicensepurchased_endpoints.py:
+a failed, refused, empty or partial endpoint read is Not evaluated there too, and only a complete,
+readable list with no MDR endpoint is False.
 """
 import importlib.util
+import json
 import pathlib
 
 import pytest
@@ -58,3 +63,191 @@ def test_error_body_is_never_true(name, keys):
     out = run(name, {"error": "Unauthorized"})
     for key in keys:
         assert out["transformedResponse"][key] is not True
+
+
+# ---------------------------------------------------------------------------------------------
+# confirmedlicensepurchased_endpoints.py: the Sophos MDR licence read (GET /endpoint/v1/endpoints).
+#
+# A failed, refused, empty or partial read of the endpoint list proves nothing about the licence,
+# so it is Not evaluated (None with a data-collection error), never False. False is only the
+# answer to a complete, readable endpoint list in which no endpoint carries the MDR product.
+# ---------------------------------------------------------------------------------------------
+LICENCE_FILE = "confirmedlicensepurchased_endpoints.py"
+LICENCE_KEY = "confirmedLicensePurchased"
+SENTINEL = "DO-NOT-ECHO-VENDOR-TEXT"
+OK_VALIDATION = {"status": "unknown", "errors": [], "warnings": []}
+
+
+def licence_run(body):
+    return run(LICENCE_FILE, body)
+
+
+def licence_endpoint(eid, codes, **extra):
+    item = {"id": eid, "type": "computer",
+            "assignedProducts": [{"code": code, "status": "installed"} for code in codes]}
+    item.update(extra)
+    return item
+
+
+def enveloped(body, validation=None):
+    return {"data": body, "validation": validation or OK_VALIDATION}
+
+
+class Poisoned(dict):
+    """A dict whose every read raises, to drive the transform down its exception path."""
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("poisoned read")
+
+    def __getitem__(self, key):
+        raise RuntimeError("poisoned read")
+
+    def __contains__(self, key):
+        raise RuntimeError("poisoned read")
+
+
+def assert_licence_not_evaluated(out):
+    assert out["transformedResponse"] == {LICENCE_KEY: None}
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert isinstance(collection["errors"], list) and collection["errors"]
+    assert out["additionalInfo"]["evaluation"]["passReasons"] == []
+    assert SENTINEL not in json.dumps(out)  # the vendor's own error text is never echoed
+
+
+SOPHOS_ERROR = {"error": "forbidden", "message": "Access to this tenant is not allowed " + SENTINEL,
+                "correlationId": "synthetic-correlation-id", "code": "forbidden"}
+MDR_PAGE = [licence_endpoint("e1", ["endpointProtection", "mtr"])]
+NO_MDR_PAGE = [licence_endpoint("e1", ["endpointProtection"]), licence_endpoint("e2", ["endpointProtection", "interceptX"])]
+
+# The four reads the house rule is about, then the rest of the ways a read can prove nothing.
+UNREADABLE_BODIES = [
+    ("empty endpoint list", {"items": [], "pages": {"size": "500", "maxSize": "500", "nextKey": "None"}}),
+    ("empty list", []),
+    ("error body", SOPHOS_ERROR),
+    ("401 envelope", {"statusCode": 401, "error": "Unauthorized"}),
+    ("401 status only", {"status_code": 401, "message": "Unauthorized"}),
+    ("401 nested error", {"error": {"statusCode": 401, "message": "Unauthorized"}}),
+    ("401 inside the data envelope", enveloped({"statusCode": 401, "message": "Unauthorized"})),
+    ("403 status body", {"statusCode": 403, "message": "Forbidden " + SENTINEL}),
+    ("500 status as text", {"status": "500", "message": "Internal Server Error"}),
+    ("errors list", {"errors": [{"code": "forbidden", "message": SENTINEL}]}),
+    ("vendor refusal marker", {"vendorErrorAsResponse": {"status": 403, "body": {"message": SENTINEL}}}),
+    ("wrapped error", {"response": SOPHOS_ERROR}),
+    ("enveloped error", enveloped(SOPHOS_ERROR)),
+    ("enveloped empty list", enveloped([])),
+    ("enveloped empty endpoint list", enveloped({"items": []})),
+    ("error beside endpoints", dict(SOPHOS_ERROR, items=MDR_PAGE)),
+    ("empty object", {}),
+    ("none", None),
+    ("empty string", ""),
+    ("json null text", "null"),
+    ("not json text", "Forbidden"),
+    ("html text", "<html><body>Service Unavailable</body></html>"),
+    ("number", 12345),
+    ("missing items key", {"pages": {"size": "500", "maxSize": "500"}}),
+    ("unrelated json", {"hello": "world"}),
+    ("items null", {"items": None}),
+    ("items not a list", {"items": "none"}),
+    ("list of strings", ["error", "forbidden"]),
+    ("list of error objects", [{"error": "forbidden"}]),
+    ("items of error objects", {"items": [{"error": "forbidden"}]}),
+    ("failed validation", enveloped({"items": MDR_PAGE},
+                                    {"status": "failed", "errors": ["body did not match the schema"], "warnings": []})),
+    ("failed validation on an error body", enveloped(SOPHOS_ERROR, {"status": "failed", "errors": [], "warnings": []})),
+]
+
+
+@pytest.mark.parametrize("label,body", UNREADABLE_BODIES, ids=[label for label, _ in UNREADABLE_BODIES])
+def test_licence_unreadable_read_is_not_evaluated(label, body):
+    assert_licence_not_evaluated(licence_run(body))
+
+
+def test_licence_transform_exception_is_not_evaluated():
+    out = licence_run(Poisoned(items=MDR_PAGE))
+    assert_licence_not_evaluated(out)
+    assert out["additionalInfo"]["transformation"]["status"] == "error"  # the exception is still recorded
+
+
+def test_licence_real_negative_stays_false():
+    body = {"items": NO_MDR_PAGE, "pages": {"size": "500", "maxSize": "500"}}
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: False}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert out["additionalInfo"]["dataCollection"]["errors"] == []
+    assert "None of the 2 endpoints" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+@pytest.mark.parametrize("body", [
+    {"items": NO_MDR_PAGE},
+    NO_MDR_PAGE,
+    {"endpoints": NO_MDR_PAGE},
+    enveloped({"items": NO_MDR_PAGE}),
+    {"items": [licence_endpoint("e1", ["endpointProtection"], mdrManaged=False)]},
+    {"items": NO_MDR_PAGE, "pages": {"size": "2", "maxSize": "500", "nextKey": "None", "total": 1}},
+    {"items": NO_MDR_PAGE, "pages": {"size": "2", "total": 1, "items": 2}},
+], ids=["items", "bare list", "endpoints key", "enveloped", "mdrManaged false", "stringified null cursor",
+        "one page, item total matches"])
+def test_licence_complete_read_with_no_mdr_endpoint_is_false(body):
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: False}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+@pytest.mark.parametrize("body", [
+    {"items": MDR_PAGE},
+    MDR_PAGE,
+    {"endpoints": MDR_PAGE},
+    enveloped({"items": MDR_PAGE}),
+    {"items": [licence_endpoint("e1", ["endpointProtection"], mdrManaged="true")]},
+    {"items": NO_MDR_PAGE + MDR_PAGE},
+], ids=["items", "bare list", "endpoints key", "enveloped", "mdrManaged true", "one MDR endpoint among others"])
+def test_licence_mdr_evidence_stays_true(body):
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: True}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+# A partial read cannot prove the licence is missing: it may sit on an endpoint on a page nobody read.
+PARTIAL_PAGES = [
+    ("next-page cursor", {"items": NO_MDR_PAGE, "pages": {"size": "2", "maxSize": "500", "nextKey": "abc123"}}),
+    ("top-level next key", {"items": NO_MDR_PAGE, "nextKey": "abc123"}),
+    ("truncated flag", {"items": NO_MDR_PAGE, "truncated": True}),
+    ("pages truncated", {"items": NO_MDR_PAGE, "pages": {"truncated": "true"}}),
+    ("page does not start at the beginning", {"items": NO_MDR_PAGE, "pages": {"fromKey": "abc123"}}),
+    ("more items than returned", {"items": NO_MDR_PAGE, "pages": {"size": "2", "items": 40, "total": 20}}),
+    ("more than one page", {"items": NO_MDR_PAGE, "pages": {"size": "2", "total": 3}}),
+    ("unreadable page total", {"items": NO_MDR_PAGE, "pages": {"total": "many"}}),
+    ("pages not an object", {"items": NO_MDR_PAGE, "pages": "more"}),
+    ("enveloped next-page cursor", enveloped({"items": NO_MDR_PAGE, "pages": {"nextKey": "abc123"}})),
+]
+
+
+@pytest.mark.parametrize("label,body", PARTIAL_PAGES, ids=[label for label, _ in PARTIAL_PAGES])
+def test_licence_partial_read_with_no_mdr_endpoint_is_not_evaluated(label, body):
+    assert_licence_not_evaluated(licence_run(body))
+
+
+@pytest.mark.parametrize("label,body", [
+    ("next-page cursor", {"items": MDR_PAGE, "pages": {"size": "1", "maxSize": "500", "nextKey": "abc123"}}),
+    ("truncated flag", {"items": MDR_PAGE, "truncated": True}),
+    ("more than one page", {"items": MDR_PAGE, "pages": {"size": "1", "total": 3}}),
+], ids=["next-page cursor", "truncated flag", "more than one page"])
+def test_licence_partial_read_that_shows_mdr_evidence_is_true(label, body):
+    # One endpoint carrying the MDR product confirms the licence, whatever else is unread.
+    out = licence_run(body)
+    assert out["transformedResponse"] == {LICENCE_KEY: True}
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_licence_full_first_page_without_a_cursor_is_not_partial():
+    # A complete read of a large fleet looks like this: a full page and no cursor.
+    page = [licence_endpoint("e" + str(n), ["endpointProtection"]) for n in range(500)]
+    out = licence_run({"items": page, "pages": {"size": "500", "maxSize": "500"}})
+    assert out["transformedResponse"] == {LICENCE_KEY: False}
+
+
+def test_licence_not_evaluated_reason_is_fixed_text():
+    out = licence_run(SOPHOS_ERROR)
+    reasons = out["additionalInfo"]["evaluation"]["failReasons"] + out["additionalInfo"]["dataCollection"]["errors"]
+    assert all(reason.startswith("Not evaluated") for reason in reasons)
