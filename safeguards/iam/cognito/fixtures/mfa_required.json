@@ -1,0 +1,12 @@
+{
+  "MfaConfiguration": "ON",
+  "SoftwareTokenMfaConfiguration": {"Enabled": true},
+  "SmsMfaConfiguration": {
+    "SmsAuthenticationMessage": "Your code is {####}.",
+    "SmsConfiguration": {
+      "ExternalId": "11111111-2222-3333-4444-555555555555",
+      "SnsCallerArn": "arn:aws:iam::111111111111:role/example-cognito-sms-role",
+      "SnsRegion": "us-east-1"
+    }
+  }
+}
