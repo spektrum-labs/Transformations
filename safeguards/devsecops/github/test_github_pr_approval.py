@@ -304,3 +304,80 @@ def test_read_layers_that_together_pass_are_enough_when_another_layer_is_unreada
 def test_read_layers_that_do_not_pass_with_another_unreadable_are_not_evaluated():
     out = run(body([repo("api")], [[pr_rule(count=1, last_push=False)]], [item_error(403, "api")]))
     assert value(out) is None
+
+
+# ----------------------------------------------------------------------------- missing fields
+# A layer that does not say its count or its last-push setting cannot prove a failure: unless
+# the layers that were read pass on their own, the repository is not evaluated, and the reason
+# names the missing field.
+
+
+def _without(rule_or_classic, field):
+    params = rule_or_classic.get("parameters") or rule_or_classic.get("required_pull_request_reviews")
+    params.pop(field)
+    return rule_or_classic
+
+
+def test_a_ruleset_missing_its_count_is_not_evaluated():
+    out = run(body([repo("api")], [[_without(pr_rule(), "required_approving_review_count")]], [NOT_PROTECTED]))
+    assert value(out) is None
+    assert "required_approving_review_count" in reasons(out)
+
+
+def test_a_missing_count_beside_a_layer_at_zero_is_not_evaluated():
+    out = run(body([repo("api")], [[_without(pr_rule(), "required_approving_review_count")]],
+                   [classic(count=0, last_push=False)]))
+    assert value(out) is None
+    assert "required_approving_review_count" in reasons(out)
+
+
+def test_a_missing_last_push_with_nothing_else_passing_is_not_evaluated():
+    out = run(body([repo("api")], [[_without(pr_rule(count=1), "require_last_push_approval")]], [NOT_PROTECTED]))
+    assert value(out) is None
+    assert "require_last_push_approval" in reasons(out)
+
+
+def test_a_missing_count_beside_a_passing_layer_still_passes():
+    out = run(body([repo("api")], [[_without(pr_rule(source="Repository", ruleset_id=9), "required_approving_review_count")]],
+                   [classic(count=1, last_push=True)]))
+    assert value(out) is True
+
+
+def test_classic_protection_missing_its_count_is_not_evaluated():
+    out = run(body([repo("api")], [[]], [_without(classic(), "required_approving_review_count")]))
+    assert value(out) is None
+    assert "required_approving_review_count" in reasons(out)
+
+
+def test_a_non_integer_count_is_not_evaluated():
+    rule = pr_rule()
+    rule["parameters"]["required_approving_review_count"] = "1"
+    out = run(body([repo("api")], [[rule]], [NOT_PROTECTED]))
+    assert value(out) is None
+
+
+# ----------------------------------------------------------------------------- empty repos, no default branch
+
+
+BRANCH_NOT_FOUND = {"vendorErrorAsResponse": {"status": 404, "bodyContains": "Branch not found",
+                                              "body": {"message": "Branch not found"}}}
+
+
+def test_an_empty_repository_is_skipped_and_counted_not_none_for_everything():
+    out = run(body([repo("api"), repo("empty")], [[pr_rule()], []], [NOT_PROTECTED, BRANCH_NOT_FOUND]))
+    assert value(out) is True
+    assert "1 empty repositories" in reasons(out)
+
+
+def test_only_empty_repositories_is_not_evaluated():
+    out = run(body([repo("empty")], [[]], [BRANCH_NOT_FOUND]))
+    assert value(out) is None
+
+
+def test_a_repository_without_a_default_branch_is_not_evaluated():
+    r = repo("odd")
+    r["default_branch"] = None
+    refused = {"error": True, "statusCode": 422, "errorType": "vendorError", "item": None}
+    out = run(body([repo("api"), r], [[pr_rule()], refused], [NOT_PROTECTED, refused]))
+    assert value(out) is None
+    assert "example-org/odd" in reasons(out) and "no default branch" in reasons(out)

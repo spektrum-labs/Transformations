@@ -144,25 +144,29 @@ def ruleset_candidates(rules, inactive_ids):
         params = rule.get("parameters") if isinstance(rule.get("parameters"), dict) else {}
         source = "organization ruleset" if source_type == "Organization" else (
             "repository ruleset" if source_type == "Repository" else "ruleset")
-        out.append({
-            "count": to_int(params.get("required_approving_review_count")),
-            "lastPush": params.get("require_last_push_approval") is True,
-            "source": source,
-            "rulesetId": rule.get("ruleset_id"),
-        })
+        out.append(layer(params, source, rule.get("ruleset_id")))
     return out
+
+
+def layer(params, source, ruleset_id):
+    """One layer's approval requirement. ``missing`` names a field the layer did not give as the
+    documented type (an integer count, a boolean last-push flag)."""
+    count = to_int(params.get("required_approving_review_count"))
+    last_push = params.get("require_last_push_approval")
+    missing = []
+    if count is None:
+        missing.append("required_approving_review_count")
+    if not isinstance(last_push, bool):
+        missing.append("require_last_push_approval")
+    return {"count": count, "lastPush": last_push is True, "source": source,
+            "rulesetId": ruleset_id, "missing": missing}
 
 
 def classic_candidate(protection):
     reviews = protection.get("required_pull_request_reviews")
     if not isinstance(reviews, dict):
         return None
-    return {
-        "count": to_int(reviews.get("required_approving_review_count")),
-        "lastPush": reviews.get("require_last_push_approval") is True,
-        "source": "classic branch protection",
-        "rulesetId": None,
-    }
+    return layer(reviews, "classic branch protection", None)
 
 
 def classic_bypass_notes(protection, label):
@@ -218,6 +222,16 @@ def inactive_org_ruleset_ids(details):
     return ids
 
 
+def is_branch_not_found(item):
+    """Classic protection's 404 "Branch not found": the default branch does not exist (a
+    repository with no commits)."""
+    if not isinstance(item, dict):
+        return False
+    envelope = item.get("vendorErrorAsResponse")
+    return isinstance(envelope, dict) and envelope.get("status") == 404 \
+        and envelope.get("bodyContains") == "Branch not found"
+
+
 def judge_repo(rules_item, protection_item, inactive_ids):
     """One repository, aggregated across every active layer that targets the default branch.
 
@@ -241,6 +255,8 @@ def judge_repo(rules_item, protection_item, inactive_ids):
         unreadable.append("branch rules not returned")
 
     protection_status = item_status(protection_item)
+    if is_branch_not_found(protection_item):
+        return "empty", "default branch not found", []
     if isinstance(protection_item, dict) and isinstance(protection_item.get("vendorErrorAsResponse"), dict):
         envelope = protection_item.get("vendorErrorAsResponse")
         if envelope.get("status") != 404:
@@ -270,6 +286,13 @@ def judge_repo(rules_item, protection_item, inactive_ids):
         return "pass", detail, count_layers + push_layers
     if unreadable:
         return "unreadable", ", ".join(unreadable), []
+    incomplete = []
+    for c in candidates:
+        for field in c.get("missing") or []:
+            incomplete.append(c["source"] + " has no " + field)
+    if incomplete:
+        # A layer that does not state its count or last-push setting cannot prove a failure.
+        return "unreadable", "; ".join(incomplete), []
 
     if not candidates:
         missing = "no approval rule"
@@ -310,7 +333,9 @@ def transform(input):
         and what is missing (no approval rule, 0 required approvals, last-push approval off).
       * None (Not evaluated, with a data collection error): the rules could not be read, that is a
         refused or missing list, no active repository, a repository whose reads returned 403/404
-        without a passing rule, or a cut-off read.
+        without a passing rule, a cut-off read, a repository without a default branch, or a layer
+        that does not state its count or last-push setting (unless the other layers pass alone).
+    Empty repositories (classic protection answers 404 "Branch not found") are skipped and counted.
     Admin bypass (enforce_admins off, bypass allowances, ruleset bypass actors) is reported and
     never fails the check; whether it should is an open decision.
     """
@@ -346,6 +371,7 @@ def transform(input):
         api_errors.append("The repository list stopped at its page limit, so not every repository was read.")
 
     excluded = 0
+    empty = 0
     passing = []
     failing = []
     unreadable = []
@@ -359,6 +385,10 @@ def transform(input):
             excluded += 1
             continue
         label = repo_label(r)
+        branch = r.get("default_branch")
+        if not isinstance(branch, str) or not branch:
+            unreadable.append(label + " (no default branch)")
+            continue
         if index >= len(rules) and index >= len(protection):
             not_read.append(label)
             continue
@@ -374,6 +404,9 @@ def transform(input):
                 elif layer["source"] == "repository ruleset" and not repo_ruleset_noted:
                     repo_ruleset_noted = True
                     findings.append(label + ": a passing layer is a repository ruleset; its bypass list was not read.")
+        elif verdict == "empty":
+            empty += 1
+            continue
         elif verdict == "fail":
             failing.append(label + ": " + detail)
         else:
@@ -384,7 +417,7 @@ def transform(input):
 
     active = len(passing) + len(failing) + len(unreadable) + len(not_read)
     if repos and active == 0 and not api_errors:
-        api_errors.append("No active (not archived, not disabled) repositories were returned.")
+        api_errors.append("No active (not archived, not disabled) repository with a default branch was returned.")
     if not_read:
         api_errors.append(str(len(not_read)) + " active repositories were beyond the per-repository read limit and not read (e.g. "
                           + ", ".join(not_read[:5]) + ").")
@@ -421,6 +454,8 @@ def transform(input):
     recommendations = []
     if excluded:
         findings.append(str(excluded) + " archived or disabled repositories were excluded.")
+    if empty:
+        findings.append(str(empty) + " empty repositories (default branch not found) were skipped.")
     if result is True:
         pass_reasons.append("All " + str(len(passing)) + " active repositories require at least one approving review and approval of the most recent push on their default branch, across their active rulesets and classic protection (e.g. "
                             + "; ".join(passing[:5]) + ").")
@@ -446,6 +481,7 @@ def transform(input):
             "repositoriesRead": len(repos),
             "activeRepositories": active,
             "excludedArchivedOrDisabled": excluded,
+            "skippedEmpty": empty,
             "passing": len(passing),
             "failingRepos": failing[:50],
             "unreadableRepos": unreadable[:50],
