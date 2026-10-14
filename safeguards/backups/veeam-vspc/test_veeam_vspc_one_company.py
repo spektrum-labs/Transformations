@@ -103,20 +103,25 @@ def company(uid):
     return coll([{"instanceUid": uid}])
 
 
+def conf(uid):
+    """Integration-Service's echo of the connection's Company UID (output.echoSettings)."""
+    return {"companyUid": uid}
+
+
 def jobs_body(uid, jobs=None, filtered=False):
     jobs = CONSOLE_JOBS if jobs is None else jobs
     if filtered:
         jobs = [j for j in jobs if j["organizationUid"] == uid]
-    return {"company": company(uid), "jobs": coll(jobs)}
+    return {"configuredSettings": conf(uid), "company": company(uid), "jobs": coll(jobs)}
 
 
 def lic_body(uid, servers=None, licenses=None):
-    return {"company": company(uid), "backupServers": coll(CONSOLE_SERVERS if servers is None else servers),
+    return {"configuredSettings": conf(uid), "company": company(uid), "backupServers": coll(CONSOLE_SERVERS if servers is None else servers),
             "licenses": coll(CONSOLE_LICENSES if licenses is None else licenses)}
 
 
 def targets_body(uid, servers=None, vm_jobs=None, repos=None):
-    return {"company": company(uid), "backupServers": coll(CONSOLE_SERVERS if servers is None else servers),
+    return {"configuredSettings": conf(uid), "company": company(uid), "backupServers": coll(CONSOLE_SERVERS if servers is None else servers),
             "vmJobs": coll(CONSOLE_VM_JOBS if vm_jobs is None else vm_jobs),
             "repositories": coll(CONSOLE_REPOS if repos is None else repos)}
 
@@ -277,5 +282,47 @@ def test_bad_target_read_is_not_evaluated(which, part):
 
 
 def test_company_uid_matches_case_insensitively():
-    upper = {"company": coll([{"instanceUid": A.upper()}]), "jobs": coll(CONSOLE_JOBS)}
+    upper = {"configuredSettings": conf(A), "company": coll([{"instanceUid": A.upper()}]), "jobs": coll(CONSOLE_JOBS)}
     assert value("isbackupenabled", "isBackupEnabled", upper) is True
+
+
+# ── the returned company must be the configured one ─────────────────────────
+
+@pytest.mark.parametrize("name,key", ALL)
+def test_returned_company_must_match_the_configured_uid(name, key):
+    """A console that ignores the instanceUid filter and holds one company answers with that company
+    whatever UID was asked for. The echoed Company UID must match it, or nothing is evaluated."""
+    good = body_for(name, A)
+    assert value(name, key, good) is True                      # a match is unchanged
+    wrong = dict(good, configuredSettings=conf(B))             # asked for B, console answered A
+    v, out = run(name, key, wrong)
+    assert v is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert "does not match" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    # Case does not matter.
+    assert value(name, key, dict(good, configuredSettings=conf(A.upper()))) is True
+
+
+@pytest.mark.parametrize("name,key", ALL)
+@pytest.mark.parametrize("configured", ["absent", None, {}, {"companyUid": ""}, {"companyUid": "not-a-uid"},
+                                        {"companyUid": None}, "x", [A]])
+def test_missing_configured_uid_is_not_evaluated(name, key, configured):
+    good = body_for(name, A)
+    body = {k: v for k, v in good.items() if k != "configuredSettings"} if configured == "absent" else \
+        dict(good, configuredSettings=configured)
+    v, out = run(name, key, body)
+    assert v is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_unattributable_vm_job_never_names_another_company():
+    """The console ignores the filter and returns another company's VM job without its embedded
+    backupServerJob: the result is not evaluated, and no reason text names that job."""
+    foreign = {"instanceUid": "foreign-vm-uid", "name": "foreign-vm-job", "targetRepositoryUid": "rb",
+               "protectedVmCount": 9}
+    body = targets_body(A, vm_jobs=[foreign] + CONSOLE_VM_JOBS)
+    v, out = run("isbackupimmutable", "isBackupImmutable", body)
+    assert v is None
+    text = str(out)
+    assert "foreign-vm-job" not in text and "foreign-vm-uid" not in text
+    assert "b-vm" not in text and B not in text
