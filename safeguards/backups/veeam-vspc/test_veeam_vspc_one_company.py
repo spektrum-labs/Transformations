@@ -648,3 +648,30 @@ def test_licence_without_a_server_is_ruled_out_only_by_an_owner_field():
     own = dict(orphan, organizationUid=A)
     assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
                  lic_body(A, licenses=[lic(SRV_A), own])) is None
+
+
+def test_serverless_extent_of_a_targeted_scale_out_is_not_evaluated():
+    """A scale-out extent with no backupServerUid under a targeted (or company-owned) parent could be a
+    mutable extent of the company's target: not evaluated, never True."""
+    owned = vm_job("a-vm", A, SRV_A, "s1")
+    sobr = repo("s1", SRV_A, None, "ScaleOut")
+    e1 = dict(repo("e1", SRV_A, True), parentRepositoryUid="s1")
+    e2 = drop(dict(repo("e2", SRV_A, False), parentRepositoryUid="s1"), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[sobr, e1])) is True
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[sobr, e1, e2])) is None
+    # Parent not targeted but on a company server: still not evaluated.
+    other_sobr = repo("s2", SRV_A, None, "ScaleOut")
+    e3 = drop(dict(repo("e3", SRV_A, False), parentRepositoryUid="s2"), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable",
+                 imm([owned], repos=[sobr, e1, other_sobr, e3])) is None
+
+
+def test_serverless_extent_of_an_unrelated_parent_stays_skipped():
+    owned = vm_job("a-vm", A, SRV_A, "s1")
+    sobr = repo("s1", SRV_A, None, "ScaleOut")
+    e1 = dict(repo("e1", SRV_A, True), parentRepositoryUid="s1")
+    foreign_sobr = repo("sb", SRV_B, None, "ScaleOut")
+    stray = drop(dict(repo("eb", SRV_B, False), parentRepositoryUid="sb"), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[sobr, e1, foreign_sobr, stray])) is True
+    orphan = drop(dict(repo("ez", SRV_B, False), parentRepositoryUid="nowhere"), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[sobr, e1, orphan])) is True
