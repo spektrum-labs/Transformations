@@ -4,6 +4,13 @@ Vendor: AWS
 Category: Backups / Licensing
 
 Evaluates if the license has been purchased for the given Backup Provider.
+
+AWS reports no licence or subscription for AWS Backup, which is pay-as-you-go, and no AWS API
+returns a licensePurchased field. The field this transform used to read is synthesised by the
+connector's returnSpec from the first DB instance of an RDS DescribeDBInstances call (a convert-to-bool
+of that record, defaulting to false), so it only says whether the call returned an instance. That is not
+licence evidence, so this check is always Not evaluated: None plus a dataCollection error that says why.
+It is never True and never False.
 """
 
 import json
@@ -66,6 +73,25 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+NOT_EVIDENCE = (
+    "AWS does not report a licence or subscription for AWS Backup, and no AWS API returns a licensePurchased "
+    "field; the connector derives it from an RDS DescribeDBInstances record, so it is not licence evidence "
+    "and this check cannot be evaluated from the AWS response"
+)
+
+
+def not_evaluated(validation, reason, transformation_errors=None, input_summary=None):
+    """No value beside an error: the None reaches the evaluator as Not evaluated through the collection error."""
+    return create_response(
+        result={"confirmedLicensePurchased": None},
+        validation=validation,
+        transformation_errors=transformation_errors,
+        api_errors=[reason],
+        recommendations=["Confirm the backup licence or subscription with the vendor, or attach it as evidence"],
+        input_summary=input_summary
+    )
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
 
@@ -78,41 +104,20 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            return not_evaluated(validation, "Could not read the response: input validation failed")
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # `default_value = True if data is not None else False` asked whether a
-        # response arrived, not what it said, so any parseable dict -- including {} and
-        # an auth-error envelope -- defaulted `licensePurchased` to True. Never default
-        # True now: an absent key means unproven, not purchased.
-        license_purchased = bool(data.get('licensePurchased', False)) if isinstance(data, dict) else False
-
-        if license_purchased:
-            pass_reasons.append("Backup provider license active")
-        else:
-            fail_reasons.append("License has not been purchased")
-            recommendations.append("Purchase license for Backup Provider")
-
-        return create_response(
-            result={criteriaKey: license_purchased},
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased}
+        # Whatever the connector put in licensePurchased (true, false or absent) is not an AWS statement
+        # about a licence, so it is reported for the reviewer but never turned into a pass or a fail.
+        synthesised = data.get("licensePurchased") if isinstance(data, dict) else None
+        return not_evaluated(
+            validation,
+            NOT_EVIDENCE,
+            input_summary={"licensePurchasedFieldSeen": synthesised is not None}
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        # An error is Not evaluated, never a fail: None plus a dataCollection error.
+        return not_evaluated(
+            {"status": "error", "errors": [], "warnings": []},
+            f"Transformation error: {str(e)}",
+            transformation_errors=[str(e)])
