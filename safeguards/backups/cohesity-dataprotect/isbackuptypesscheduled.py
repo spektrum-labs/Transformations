@@ -1,7 +1,10 @@
 # isbackuptypesscheduled.py - Cohesity DataProtect (Helios / Cohesity Data Cloud)
 #
 # Method: getProtectionPosture (workflow: getProtectionGroups then getProtectionPolicies, merged)
-#         GET {serverUrl}/v2/mcm/data-protect/protection-groups?includeLastRunInfo=true
+#         listClusters: GET {serverUrl}/v2/mcm/cluster-mgmt/info (cohesityClusters[].clusterId / clusterName /
+#         isConnectedToHelios), then per cluster, routed by the accessClusterId header,
+#         GET {serverUrl}/v2/data-protect/protection-groups?includeLastRunInfo=true&isDeleted=false,
+#         merged as clusterGroups[] (one body per cluster, an error record for a cluster Helios cannot reach)
 #         (protectionGroups[].isActive / isPaused / isDeleted / policyId / lastRun.localBackupInfo
 #         {status, isSlaViolated, startTimeUsecs, endTimeUsecs}; paginationCookie when more pages exist)
 #         then GET {serverUrl}/v2/mcm/data-protect/policies (policies[].id / backupPolicy.regular
@@ -102,8 +105,71 @@ def transform(input):
             return None
         return info
 
+    def groups_body(input, extra):
+        """The protection-group body in either shape Integration-Service sends, as (body, partial, problem).
+
+        Helios' tenant-wide list never carries a group's last run, so the definition lists the clusters
+        registered in Helios (clusters.cohesityClusters) and fans the per-cluster list out over them: one
+        body per cluster under clusterGroups, in the clusters' order, with an error record in the slot of
+        a cluster Helios could not reach (continueOnItemError). The older tenant-wide shape, one list
+        under protectionGroups, is still read as before.
+
+        body carries every group read under protectionGroups (each tagged with its clusterName) plus the
+        extra markers (policies). partial names what could not be read: a connected cluster whose read
+        failed, a cluster whose list was cut short, or clusters beyond the fan-out cap. A cluster that
+        Helios reports as not connected is not readable through Helios at all; it is listed under
+        clustersNotConnected and does not make the read partial. problem is set when nothing can be read.
+        """
+        body, problem = body_with(input, ["clusterGroups"] + extra)
+        if body is None:
+            legacy, legacy_problem = body_with(input, ["protectionGroups"] + extra)
+            if legacy is None:
+                return None, None, legacy_problem
+            return legacy, None, None
+        slots = body.get("clusterGroups")
+        if not isinstance(slots, list):
+            return None, None, "clusterGroups has an unexpected shape"
+        clusters = body.get("clusters")
+        known = clusters.get("cohesityClusters") if isinstance(clusters, dict) else None
+        if not isinstance(known, list):
+            known = []
+        groups = []
+        unreadable = []
+        not_connected = []
+        for index, slot in enumerate(slots):
+            meta = known[index] if index < len(known) and isinstance(known[index], dict) else {}
+            label = str(meta.get("clusterName") or meta.get("clusterId") or "cluster " + str(index + 1))
+            if isinstance(slot, dict) and slot.get("error") is True:
+                if meta.get("isConnectedToHelios") is False:
+                    not_connected.append(label)
+                else:
+                    unreadable.append(label + " (HTTP " + str(slot.get("statusCode")) + ")")
+                continue
+            if not isinstance(slot, dict) or not isinstance(slot.get("protectionGroups"), list):
+                unreadable.append(label + " (no protection group list)")
+                continue
+            if slot.get("paginationCookie"):
+                unreadable.append(label + " (first page only)")
+                continue
+            for g in slot["protectionGroups"]:
+                if isinstance(g, dict):
+                    g = dict(g)
+                    g["clusterName"] = label
+                groups.append(g)
+        stats = body.get("iterateStats")
+        stats = stats.get("clusterGroups") if isinstance(stats, dict) else None
+        if body.get("iterateTruncated") is True or (isinstance(stats, dict) and stats.get("iterateTruncated") is True):
+            unreadable.append("clusters beyond the fan-out cap")
+        if len(slots) == 0 and len(known) > 0:
+            unreadable.append("no cluster was read")
+        merged = dict(body)
+        merged["protectionGroups"] = groups
+        merged["clustersNotConnected"] = not_connected
+        partial = ("Not read: " + ", ".join(unreadable)) if unreadable else None
+        return merged, partial, None
+
     try:
-        body, problem = body_with(input, ["protectionGroups", "policies"])
+        body, partial, problem = groups_body(input, ["policies"])
         if body is None:
             return respond(key, None, problem)
         live, problem = groups_in(body)
@@ -124,6 +190,8 @@ def transform(input):
             if by_id[pid] not in used:
                 used.append(by_id[pid])
         if not used:
+            if partial:
+                return respond(key, None, partial + "; no protection group was read, so no policy can be judged")
             return respond(key, False, "No active protection group, so no policy is in use")
 
         def regular(p):
@@ -155,6 +223,9 @@ def transform(input):
                     ok = True
             if not ok:
                 return respond(key, False, "Policy " + str(p.get("name")) + " has no recurring regular backup schedule")
+        if partial:
+            return respond(key, None, partial + "; the policies in use on those clusters could not be judged")
+
         return respond(key, True, "All " + str(len(used)) + " in-use policies schedule recurring regular backups")
     except Exception as e:
         return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
