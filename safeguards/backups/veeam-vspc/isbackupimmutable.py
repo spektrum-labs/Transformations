@@ -3,8 +3,9 @@ Source: workflow getRepositoryTargets: company + GET /api/v3/infrastructure/back
 organizationUid (backupServers) + GET .../jobs/backupVmJobs?expand=BackupServerJob (vmJobs) +
 GET /api/v3/infrastructure/backupServers/repositories (repositories).
 One company only: the "company" part (GET /api/v3/organizations/companies filtered by the connection's
-Company UID) must name exactly one company; without it (no Company UID) the check is None, never a
-verdict over the whole console. Only VM jobs the
+Company UID) must name exactly one company, and it must equal the Company UID Integration-Service echoes
+under "configuredSettings"; otherwise (no Company UID, a mismatch) the check is None, never a verdict
+over the whole console. Only VM jobs the
 company owns on its own servers, and repositories on those servers, count.
 True when every repository written by an enabled VM backup job has immutability enabled (for a
 scale-out repository: every extent). False when any target is mutable. None when there is no enabled
@@ -200,7 +201,27 @@ def configured_company(raw):
     uid = items[0].get("instanceUid")
     if not is_uid(uid):
         return None, "The company read carries no valid instanceUid"
+    # The company VSPC returned must be the one the connection names (Integration-Service echoes the
+    # Company UID under configuredSettings). A console that ignores the filter and holds one company
+    # would otherwise answer with it whatever UID was asked for.
+    asked = configured_uid(raw)
+    if asked is None:
+        return None, ("No configured Company UID in the response, so the company VSPC returned cannot be "
+                      "shown to be the one this connection names")
+    if uid.lower() != asked:
+        return None, "The company VSPC returned does not match the connection's Company UID"
     return uid.lower(), None
+
+
+def configured_uid(raw):
+    """The connection's Company UID as Integration-Service echoed it (output.echoSettings), or None."""
+    conf = workflow_part(raw, "configuredSettings")
+    if not isinstance(conf, dict):
+        return None
+    uid = conf.get("companyUid")
+    if not is_uid(uid):
+        return None
+    return uid.lower()
 
 
 def company_servers(raw, company):
@@ -310,12 +331,14 @@ def evaluate(input):
         by_uid[(str(r.get("backupServerUid")).lower(), str(r.get("instanceUid")).lower())] = r
     enabled = []
     owned_jobs = 0
+    unattributed = 0
     for j in all_vm_jobs:
         emb = j.get("_embedded") if isinstance(j.get("_embedded"), dict) else {}
         job = emb.get("backupServerJob") if isinstance(emb.get("backupServerJob"), dict) else None
         if job is None:
-            return respond(KEY, METHOD, None, "VM backup job " + name_of(j) + " carries no embedded backupServerJob "
-                           "(expand=BackupServerJob was not applied)")
+            # Its owner cannot be read, so it may be another company's: counted, never named.
+            unattributed = unattributed + 1
+            continue
         # The company's own job on one of the company's own servers; anything else is another company's.
         if lower_text(job.get("organizationUid")) != company:
             continue
@@ -324,6 +347,9 @@ def evaluate(input):
         owned_jobs = owned_jobs + 1
         if job.get("isEnabled") is True:
             enabled.append((j, job))
+    if unattributed > 0:
+        return respond(KEY, METHOD, None, str(unattributed) + " VM backup jobs carry no embedded backupServerJob "
+                       "(expand=BackupServerJob was not applied), so their owner cannot be shown")
     if len(enabled) == 0:
         return respond(KEY, METHOD, None, "No enabled VM backup job of the company, so no repository target to judge")
     mutable = []
