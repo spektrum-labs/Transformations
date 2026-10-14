@@ -225,34 +225,6 @@ def configured_uid(raw):
     return uid.lower()
 
 
-def company_servers(raw, company):
-    """({backup server UID: True}, None) for the company's own Veeam Backup & Replication servers, else
-    (None, reason). Only servers whose organizationUid is the company count, whatever else is listed."""
-    part = workflow_part(raw, "backupServers")
-    if part is None:
-        return None, "No backup server read for the company; repositories and licenses cannot be scoped to it"
-    items, why = complete_items(part, "company backup servers")
-    if why:
-        return None, why
-    owned = {}
-    for s in items:
-        uid = lower_text(s.get("instanceUid"))
-        org = lower_text(s.get("organizationUid"))
-        if not org:
-            # No owner (an unassigned or provider-owned server): not the company's by VSPC's own account.
-            # Skipped here; a check that finds the company's own job on it reads Not evaluated.
-            continue
-        if org == company:
-            if not uid:
-                # The company's server, but its UID cannot be read: its licenses or repositories would hide.
-                return None, ("A backup server of the company carries no instanceUid, so the company's own "
-                              "servers cannot be shown completely")
-            owned[uid] = True
-    if len(owned) == 0:
-        return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
-    return owned, None
-
-
 def company_jobs(jobs, company):
     """(the jobs the company owns, whether any job has no readable owner). A job without an
     organizationUid may be anyone's, so a check must not judge the attributable rest without it."""

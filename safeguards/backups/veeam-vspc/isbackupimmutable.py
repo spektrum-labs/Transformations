@@ -347,7 +347,11 @@ def evaluate(input):
     repos = [r for r in all_repos
              if lower_text(r.get("instanceUid")) and servers.get(lower_text(r.get("backupServerUid"))) is True]
     # Repositories that cannot be placed: judged after the company's enabled jobs are known.
-    serverless = [lower_text(r.get("instanceUid")) for r in all_repos if not lower_text(r.get("backupServerUid"))]
+    serverless = [(lower_text(r.get("instanceUid")), lower_text(r.get("parentRepositoryUid")))
+                  for r in all_repos if not lower_text(r.get("backupServerUid"))]
+    company_repo_uids = {}
+    for r in repos:
+        company_repo_uids[lower_text(r.get("instanceUid"))] = True
     for r in all_repos:
         if not lower_text(r.get("instanceUid")) and servers.get(lower_text(r.get("backupServerUid"))) is True:
             # On one of the company's servers with no UID (it could be an extent of a target).
@@ -397,8 +401,11 @@ def evaluate(input):
         tu = lower_text(j.get("targetRepositoryUid"))
         if tu:
             targeted[tu] = True
-    for ru in serverless:
-        if not ru or targeted.get(ru) is True:
+    for ru, parent in serverless:
+        # Ruled out only when neither it nor its scale-out parent is a target of the company's enabled
+        # jobs, and its parent is not a repository on the company's servers (an extent of the company's).
+        if (not ru or targeted.get(ru) is True or
+                (parent and (targeted.get(parent) is True or company_repo_uids.get(parent) is True))):
             return respond(KEY, METHOD, None, "A repository targeted by the company's jobs carries no "
                            "backupServerUid, so the company's own repositories cannot be shown completely")
     mutable = []
@@ -410,6 +417,10 @@ def evaluate(input):
         if target is None:
             return respond(KEY, METHOD, None, "Target repository of job " + name_of(job) +
                            " is not in the company's repository list")
+        if not is_text(target.get("type")):
+            # It may be a scale-out repository whose extents are mutable: not judged as a single one.
+            return respond(KEY, METHOD, None, "A target repository of the company reports no type, so whether it "
+                           "is a scale-out repository cannot be shown")
         if target.get("type") == "ScaleOut":
             extents = [r for r in repos if str(r.get("backupServerUid")).lower() == server and
                        str(r.get("parentRepositoryUid")).lower() == str(target.get("instanceUid")).lower()]
