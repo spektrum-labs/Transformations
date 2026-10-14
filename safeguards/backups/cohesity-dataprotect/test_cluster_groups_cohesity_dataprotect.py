@@ -218,9 +218,25 @@ class ClusterGroups(unittest.TestCase):
                {"protectionGroups": [group(3333, 1, run=False), group(3333, 2, run=False)]}]
         for key in RUN_KEYS:
             inner, dc = run(key, body(odd))
+            if key == "isBackupEnabled":
+                # alpha already proves a backup ran: a proven True stands, with the unjudged cluster noted
+                self.assertIs(inner[key], True)
+                self.assertIn("no last-run information from: gamma", inner["reason"])
+                continue
             self.assertIsNone(inner[key], key)
             self.assertEqual(dc.get("errorCode"), "VENDOR_DATA_NOT_EXPOSED", key)
             self.assertIn("gamma", dc["errors"][0], key)
+        # nothing proven on the readable cluster either: Not evaluated, never False
+        nothing = [{"protectionGroups": [group(1111, 1, "Failed")]}, DEAD,
+                   {"protectionGroups": [group(3333, 1, run=False)]}]
+        inner, dc = run("isBackupEnabled", body(nothing))
+        self.assertIsNone(inner["isBackupEnabled"])
+        self.assertEqual(dc.get("errorCode"), "VENDOR_DATA_NOT_EXPOSED")
+        # a cluster whose only run-less groups are paused or inactive is not judged, so it does not block
+        quiet = [{"protectionGroups": [group(1111, 1), group(1111, 2, "Failed")]}, DEAD,
+                 {"protectionGroups": [group(3333, 1, run=False, active=False), dict(group(3333, 2, run=False), isPaused=True)]}]
+        inner, dc = run("failedBackupJobsCount", body(quiet))
+        self.assertEqual(inner["failedBackupJobsCount"], 1)
         for key in POLICY_KEYS:  # the policy checks do not need runs
             inner, dc = run(key, body(odd, POLICIES))
             self.assertIsNotNone(inner[key] if inner[key] is False else True, key)
