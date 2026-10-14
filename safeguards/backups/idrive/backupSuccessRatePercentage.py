@@ -13,7 +13,7 @@ def error_reason(body):
     for key in ("error", "Error", "errors"):
         err = body.get(key)
         if err:
-            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured: " + str(err)[:200]
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
     for key in ("statusCode", "status_code", "status", "httpStatus"):
         code = body.get(key)
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
@@ -89,110 +89,107 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def evaluate(input):
-    data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
+FAILURE_STATUSES = ("failure", "failed")
+SUCCESS_STATUSES = ("success",)
+TRUNCATION_FLAGS = ("paginationTruncated", "iterateTruncated", "itemErrors")
 
-    if isinstance(data, list):
-        plans = data
-    elif isinstance(data, dict):
-        plans = data.get("data") or data.get("results") or []
-        if not isinstance(plans, list):
-            plans = []
-    else:
-        plans = []
 
+def truncated(body):
+    if not isinstance(body, dict):
+        return False
+    for key in TRUNCATION_FLAGS:
+        if body.get(key):
+            return True
+    return False
+
+
+def read_devices(input, data):
+    """(devices, reason): the getDeviceSummary records, or a reason the read proves nothing.
+
+    Each record must be an object carrying a backup_status key; one that does not makes the whole
+    read unreadable, because the count over the rest would look complete when it is not."""
     api_error = error_reason(input) or error_reason(data)
     if api_error:
-        plans = []
-
-    total_applied = 0
-    total_failed = 0
-    total_pending = 0
-    plan_count = 0
-    plans_without_lists = 0
-
-    for plan in plans:
-        plan_count = plan_count + 1
-        if not isinstance(plan, dict):
-            plans_without_lists = plans_without_lists + 1
-            continue
-        applied = plan.get("backup_applied_on")
-        failed = plan.get("backup_failed_on")
-        pending = plan.get("backup_pending_on") or []
-        if not isinstance(applied, list) or not isinstance(failed, list):
-            # Missing, null or "" applied/failed lists prove nothing about this plan's outcomes.
-            plans_without_lists = plans_without_lists + 1
-            continue
-        if not isinstance(pending, list):
-            pending = []
-        total_applied = total_applied + len(applied)
-        total_failed = total_failed + len(failed)
-        total_pending = total_pending + len(pending)
-
-    attempted = total_applied + total_failed
-
-    if api_error or plan_count == 0 or plans_without_lists > 0 or attempted == 0:
-        # No completed attempt to divide by, or an incomplete read: the rate is not measured.
-        success_rate = None
+        return None, api_error
+    if truncated(input) or truncated(data):
+        return None, "The device summary read was cut short; " + CRITERIA_KEY + " was not measured."
+    if isinstance(data, list):
+        devices = data
+    elif isinstance(data, dict):
+        devices = data.get("data")
+        if not isinstance(devices, list):
+            devices = data.get("devices")
     else:
-        success_rate = round((total_applied / attempted) * 100.0, 2)
+        devices = None
+    if not isinstance(devices, list) or len(devices) == 0:
+        return None, "No device records were returned by getDeviceSummary; " + CRITERIA_KEY + " was not measured."
+    unreadable = 0
+    for dev in devices:
+        if not isinstance(dev, dict) or "backup_status" not in dev:
+            unreadable = unreadable + 1
+        elif dev.get("backup_status") is not None and not isinstance(dev.get("backup_status"), str):
+            unreadable = unreadable + 1
+    if unreadable > 0:
+        return None, (str(unreadable) + " of " + str(len(devices)) + " device record(s) carry no readable backup_status; "
+                      + CRITERIA_KEY + " was not measured.")
+    return devices, None
 
-    input_summary = {
-        "planCount": plan_count,
-        "totalApplied": total_applied,
-        "totalFailed": total_failed,
-        "totalPending": total_pending,
-        "attempted": attempted,
-    }
 
-    pass_reasons = []
+def status_of(dev):
+    status = dev.get("backup_status")
+    return status.strip().lower() if isinstance(status, str) else ""
+
+
+def evaluate(input):
+    data, validation = extract_input(input)
+    devices, reason = read_devices(input, data)
+    metadata = {"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup", "source": "getDeviceSummary"}
+    if devices is None:
+        return create_response(
+            result={CRITERIA_KEY: None, "successfulDevices": None, "failedDevices": None, "totalDevices": None},
+            validation=validation,
+            fail_reasons=[reason],
+            recommendations=["Check the IDrive API key and that getDeviceSummary returns every device with its backup_status, then re-run the check."],
+            input_summary={"totalDevices": None, "successfulDevices": None, "failedDevices": None, "attempted": None},
+            metadata=metadata,
+            api_errors=[reason],
+        )
+
+    total = len(devices)
+    succeeded = len([d for d in devices if status_of(d) in SUCCESS_STATUSES])
+    failed = len([d for d in devices if status_of(d) in FAILURE_STATUSES])
+    attempted = succeeded + failed
+    summary = {"totalDevices": total, "successfulDevices": succeeded, "failedDevices": failed, "attempted": attempted}
+    if attempted == 0:
+        # A full read with no finished backup to divide by: the rate is not measured, the counts are real.
+        reason = ("None of the " + str(total) + " device(s) reports a Success or Failure backup_status; "
+                  + CRITERIA_KEY + " was not measured.")
+        return create_response(
+            result={CRITERIA_KEY: None, "successfulDevices": succeeded, "failedDevices": failed, "totalDevices": total},
+            validation=validation,
+            fail_reasons=[reason],
+            recommendations=["Confirm backups have finished at least once on the company's devices."],
+            input_summary=summary,
+            metadata=metadata,
+            api_errors=[reason],
+        )
+
+    rate = round((succeeded / attempted) * 100.0, 2)
+    pass_reasons = [str(succeeded) + " of " + str(attempted) + " device(s) with a finished backup report Success, a " + str(rate) + "% success rate."]
     fail_reasons = []
     recommendations = []
-
-    if api_error:
-        fail_reasons.append(api_error)
-        recommendations.append("Check the IDrive API credentials and permissions for getBackupPlan, then re-run the check.")
-    elif plan_count == 0:
-        fail_reasons.append("No backup plans were returned by getBackupPlan; success rate cannot be computed.")
-        recommendations.append("Verify at least one backup plan is configured and applied to devices for this company.")
-    elif plans_without_lists > 0:
-        fail_reasons.append(
-            f"{plans_without_lists} of {plan_count} backup plan record(s) carry no backup_applied_on/backup_failed_on lists; the success rate cannot be computed, so it is not evaluated."
-        )
-        recommendations.append("Confirm getBackupPlan returns backup_applied_on and backup_failed_on for every plan for this company.")
-    elif attempted == 0:
-        fail_reasons.append(
-            f"Across {plan_count} backup plan(s), no devices appear in backup_applied_on or backup_failed_on (both empty); no completed backup attempts to evaluate."
-        )
-        recommendations.append("Confirm backup plans have been applied to devices and jobs have run at least once.")
-    else:
-        pass_reasons.append(
-            f"Across {plan_count} backup plan(s), {total_applied} of {attempted} attempted device backups completed successfully (backup_applied_on vs backup_failed_on), a {success_rate}% success rate. {total_pending} device(s) remain pending application."
-        )
-        if total_failed > 0:
-            fail_reasons.append(
-                f"{total_failed} device backup(s) are listed in backup_failed_on across the plan(s) evaluated."
-            )
-            recommendations.append("Investigate devices listed in backup_failed_on for recurring backup failures.")
-
-    result = {
-        "backupSuccessRatePercentage": success_rate,
-        "totalApplied": total_applied,
-        "totalFailed": total_failed,
-        "totalPending": total_pending,
-        "planCount": plan_count,
-    }
+    if failed > 0:
+        fail_reasons = [str(failed) + " device(s) report a failed last backup (backup_status Failure)."]
+        recommendations = ["Investigate the failed devices' backup jobs and re-run them."]
 
     return create_response(
-        result=result,
+        result={CRITERIA_KEY: rate, "successfulDevices": succeeded, "failedDevices": failed, "totalDevices": total},
         validation=validation,
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
-        metadata={"transformationId": "backupSuccessRatePercentage", "vendor": "IDrive", "category": "backup"},
-        api_errors=[api_error] if api_error else None,
+        input_summary=summary,
+        metadata=metadata,
     )
 
 
