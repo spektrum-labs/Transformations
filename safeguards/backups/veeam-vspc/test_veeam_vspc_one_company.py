@@ -1,0 +1,281 @@
+"""Veeam Service Provider Console checks count only the configured company's own backups.
+
+One VSPC console serves many companies. Integration-Service reads a company-scoped workflow:
+"company" (the company the connection's Company UID names, from
+GET /organizations/companies?filter=instanceUid equals <uid>), "backupServers" (that company's
+Veeam Backup & Replication servers, filter organizationUid equals <uid>) and the data parts.
+Each transform keeps only:
+
+- jobs whose organizationUid is the company (BackupServerJob.organizationUid);
+- VM jobs whose embedded backupServerJob.organizationUid is the company and whose server is the company's;
+- repositories and licences whose backupServerUid is one of the company's backup servers.
+
+The VSPC filter is a request-side narrowing that is UNPROVEN against a real console, so these
+tests send whole-console bodies (the filter ignored) and expect each company to see only its own.
+
+A missing company (no Company UID, so no company read), an ambiguous one, a missing backup
+server set, or an error, empty or truncated read gives None (Not evaluated), never False and
+never a verdict over the whole console. Synthetic data only.
+"""
+import importlib.util
+import os
+
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+A = "1a1a1a1a-2b2b-4c3c-8d4d-5e5e5e5e5e5e"
+B = "9f9f9f9f-8e8e-4d7d-9c6c-5b5b5b5b5b5b"
+SRV_A = "aaaaaaaa-0000-4000-8000-00000000000a"
+SRV_B = "bbbbbbbb-0000-4000-8000-00000000000b"
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location("veeam_vspc_oc_" + name, os.path.join(HERE, name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.transform
+
+
+def run(name, key, body):
+    out = load(name)(body)
+    return out["transformedResponse"][key], out
+
+
+def value(name, key, body):
+    return run(name, key, body)[0]
+
+
+def coll(items, total=None):
+    n = len(items) if total is None else total
+    return {"meta": {"pagingInfo": {"total": n, "count": len(items), "offset": 0}}, "data": items, "errors": None}
+
+
+def ts_wrap(body):
+    return {"data": {"apiResponse": body}, "validation": {"status": "skipped", "errors": [], "warnings": []}}
+
+
+def job(name, org, server, jtype="BackupVm", enabled=True, schedule="Daily", status="Success"):
+    return {"instanceUid": name + "-uid", "name": name, "backupServerUid": server, "organizationUid": org,
+            "type": jtype, "isEnabled": enabled, "scheduleType": schedule, "status": status,
+            "lastRun": "2099-01-01 00:00:00.000000+00:00", "lastEndTime": None}
+
+
+def recent_job(name, org, server, **kw):
+    from datetime import datetime, timedelta, timezone
+    j = job(name, org, server, **kw)
+    j["lastEndTime"] = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S.000000+00:00")
+    return j
+
+
+def server(uid, org):
+    return {"instanceUid": uid, "name": "vbr-" + uid[:4], "organizationUid": org}
+
+
+def lic(srv, ltype="Rental", status="Valid"):
+    return {"backupServerUid": srv, "type": ltype, "status": status}
+
+
+def vm_job(name, org, srv, target, enabled=True):
+    return {"instanceUid": name + "-uid", "targetRepositoryUid": target, "protectedVmCount": 2,
+            "_embedded": {"backupServerJob": {"name": name, "backupServerUid": srv, "organizationUid": org,
+                                              "isEnabled": enabled, "type": "BackupVm"}}}
+
+
+def repo(uid, srv, immutable, rtype="LinuxHardened"):
+    return {"instanceUid": uid, "name": "repo-" + uid, "backupServerUid": srv, "type": rtype,
+            "parentRepositoryUid": None, "isImmutabilityEnabled": immutable}
+
+
+# ── one console, two companies. A is good everywhere, B is bad everywhere. ──
+CONSOLE_JOBS = [
+    recent_job("a-backup", A, SRV_A), recent_job("a-sure", A, SRV_A, jtype="SureBackup"),
+    job("b-backup", B, SRV_B, enabled=False, schedule="NotScheduled"),
+    job("b-sure", B, SRV_B, jtype="SureBackup", status="Failed"),
+]
+CONSOLE_SERVERS = [server(SRV_A, A), server(SRV_B, B)]
+CONSOLE_LICENSES = [lic(SRV_A), lic(SRV_B, "Evaluation")]
+CONSOLE_VM_JOBS = [vm_job("a-vm", A, SRV_A, "ra"), vm_job("b-vm", B, SRV_B, "rb")]
+CONSOLE_REPOS = [repo("ra", SRV_A, True), repo("rb", SRV_B, False)]
+
+
+def company(uid):
+    return coll([{"instanceUid": uid}])
+
+
+def jobs_body(uid, jobs=None, filtered=False):
+    jobs = CONSOLE_JOBS if jobs is None else jobs
+    if filtered:
+        jobs = [j for j in jobs if j["organizationUid"] == uid]
+    return {"company": company(uid), "jobs": coll(jobs)}
+
+
+def lic_body(uid, servers=None, licenses=None):
+    return {"company": company(uid), "backupServers": coll(CONSOLE_SERVERS if servers is None else servers),
+            "licenses": coll(CONSOLE_LICENSES if licenses is None else licenses)}
+
+
+def targets_body(uid, servers=None, vm_jobs=None, repos=None):
+    return {"company": company(uid), "backupServers": coll(CONSOLE_SERVERS if servers is None else servers),
+            "vmJobs": coll(CONSOLE_VM_JOBS if vm_jobs is None else vm_jobs),
+            "repositories": coll(CONSOLE_REPOS if repos is None else repos)}
+
+
+JOB_CHECKS = [
+    ("isbackupenabled", "isBackupEnabled"),
+    ("isbackuptypesscheduled", "isBackupTypesScheduled"),
+    ("isbackuptested", "isBackupTested"),
+]
+ALL = JOB_CHECKS + [("confirmedlicensepurchased", "confirmedLicensePurchased"),
+                    ("isbackupimmutable", "isBackupImmutable")]
+
+
+def body_for(name, uid):
+    if name == "confirmedlicensepurchased":
+        return lic_body(uid)
+    if name == "isbackupimmutable":
+        return targets_body(uid)
+    return jobs_body(uid)
+
+
+@pytest.mark.parametrize("name,key", ALL)
+@pytest.mark.parametrize("wrap", [lambda b: b, ts_wrap, lambda b: {"data": b, "validation": {}}],
+                         ids=["bare", "ts", "enriched"])
+def test_each_company_sees_only_its_own(name, key, wrap):
+    """The whole console comes back (filter ignored): A passes on A's data, B fails on B's."""
+    assert value(name, key, wrap(body_for(name, A))) is True
+    assert value(name, key, wrap(body_for(name, B))) is False
+
+
+@pytest.mark.parametrize("name,key", JOB_CHECKS)
+def test_filtered_and_unfiltered_reads_agree(name, key):
+    assert value(name, key, jobs_body(A, filtered=True)) is value(name, key, jobs_body(A)) is True
+    assert value(name, key, jobs_body(B, filtered=True)) is value(name, key, jobs_body(B)) is False
+
+
+@pytest.mark.parametrize("name,key", JOB_CHECKS)
+def test_another_companys_good_jobs_never_pass_this_company(name, key):
+    # B has no jobs of its own; A's good jobs are on the console. B is not evaluated, never True.
+    only_a = [j for j in CONSOLE_JOBS if j["organizationUid"] == A]
+    assert value(name, key, jobs_body(B, jobs=only_a)) is None
+
+
+def test_another_companys_licences_and_repositories_never_count():
+    # B's console server lists no licence of B; A's valid licence must not pass B.
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(B, licenses=[lic(SRV_A)])) is None
+    # A's evaluation licence on a server of B's must not fail A.
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), lic(SRV_B, "Evaluation")])) is True
+    # B's mutable repository does not fail A; A's VM job is judged on A's repository only.
+    assert value("isbackupimmutable", "isBackupImmutable", targets_body(A)) is True
+    # A VM job owned by A but on B's server (inconsistent read) is not counted for A.
+    assert value("isbackupimmutable", "isBackupImmutable",
+                 targets_body(A, vm_jobs=[vm_job("x", A, SRV_B, "rb")])) is None
+
+
+def test_backup_server_set_comes_from_the_company_not_the_console():
+    # The console lists both servers; only A's counts for A, whatever the licences say.
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, servers=CONSOLE_SERVERS)) is True
+    # A server another company owns is ignored even if it is in the backupServers part.
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, servers=[server(SRV_B, B)], licenses=[lic(SRV_B, "Evaluation")])) is None
+
+
+def test_reports_whether_the_console_filter_was_honoured():
+    _, out = run("isbackupenabled", "isBackupEnabled", jobs_body(A))
+    assert out["transformedResponse"]["consoleFilterHonoured"] is False
+    _, out = run("isbackupenabled", "isBackupEnabled", jobs_body(A, filtered=True))
+    assert out["transformedResponse"]["consoleFilterHonoured"] is True
+    # Never another company's names or counts in what this company sees.
+    text = str(run("isbackupenabled", "isBackupEnabled", jobs_body(A))[1])
+    assert "b-backup" not in text and B not in text
+
+
+# ── no company UID / no company read: Not evaluated ─────────────────────────
+
+MISSING_UID = "Required integration credentials are not connected: companyUid"
+
+
+def company_missing_bodies(name):
+    full = body_for(name, A)
+    no_company = {k: v for k, v in full.items() if k != "company"}
+    return [
+        # The definition before the Company UID: the old single-collection read.
+        coll(CONSOLE_JOBS) if name in [n for n, _ in JOB_CHECKS] else (
+            coll(CONSOLE_LICENSES) if name == "confirmedlicensepurchased" else
+            {"vmJobs": coll(CONSOLE_VM_JOBS), "repositories": coll(CONSOLE_REPOS)}),
+        # Integration-Service's answer when the setting is missing (the workflow stops at step 1).
+        {"error": True, "errorType": "missing_credentials", "statusCode": 412, "status": "Error",
+         "message": MISSING_UID, "missingFields": ["companyUid"]},
+        no_company,
+        dict(full, company=coll([])),                                       # no company matches
+        dict(full, company=coll([{"instanceUid": A}, {"instanceUid": B}])),  # filter ignored: ambiguous
+        dict(full, company=coll([{"instanceUid": "not-a-uid"}])),
+        dict(full, company=coll([{"name": "no uid"}])),
+        dict(full, company=coll([{"instanceUid": A}], total=2)),             # truncated
+        dict(full, company={"errors": [{"message": "Access denied", "type": "security", "code": 1100}]}),
+        dict(full, company=None),
+    ]
+
+
+@pytest.mark.parametrize("name,key", ALL)
+def test_missing_company_is_not_evaluated(name, key):
+    for i, body in enumerate(company_missing_bodies(name)):
+        v, out = run(name, key, body)
+        assert v is None, (i, out["additionalInfo"]["dataCollection"])
+        assert out["additionalInfo"]["dataCollection"]["status"] == "error", i
+
+
+@pytest.mark.parametrize("name,key", [("confirmedlicensepurchased", "confirmedLicensePurchased"),
+                                      ("isbackupimmutable", "isBackupImmutable")])
+def test_missing_backup_server_set_is_not_evaluated(name, key):
+    full = body_for(name, A)
+    for i, part in enumerate([
+        "absent", coll([]), coll([server(SRV_B, B)]), coll([server(SRV_A, A)], total=3),
+        {"errors": [{"message": "Forbidden", "type": "security", "code": 1100}]},
+        {"error": True, "statusCode": 403, "status": "Error", "message": "forbidden"}, None, "",
+    ]):
+        body = {k: v for k, v in full.items() if k != "backupServers"} if part == "absent" else \
+            dict(full, backupServers=part)
+        assert value(name, key, body) is None, i
+
+
+# ── error, empty or truncated data parts: Not evaluated ─────────────────────
+
+BAD_PARTS = [
+    "absent", None, "", {}, coll([]),
+    {"meta": None, "data": None, "errors": [{"message": "Access denied", "type": "security", "code": 1100}]},
+    {"error": True, "statusCode": 429, "status": "Error", "message": "rate limited"},
+    {"data": []},
+]
+
+
+def with_part(body, key, part):
+    if part == "absent":
+        return {k: v for k, v in body.items() if k != key}
+    return dict(body, **{key: part})
+
+
+@pytest.mark.parametrize("name,key", JOB_CHECKS)
+@pytest.mark.parametrize("part", BAD_PARTS + [coll(CONSOLE_JOBS[:1], total=900)])
+def test_bad_job_read_is_not_evaluated(name, key, part):
+    assert value(name, key, with_part(jobs_body(A), "jobs", part)) is None
+
+
+@pytest.mark.parametrize("part", BAD_PARTS + [coll(CONSOLE_LICENSES[:1], total=900)])
+def test_bad_licence_read_is_not_evaluated(part):
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 with_part(lic_body(A), "licenses", part)) is None
+
+
+@pytest.mark.parametrize("which", ["vmJobs", "repositories"])
+@pytest.mark.parametrize("part", BAD_PARTS)
+def test_bad_target_read_is_not_evaluated(which, part):
+    assert value("isbackupimmutable", "isBackupImmutable", with_part(targets_body(A), which, part)) is None
+
+
+def test_company_uid_matches_case_insensitively():
+    upper = {"company": coll([{"instanceUid": A.upper()}]), "jobs": coll(CONSOLE_JOBS)}
+    assert value("isbackupenabled", "isBackupEnabled", upper) is True
