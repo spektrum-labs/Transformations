@@ -1,5 +1,10 @@
 """Transformation: isBackupTested - Veeam Service Provider Console REST API v3.
-Source: GET /api/v3/infrastructure/backupServers/jobs (all pages), SureBackup jobs
+Source: workflow getCompanyJobs: company + GET /api/v3/infrastructure/backupServers/jobs filtered by
+organizationUid (jobs, all pages).
+One company only: the "company" part (GET /api/v3/organizations/companies filtered by the connection's
+Company UID) must name exactly one company; without it (no Company UID) the check is None, never a
+verdict over the whole console. Only jobs whose organizationUid is the company count (a safety net:
+the VSPC filter is unproven against a real console); none of them is None.
 True when an enabled SureBackup job's latest session ended Success or Warning within the last 90
 days. False when there is no SureBackup job, none is enabled, or none has a recent good session.
 Returns None (not measured) on any body that is not a complete VSPC read: empty, an error envelope,
@@ -8,7 +13,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 KEY = "isBackupTested"
-METHOD = "listBackupServerJobs"
+METHOD = "getCompanyJobs"
 
 VENDOR = "Veeam"
 PRODUCT = "Veeam Service Provider Console (REST API v3)"
@@ -128,6 +133,100 @@ def workflow_part(raw, key):
     return None
 
 
+HEX = "0123456789abcdef"
+
+
+def is_uid(value):
+    """True for a VSPC UID: 36 characters, hex in 8-4-4-4-12 groups."""
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    low = value.lower()
+    for i in range(36):
+        if i in (8, 13, 18, 23):
+            if low[i] != "-":
+                return False
+        elif low[i] not in HEX:
+            return False
+    return True
+
+
+def lower_text(value):
+    return value.lower() if isinstance(value, str) else None
+
+
+def part_error(raw):
+    """An error envelope at the top of the body (Integration-Service stopped the workflow), else None."""
+    cur = to_obj(raw)
+    for depth in range(8):
+        if not isinstance(cur, dict):
+            return None
+        problem = envelope_error(cur)
+        if problem is not None:
+            return problem
+        nxt = None
+        if "validation" in cur and "data" in cur:
+            nxt = to_obj(cur.get("data"))
+        else:
+            for w in WRAPPERS:
+                if isinstance(cur.get(w), (dict, str)):
+                    nxt = to_obj(cur.get(w))
+                    break
+        if nxt is None:
+            return None
+        cur = nxt
+    return None
+
+
+def configured_company(raw):
+    """(company UID, None) from the workflow's "company" part, else (None, reason).
+    The part is GET /organizations/companies filtered by the connection's Company UID: exactly one
+    company with a UID, read completely. Anything else (no Company UID, so no company read; no match;
+    several companies because the filter was not applied; an error) is not evaluated."""
+    part = workflow_part(raw, "company")
+    if part is None:
+        problem = part_error(raw)
+        if problem is not None:
+            return None, problem
+        return None, ("No company read in the response. The connection needs its Company UID (VSPC portal: "
+                      "Companies > the company > UID) so only that company is evaluated, never the whole console")
+    items, why = complete_items(part, "company")
+    if why:
+        return None, why
+    if len(items) != 1:
+        return None, ("The Company UID matched " + str(len(items)) + " companies on the console; exactly one is "
+                      "needed to evaluate one company")
+    uid = items[0].get("instanceUid")
+    if not is_uid(uid):
+        return None, "The company read carries no valid instanceUid"
+    return uid.lower(), None
+
+
+def company_servers(raw, company):
+    """({backup server UID: True}, None) for the company's own Veeam Backup & Replication servers, else
+    (None, reason). Only servers whose organizationUid is the company count, whatever else is listed."""
+    part = workflow_part(raw, "backupServers")
+    if part is None:
+        return None, "No backup server read for the company; repositories and licenses cannot be scoped to it"
+    items, why = complete_items(part, "company backup servers")
+    if why:
+        return None, why
+    owned = {}
+    for s in items:
+        uid = lower_text(s.get("instanceUid"))
+        if uid and lower_text(s.get("organizationUid")) == company:
+            owned[uid] = True
+    if len(owned) == 0:
+        return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
+    return owned, None
+
+
+def company_jobs(jobs, company):
+    """The jobs the company owns (BackupServerJob.organizationUid), and whether the console's filter
+    already returned only those."""
+    own = [j for j in jobs if lower_text(j.get("organizationUid")) == company]
+    return own, len(own) == len(jobs)
+
+
 def parse_time(value):
     """Naive-UTC datetime from a VSPC timestamp ("2023-10-20 03:07:31.317000+02:00" or ISO with T/Z).
     None if unreadable."""
@@ -194,9 +293,15 @@ WINDOW_DAYS = 90
 
 
 def evaluate(input):
-    jobs, why = complete_items(input, "backup server jobs")
+    company, why = configured_company(input)
     if why:
         return respond(KEY, METHOD, None, why)
+    jobs, why = complete_items(workflow_part(input, "jobs"), "backup server jobs")
+    if why:
+        return respond(KEY, METHOD, None, why)
+    jobs, honoured = company_jobs(jobs, company)
+    if len(jobs) == 0:
+        return respond(KEY, METHOD, None, "VSPC lists no job of the company; nothing to evaluate")
     sure = [j for j in jobs if j.get("type") == "SureBackup"]
     enabled = [j for j in sure if j.get("isEnabled") is True]
     oldest = utc_now() - timedelta(days=WINDOW_DAYS)
@@ -206,17 +311,18 @@ def evaluate(input):
         if j.get("status") in ("Success", "Warning") and when is not None and when >= oldest:
             good.append(name_of(j))
     extra = {"sureBackupJobCount": len(sure), "enabledSureBackupJobCount": len(enabled),
-             "recentGoodSureBackupJobCount": len(good)}
+             "recentGoodSureBackupJobCount": len(good), "consoleFilterHonoured": honoured}
     if good:
         extra["recentGoodSureBackupJobs"] = good[:25]
-        return respond(KEY, METHOD, True, str(len(good)) + " SureBackup jobs verified restore points successfully "
-                       "in the last " + str(WINDOW_DAYS) + " days", extra)
+        return respond(KEY, METHOD, True, str(len(good)) + " SureBackup jobs of the company verified restore points "
+                       "successfully in the last " + str(WINDOW_DAYS) + " days", extra)
     if len(sure) == 0:
-        return respond(KEY, METHOD, False, "No SureBackup (recovery verification) job is configured", extra)
+        return respond(KEY, METHOD, False, "The company has no SureBackup (recovery verification) job", extra)
     if len(enabled) == 0:
-        return respond(KEY, METHOD, False, "All " + str(len(sure)) + " SureBackup jobs are disabled", extra)
-    return respond(KEY, METHOD, False, "No enabled SureBackup job finished Success or Warning in the last " +
-                   str(WINDOW_DAYS) + " days", extra)
+        return respond(KEY, METHOD, False, "All " + str(len(sure)) + " SureBackup jobs of the company are disabled",
+                       extra)
+    return respond(KEY, METHOD, False, "No enabled SureBackup job of the company finished Success or Warning in "
+                   "the last " + str(WINDOW_DAYS) + " days", extra)
 
 
 def transform(input):

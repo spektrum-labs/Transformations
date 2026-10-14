@@ -1,5 +1,11 @@
 """Transformation: isBackupImmutable - Veeam Service Provider Console REST API v3.
-Source: workflow getRepositoryTargets: GET /api/v3/infrastructure/backupServers/jobs/backupVmJobs?expand=BackupServerJob (vmJobs) + GET /api/v3/infrastructure/backupServers/repositories (repositories)
+Source: workflow getRepositoryTargets: company + GET /api/v3/infrastructure/backupServers filtered by
+organizationUid (backupServers) + GET .../jobs/backupVmJobs?expand=BackupServerJob (vmJobs) +
+GET /api/v3/infrastructure/backupServers/repositories (repositories).
+One company only: the "company" part (GET /api/v3/organizations/companies filtered by the connection's
+Company UID) must name exactly one company; without it (no Company UID) the check is None, never a
+verdict over the whole console. Only VM jobs the
+company owns on its own servers, and repositories on those servers, count.
 True when every repository written by an enabled VM backup job has immutability enabled (for a
 scale-out repository: every extent). False when any target is mutable. None when there is no enabled
 VM backup job or a target cannot be resolved in the repository list.
@@ -129,6 +135,100 @@ def workflow_part(raw, key):
     return None
 
 
+HEX = "0123456789abcdef"
+
+
+def is_uid(value):
+    """True for a VSPC UID: 36 characters, hex in 8-4-4-4-12 groups."""
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    low = value.lower()
+    for i in range(36):
+        if i in (8, 13, 18, 23):
+            if low[i] != "-":
+                return False
+        elif low[i] not in HEX:
+            return False
+    return True
+
+
+def lower_text(value):
+    return value.lower() if isinstance(value, str) else None
+
+
+def part_error(raw):
+    """An error envelope at the top of the body (Integration-Service stopped the workflow), else None."""
+    cur = to_obj(raw)
+    for depth in range(8):
+        if not isinstance(cur, dict):
+            return None
+        problem = envelope_error(cur)
+        if problem is not None:
+            return problem
+        nxt = None
+        if "validation" in cur and "data" in cur:
+            nxt = to_obj(cur.get("data"))
+        else:
+            for w in WRAPPERS:
+                if isinstance(cur.get(w), (dict, str)):
+                    nxt = to_obj(cur.get(w))
+                    break
+        if nxt is None:
+            return None
+        cur = nxt
+    return None
+
+
+def configured_company(raw):
+    """(company UID, None) from the workflow's "company" part, else (None, reason).
+    The part is GET /organizations/companies filtered by the connection's Company UID: exactly one
+    company with a UID, read completely. Anything else (no Company UID, so no company read; no match;
+    several companies because the filter was not applied; an error) is not evaluated."""
+    part = workflow_part(raw, "company")
+    if part is None:
+        problem = part_error(raw)
+        if problem is not None:
+            return None, problem
+        return None, ("No company read in the response. The connection needs its Company UID (VSPC portal: "
+                      "Companies > the company > UID) so only that company is evaluated, never the whole console")
+    items, why = complete_items(part, "company")
+    if why:
+        return None, why
+    if len(items) != 1:
+        return None, ("The Company UID matched " + str(len(items)) + " companies on the console; exactly one is "
+                      "needed to evaluate one company")
+    uid = items[0].get("instanceUid")
+    if not is_uid(uid):
+        return None, "The company read carries no valid instanceUid"
+    return uid.lower(), None
+
+
+def company_servers(raw, company):
+    """({backup server UID: True}, None) for the company's own Veeam Backup & Replication servers, else
+    (None, reason). Only servers whose organizationUid is the company count, whatever else is listed."""
+    part = workflow_part(raw, "backupServers")
+    if part is None:
+        return None, "No backup server read for the company; repositories and licenses cannot be scoped to it"
+    items, why = complete_items(part, "company backup servers")
+    if why:
+        return None, why
+    owned = {}
+    for s in items:
+        uid = lower_text(s.get("instanceUid"))
+        if uid and lower_text(s.get("organizationUid")) == company:
+            owned[uid] = True
+    if len(owned) == 0:
+        return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
+    return owned, None
+
+
+def company_jobs(jobs, company):
+    """The jobs the company owns (BackupServerJob.organizationUid), and whether the console's filter
+    already returned only those."""
+    own = [j for j in jobs if lower_text(j.get("organizationUid")) == company]
+    return own, len(own) == len(jobs)
+
+
 def parse_time(value):
     """Naive-UTC datetime from a VSPC timestamp ("2023-10-20 03:07:31.317000+02:00" or ISO with T/Z).
     None if unreadable."""
@@ -192,26 +292,40 @@ BACKUP_TYPES = ["BackupVm", "AgentBackupJob", "AgentPolicy", "BackupFile", "Azur
 SCHEDULED = ["Daily", "Monthly", "Periodically", "Continuously", "BackupWindow", "Chained"]
 
 def evaluate(input):
-    vm_jobs, why = complete_items(workflow_part(input, "vmJobs"), "VM backup jobs")
+    company, why = configured_company(input)
     if why:
         return respond(KEY, METHOD, None, why)
-    repos, why = complete_items(workflow_part(input, "repositories"), "backup repositories")
+    servers, why = company_servers(input, company)
     if why:
         return respond(KEY, METHOD, None, why)
+    all_vm_jobs, why = complete_items(workflow_part(input, "vmJobs"), "VM backup jobs")
+    if why:
+        return respond(KEY, METHOD, None, why)
+    all_repos, why = complete_items(workflow_part(input, "repositories"), "backup repositories")
+    if why:
+        return respond(KEY, METHOD, None, why)
+    repos = [r for r in all_repos if servers.get(lower_text(r.get("backupServerUid")) or "") is True]
     by_uid = {}
     for r in repos:
         by_uid[(str(r.get("backupServerUid")).lower(), str(r.get("instanceUid")).lower())] = r
     enabled = []
-    for j in vm_jobs:
+    owned_jobs = 0
+    for j in all_vm_jobs:
         emb = j.get("_embedded") if isinstance(j.get("_embedded"), dict) else {}
         job = emb.get("backupServerJob") if isinstance(emb.get("backupServerJob"), dict) else None
         if job is None:
             return respond(KEY, METHOD, None, "VM backup job " + name_of(j) + " carries no embedded backupServerJob "
                            "(expand=BackupServerJob was not applied)")
+        # The company's own job on one of the company's own servers; anything else is another company's.
+        if lower_text(job.get("organizationUid")) != company:
+            continue
+        if servers.get(lower_text(job.get("backupServerUid")) or "") is not True:
+            continue
+        owned_jobs = owned_jobs + 1
         if job.get("isEnabled") is True:
             enabled.append((j, job))
     if len(enabled) == 0:
-        return respond(KEY, METHOD, None, "No enabled VM backup job, so no repository target to judge")
+        return respond(KEY, METHOD, None, "No enabled VM backup job of the company, so no repository target to judge")
     mutable = []
     checked = 0
     for j, job in enabled:
@@ -219,7 +333,7 @@ def evaluate(input):
         target = by_uid.get((server, str(j.get("targetRepositoryUid")).lower()))
         if target is None:
             return respond(KEY, METHOD, None, "Target repository of job " + name_of(job) +
-                           " is not in the repository list")
+                           " is not in the company's repository list")
         if target.get("type") == "ScaleOut":
             extents = [r for r in repos if str(r.get("backupServerUid")).lower() == server and
                        str(r.get("parentRepositoryUid")).lower() == str(target.get("instanceUid")).lower()]
@@ -231,12 +345,14 @@ def evaluate(input):
             checked = checked + 1
             if r.get("isImmutabilityEnabled") is not True:
                 mutable.append(name_of(job) + " -> " + name_of(r) + " (" + str(r.get("type")) + ")")
-    extra = {"enabledVmBackupJobCount": len(enabled), "targetsChecked": checked, "mutableTargetCount": len(mutable)}
+    extra = {"enabledVmBackupJobCount": len(enabled), "targetsChecked": checked, "mutableTargetCount": len(mutable),
+             "consoleFilterHonoured": owned_jobs == len(all_vm_jobs) and len(repos) == len(all_repos)}
     if mutable:
         extra["mutableTargets"] = mutable[:25]
-        return respond(KEY, METHOD, False, str(len(mutable)) + " job targets do not have immutability enabled", extra)
+        return respond(KEY, METHOD, False, str(len(mutable)) + " job targets of the company do not have immutability "
+                       "enabled", extra)
     return respond(KEY, METHOD, True, "Every repository written by the " + str(len(enabled)) +
-                   " enabled VM backup jobs has immutability enabled", extra)
+                   " enabled VM backup jobs of the company has immutability enabled", extra)
 
 
 def transform(input):
