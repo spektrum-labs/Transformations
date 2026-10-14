@@ -190,6 +190,17 @@ class ClusterGroups(unittest.TestCase):
         self.assertEqual(inner["failedBackupJobsCount"], 0)
         self.assertEqual(inner["groupsNotRunYet"], ["pg-1-2"])
 
+    def test_a_false_resting_on_some_clusters_names_the_ones_not_read(self):
+        thin = [{"protectionGroups": []}, DEAD, {"protectionGroups": [group(3, 1, "Failed")]}]
+        inner, dc = run("isBackupEnabled", body(thin))
+        self.assertIs(inner["isBackupEnabled"], False)
+        self.assertIn("not connected to Helios, so not read: beta", inner["reason"])
+        empty = [{"protectionGroups": []}, DEAD, {"protectionGroups": []}]
+        for key in POLICY_KEYS:
+            inner, dc = run(key, body(empty, POLICIES))
+            self.assertIs(inner[key], False, key)
+            self.assertIn("beta", inner["reason"], key)
+
     def test_every_run_check_returns_the_envelope(self):
         for key in RUN_KEYS + POLICY_KEYS:
             out = load(key.lower()).transform({"apiResponse": {"clusterGroups": "junk"}})

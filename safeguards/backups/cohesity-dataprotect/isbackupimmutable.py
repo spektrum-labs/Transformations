@@ -226,7 +226,9 @@ def transform(input):
         if not used:
             if partial:
                 return respond(key, None, partial + "; no protection group was read, so no policy can be judged")
-            return respond(key, False, "No active protection group, so no policy is in use")
+            skipped = body.get("clustersNotConnected") or []
+            skipped_note = ("; not connected to Helios, so not read: " + ", ".join(skipped)) if skipped else ""
+            return respond(key, False, "No active protection group, so no policy is in use" + skipped_note)
 
         def regular(p):
             bp = p.get("backupPolicy")
