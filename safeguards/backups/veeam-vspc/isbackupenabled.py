@@ -239,11 +239,15 @@ def company_servers(raw, company):
     for s in items:
         uid = lower_text(s.get("instanceUid"))
         org = lower_text(s.get("organizationUid"))
-        if not uid or not org:
-            # A server whose owner or UID cannot be read could hide the company's licenses or repositories.
-            return None, ("Some backup servers on the console carry no instanceUid or organizationUid, so the "
-                          "company's own servers cannot be shown completely")
+        if not org:
+            # No owner (an unassigned or provider-owned server): not the company's by VSPC's own account.
+            # Skipped here; a check that finds the company's own job on it reads Not evaluated.
+            continue
         if org == company:
+            if not uid:
+                # The company's server, but its UID cannot be read: its licenses or repositories would hide.
+                return None, ("A backup server of the company carries no instanceUid, so the company's own "
+                              "servers cannot be shown completely")
             owned[uid] = True
     if len(owned) == 0:
         return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
