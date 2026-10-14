@@ -119,7 +119,9 @@ def transform(input):
         extra markers (policies). partial names what could not be read: a connected cluster whose read
         failed, a cluster whose list was cut short, or clusters beyond the fan-out cap. A cluster that
         Helios reports as not connected is not readable through Helios at all; it is listed under
-        clustersNotConnected and does not make the read partial. problem is set when nothing can be read.
+        clustersNotConnected and does not make the read partial. Slots are matched to clusters by the id an
+        error record echoes or the id prefix of the slot's group ids, position only as a last resort; a slot
+        count that differs from the cluster count is partial. problem is set when nothing was read at all.
         """
         body, problem = body_with(input, ["clusterGroups"] + extra)
         if body is None:
@@ -134,11 +136,32 @@ def transform(input):
         known = clusters.get("cohesityClusters") if isinstance(clusters, dict) else None
         if not isinstance(known, list):
             known = []
+        by_id = {}
+        for c in known:
+            if isinstance(c, dict) and c.get("clusterId") is not None:
+                by_id[str(c.get("clusterId"))] = c
+
+        def slot_cluster(index, slot):
+            """The cluster a slot came from: the id an error record echoes, else the id prefix of its
+            group ids (<clusterId>:<incarnation>:<n>), else the cluster at the same position."""
+            cid = None
+            if isinstance(slot, dict) and slot.get("error") is True:
+                cid = slot.get("item")
+            elif isinstance(slot, dict) and isinstance(slot.get("protectionGroups"), list):
+                for g in slot["protectionGroups"]:
+                    if isinstance(g, dict) and ":" in str(g.get("id") or ""):
+                        cid = str(g.get("id")).split(":")[0]
+                        break
+            if cid is not None and str(cid) in by_id:
+                return by_id[str(cid)]
+            return known[index] if index < len(known) and isinstance(known[index], dict) else {}
+
         groups = []
         unreadable = []
         not_connected = []
+        read_any = False
         for index, slot in enumerate(slots):
-            meta = known[index] if index < len(known) and isinstance(known[index], dict) else {}
+            meta = slot_cluster(index, slot)
             label = str(meta.get("clusterName") or meta.get("clusterId") or "cluster " + str(index + 1))
             if isinstance(slot, dict) and slot.get("error") is True:
                 if meta.get("isConnectedToHelios") is False:
@@ -152,6 +175,7 @@ def transform(input):
             if slot.get("paginationCookie"):
                 unreadable.append(label + " (first page only)")
                 continue
+            read_any = True
             for g in slot["protectionGroups"]:
                 if isinstance(g, dict):
                     g = dict(g)
@@ -161,8 +185,17 @@ def transform(input):
         stats = stats.get("clusterGroups") if isinstance(stats, dict) else None
         if body.get("iterateTruncated") is True or (isinstance(stats, dict) and stats.get("iterateTruncated") is True):
             unreadable.append("clusters beyond the fan-out cap")
-        if len(slots) == 0 and len(known) > 0:
-            unreadable.append("no cluster was read")
+        if len(known) > 0 and len(slots) != len(known):
+            unreadable.append(str(len(slots)) + " of " + str(len(known)) + " clusters answered")
+        if not read_any:
+            # Nothing was read: not one cluster list came back. Whether every cluster is disconnected from
+            # Helios, every read failed, or the account sees no cluster at all, there is no evidence either
+            # way, so the check is not evaluated, never Failed.
+            if not_connected and not unreadable:
+                return None, None, "No cluster could be read: not connected to Helios: " + ", ".join(not_connected)
+            if unreadable:
+                return None, None, "No cluster could be read: " + ", ".join(unreadable + not_connected)
+            return None, None, "No cluster list was returned (clusterGroups is empty)"
         merged = dict(body)
         merged["protectionGroups"] = groups
         merged["clustersNotConnected"] = not_connected
