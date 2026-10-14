@@ -153,6 +153,11 @@ def is_uid(value):
     return True
 
 
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
+
+
 def lower_text(value):
     return value.lower() if isinstance(value, str) else None
 
@@ -196,8 +201,8 @@ def configured_company(raw):
     if why:
         return None, why
     if len(items) != 1:
-        return None, ("The Company UID matched " + str(len(items)) + " companies on the console; exactly one is "
-                      "needed to evaluate one company")
+        return None, ("The Company UID did not match exactly one company on the console, so no single "
+                      "company can be evaluated")
     uid = items[0].get("instanceUid")
     if not is_uid(uid):
         return None, "The company read carries no valid instanceUid"
@@ -244,10 +249,17 @@ def company_servers(raw, company):
 
 
 def company_jobs(jobs, company):
-    """The jobs the company owns (BackupServerJob.organizationUid), and whether the console's filter
-    already returned only those."""
-    own = [j for j in jobs if lower_text(j.get("organizationUid")) == company]
-    return own, len(own) == len(jobs)
+    """(the jobs the company owns, whether any job has no readable owner). A job without an
+    organizationUid may be anyone's, so a check must not judge the attributable rest without it."""
+    own = []
+    unattributed = False
+    for j in jobs:
+        org = lower_text(j.get("organizationUid"))
+        if not org:
+            unattributed = True
+        elif org == company:
+            own.append(j)
+    return own, unattributed
 
 
 def parse_time(value):
@@ -331,16 +343,22 @@ def evaluate(input):
         return respond(KEY, METHOD, None, "VSPC reports no license on the company's Veeam Backup & Replication "
                        "servers; nothing to evaluate")
     bad = []
+    unread = 0
     for lic in lics:
+        if not is_text(lic.get("type")) or not is_text(lic.get("status")):
+            unread = unread + 1
+            continue
         if lic.get("type") not in PAID or lic.get("status") not in OK_STATUS:
             bad.append(str(lic.get("backupServerUid") or "?") + ": " + str(lic.get("type")) + "/" + str(lic.get("status")))
     extra = {"licenseCount": len(lics), "types": sorted(set([str(x.get("type")) for x in lics])),
-             "statuses": sorted(set([str(x.get("status")) for x in lics])), "backupServerCount": len(servers),
-             "consoleFilterHonoured": len(lics) == len(all_lics)}
+             "statuses": sorted(set([str(x.get("status")) for x in lics])), "backupServerCount": len(servers)}
     if bad:
         extra["unpaidOrInvalid"] = bad[:25]
         return respond(KEY, METHOD, False, str(len(bad)) + " of " + str(len(lics)) +
                        " licenses on the company's backup servers are not a valid paid license", extra)
+    if unread:
+        return respond(KEY, METHOD, None, "Some licenses on the company's backup servers report no type or status, "
+                       "so whether they are valid paid licenses cannot be shown")
     return respond(KEY, METHOD, True, "All " + str(len(lics)) + " licenses on the company's backup servers are "
                    "valid paid licenses", extra)
 

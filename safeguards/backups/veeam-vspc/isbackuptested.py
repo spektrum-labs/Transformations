@@ -194,8 +194,8 @@ def configured_company(raw):
     if why:
         return None, why
     if len(items) != 1:
-        return None, ("The Company UID matched " + str(len(items)) + " companies on the console; exactly one is "
-                      "needed to evaluate one company")
+        return None, ("The Company UID did not match exactly one company on the console, so no single "
+                      "company can be evaluated")
     uid = items[0].get("instanceUid")
     if not is_uid(uid):
         return None, "The company read carries no valid instanceUid"
@@ -242,10 +242,17 @@ def company_servers(raw, company):
 
 
 def company_jobs(jobs, company):
-    """The jobs the company owns (BackupServerJob.organizationUid), and whether the console's filter
-    already returned only those."""
-    own = [j for j in jobs if lower_text(j.get("organizationUid")) == company]
-    return own, len(own) == len(jobs)
+    """(the jobs the company owns, whether any job has no readable owner). A job without an
+    organizationUid may be anyone's, so a check must not judge the attributable rest without it."""
+    own = []
+    unattributed = False
+    for j in jobs:
+        org = lower_text(j.get("organizationUid"))
+        if not org:
+            unattributed = True
+        elif org == company:
+            own.append(j)
+    return own, unattributed
 
 
 def parse_time(value):
@@ -320,7 +327,10 @@ def evaluate(input):
     jobs, why = complete_items(workflow_part(input, "jobs"), "backup server jobs")
     if why:
         return respond(KEY, METHOD, None, why)
-    jobs, honoured = company_jobs(jobs, company)
+    jobs, unattributed = company_jobs(jobs, company)
+    if unattributed:
+        return respond(KEY, METHOD, None, "Some jobs on the console carry no organizationUid, so the company's "
+                       "own jobs cannot be shown completely")
     if len(jobs) == 0:
         return respond(KEY, METHOD, None, "VSPC lists no job of the company; nothing to evaluate")
     sure = [j for j in jobs if j.get("type") == "SureBackup"]
@@ -332,7 +342,7 @@ def evaluate(input):
         if j.get("status") in ("Success", "Warning") and when is not None and when >= oldest:
             good.append(name_of(j))
     extra = {"sureBackupJobCount": len(sure), "enabledSureBackupJobCount": len(enabled),
-             "recentGoodSureBackupJobCount": len(good), "consoleFilterHonoured": honoured}
+             "recentGoodSureBackupJobCount": len(good)}
     if good:
         extra["recentGoodSureBackupJobs"] = good[:25]
         return respond(KEY, METHOD, True, str(len(good)) + " SureBackup jobs of the company verified restore points "
