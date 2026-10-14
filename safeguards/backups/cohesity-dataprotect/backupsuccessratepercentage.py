@@ -162,8 +162,10 @@ def transform_unmarked(input):
                 by_id[str(c.get("clusterId"))] = c
 
         def slot_cluster(index, slot):
-            """The cluster a slot came from: the id an error record echoes, else the id prefix of its
-            group ids (<clusterId>:<incarnation>:<n>), else the cluster at the same position."""
+            """The cluster a slot came from: the cluster id an error record echoes (Integration-Service's
+            continueOnItemError record carries the iterate parameter's value under "item", here the
+            clusterId), else the id prefix of its group ids (<clusterId>:<incarnation>:<n>), else the
+            cluster at the same position."""
             cid = None
             if isinstance(slot, dict) and slot.get("error") is True:
                 cid = slot.get("item")
@@ -179,6 +181,7 @@ def transform_unmarked(input):
         groups = []
         unreadable = []
         not_connected = []
+        no_runs = []
         read_any = False
         for index, slot in enumerate(slots):
             meta = slot_cluster(index, slot)
@@ -196,10 +199,15 @@ def transform_unmarked(input):
                 unreadable.append(label + " (first page only)")
                 continue
             read_any = True
-            for g in slot["protectionGroups"]:
-                if isinstance(g, dict):
-                    g = dict(g)
-                    g["clusterName"] = label
+            slot_groups = [g for g in slot["protectionGroups"] if isinstance(g, dict)]
+            if slot_groups and not any("lastRun" in g for g in slot_groups):
+                # This cluster answered, but without last-run information on any group: it did not
+                # honour includeLastRunInfo (or runs a build that does not return it). The run checks
+                # cannot judge it, and must not read its groups as "never ran".
+                no_runs.append(label)
+            for g in slot_groups:
+                g = dict(g)
+                g["clusterName"] = label
                 groups.append(g)
         stats = body.get("iterateStats")
         stats = stats.get("clusterGroups") if isinstance(stats, dict) else None
@@ -219,6 +227,7 @@ def transform_unmarked(input):
         merged = dict(body)
         merged["protectionGroups"] = groups
         merged["clustersNotConnected"] = not_connected
+        merged["clustersWithoutRuns"] = no_runs
         partial = ("Not read: " + ", ".join(unreadable)) if unreadable else None
         return merged, partial, None
 
@@ -226,6 +235,9 @@ def transform_unmarked(input):
         body, partial, problem = groups_body(input, [])
         if body is None:
             return respond(key, None, problem)
+        no_runs = body.get("clustersWithoutRuns") or []
+        if no_runs:
+            return respond(key, None, "Cluster(s) " + ", ".join(no_runs) + " returned protection groups with no last-run information (lastRun) on any of them, so their backups cannot be judged (was includeLastRunInfo honored?)", {"runInfoReturned": False}, VENDOR_DATA_NOT_EXPOSED)
         live, problem = groups_in(body)
         if live is None:
             return respond(key, None, problem)
@@ -245,7 +257,9 @@ def transform_unmarked(input):
                 done = done + 1
         if done == 0:
             return respond(key, None, "No active protection group has a finished last backup run")
-        return respond(key, round(ok * 100.0 / done, 2), str(ok) + " of " + str(done) + " finished last backup runs succeeded")
+        skipped = body.get("clustersNotConnected") or []
+        skipped_note = ("; not connected to Helios, so not read: " + ", ".join(skipped)) if skipped else ""
+        return respond(key, round(ok * 100.0 / done, 2), str(ok) + " of " + str(done) + " finished last backup runs succeeded" + skipped_note)
     except Exception as e:
         return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
 

@@ -149,8 +149,10 @@ def transform(input):
                 by_id[str(c.get("clusterId"))] = c
 
         def slot_cluster(index, slot):
-            """The cluster a slot came from: the id an error record echoes, else the id prefix of its
-            group ids (<clusterId>:<incarnation>:<n>), else the cluster at the same position."""
+            """The cluster a slot came from: the cluster id an error record echoes (Integration-Service's
+            continueOnItemError record carries the iterate parameter's value under "item", here the
+            clusterId), else the id prefix of its group ids (<clusterId>:<incarnation>:<n>), else the
+            cluster at the same position."""
             cid = None
             if isinstance(slot, dict) and slot.get("error") is True:
                 cid = slot.get("item")
@@ -166,6 +168,7 @@ def transform(input):
         groups = []
         unreadable = []
         not_connected = []
+        no_runs = []
         read_any = False
         for index, slot in enumerate(slots):
             meta = slot_cluster(index, slot)
@@ -183,10 +186,15 @@ def transform(input):
                 unreadable.append(label + " (first page only)")
                 continue
             read_any = True
-            for g in slot["protectionGroups"]:
-                if isinstance(g, dict):
-                    g = dict(g)
-                    g["clusterName"] = label
+            slot_groups = [g for g in slot["protectionGroups"] if isinstance(g, dict)]
+            if slot_groups and not any("lastRun" in g for g in slot_groups):
+                # This cluster answered, but without last-run information on any group: it did not
+                # honour includeLastRunInfo (or runs a build that does not return it). The run checks
+                # cannot judge it, and must not read its groups as "never ran".
+                no_runs.append(label)
+            for g in slot_groups:
+                g = dict(g)
+                g["clusterName"] = label
                 groups.append(g)
         stats = body.get("iterateStats")
         stats = stats.get("clusterGroups") if isinstance(stats, dict) else None
@@ -206,6 +214,7 @@ def transform(input):
         merged = dict(body)
         merged["protectionGroups"] = groups
         merged["clustersNotConnected"] = not_connected
+        merged["clustersWithoutRuns"] = no_runs
         partial = ("Not read: " + ", ".join(unreadable)) if unreadable else None
         return merged, partial, None
 
@@ -213,6 +222,9 @@ def transform(input):
         body, partial, problem = groups_body(input, [])
         if body is None:
             return respond(key, None, problem)
+        no_runs = body.get("clustersWithoutRuns") or []
+        if no_runs:
+            return respond(key, None, "Cluster(s) " + ", ".join(no_runs) + " returned protection groups with no last-run information (lastRun) on any of them, so their backups cannot be judged (was includeLastRunInfo honored?)", {"runInfoReturned": False}, VENDOR_DATA_NOT_EXPOSED)
         pgs = body.get("protectionGroups")
         if not isinstance(pgs, list):
             return respond(key, None, "protectionGroups has an unexpected shape")
