@@ -187,10 +187,14 @@ def transform(input):
                 continue
             read_any = True
             slot_groups = [g for g in slot["protectionGroups"] if isinstance(g, dict)]
-            if slot_groups and not any("lastRun" in g for g in slot_groups):
-                # This cluster answered, but without last-run information on any group: it did not
-                # honour includeLastRunInfo (or runs a build that does not return it). The run checks
-                # cannot judge it, and must not read its groups as "never ran".
+            live_here = [g for g in slot_groups
+                         if not (g.get("isDeleted") is True or g.get("isActive") is False or g.get("isPaused") is True)]
+            if live_here and not any("lastRun" in g for g in live_here):
+                # This cluster answered with live groups but no last-run information on any of them:
+                # either it did not honour includeLastRunInfo (or runs a build that does not return
+                # it), or none of its groups has run yet. The run checks cannot tell which, so they do
+                # not judge it, and must not read its groups as "never ran". Deleted, paused and
+                # inactive groups are not judged anyway, so a cluster with only those is not flagged.
                 no_runs.append(label)
             for g in slot_groups:
                 g = dict(g)
@@ -223,8 +227,6 @@ def transform(input):
         if body is None:
             return respond(key, None, problem)
         no_runs = body.get("clustersWithoutRuns") or []
-        if no_runs:
-            return respond(key, None, "Cluster(s) " + ", ".join(no_runs) + " returned protection groups with no last-run information (lastRun) on any of them, so their backups cannot be judged (was includeLastRunInfo honored?)", {"runInfoReturned": False}, VENDOR_DATA_NOT_EXPOSED)
         pgs = body.get("protectionGroups")
         if not isinstance(pgs, list):
             return respond(key, None, "protectionGroups has an unexpected shape")
@@ -245,10 +247,15 @@ def transform(input):
         if not good:
             if partial:
                 return respond(key, None, partial + "; no successful last backup run on the clusters that were read")
+            if no_runs:
+                # No successful run was proven, and a cluster could not be judged: not a False.
+                return respond(key, None, "Cluster(s) " + ", ".join(no_runs) + " returned live protection groups with no last-run information (lastRun) on any of them: includeLastRunInfo was not honored, or none of its groups has run yet; their backups cannot be judged", {"runInfoReturned": False}, VENDOR_DATA_NOT_EXPOSED)
             skipped = body.get("clustersNotConnected") or []
             skipped_note = ("; not connected to Helios, so not read: " + ", ".join(skipped)) if skipped else ""
             return respond(key, False, "No active protection group has a successful last backup run" + skipped_note)
         note = ("; " + partial) if partial else ""
+        if no_runs:
+            note = note + "; no last-run information from: " + ", ".join(no_runs)
         return respond(key, True, str(len(good)) + " active protection groups have a successful last backup run" + note, {"groups": good[:20]})
     except Exception as e:
         return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})
