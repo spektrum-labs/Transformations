@@ -402,3 +402,21 @@ def test_enabled_job_with_a_missing_schedule_type_is_not_evaluated(how):
     # A real unscheduled job is still a readable "no".
     assert value("isbackuptypesscheduled", "isBackupTypesScheduled",
                  jobs_body(A, jobs=CONSOLE_JOBS + [job("a-ns", A, SRV_A, schedule="NotScheduled")])) is False
+
+
+@pytest.mark.parametrize("org_value", ["absent", None, "", 7])
+def test_owner_less_embedded_vm_job_is_not_evaluated(org_value):
+    """An embedded backupServerJob with no readable organizationUid may be anyone's: one owned immutable
+    job plus one owner-less job on a mutable target is not evaluated, never True."""
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    stray = vm_job("stray-vm", A, SRV_A, "rm")
+    if org_value == "absent":
+        del stray["_embedded"]["backupServerJob"]["organizationUid"]
+    else:
+        stray["_embedded"]["backupServerJob"]["organizationUid"] = org_value
+    repos = [repo("ra", SRV_A, True), repo("rm", SRV_A, False)]
+    assert value("isbackupimmutable", "isBackupImmutable", targets_body(A, vm_jobs=[owned], repos=repos)) is True
+    v, out = run("isbackupimmutable", "isBackupImmutable", targets_body(A, vm_jobs=[owned, stray], repos=repos))
+    assert v is None, out["additionalInfo"]["dataCollection"]
+    reason = out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert digits(reason) == [] and "stray-vm" not in str(out)
