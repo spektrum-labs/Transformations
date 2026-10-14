@@ -2,8 +2,9 @@
 Source: workflow getCompanyJobs: company + GET /api/v3/infrastructure/backupServers/jobs filtered by
 organizationUid (jobs, all pages).
 One company only: the "company" part (GET /api/v3/organizations/companies filtered by the connection's
-Company UID) must name exactly one company; without it (no Company UID) the check is None, never a
-verdict over the whole console. Only jobs whose organizationUid is the company count (a safety net:
+Company UID) must name exactly one company, and it must equal the Company UID Integration-Service echoes
+under "configuredSettings"; otherwise (no Company UID, a mismatch) the check is None, never a verdict
+over the whole console. Only jobs whose organizationUid is the company count (a safety net:
 the VSPC filter is unproven against a real console); none of them is None.
 True when at least one backup job (VM, agent, file, object storage or cloud backup) on the managed
 Veeam Backup & Replication servers has its schedule enabled (isEnabled). False when the complete job
@@ -199,7 +200,27 @@ def configured_company(raw):
     uid = items[0].get("instanceUid")
     if not is_uid(uid):
         return None, "The company read carries no valid instanceUid"
+    # The company VSPC returned must be the one the connection names (Integration-Service echoes the
+    # Company UID under configuredSettings). A console that ignores the filter and holds one company
+    # would otherwise answer with it whatever UID was asked for.
+    asked = configured_uid(raw)
+    if asked is None:
+        return None, ("No configured Company UID in the response, so the company VSPC returned cannot be "
+                      "shown to be the one this connection names")
+    if uid.lower() != asked:
+        return None, "The company VSPC returned does not match the connection's Company UID"
     return uid.lower(), None
+
+
+def configured_uid(raw):
+    """The connection's Company UID as Integration-Service echoed it (output.echoSettings), or None."""
+    conf = workflow_part(raw, "configuredSettings")
+    if not isinstance(conf, dict):
+        return None
+    uid = conf.get("companyUid")
+    if not is_uid(uid):
+        return None
+    return uid.lower()
 
 
 def company_servers(raw, company):
