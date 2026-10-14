@@ -196,8 +196,8 @@ def configured_company(raw):
     if why:
         return None, why
     if len(items) != 1:
-        return None, ("The Company UID matched " + str(len(items)) + " companies on the console; exactly one is "
-                      "needed to evaluate one company")
+        return None, ("The Company UID did not match exactly one company on the console, so no single "
+                      "company can be evaluated")
     uid = items[0].get("instanceUid")
     if not is_uid(uid):
         return None, "The company read carries no valid instanceUid"
@@ -244,10 +244,17 @@ def company_servers(raw, company):
 
 
 def company_jobs(jobs, company):
-    """The jobs the company owns (BackupServerJob.organizationUid), and whether the console's filter
-    already returned only those."""
-    own = [j for j in jobs if lower_text(j.get("organizationUid")) == company]
-    return own, len(own) == len(jobs)
+    """(the jobs the company owns, whether any job has no readable owner). A job without an
+    organizationUid may be anyone's, so a check must not judge the attributable rest without it."""
+    own = []
+    unattributed = False
+    for j in jobs:
+        org = lower_text(j.get("organizationUid"))
+        if not org:
+            unattributed = True
+        elif org == company:
+            own.append(j)
+    return own, unattributed
 
 
 def parse_time(value):
@@ -330,7 +337,6 @@ def evaluate(input):
     for r in repos:
         by_uid[(str(r.get("backupServerUid")).lower(), str(r.get("instanceUid")).lower())] = r
     enabled = []
-    owned_jobs = 0
     unattributed = 0
     for j in all_vm_jobs:
         emb = j.get("_embedded") if isinstance(j.get("_embedded"), dict) else {}
@@ -344,11 +350,10 @@ def evaluate(input):
             continue
         if servers.get(lower_text(job.get("backupServerUid")) or "") is not True:
             continue
-        owned_jobs = owned_jobs + 1
         if job.get("isEnabled") is True:
             enabled.append((j, job))
     if unattributed > 0:
-        return respond(KEY, METHOD, None, str(unattributed) + " VM backup jobs carry no embedded backupServerJob "
+        return respond(KEY, METHOD, None, "Some VM backup jobs carry no embedded backupServerJob "
                        "(expand=BackupServerJob was not applied), so their owner cannot be shown")
     if len(enabled) == 0:
         return respond(KEY, METHOD, None, "No enabled VM backup job of the company, so no repository target to judge")
@@ -371,8 +376,7 @@ def evaluate(input):
             checked = checked + 1
             if r.get("isImmutabilityEnabled") is not True:
                 mutable.append(name_of(job) + " -> " + name_of(r) + " (" + str(r.get("type")) + ")")
-    extra = {"enabledVmBackupJobCount": len(enabled), "targetsChecked": checked, "mutableTargetCount": len(mutable),
-             "consoleFilterHonoured": owned_jobs == len(all_vm_jobs) and len(repos) == len(all_repos)}
+    extra = {"enabledVmBackupJobCount": len(enabled), "targetsChecked": checked, "mutableTargetCount": len(mutable)}
     if mutable:
         extra["mutableTargets"] = mutable[:25]
         return respond(KEY, METHOD, False, str(len(mutable)) + " job targets of the company do not have immutability "

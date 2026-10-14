@@ -151,6 +151,11 @@ def is_uid(value):
     return True
 
 
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
+
+
 def lower_text(value):
     return value.lower() if isinstance(value, str) else None
 
@@ -194,8 +199,8 @@ def configured_company(raw):
     if why:
         return None, why
     if len(items) != 1:
-        return None, ("The Company UID matched " + str(len(items)) + " companies on the console; exactly one is "
-                      "needed to evaluate one company")
+        return None, ("The Company UID did not match exactly one company on the console, so no single "
+                      "company can be evaluated")
     uid = items[0].get("instanceUid")
     if not is_uid(uid):
         return None, "The company read carries no valid instanceUid"
@@ -242,10 +247,17 @@ def company_servers(raw, company):
 
 
 def company_jobs(jobs, company):
-    """The jobs the company owns (BackupServerJob.organizationUid), and whether the console's filter
-    already returned only those."""
-    own = [j for j in jobs if lower_text(j.get("organizationUid")) == company]
-    return own, len(own) == len(jobs)
+    """(the jobs the company owns, whether any job has no readable owner). A job without an
+    organizationUid may be anyone's, so a check must not judge the attributable rest without it."""
+    own = []
+    unattributed = False
+    for j in jobs:
+        org = lower_text(j.get("organizationUid"))
+        if not org:
+            unattributed = True
+        elif org == company:
+            own.append(j)
+    return own, unattributed
 
 
 def parse_time(value):
@@ -317,21 +329,27 @@ def evaluate(input):
     jobs, why = complete_items(workflow_part(input, "jobs"), "backup server jobs")
     if why:
         return respond(KEY, METHOD, None, why)
-    jobs, honoured = company_jobs(jobs, company)
+    jobs, unattributed = company_jobs(jobs, company)
+    if unattributed:
+        return respond(KEY, METHOD, None, "Some jobs on the console carry no organizationUid, so the company's "
+                       "own jobs cannot be shown completely")
     if len(jobs) == 0:
         return respond(KEY, METHOD, None, "VSPC lists no job of the company; nothing to evaluate")
     enabled = [j for j in jobs if j.get("type") in BACKUP_TYPES and j.get("isEnabled") is True]
     if len(enabled) == 0:
         return respond(KEY, METHOD, False, "No enabled backup job of the company, so no backup is scheduled",
-                       {"enabledBackupJobCount": 0, "consoleFilterHonoured": honoured})
+                       {"enabledBackupJobCount": 0})
     unscheduled = [name_of(j) + " (" + str(j.get("scheduleType")) + ")" for j in enabled
-                   if j.get("scheduleType") not in SCHEDULED]
-    extra = {"enabledBackupJobCount": len(enabled), "unscheduledJobCount": len(unscheduled),
-             "consoleFilterHonoured": honoured}
+                   if is_text(j.get("scheduleType")) and j.get("scheduleType") not in SCHEDULED]
+    unread = [j for j in enabled if not is_text(j.get("scheduleType"))]
+    extra = {"enabledBackupJobCount": len(enabled), "unscheduledJobCount": len(unscheduled)}
     if unscheduled:
         extra["unscheduledJobs"] = unscheduled[:25]
         return respond(KEY, METHOD, False, str(len(unscheduled)) + " of " + str(len(enabled)) +
                        " enabled backup jobs of the company have no schedule", extra)
+    if unread:
+        return respond(KEY, METHOD, None, "Some enabled backup jobs of the company report no scheduleType, so "
+                       "whether they run on a schedule cannot be shown")
     return respond(KEY, METHOD, True, "All " + str(len(enabled)) + " enabled backup jobs of the company run on a "
                    "schedule", extra)
 
