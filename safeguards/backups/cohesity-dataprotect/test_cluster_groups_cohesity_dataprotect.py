@@ -237,9 +237,19 @@ class ClusterGroups(unittest.TestCase):
                  {"protectionGroups": [group(3333, 1, run=False, active=False), dict(group(3333, 2, run=False), isPaused=True)]}]
         inner, dc = run("failedBackupJobsCount", body(quiet))
         self.assertEqual(inner["failedBackupJobsCount"], 1)
-        for key in POLICY_KEYS:  # the policy checks do not need runs
+        # the policy checks do not need runs: with beta disconnected they are None because of beta, never
+        # because of gamma's missing runs; with every cluster connected they answer True
+        for key in POLICY_KEYS:
             inner, dc = run(key, body(odd, POLICIES))
-            self.assertIsNotNone(inner[key] if inner[key] is False else True, key)
+            self.assertIsNone(inner[key], key)
+            self.assertNotEqual(dc.get("errorCode"), "VENDOR_DATA_NOT_EXPOSED", key)
+            self.assertIn("beta", dc["errors"][0], key)
+            self.assertNotIn("gamma", dc["errors"][0] + str(inner.get("reason")), key)
+            payload = body([odd[0], odd[2]], POLICIES)
+            payload["apiResponse"]["clusters"] = copy.deepcopy(ALIVE)
+            inner, dc = run(key, payload)
+            self.assertIs(inner[key], True, key)
+            self.assertEqual(dc["status"], "success", key)
 
     def test_counts_name_the_clusters_not_read(self):
         inner, dc = run("failedBackupJobsCount", body(COMPLETE))
