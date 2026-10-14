@@ -169,7 +169,9 @@ def test_immutable():
     key = "isBackupImmutable"
     t = "isbackupimmutable"
     assert value(t, key, targets([vm_job("a", "r1")], [repo("r1", True), repo("r2", False)])) is True
-    assert value(t, key, targets([vm_job("a", "r1"), vm_job("b", "r2")], [repo("r1", True), repo("r2", None)])) is False
+    assert value(t, key, targets([vm_job("a", "r1"), vm_job("b", "r2")], [repo("r1", True), repo("r2", False)])) is False
+    # A missing isImmutabilityEnabled is not a readable "no": not evaluated.
+    assert value(t, key, targets([vm_job("a", "r1"), vm_job("b", "r2")], [repo("r1", True), repo("r2", None)])) is None
     sobr = [repo("s1", None, "ScaleOut"), repo("e1", True, parent="s1"), repo("e2", False, parent="s1")]
     assert value(t, key, targets([vm_job("a", "s1")], sobr)) is False
     sobr_ok = [repo("s1", None, "ScaleOut"), repo("e1", True, parent="s1"), repo("e2", True, parent="s1")]

@@ -17,6 +17,7 @@ A missing company (no Company UID, so no company read), an ambiguous one, a miss
 server set, or an error, empty or truncated read gives None (Not evaluated), never False and
 never a verdict over the whole console. Synthetic data only.
 """
+import copy
 import importlib.util
 import os
 
@@ -420,3 +421,146 @@ def test_owner_less_embedded_vm_job_is_not_evaluated(org_value):
     assert v is None, out["additionalInfo"]["dataCollection"]
     reason = out["additionalInfo"]["dataCollection"]["errors"][0]
     assert digits(reason) == [] and "stray-vm" not in str(out)
+
+
+
+# ── round 5: missing ownership data or a missing field is never a verdict ────
+
+def drop(d, path):
+    """Copy of d with the dotted key removed."""
+    d = copy.deepcopy(d)
+    cur = d
+    parts = path.split(".")
+    for p in parts[:-1]:
+        cur = cur[p]
+    del cur[parts[-1]]
+    return d
+
+
+IMM_REPOS = [repo("ra", SRV_A, True), repo("rm", SRV_A, False)]
+
+
+def imm(vm_jobs, repos=None, servers=None):
+    return targets_body(A, vm_jobs=vm_jobs, repos=IMM_REPOS if repos is None else repos, servers=servers)
+
+
+def test_immutable_own_job_missing_its_server_is_not_evaluated():
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    stray = drop(vm_job("a-stray", A, SRV_A, "rm"), "_embedded.backupServerJob.backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned])) is True
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned, stray])) is None
+    # Real "no": an own enabled job on a mutable target.
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned, vm_job("a-m", A, SRV_A, "rm")])) is False
+
+
+@pytest.mark.parametrize("enabled", ["absent", None, "yes", 1])
+def test_immutable_own_job_with_unreadable_is_enabled_is_not_evaluated(enabled):
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    stray = vm_job("a-stray", A, SRV_A, "rm")
+    if enabled == "absent":
+        stray = drop(stray, "_embedded.backupServerJob.isEnabled")
+    else:
+        stray["_embedded"]["backupServerJob"]["isEnabled"] = enabled
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned, stray])) is None
+    # A real disabled job does not count.
+    assert value("isbackupimmutable", "isBackupImmutable",
+                 imm([owned, vm_job("a-off", A, SRV_A, "rm", enabled=False)])) is True
+
+
+def test_immutable_repository_without_a_server_is_not_evaluated():
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    orphan = drop(repo("rx", SRV_A, False), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [orphan])) is None
+    no_uid = drop(repo("ry", SRV_A, False), "instanceUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [no_uid])) is None
+
+
+@pytest.mark.parametrize("flag", ["absent", None, "true"])
+def test_immutable_missing_immutability_flag_is_not_evaluated(flag):
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    r = repo("ra", SRV_A, True)
+    if flag == "absent":
+        r = drop(r, "isImmutabilityEnabled")
+    else:
+        r["isImmutabilityEnabled"] = flag
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[r])) is None
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[repo("ra", SRV_A, False)])) is False
+
+
+def test_licence_without_a_server_is_not_evaluated():
+    orphan = drop(lic(SRV_A, "Evaluation"), "backupServerUid")
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased", lic_body(A, licenses=[lic(SRV_A)])) is True
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), orphan])) is None
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), lic(SRV_A, "Evaluation")])) is False
+
+
+@pytest.mark.parametrize("name,key", [("confirmedlicensepurchased", "confirmedLicensePurchased"),
+                                      ("isbackupimmutable", "isBackupImmutable")])
+@pytest.mark.parametrize("missing", ["organizationUid", "instanceUid"])
+def test_unattributable_server_is_not_evaluated(name, key, missing):
+    stray = drop(server("cccccccc-0000-4000-8000-00000000000c", A), missing)
+    good = body_for(name, A)
+    assert value(name, key, good) is True
+    v, out = run(name, key, dict(good, backupServers=coll(CONSOLE_SERVERS + [stray])))
+    assert v is None
+    assert digits(out["additionalInfo"]["dataCollection"]["errors"][0]) == []
+
+
+@pytest.mark.parametrize("missing", ["isEnabled", "type"])
+def test_backup_enabled_missing_field_is_not_evaluated(missing):
+    only_off = [job("a-off", A, SRV_A, enabled=False)]
+    assert value("isbackupenabled", "isBackupEnabled", jobs_body(A, jobs=only_off)) is False
+    stray = drop(job("a-x", A, SRV_A), missing)
+    assert value("isbackupenabled", "isBackupEnabled", jobs_body(A, jobs=only_off + [stray])) is None
+    # A readable enabled job still answers True whatever else is missing.
+    assert value("isbackupenabled", "isBackupEnabled", jobs_body(A, jobs=[job("a-on", A, SRV_A), stray])) is True
+
+
+@pytest.mark.parametrize("change", ["no-status", "no-times", "no-type", "no-enabled"])
+def test_backup_tested_missing_field_is_not_evaluated(change):
+    failed = job("a-sb-failed", A, SRV_A, jtype="SureBackup", status="Failed")
+    assert value("isbackuptested", "isBackupTested", jobs_body(A, jobs=[failed])) is False
+    sb = recent_job("a-sb", A, SRV_A, jtype="SureBackup")
+    if change == "no-status":
+        sb = drop(sb, "status")
+    elif change == "no-times":
+        sb["lastEndTime"] = None
+        sb["lastRun"] = "not a time"
+    elif change == "no-type":
+        sb = drop(sb, "type")
+    else:
+        sb = drop(sb, "isEnabled")
+    assert value("isbackuptested", "isBackupTested", jobs_body(A, jobs=[failed, sb])) is None
+
+
+@pytest.mark.parametrize("missing", ["type", "isEnabled"])
+def test_types_scheduled_missing_field_is_not_evaluated(missing):
+    good = [job("a-ok", A, SRV_A)]
+    assert value("isbackuptypesscheduled", "isBackupTypesScheduled", jobs_body(A, jobs=good)) is True
+    stray = drop(job("a-x", A, SRV_A, schedule="NotScheduled"), missing)
+    assert value("isbackuptypesscheduled", "isBackupTypesScheduled", jobs_body(A, jobs=good + [stray])) is None
+    assert value("isbackuptypesscheduled", "isBackupTypesScheduled",
+                 jobs_body(A, jobs=good + [job("a-ns", A, SRV_A, schedule="NotScheduled")])) is False
+
+
+@pytest.mark.parametrize("name,key", ALL)
+def test_partial_read_reason_carries_no_console_count(name, key):
+    part = {"isbackupimmutable": "repositories", "confirmedlicensepurchased": "licenses"}.get(name, "jobs")
+    body = body_for(name, A)
+    items = body[part]["data"]
+    v, out = run(name, key, dict(body, **{part: coll(items, total=4321)}))
+    assert v is None
+    reason = out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert digits(reason) == [], reason
+
+
+@pytest.mark.parametrize("name,key", ALL)
+def test_vendor_error_text_is_not_echoed(name, key):
+    secret = "vendor-internal-detail-xyz"
+    body = body_for(name, A)
+    part = {"isbackupimmutable": "vmJobs", "confirmedlicensepurchased": "licenses"}.get(name, "jobs")
+    err = {"meta": None, "data": None, "errors": [{"message": secret, "type": "security", "code": 1100}]}
+    v, out = run(name, key, dict(body, **{part: err}))
+    assert v is None and secret not in str(out)
