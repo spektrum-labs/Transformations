@@ -233,7 +233,9 @@ def transform(input):
         if not good:
             if partial:
                 return respond(key, None, partial + "; no successful last backup run on the clusters that were read")
-            return respond(key, False, "No active protection group has a successful last backup run")
+            skipped = body.get("clustersNotConnected") or []
+            skipped_note = ("; not connected to Helios, so not read: " + ", ".join(skipped)) if skipped else ""
+            return respond(key, False, "No active protection group has a successful last backup run" + skipped_note)
         note = ("; " + partial) if partial else ""
         return respond(key, True, str(len(good)) + " active protection groups have a successful last backup run" + note, {"groups": good[:20]})
     except Exception as e:
