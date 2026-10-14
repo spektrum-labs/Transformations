@@ -188,12 +188,13 @@ def test_backup_server_set_comes_from_the_company_not_the_console():
                  lic_body(A, servers=[server(SRV_B, B)], licenses=[lic(SRV_B, "Evaluation")])) is None
 
 
-def test_reports_whether_the_console_filter_was_honoured():
-    _, out = run("isbackupenabled", "isBackupEnabled", jobs_body(A))
-    assert out["transformedResponse"]["consoleFilterHonoured"] is False
-    _, out = run("isbackupenabled", "isBackupEnabled", jobs_body(A, filtered=True))
-    assert out["transformedResponse"]["consoleFilterHonoured"] is True
-    # Never another company's names or counts in what this company sees.
+@pytest.mark.parametrize("name,key", ALL)
+def test_output_never_says_whether_the_console_held_other_companies(name, key):
+    """No consoleFilterHonoured (or any other console-wide fact) in what a company sees."""
+    for body in (body_for(name, A), body_for(name, B)):
+        out = load(name)(body)
+        assert "consoleFilterHonoured" not in out["transformedResponse"]
+        assert "consoleFilterHonoured" not in str(out)
     text = str(run("isbackupenabled", "isBackupEnabled", jobs_body(A))[1])
     assert "b-backup" not in text and B not in text
 
@@ -326,3 +327,78 @@ def test_unattributable_vm_job_never_names_another_company():
     text = str(out)
     assert "foreign-vm-job" not in text and "foreign-vm-uid" not in text
     assert "b-vm" not in text and B not in text
+
+
+def digits(text):
+    return [c for c in str(text) if c.isdigit()]
+
+
+@pytest.mark.parametrize("name,key", ALL)
+def test_ambiguous_company_reason_carries_no_count(name, key):
+    """Several companies back for one UID: the reason must not say how many companies the console holds."""
+    for n in (2, 3, 7):
+        many = coll([{"instanceUid": ("%08d" % i) + A[8:]} for i in range(n)])
+        v, out = run(name, key, dict(body_for(name, A), company=many))
+        assert v is None
+        reason = out["additionalInfo"]["dataCollection"]["errors"][0]
+        assert digits(reason) == [], reason
+
+
+def test_unattributable_vm_job_reason_carries_no_count():
+    foreign = [{"instanceUid": "f%d" % i, "targetRepositoryUid": "rb"} for i in range(4)]
+    v, out = run("isbackupimmutable", "isBackupImmutable", targets_body(A, vm_jobs=foreign + CONSOLE_VM_JOBS))
+    assert v is None
+    reason = out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert digits(reason) == [], reason
+    assert "4" not in str(out["transformedResponse"])
+
+
+@pytest.mark.parametrize("name,key", JOB_CHECKS)
+def test_unattributed_job_is_not_evaluated(name, key):
+    """A job with no organizationUid may be anyone's (and, for B, could be its unscheduled one):
+    the check is not evaluated rather than judged on the attributable rest."""
+    stray = job("stray", None, SRV_A, enabled=True, schedule="NotScheduled")
+    del stray["organizationUid"]
+    for org_value in ("absent", None, "", 7):
+        j = dict(stray)
+        if org_value != "absent":
+            j["organizationUid"] = org_value
+        v, out = run(name, key, jobs_body(A, jobs=CONSOLE_JOBS + [j]))
+        assert v is None, (org_value, out["additionalInfo"]["dataCollection"])
+        assert digits(out["additionalInfo"]["dataCollection"]["errors"][0]) == []
+
+
+def test_unscheduled_unattributed_job_cannot_leave_scheduled_true():
+    stray = job("stray", A, SRV_A, enabled=True, schedule="NotScheduled")
+    del stray["organizationUid"]
+    assert value("isbackuptypesscheduled", "isBackupTypesScheduled", jobs_body(A)) is True
+    assert value("isbackuptypesscheduled", "isBackupTypesScheduled", jobs_body(A, jobs=CONSOLE_JOBS + [stray])) is None
+
+
+@pytest.mark.parametrize("missing", ["type", "status"])
+@pytest.mark.parametrize("how", ["absent", None, ""])
+def test_licence_with_a_missing_field_is_not_evaluated(missing, how):
+    bad = lic(SRV_A)
+    if how == "absent":
+        del bad[missing]
+    else:
+        bad[missing] = how
+    v, out = run("confirmedlicensepurchased", "confirmedLicensePurchased", lic_body(A, licenses=[lic(SRV_A), bad]))
+    assert v is None, out["additionalInfo"]["dataCollection"]
+    # A real, readable "no" still fails.
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), lic(SRV_A, "Evaluation")])) is False
+
+
+@pytest.mark.parametrize("how", ["absent", None, ""])
+def test_enabled_job_with_a_missing_schedule_type_is_not_evaluated(how):
+    j = recent_job("a-noschedule", A, SRV_A)
+    if how == "absent":
+        del j["scheduleType"]
+    else:
+        j["scheduleType"] = how
+    v, out = run("isbackuptypesscheduled", "isBackupTypesScheduled", jobs_body(A, jobs=CONSOLE_JOBS + [j]))
+    assert v is None, out["additionalInfo"]["dataCollection"]
+    # A real unscheduled job is still a readable "no".
+    assert value("isbackuptypesscheduled", "isBackupTypesScheduled",
+                 jobs_body(A, jobs=CONSOLE_JOBS + [job("a-ns", A, SRV_A, schedule="NotScheduled")])) is False
