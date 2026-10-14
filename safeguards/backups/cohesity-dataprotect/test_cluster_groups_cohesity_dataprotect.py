@@ -40,10 +40,12 @@ def policy(cluster, lock="Compliance", schedule=True):
     return {"id": "%d:1:9" % cluster, "name": "Gold-%d" % cluster, "backupPolicy": {"regular": reg}}
 
 
-CLUSTERS = {"cohesityClusters": [{"clusterId": 1, "clusterName": "alpha", "isConnectedToHelios": True},
-                                 {"clusterId": 2, "clusterName": "beta", "isConnectedToHelios": False},
-                                 {"clusterId": 3, "clusterName": "gamma", "isConnectedToHelios": True}]}
-DEAD = {"error": True, "statusCode": 502, "item": 2, "errorType": "vendorError"}
+CLUSTERS = {"cohesityClusters": [{"clusterId": 1111, "clusterName": "alpha", "isConnectedToHelios": True},
+                                 {"clusterId": 2222, "clusterName": "beta", "isConnectedToHelios": False},
+                                 {"clusterId": 3333, "clusterName": "gamma", "isConnectedToHelios": True}]}
+# Integration-Service's continueOnItemError record carries the iterate parameter's value under "item": the clusterId.
+DEAD = {"error": True, "statusCode": 502, "item": 2222, "errorType": "vendorError"}
+ALIVE = {"cohesityClusters": [c for c in CLUSTERS["cohesityClusters"] if c["isConnectedToHelios"]]}
 
 
 def body(slots, policies=None, **extra):
@@ -56,9 +58,9 @@ def body(slots, policies=None, **extra):
     return {"apiResponse": out}
 
 
-COMPLETE = [{"protectionGroups": [group(1, 1), group(1, 2, "Failed")]}, DEAD, {"protectionGroups": [group(3, 1, sla=True)]}]
-PARTIAL = [{"protectionGroups": [group(1, 1)]}, DEAD, {"error": True, "statusCode": 500, "item": 3, "errorType": "vendorError"}]
-POLICIES = [policy(1), policy(3)]
+COMPLETE = [{"protectionGroups": [group(1111, 1), group(1111, 2, "Failed")]}, DEAD, {"protectionGroups": [group(3333, 1, sla=True)]}]
+PARTIAL = [{"protectionGroups": [group(1111, 1)]}, DEAD, {"error": True, "statusCode": 500, "item": 3333, "errorType": "vendorError"}]
+POLICIES = [policy(1111), policy(3333)]
 RUN_KEYS = ["isBackupEnabled", "failedBackupJobsCount", "backupSuccessRatePercentage",
             "backupSlaComplianceRatePercentage", "staleProtectionJobsCount"]
 POLICY_KEYS = ["isBackupImmutable", "isBackupTypesScheduled", "isDataLockComplianceModeEnabled"]
@@ -97,16 +99,26 @@ class ClusterGroups(unittest.TestCase):
         self.assertIs(inner["isBackupEnabled"], True)
         self.assertIn("gamma (HTTP 500)", inner["reason"])
         nothing_good = [{"protectionGroups": [group(1, 1, "Failed")]}, DEAD,
-                        {"error": True, "statusCode": 500, "item": 3, "errorType": "vendorError"}]
+                        {"error": True, "statusCode": 500, "item": 3333, "errorType": "vendorError"}]
         inner, dc = run("isBackupEnabled", body(nothing_good))
         self.assertIsNone(inner["isBackupEnabled"])
         self.assertEqual(dc["status"], "error")
 
     def test_policy_checks_judge_in_use_policies_across_clusters(self):
+        # every registered cluster read: True
+        all_read = [COMPLETE[0], COMPLETE[2]]
+        for key in POLICY_KEYS:
+            payload = body(all_read, POLICIES)
+            payload["apiResponse"]["clusters"] = copy.deepcopy(ALIVE)
+            inner, dc = run(key, payload)
+            self.assertIs(inner[key], True, key)
+        # a registered cluster not connected to Helios was never read: compliant so far, but not proven for the estate
         for key in POLICY_KEYS:
             inner, dc = run(key, body(COMPLETE, POLICIES))
-            self.assertIs(inner[key], True, key)
-        bad = [policy(1), policy(3, lock=None, schedule=False)]
+            self.assertIsNone(inner[key], key)
+            self.assertEqual(dc["status"], "error", key)
+            self.assertIn("not connected to Helios, so not read: beta", dc["errors"][0], key)
+        bad = [policy(1111), policy(3333, lock=None, schedule=False)]
         for key in POLICY_KEYS:
             inner, _ = run(key, body(COMPLETE, bad))
             self.assertIs(inner[key], False, key)
@@ -117,7 +129,7 @@ class ClusterGroups(unittest.TestCase):
             inner, dc = run(key, body(PARTIAL, POLICIES))
             self.assertIsNone(inner[key], key)
             self.assertEqual(dc["status"], "error", key)
-        bad = [policy(1, lock=None, schedule=False), policy(3)]
+        bad = [policy(1111, lock=None, schedule=False), policy(3333)]
         for key in POLICY_KEYS:
             inner, _ = run(key, body(PARTIAL, bad))
             self.assertIs(inner[key], False, key)
@@ -133,19 +145,19 @@ class ClusterGroups(unittest.TestCase):
         self.assertIn("alpha (first page only)", dc["errors"][0])
 
     def test_the_tenant_wide_shape_still_reads_as_before(self):
-        legacy = {"apiResponse": {"protectionGroups": [group(1, 1), group(1, 2, "Failed")], "policies": POLICIES}}
+        legacy = {"apiResponse": {"protectionGroups": [group(1111, 1), group(1111, 2, "Failed")], "policies": POLICIES}}
         inner, _ = run("failedBackupJobsCount", legacy)
         self.assertEqual(inner["failedBackupJobsCount"], 1)
         inner, _ = run("isBackupImmutable", legacy)
         self.assertIs(inner["isBackupImmutable"], True)
-        no_runs = {"apiResponse": {"protectionGroups": [group(1, 1, run=False), group(1, 2, run=False)]}}
+        no_runs = {"apiResponse": {"protectionGroups": [group(1, 1, run=False), group(1111, 2, run=False)]}}
         for key in RUN_KEYS:
             inner, dc = run(key, no_runs)
             self.assertIsNone(inner[key], key)
             self.assertEqual(dc.get("errorCode"), "VENDOR_DATA_NOT_EXPOSED", key)
 
     def test_no_readable_cluster_is_not_evaluated_never_failed(self):
-        all_dead = {"cohesityClusters": [{"clusterId": 2, "clusterName": "beta", "isConnectedToHelios": False}]}
+        all_dead = {"cohesityClusters": [{"clusterId": 2222, "clusterName": "beta", "isConnectedToHelios": False}]}
         for key in RUN_KEYS + POLICY_KEYS:
             payload = body([DEAD], POLICIES)
             payload["apiResponse"]["clusters"] = copy.deepcopy(all_dead)
@@ -162,36 +174,36 @@ class ClusterGroups(unittest.TestCase):
 
     def test_slots_are_matched_to_clusters_by_id_not_position(self):
         # The error record echoes cluster 2 but sits in slot 0; the data slots carry cluster 3 and 1 group ids.
-        shuffled = [DEAD, {"protectionGroups": [group(3, 1, sla=True)]}, {"protectionGroups": [group(1, 1), group(1, 2, "Failed")]}]
+        shuffled = [DEAD, {"protectionGroups": [group(3333, 1, sla=True)]}, {"protectionGroups": [group(1111, 1), group(1111, 2, "Failed")]}]
         inner, dc = run("failedBackupJobsCount", body(shuffled))
         self.assertEqual(inner["failedBackupJobsCount"], 1)
         self.assertEqual(dc["status"], "success")
         # A failed read of a connected cluster is partial even when a disconnected cluster sits at its position.
-        swapped = [{"error": True, "statusCode": 500, "item": 3, "errorType": "vendorError"}, DEAD,
-                   {"protectionGroups": [group(1, 1)]}]
+        swapped = [{"error": True, "statusCode": 500, "item": 3333, "errorType": "vendorError"}, DEAD,
+                   {"protectionGroups": [group(1111, 1)]}]
         inner, dc = run("failedBackupJobsCount", body(swapped))
         self.assertIsNone(inner["failedBackupJobsCount"])
         self.assertIn("gamma (HTTP 500)", dc["errors"][0])
 
     def test_fewer_slots_than_clusters_is_partial(self):
-        two_slots = [{"protectionGroups": [group(1, 1)]}, DEAD]
+        two_slots = [{"protectionGroups": [group(1111, 1)]}, DEAD]
         inner, dc = run("staleProtectionJobsCount", body(two_slots))
         self.assertIsNone(inner["staleProtectionJobsCount"])
         self.assertIn("2 of 3 clusters answered", dc["errors"][0])
 
     def test_a_run_without_a_status_is_unreadable_not_never_ran(self):
-        odd = [{"protectionGroups": [group(1, 1), dict(group(1, 2), lastRun={"archivalInfo": {}})]}, DEAD,
-               {"protectionGroups": [group(3, 1)]}]
+        odd = [{"protectionGroups": [group(1111, 1), dict(group(1111, 2), lastRun={"archivalInfo": {}})]}, DEAD,
+               {"protectionGroups": [group(3333, 1)]}]
         inner, dc = run("failedBackupJobsCount", body(odd))
         self.assertIsNone(inner["failedBackupJobsCount"])
         self.assertIn("no local backup status", dc["errors"][0])
-        fresh = [{"protectionGroups": [group(1, 1), group(1, 2, run=False)]}, DEAD, {"protectionGroups": [group(3, 1)]}]
+        fresh = [{"protectionGroups": [group(1111, 1), group(1111, 2, run=False)]}, DEAD, {"protectionGroups": [group(3333, 1)]}]
         inner, dc = run("failedBackupJobsCount", body(fresh))
         self.assertEqual(inner["failedBackupJobsCount"], 0)
-        self.assertEqual(inner["groupsNotRunYet"], ["pg-1-2"])
+        self.assertEqual(inner["groupsNotRunYet"], ["pg-1111-2"])
 
     def test_a_false_resting_on_some_clusters_names_the_ones_not_read(self):
-        thin = [{"protectionGroups": []}, DEAD, {"protectionGroups": [group(3, 1, "Failed")]}]
+        thin = [{"protectionGroups": []}, DEAD, {"protectionGroups": [group(3333, 1, "Failed")]}]
         inner, dc = run("isBackupEnabled", body(thin))
         self.assertIs(inner["isBackupEnabled"], False)
         self.assertIn("not connected to Helios, so not read: beta", inner["reason"])
@@ -200,6 +212,23 @@ class ClusterGroups(unittest.TestCase):
             inner, dc = run(key, body(empty, POLICIES))
             self.assertIs(inner[key], False, key)
             self.assertIn("beta", inner["reason"], key)
+
+    def test_a_cluster_that_returns_no_last_run_at_all_is_not_evaluated_for_the_run_checks(self):
+        odd = [{"protectionGroups": [group(1111, 1), group(1111, 2, "Failed")]}, DEAD,
+               {"protectionGroups": [group(3333, 1, run=False), group(3333, 2, run=False)]}]
+        for key in RUN_KEYS:
+            inner, dc = run(key, body(odd))
+            self.assertIsNone(inner[key], key)
+            self.assertEqual(dc.get("errorCode"), "VENDOR_DATA_NOT_EXPOSED", key)
+            self.assertIn("gamma", dc["errors"][0], key)
+        for key in POLICY_KEYS:  # the policy checks do not need runs
+            inner, dc = run(key, body(odd, POLICIES))
+            self.assertIsNotNone(inner[key] if inner[key] is False else True, key)
+
+    def test_counts_name_the_clusters_not_read(self):
+        inner, dc = run("failedBackupJobsCount", body(COMPLETE))
+        self.assertEqual(inner["failedBackupJobsCount"], 1)
+        self.assertIn("not connected to Helios, so not read: beta", inner["reason"])
 
     def test_every_run_check_returns_the_envelope(self):
         for key in RUN_KEYS + POLICY_KEYS:
