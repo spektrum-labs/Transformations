@@ -240,11 +240,15 @@ def company_servers(raw, company):
     for s in items:
         uid = lower_text(s.get("instanceUid"))
         org = lower_text(s.get("organizationUid"))
-        if not uid or not org:
-            # A server whose owner or UID cannot be read could hide the company's licenses or repositories.
-            return None, ("Some backup servers on the console carry no instanceUid or organizationUid, so the "
-                          "company's own servers cannot be shown completely")
+        if not org:
+            # No owner (an unassigned or provider-owned server): not the company's by VSPC's own account.
+            # Skipped here; a check that finds the company's own job on it reads Not evaluated.
+            continue
         if org == company:
+            if not uid:
+                # The company's server, but its UID cannot be read: its licenses or repositories would hide.
+                return None, ("A backup server of the company carries no instanceUid, so the company's own "
+                              "servers cannot be shown completely")
             owned[uid] = True
     if len(owned) == 0:
         return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
@@ -340,11 +344,15 @@ def evaluate(input):
     all_repos, why = complete_items(workflow_part(input, "repositories"), "backup repositories")
     if why:
         return respond(KEY, METHOD, None, why)
+    repos = [r for r in all_repos
+             if lower_text(r.get("instanceUid")) and servers.get(lower_text(r.get("backupServerUid"))) is True]
+    # Repositories that cannot be placed: judged after the company's enabled jobs are known.
+    serverless = [lower_text(r.get("instanceUid")) for r in all_repos if not lower_text(r.get("backupServerUid"))]
     for r in all_repos:
-        if not lower_text(r.get("backupServerUid")) or not lower_text(r.get("instanceUid")):
-            return respond(KEY, METHOD, None, "Some repositories carry no backupServerUid or instanceUid, so the "
-                           "company's own repositories cannot be shown completely")
-    repos = [r for r in all_repos if servers.get(lower_text(r.get("backupServerUid"))) is True]
+        if not lower_text(r.get("instanceUid")) and servers.get(lower_text(r.get("backupServerUid"))) is True:
+            # On one of the company's servers with no UID (it could be an extent of a target).
+            return respond(KEY, METHOD, None, "A repository on the company's servers carries no instanceUid, so "
+                           "the company's own repositories cannot be shown completely")
     by_uid = {}
     for r in repos:
         by_uid[(lower_text(r.get("backupServerUid")), lower_text(r.get("instanceUid")))] = r
@@ -371,14 +379,28 @@ def evaluate(input):
             unattributed = unattributed + 1
             continue
         if servers.get(server_uid) is not True:
+            # The company's own job on a server that is not the company's (another company's, or an
+            # ownerless one): it could hide a mutable target, so it is never skipped.
+            unattributed = unattributed + 1
             continue
         if job.get("isEnabled") is True:
             enabled.append((j, job))
     if unattributed > 0:
         return respond(KEY, METHOD, None, "Some VM backup jobs carry no embedded backupServerJob, or no "
-                       "organizationUid, backupServerUid or isEnabled on it, so they cannot be judged")
+                       "organizationUid, backupServerUid or isEnabled on it, or run on a server outside the "
+                       "company's, so they cannot be judged")
     if len(enabled) == 0:
         return respond(KEY, METHOD, None, "No enabled VM backup job of the company, so no repository target to judge")
+    # A repository with no server is ruled out only when no enabled company job targets its UID.
+    targeted = {}
+    for j, job in enabled:
+        tu = lower_text(j.get("targetRepositoryUid"))
+        if tu:
+            targeted[tu] = True
+    for ru in serverless:
+        if not ru or targeted.get(ru) is True:
+            return respond(KEY, METHOD, None, "A repository targeted by the company's jobs carries no "
+                           "backupServerUid, so the company's own repositories cannot be shown completely")
     mutable = []
     unread_flags = 0
     checked = 0
