@@ -179,10 +179,14 @@ def transform(input):
                 continue
             read_any = True
             slot_groups = [g for g in slot["protectionGroups"] if isinstance(g, dict)]
-            if slot_groups and not any("lastRun" in g for g in slot_groups):
-                # This cluster answered, but without last-run information on any group: it did not
-                # honour includeLastRunInfo (or runs a build that does not return it). The run checks
-                # cannot judge it, and must not read its groups as "never ran".
+            live_here = [g for g in slot_groups
+                         if not (g.get("isDeleted") is True or g.get("isActive") is False or g.get("isPaused") is True)]
+            if live_here and not any("lastRun" in g for g in live_here):
+                # This cluster answered with live groups but no last-run information on any of them:
+                # either it did not honour includeLastRunInfo (or runs a build that does not return
+                # it), or none of its groups has run yet. The run checks cannot tell which, so they do
+                # not judge it, and must not read its groups as "never ran". Deleted, paused and
+                # inactive groups are not judged anyway, so a cluster with only those is not flagged.
                 no_runs.append(label)
             for g in slot_groups:
                 g = dict(g)
