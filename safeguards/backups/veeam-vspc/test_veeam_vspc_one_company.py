@@ -468,11 +468,20 @@ def test_immutable_own_job_with_unreadable_is_enabled_is_not_evaluated(enabled):
 
 
 def test_immutable_repository_without_a_server_is_not_evaluated():
+    """Scoped to repositories that could be the company's (master, pre-merge data concern)."""
     owned = vm_job("a-vm", A, SRV_A, "ra")
-    orphan = drop(repo("rx", SRV_A, False), "backupServerUid")
-    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [orphan])) is None
+    # No server, and its UID is a target of the company's own job: cannot be ruled out.
+    related = drop(repo("ra", SRV_A, False), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [related])) is None
+    # No server and no link to any of the company's jobs: ruled out, the company is evaluated normally.
+    unrelated = drop(repo("rx", SRV_A, False), "backupServerUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [unrelated])) is True
+    # On one of the company's own servers but with no UID (it could be an extent): not evaluated.
     no_uid = drop(repo("ry", SRV_A, False), "instanceUid")
     assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [no_uid])) is None
+    # No UID on another company's server: ruled out.
+    foreign_no_uid = drop(repo("rz", SRV_B, False), "instanceUid")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=IMM_REPOS + [foreign_no_uid])) is True
 
 
 @pytest.mark.parametrize("flag", ["absent", None, "true"])
@@ -496,16 +505,66 @@ def test_licence_without_a_server_is_not_evaluated():
                  lic_body(A, licenses=[lic(SRV_A), lic(SRV_A, "Evaluation")])) is False
 
 
+PROVIDER_SRV = "cccccccc-0000-4000-8000-00000000000c"
+
+
 @pytest.mark.parametrize("name,key", [("confirmedlicensepurchased", "confirmedLicensePurchased"),
                                       ("isbackupimmutable", "isBackupImmutable")])
-@pytest.mark.parametrize("missing", ["organizationUid", "instanceUid"])
-def test_unattributable_server_is_not_evaluated(name, key, missing):
-    stray = drop(server("cccccccc-0000-4000-8000-00000000000c", A), missing)
+@pytest.mark.parametrize("org", ["absent", None, ""])
+def test_ownerless_provider_server_unrelated_to_the_company_is_skipped(name, key, org):
+    """One unassigned or provider-owned server (organizationUid null) on an MSP console must not
+    make every company on it read Not evaluated: unrelated to the company, it is skipped."""
+    stray = server(PROVIDER_SRV, A)
+    if org == "absent":
+        del stray["organizationUid"]
+    else:
+        stray["organizationUid"] = org
+    body = body_for(name, A)
+    extra = {"backupServers": coll(CONSOLE_SERVERS + [stray])}
+    if name == "confirmedlicensepurchased":
+        # Its licence (an evaluation one) is not the company's either.
+        extra["licenses"] = coll(CONSOLE_LICENSES + [lic(PROVIDER_SRV, "Evaluation")])
+    else:
+        extra["repositories"] = coll(CONSOLE_REPOS + [repo("rp", PROVIDER_SRV, False)])
+    assert value(name, key, dict(body, **extra)) is True
+    assert value(name, key, dict(body_for(name, B), **extra)) is False
+
+
+def test_ownerless_server_the_company_job_points_at_is_not_evaluated():
+    stray = server(PROVIDER_SRV, A)
+    stray["organizationUid"] = None
+    jobs = CONSOLE_VM_JOBS + [vm_job("a-hosted", A, PROVIDER_SRV, "rp")]
+    body = targets_body(A, servers=CONSOLE_SERVERS + [stray], vm_jobs=jobs,
+                        repos=CONSOLE_REPOS + [repo("rp", PROVIDER_SRV, False)])
+    v, out = run("isbackupimmutable", "isBackupImmutable", body)
+    assert v is None
+    assert digits(out["additionalInfo"]["dataCollection"]["errors"][0]) == []
+
+
+def test_own_vm_job_on_a_server_outside_the_company_is_not_evaluated():
+    """The company's own job on another company's server (inconsistent data) could hide a mutable
+    target: not evaluated, never skipped."""
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    elsewhere = vm_job("a-elsewhere", A, SRV_B, "rb")
+    assert value("isbackupimmutable", "isBackupImmutable", targets_body(A, vm_jobs=[owned])) is True
+    assert value("isbackupimmutable", "isBackupImmutable", targets_body(A, vm_jobs=[owned, elsewhere])) is None
+    # Another company's job on another company's server is still simply not this company's.
+    assert value("isbackupimmutable", "isBackupImmutable",
+                 targets_body(A, vm_jobs=[owned, vm_job("b-vm", B, SRV_B, "rb")])) is True
+
+
+@pytest.mark.parametrize("name,key", [("confirmedlicensepurchased", "confirmedLicensePurchased"),
+                                      ("isbackupimmutable", "isBackupImmutable")])
+def test_company_server_without_a_uid_is_not_evaluated(name, key):
+    """A server the company owns but whose UID cannot be read hides its licences or repositories."""
+    stray = drop(server(PROVIDER_SRV, A), "instanceUid")
     good = body_for(name, A)
-    assert value(name, key, good) is True
     v, out = run(name, key, dict(good, backupServers=coll(CONSOLE_SERVERS + [stray])))
     assert v is None
     assert digits(out["additionalInfo"]["dataCollection"]["errors"][0]) == []
+    # The same server without a UID and without an owner cannot be the company's: skipped.
+    nobody = drop(stray, "organizationUid")
+    assert value(name, key, dict(good, backupServers=coll(CONSOLE_SERVERS + [nobody]))) is True
 
 
 @pytest.mark.parametrize("missing", ["isEnabled", "type"])
@@ -564,3 +623,28 @@ def test_vendor_error_text_is_not_echoed(name, key):
     err = {"meta": None, "data": None, "errors": [{"message": secret, "type": "security", "code": 1100}]}
     v, out = run(name, key, dict(body, **{part: err}))
     assert v is None and secret not in str(out)
+
+
+def test_repository_without_a_server_is_ruled_out_only_without_an_enabled_company_job_on_it():
+    owned = vm_job("a-vm", A, SRV_A, "ra")
+    off = vm_job("a-off", A, SRV_A, "rx", enabled=False)
+    orphan = drop(repo("rx", SRV_A, False), "backupServerUid")
+    # Only a disabled company job targets it: ruled out.
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned, off], repos=IMM_REPOS + [orphan])) is True
+    # An enabled company job targets it: not evaluated.
+    on = vm_job("a-on", A, SRV_A, "rx")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned, on], repos=IMM_REPOS + [orphan])) is None
+
+
+def test_licence_without_a_server_is_ruled_out_only_by_an_owner_field():
+    """VSPC licences carry no organization field (v3.6.1 schema), so in practice a licence without a
+    backupServerUid is Not evaluated. If one ever names another owner, it is ruled out."""
+    orphan = drop(lic(SRV_A, "Evaluation"), "backupServerUid")
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), orphan])) is None
+    other = dict(orphan, organizationUid=B)
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), other])) is True
+    own = dict(orphan, organizationUid=A)
+    assert value("confirmedlicensepurchased", "confirmedLicensePurchased",
+                 lic_body(A, licenses=[lic(SRV_A), own])) is None
