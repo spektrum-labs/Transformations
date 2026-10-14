@@ -57,14 +57,18 @@ def servers(*uids):
     return coll([{"instanceUid": u, "organizationUid": COMPANY} for u in (uids or ("srv-1", "srv-2"))])
 
 
+CONFIGURED = {"companyUid": COMPANY}
+
+
 def jobs_body(items, total=None):
     """The getCompanyJobs workflow body."""
-    return {"company": company(), "jobs": coll(items, total)}
+    return {"configuredSettings": CONFIGURED, "company": company(), "jobs": coll(items, total)}
 
 
 def lic_body(items):
     """The getCompanyLicenses workflow body."""
-    return {"company": company(), "backupServers": servers(), "licenses": coll(items)}
+    return {"configuredSettings": CONFIGURED, "company": company(), "backupServers": servers(),
+            "licenses": coll(items)}
 
 
 NO_EVIDENCE = [
@@ -156,7 +160,8 @@ def repo(uid, immutable, rtype="LinuxHardened", parent=None, server="srv-1"):
 
 
 def targets(jobs, repos):
-    return ts_wrap({"company": company(), "backupServers": servers(), "vmJobs": coll(jobs),
+    return ts_wrap({"configuredSettings": CONFIGURED, "company": company(), "backupServers": servers(),
+                    "vmJobs": coll(jobs),
                     "repositories": coll(repos)})
 
 
@@ -214,7 +219,8 @@ def test_token_service_enriched_envelope_bare_and_wrapped():
         assert value("isbackupenabled", "isBackupEnabled", enriched(raw)) is True
     assert value("isbackupenabled", "isBackupEnabled", enriched(jobs_body([job("a", enabled=False)]))) is False
     assert value("isbackupenabled", "isBackupEnabled", enriched(None)) is None
-    body = {"company": company(), "backupServers": servers(), "vmJobs": coll([vm_job("a", "r1")]),
+    body = {"configuredSettings": CONFIGURED, "company": company(), "backupServers": servers(),
+            "vmJobs": coll([vm_job("a", "r1")]),
             "repositories": coll([repo("r1", True)])}
     assert value("isbackupimmutable", "isBackupImmutable", enriched(body)) is True
     assert value("isbackupimmutable", "isBackupImmutable", enriched({"apiResponse": body})) is True
