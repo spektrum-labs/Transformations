@@ -42,21 +42,18 @@ def envelope_error(obj):
     """A short reason when obj is an IS or VSPC error envelope, else None."""
     if not isinstance(obj, dict):
         return None
+    # Fixed reasons: the vendor's own error text is never echoed into the result.
     errs = obj.get("errors")
     if isinstance(errs, list) and len(errs) > 0:
-        first = errs[0] if isinstance(errs[0], dict) else {}
-        return "VSPC returned an error: " + str(first.get("message") or first.get("type") or errs[0])[:300]
+        return "VSPC returned an error"
     err = obj.get("error")
     if err is True or isinstance(err, (str, dict)):
-        detail = obj.get("message") or err
-        if isinstance(detail, dict):
-            detail = detail.get("message") or json.dumps(detail)[:200]
-        return "The VSPC call did not return data: " + str(detail)[:300]
+        return "The VSPC call did not return data"
     code = obj.get("status_code") or obj.get("statusCode") or obj.get("status")
     if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
         return "The VSPC call returned HTTP " + str(code)
     if obj.get("status") == "Error":
-        return "The VSPC call did not return data: " + str(obj.get("message") or "error")[:300]
+        return "The VSPC call did not return data"
     return None
 
 
@@ -107,7 +104,8 @@ def complete_items(raw, what):
     if isinstance(total, bool) or not isinstance(total, int):
         return None, what + ": no meta.pagingInfo.total, so a complete read cannot be shown"
     if len(items) < total:
-        return None, what + ": read " + str(len(items)) + " of " + str(total) + "; the remaining pages were not read"
+        # No numbers: the total can be the whole console's count, across companies.
+        return None, what + ": only part of the list was read; the remaining pages were not read"
     for it in items:
         if not isinstance(it, dict):
             return None, what + ": an entry is not an object"
@@ -151,6 +149,11 @@ def is_uid(value):
         elif low[i] not in HEX:
             return False
     return True
+
+
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
 
 
 def lower_text(value):
@@ -236,7 +239,12 @@ def company_servers(raw, company):
     owned = {}
     for s in items:
         uid = lower_text(s.get("instanceUid"))
-        if uid and lower_text(s.get("organizationUid")) == company:
+        org = lower_text(s.get("organizationUid"))
+        if not uid or not org:
+            # A server whose owner or UID cannot be read could hide the company's licenses or repositories.
+            return None, ("Some backup servers on the console carry no instanceUid or organizationUid, so the "
+                          "company's own servers cannot be shown completely")
+        if org == company:
             owned[uid] = True
     if len(owned) == 0:
         return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
@@ -332,10 +340,14 @@ def evaluate(input):
     all_repos, why = complete_items(workflow_part(input, "repositories"), "backup repositories")
     if why:
         return respond(KEY, METHOD, None, why)
-    repos = [r for r in all_repos if servers.get(lower_text(r.get("backupServerUid")) or "") is True]
+    for r in all_repos:
+        if not lower_text(r.get("backupServerUid")) or not lower_text(r.get("instanceUid")):
+            return respond(KEY, METHOD, None, "Some repositories carry no backupServerUid or instanceUid, so the "
+                           "company's own repositories cannot be shown completely")
+    repos = [r for r in all_repos if servers.get(lower_text(r.get("backupServerUid"))) is True]
     by_uid = {}
     for r in repos:
-        by_uid[(str(r.get("backupServerUid")).lower(), str(r.get("instanceUid")).lower())] = r
+        by_uid[(lower_text(r.get("backupServerUid")), lower_text(r.get("instanceUid")))] = r
     enabled = []
     unattributed = 0
     for j in all_vm_jobs:
@@ -345,19 +357,30 @@ def evaluate(input):
             # Its owner cannot be read, so it may be another company's: counted, never named.
             unattributed = unattributed + 1
             continue
-        # The company's own job on one of the company's own servers; anything else is another company's.
-        if lower_text(job.get("organizationUid")) != company:
+        # An embedded job with no readable owner may be anyone's, as with a missing embedding.
+        org = lower_text(job.get("organizationUid"))
+        if not org:
+            unattributed = unattributed + 1
             continue
-        if servers.get(lower_text(job.get("backupServerUid")) or "") is not True:
+        # The company's own job on one of the company's own servers; anything else is another company's.
+        if org != company:
+            continue
+        server_uid = lower_text(job.get("backupServerUid"))
+        if not server_uid or not isinstance(job.get("isEnabled"), bool):
+            # The company's own job, but its server or enabled state cannot be read.
+            unattributed = unattributed + 1
+            continue
+        if servers.get(server_uid) is not True:
             continue
         if job.get("isEnabled") is True:
             enabled.append((j, job))
     if unattributed > 0:
-        return respond(KEY, METHOD, None, "Some VM backup jobs carry no embedded backupServerJob "
-                       "(expand=BackupServerJob was not applied), so their owner cannot be shown")
+        return respond(KEY, METHOD, None, "Some VM backup jobs carry no embedded backupServerJob, or no "
+                       "organizationUid, backupServerUid or isEnabled on it, so they cannot be judged")
     if len(enabled) == 0:
         return respond(KEY, METHOD, None, "No enabled VM backup job of the company, so no repository target to judge")
     mutable = []
+    unread_flags = 0
     checked = 0
     for j, job in enabled:
         server = str(job.get("backupServerUid")).lower()
@@ -374,13 +397,18 @@ def evaluate(input):
             extents = [target]
         for r in extents:
             checked = checked + 1
-            if r.get("isImmutabilityEnabled") is not True:
+            if not isinstance(r.get("isImmutabilityEnabled"), bool):
+                unread_flags = unread_flags + 1
+            elif r.get("isImmutabilityEnabled") is not True:
                 mutable.append(name_of(job) + " -> " + name_of(r) + " (" + str(r.get("type")) + ")")
     extra = {"enabledVmBackupJobCount": len(enabled), "targetsChecked": checked, "mutableTargetCount": len(mutable)}
     if mutable:
         extra["mutableTargets"] = mutable[:25]
         return respond(KEY, METHOD, False, str(len(mutable)) + " job targets of the company do not have immutability "
                        "enabled", extra)
+    if unread_flags > 0:
+        return respond(KEY, METHOD, None, "Some target repositories of the company report no isImmutabilityEnabled, "
+                       "so immutability cannot be shown")
     return respond(KEY, METHOD, True, "Every repository written by the " + str(len(enabled)) +
                    " enabled VM backup jobs of the company has immutability enabled", extra)
 

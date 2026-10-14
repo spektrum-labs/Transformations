@@ -42,21 +42,18 @@ def envelope_error(obj):
     """A short reason when obj is an IS or VSPC error envelope, else None."""
     if not isinstance(obj, dict):
         return None
+    # Fixed reasons: the vendor's own error text is never echoed into the result.
     errs = obj.get("errors")
     if isinstance(errs, list) and len(errs) > 0:
-        first = errs[0] if isinstance(errs[0], dict) else {}
-        return "VSPC returned an error: " + str(first.get("message") or first.get("type") or errs[0])[:300]
+        return "VSPC returned an error"
     err = obj.get("error")
     if err is True or isinstance(err, (str, dict)):
-        detail = obj.get("message") or err
-        if isinstance(detail, dict):
-            detail = detail.get("message") or json.dumps(detail)[:200]
-        return "The VSPC call did not return data: " + str(detail)[:300]
+        return "The VSPC call did not return data"
     code = obj.get("status_code") or obj.get("statusCode") or obj.get("status")
     if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
         return "The VSPC call returned HTTP " + str(code)
     if obj.get("status") == "Error":
-        return "The VSPC call did not return data: " + str(obj.get("message") or "error")[:300]
+        return "The VSPC call did not return data"
     return None
 
 
@@ -107,7 +104,8 @@ def complete_items(raw, what):
     if isinstance(total, bool) or not isinstance(total, int):
         return None, what + ": no meta.pagingInfo.total, so a complete read cannot be shown"
     if len(items) < total:
-        return None, what + ": read " + str(len(items)) + " of " + str(total) + "; the remaining pages were not read"
+        # No numbers: the total can be the whole console's count, across companies.
+        return None, what + ": only part of the list was read; the remaining pages were not read"
     for it in items:
         if not isinstance(it, dict):
             return None, what + ": an entry is not an object"
@@ -241,7 +239,12 @@ def company_servers(raw, company):
     owned = {}
     for s in items:
         uid = lower_text(s.get("instanceUid"))
-        if uid and lower_text(s.get("organizationUid")) == company:
+        org = lower_text(s.get("organizationUid"))
+        if not uid or not org:
+            # A server whose owner or UID cannot be read could hide the company's licenses or repositories.
+            return None, ("Some backup servers on the console carry no instanceUid or organizationUid, so the "
+                          "company's own servers cannot be shown completely")
+        if org == company:
             owned[uid] = True
     if len(owned) == 0:
         return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
@@ -338,6 +341,11 @@ def evaluate(input):
     all_lics, why = complete_items(workflow_part(input, "licenses"), "backup server licenses")
     if why:
         return respond(KEY, METHOD, None, why)
+    for x in all_lics:
+        if not lower_text(x.get("backupServerUid")):
+            # Its server cannot be read, so it could be the company's unpaid license.
+            return respond(KEY, METHOD, None, "Some licenses carry no backupServerUid, so the company's own "
+                           "licenses cannot be shown completely")
     lics = [x for x in all_lics if servers.get(lower_text(x.get("backupServerUid")) or "") is True]
     if len(lics) == 0:
         return respond(KEY, METHOD, None, "VSPC reports no license on the company's Veeam Backup & Replication "

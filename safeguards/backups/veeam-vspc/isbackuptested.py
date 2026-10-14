@@ -40,21 +40,18 @@ def envelope_error(obj):
     """A short reason when obj is an IS or VSPC error envelope, else None."""
     if not isinstance(obj, dict):
         return None
+    # Fixed reasons: the vendor's own error text is never echoed into the result.
     errs = obj.get("errors")
     if isinstance(errs, list) and len(errs) > 0:
-        first = errs[0] if isinstance(errs[0], dict) else {}
-        return "VSPC returned an error: " + str(first.get("message") or first.get("type") or errs[0])[:300]
+        return "VSPC returned an error"
     err = obj.get("error")
     if err is True or isinstance(err, (str, dict)):
-        detail = obj.get("message") or err
-        if isinstance(detail, dict):
-            detail = detail.get("message") or json.dumps(detail)[:200]
-        return "The VSPC call did not return data: " + str(detail)[:300]
+        return "The VSPC call did not return data"
     code = obj.get("status_code") or obj.get("statusCode") or obj.get("status")
     if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
         return "The VSPC call returned HTTP " + str(code)
     if obj.get("status") == "Error":
-        return "The VSPC call did not return data: " + str(obj.get("message") or "error")[:300]
+        return "The VSPC call did not return data"
     return None
 
 
@@ -105,7 +102,8 @@ def complete_items(raw, what):
     if isinstance(total, bool) or not isinstance(total, int):
         return None, what + ": no meta.pagingInfo.total, so a complete read cannot be shown"
     if len(items) < total:
-        return None, what + ": read " + str(len(items)) + " of " + str(total) + "; the remaining pages were not read"
+        # No numbers: the total can be the whole console's count, across companies.
+        return None, what + ": only part of the list was read; the remaining pages were not read"
     for it in items:
         if not isinstance(it, dict):
             return None, what + ": an entry is not an object"
@@ -149,6 +147,11 @@ def is_uid(value):
         elif low[i] not in HEX:
             return False
     return True
+
+
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
 
 
 def lower_text(value):
@@ -234,7 +237,12 @@ def company_servers(raw, company):
     owned = {}
     for s in items:
         uid = lower_text(s.get("instanceUid"))
-        if uid and lower_text(s.get("organizationUid")) == company:
+        org = lower_text(s.get("organizationUid"))
+        if not uid or not org:
+            # A server whose owner or UID cannot be read could hide the company's licenses or repositories.
+            return None, ("Some backup servers on the console carry no instanceUid or organizationUid, so the "
+                          "company's own servers cannot be shown completely")
+        if org == company:
             owned[uid] = True
     if len(owned) == 0:
         return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
@@ -337,9 +345,17 @@ def evaluate(input):
     enabled = [j for j in sure if j.get("isEnabled") is True]
     oldest = utc_now() - timedelta(days=WINDOW_DAYS)
     good = []
+    # Not a readable "no": a job whose type cannot be read, a SureBackup job without a boolean isEnabled,
+    # or an enabled one without a status, or reporting success with no readable time.
+    unread = len([j for j in jobs if not is_text(j.get("type"))]) + \
+        len([j for j in sure if not isinstance(j.get("isEnabled"), bool)])
     for j in enabled:
         when = parse_time(j.get("lastEndTime")) or parse_time(j.get("lastRun"))
-        if j.get("status") in ("Success", "Warning") and when is not None and when >= oldest:
+        if not is_text(j.get("status")):
+            unread = unread + 1
+        elif j.get("status") in ("Success", "Warning") and when is None:
+            unread = unread + 1
+        elif j.get("status") in ("Success", "Warning") and when >= oldest:
             good.append(name_of(j))
     extra = {"sureBackupJobCount": len(sure), "enabledSureBackupJobCount": len(enabled),
              "recentGoodSureBackupJobCount": len(good)}
@@ -347,6 +363,9 @@ def evaluate(input):
         extra["recentGoodSureBackupJobs"] = good[:25]
         return respond(KEY, METHOD, True, str(len(good)) + " SureBackup jobs of the company verified restore points "
                        "successfully in the last " + str(WINDOW_DAYS) + " days", extra)
+    if unread > 0:
+        return respond(KEY, METHOD, None, "Some jobs of the company report no type, isEnabled, status or readable "
+                       "run time, so whether a recovery test succeeded cannot be shown")
     if len(sure) == 0:
         return respond(KEY, METHOD, False, "The company has no SureBackup (recovery verification) job", extra)
     if len(enabled) == 0:
