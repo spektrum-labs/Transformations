@@ -41,21 +41,18 @@ def envelope_error(obj):
     """A short reason when obj is an IS or VSPC error envelope, else None."""
     if not isinstance(obj, dict):
         return None
+    # Fixed reasons: the vendor's own error text is never echoed into the result.
     errs = obj.get("errors")
     if isinstance(errs, list) and len(errs) > 0:
-        first = errs[0] if isinstance(errs[0], dict) else {}
-        return "VSPC returned an error: " + str(first.get("message") or first.get("type") or errs[0])[:300]
+        return "VSPC returned an error"
     err = obj.get("error")
     if err is True or isinstance(err, (str, dict)):
-        detail = obj.get("message") or err
-        if isinstance(detail, dict):
-            detail = detail.get("message") or json.dumps(detail)[:200]
-        return "The VSPC call did not return data: " + str(detail)[:300]
+        return "The VSPC call did not return data"
     code = obj.get("status_code") or obj.get("statusCode") or obj.get("status")
     if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
         return "The VSPC call returned HTTP " + str(code)
     if obj.get("status") == "Error":
-        return "The VSPC call did not return data: " + str(obj.get("message") or "error")[:300]
+        return "The VSPC call did not return data"
     return None
 
 
@@ -106,7 +103,8 @@ def complete_items(raw, what):
     if isinstance(total, bool) or not isinstance(total, int):
         return None, what + ": no meta.pagingInfo.total, so a complete read cannot be shown"
     if len(items) < total:
-        return None, what + ": read " + str(len(items)) + " of " + str(total) + "; the remaining pages were not read"
+        # No numbers: the total can be the whole console's count, across companies.
+        return None, what + ": only part of the list was read; the remaining pages were not read"
     for it in items:
         if not isinstance(it, dict):
             return None, what + ": an entry is not an object"
@@ -150,6 +148,11 @@ def is_uid(value):
         elif low[i] not in HEX:
             return False
     return True
+
+
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
 
 
 def lower_text(value):
@@ -235,7 +238,12 @@ def company_servers(raw, company):
     owned = {}
     for s in items:
         uid = lower_text(s.get("instanceUid"))
-        if uid and lower_text(s.get("organizationUid")) == company:
+        org = lower_text(s.get("organizationUid"))
+        if not uid or not org:
+            # A server whose owner or UID cannot be read could hide the company's licenses or repositories.
+            return None, ("Some backup servers on the console carry no instanceUid or organizationUid, so the "
+                          "company's own servers cannot be shown completely")
+        if org == company:
             owned[uid] = True
     if len(owned) == 0:
         return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
@@ -333,10 +341,16 @@ def evaluate(input):
         return respond(KEY, METHOD, None, "VSPC lists no job of the company; nothing to evaluate")
     backup = [j for j in jobs if j.get("type") in BACKUP_TYPES]
     enabled = [j for j in backup if j.get("isEnabled") is True]
+    # A job whose type or (for a backup job) isEnabled cannot be read is not a readable "no".
+    unread = [j for j in jobs if not is_text(j.get("type"))] + \
+        [j for j in backup if not isinstance(j.get("isEnabled"), bool)]
     extra = {"backupJobCount": len(backup), "enabledBackupJobCount": len(enabled), "totalJobCount": len(jobs)}
     if len(enabled) > 0:
         return respond(KEY, METHOD, True, str(len(enabled)) + " of " + str(len(backup)) +
                        " backup jobs of the company are enabled", extra)
+    if unread:
+        return respond(KEY, METHOD, None, "Some jobs of the company report no type or isEnabled, so whether a "
+                       "backup job is enabled cannot be shown")
     if len(backup) == 0:
         return respond(KEY, METHOD, False, "No backup job is configured on the company's Veeam Backup & "
                        "Replication servers (" + str(len(jobs)) + " jobs of other types)", extra)
