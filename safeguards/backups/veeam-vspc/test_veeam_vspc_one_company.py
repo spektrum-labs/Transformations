@@ -675,3 +675,27 @@ def test_serverless_extent_of_an_unrelated_parent_stays_skipped():
     assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[sobr, e1, foreign_sobr, stray])) is True
     orphan = drop(dict(repo("ez", SRV_B, False), parentRepositoryUid="nowhere"), "backupServerUid")
     assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[sobr, e1, orphan])) is True
+
+
+@pytest.mark.parametrize("rtype", ["absent", None, "", 3])
+def test_target_whose_type_cannot_be_read_is_not_evaluated(rtype):
+    """A target that may be a scale-out repository (type unreadable) cannot be judged as a single
+    repository: its extents could be mutable."""
+    owned = vm_job("a-vm", A, SRV_A, "s1")
+    target = repo("s1", SRV_A, True, "ScaleOut")
+    if rtype == "absent":
+        del target["type"]
+    else:
+        target["type"] = rtype
+    extent = dict(repo("e1", SRV_A, False), parentRepositoryUid="s1")
+    assert value("isbackupimmutable", "isBackupImmutable", imm([owned], repos=[target, extent])) is None
+    # A readable single-repository type is judged as before.
+    assert value("isbackupimmutable", "isBackupImmutable",
+                 imm([owned], repos=[repo("s1", SRV_A, True, "LinuxHardened")])) is True
+
+
+@pytest.mark.parametrize("name", ["isbackupenabled", "isbackuptested", "isbackuptypesscheduled"])
+def test_job_checks_carry_no_unused_server_scoping(name):
+    """The three job checks never read backupServers; the copied company_servers helper is gone."""
+    with open(os.path.join(HERE, name + ".py")) as fh:
+        assert "def company_servers" not in fh.read()
