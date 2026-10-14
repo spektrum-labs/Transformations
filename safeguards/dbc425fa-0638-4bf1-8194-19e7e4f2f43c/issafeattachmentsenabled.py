@@ -13,7 +13,8 @@ PROXY: this is not sandbox detonation. Google Security Sandbox (Enterprise editi
 in this policy set, so a true sandbox cannot be proven from this evidence.
 
 Rule (fail closed): true only when at least one gmail.email_attachment_safety policy is returned and EVERY one of them
-(Google returns one per org unit or group that sets it) has all required fields "True". A policy
+in force (Google returns several per org unit or group: SYSTEM defaults and any ADMIN override; the
+one with the greatest policyQuery.sortOrder is applied and is the only one judged) has all required fields "True". A policy
 that reports a required field off, or a complete list that carries no policy for this setting, is false:
 those are measured. A required field a policy does not report at all is not off, it is unknown (None).
 
@@ -163,6 +164,38 @@ def is_true(value):
     return value is True or str(value).strip().lower() == "true"
 
 
+def as_order(value):
+    """policyQuery.sortOrder as a number; None when unreadable. Integration-Service hands scalars over as strings."""
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def in_force(matched):
+    """Split matched policies into the ones Google applies and the ones they supersede.
+
+    For one setting on one org unit (or group) Google returns several policies: the SYSTEM default for
+    entities without a Gmail licence, the SYSTEM default for licensed users, and any ADMIN override. It
+    resolves them by precedence: the policy with the greatest policyQuery.sortOrder is the one in force
+    (Policy API concepts, Max reducer), so only that one is judged. Equal sortOrders on one target, and a
+    sortOrder that cannot be read, are all judged (fail closed). Returns (judged, superseded).
+    """
+    top = {}
+    for target, value, order, policy_type in matched:
+        if order is not None and (target not in top or order > top[target]):
+            top[target] = order
+    judged = []
+    superseded = []
+    for entry in matched:
+        target, value, order, policy_type = entry
+        if order is None or target not in top or order >= top[target]:
+            judged.append(entry)
+        else:
+            superseded.append(entry)
+    return judged, superseded
+
+
 def transform(input):
     try:
         if isinstance(input, (str, bytes)) and len(input.strip()) == 0:
@@ -197,13 +230,19 @@ def transform(input):
                 continue
             value = setting.get("value")
             query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
-            matched.append((str(query.get("orgUnit") or query.get("group") or "unknown"), value if isinstance(value, dict) else {}))
+            target = str(query.get("orgUnit") or "unknown")
+            if query.get("group"):
+                target = target + " " + str(query.get("group"))
+            matched.append((target, value if isinstance(value, dict) else {},
+                            as_order(query.get("sortOrder")), str(policy.get("type") or "")))
+        # Judge only the policy in force on each org unit or group; Google's own precedence decides which.
+        matched, superseded = in_force(matched)
 
         findings = []
         off_fields = []
         missing_fields = []
         compliant = 0
-        for org_unit, value in matched:
+        for org_unit, value, order, policy_type in matched:
             # A field the policy reports as off is a finding. A field it does not report at all is not: it
             # leaves the policy unjudged (None), never off.
             off = [f for f in REQUIRED_FIELDS if value.get(f) is not None and not is_true(value.get(f))]
@@ -222,7 +261,8 @@ def transform(input):
                 state, reason = None, "not reported: " + ", ".join(absent)
             else:
                 state, reason = True, "all required settings on"
-            findings.append({"metric": org_unit, "value": state, "reason": reason})
+            findings.append({"metric": org_unit, "value": state, "reason": reason,
+                             "policyType": policy_type, "sortOrder": order})
 
         if off_fields:
             # A policy that reports a required field off already decides False, whatever else is unread.
@@ -272,7 +312,8 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=findings,
             input_summary={"truncated": True} if truncated else
-                          {"gmailPolicies": len(policies), "matchingPolicies": len(matched), "compliant": compliant}
+                          {"gmailPolicies": len(policies), "matchingPolicies": len(matched), "compliant": compliant,
+                           "supersededPolicies": len(superseded)}
         )
 
     except Exception as e:
