@@ -144,6 +144,52 @@ class ClusterGroups(unittest.TestCase):
             self.assertIsNone(inner[key], key)
             self.assertEqual(dc.get("errorCode"), "VENDOR_DATA_NOT_EXPOSED", key)
 
+    def test_no_readable_cluster_is_not_evaluated_never_failed(self):
+        all_dead = {"cohesityClusters": [{"clusterId": 2, "clusterName": "beta", "isConnectedToHelios": False}]}
+        for key in RUN_KEYS + POLICY_KEYS:
+            payload = body([DEAD], POLICIES)
+            payload["apiResponse"]["clusters"] = copy.deepcopy(all_dead)
+            inner, dc = run(key, payload)
+            self.assertIsNone(inner[key], key)
+            self.assertEqual(dc["status"], "error", key)
+            self.assertIn("not connected to Helios: beta", dc["errors"][0], key)
+        for key in RUN_KEYS + POLICY_KEYS:
+            payload = body([], POLICIES)
+            payload["apiResponse"]["clusters"] = {"cohesityClusters": []}
+            inner, dc = run(key, payload)
+            self.assertIsNone(inner[key], key)
+            self.assertEqual(dc["status"], "error", key)
+
+    def test_slots_are_matched_to_clusters_by_id_not_position(self):
+        # The error record echoes cluster 2 but sits in slot 0; the data slots carry cluster 3 and 1 group ids.
+        shuffled = [DEAD, {"protectionGroups": [group(3, 1, sla=True)]}, {"protectionGroups": [group(1, 1), group(1, 2, "Failed")]}]
+        inner, dc = run("failedBackupJobsCount", body(shuffled))
+        self.assertEqual(inner["failedBackupJobsCount"], 1)
+        self.assertEqual(dc["status"], "success")
+        # A failed read of a connected cluster is partial even when a disconnected cluster sits at its position.
+        swapped = [{"error": True, "statusCode": 500, "item": 3, "errorType": "vendorError"}, DEAD,
+                   {"protectionGroups": [group(1, 1)]}]
+        inner, dc = run("failedBackupJobsCount", body(swapped))
+        self.assertIsNone(inner["failedBackupJobsCount"])
+        self.assertIn("gamma (HTTP 500)", dc["errors"][0])
+
+    def test_fewer_slots_than_clusters_is_partial(self):
+        two_slots = [{"protectionGroups": [group(1, 1)]}, DEAD]
+        inner, dc = run("staleProtectionJobsCount", body(two_slots))
+        self.assertIsNone(inner["staleProtectionJobsCount"])
+        self.assertIn("2 of 3 clusters answered", dc["errors"][0])
+
+    def test_a_run_without_a_status_is_unreadable_not_never_ran(self):
+        odd = [{"protectionGroups": [group(1, 1), dict(group(1, 2), lastRun={"archivalInfo": {}})]}, DEAD,
+               {"protectionGroups": [group(3, 1)]}]
+        inner, dc = run("failedBackupJobsCount", body(odd))
+        self.assertIsNone(inner["failedBackupJobsCount"])
+        self.assertIn("no local backup status", dc["errors"][0])
+        fresh = [{"protectionGroups": [group(1, 1), group(1, 2, run=False)]}, DEAD, {"protectionGroups": [group(3, 1)]}]
+        inner, dc = run("failedBackupJobsCount", body(fresh))
+        self.assertEqual(inner["failedBackupJobsCount"], 0)
+        self.assertEqual(inner["groupsNotRunYet"], ["pg-1-2"])
+
     def test_every_run_check_returns_the_envelope(self):
         for key in RUN_KEYS + POLICY_KEYS:
             out = load(key.lower()).transform({"apiResponse": {"clusterGroups": "junk"}})
