@@ -8,23 +8,26 @@ repo paths on every worker within about ten seconds; this tool sends it the path
     git diff --name-only <before> <after> | python tools/reset_token_service_cache.py [--dry-run]
 
 Configuration comes only from the environment, never from this file (the repository is public):
-    TOKEN_SERVICE_RESET_URL         the Token-Service base URL
-    TOKEN_SERVICE_RESET_BASIC_AUTH  the Basic credential Token-Service accepts for service callers
-                                    (base64 of "user:password")
+    TOKEN_SERVICE_RESET_URL    the Token-Service base URL
+    TOKEN_SERVICE_RESET_TOKEN  Token-Service's reset-only token (its TRANSFORM_CACHE_RESET_TOKEN). It can
+                               reset this cache and nothing else; never put a service credential here.
 Either unset: nothing is sent and the run says so (exit 0), so the workflow can merge before the secrets
 exist. No changed path: nothing is sent. More than MAX_PATHS paths, or no usable diff (--all): the whole
-cache is reset. A refusal from Token-Service exits 1 with its status only; no body or secret is printed.
+cache is reset, and so is any path the server would refuse (git quotes spaces, "+" and non-ASCII). A refusal from Token-Service exits 1 with its status only; no body or secret is printed.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 
 ROUTE = "/admin/cache/transformations/reset"
 MAX_PATHS = 200
+#: The paths Token-Service accepts. Anything else resets everything rather than failing the whole request.
+_PATH_RE = re.compile(r"^[A-Za-z0-9_.\-/]{1,512}$")
 
 
 def scope_for(paths: list[str], everything: bool = False) -> dict | None:
@@ -38,18 +41,22 @@ def scope_for(paths: list[str], everything: bool = False) -> dict | None:
             clean.append(p)
     if not clean:
         return None
-    if len(clean) > MAX_PATHS:
+    if len(clean) > MAX_PATHS or not all(_PATH_RE.match(p) for p in clean):
         return {"all": True}
     return {"paths": clean}
 
 
-def send(base_url: str, basic: str, scope: dict, timeout: float = 20.0) -> int:
-    request = urllib.request.Request(
+def build_request(base_url: str, token: str, scope: dict) -> urllib.request.Request:
+    return urllib.request.Request(
         base_url.rstrip("/") + ROUTE,
         data=json.dumps(scope).encode(),
         method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Basic {basic}"},
+        headers={"Content-Type": "application/json", "X-Transform-Reset-Token": token},
     )
+
+
+def send(base_url: str, token: str, scope: dict, timeout: float = 20.0) -> int:
+    request = build_request(base_url, token, scope)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https URL from a secret
             return response.status
@@ -71,12 +78,12 @@ def main(argv: list[str]) -> int:
         print(json.dumps(scope, indent=1))
         return 0
     base_url = os.environ.get("TOKEN_SERVICE_RESET_URL", "").strip()
-    basic = os.environ.get("TOKEN_SERVICE_RESET_BASIC_AUTH", "").strip()
-    if not base_url or not basic:
-        print("TOKEN_SERVICE_RESET_URL or TOKEN_SERVICE_RESET_BASIC_AUTH is not set; nothing sent. "
+    token = os.environ.get("TOKEN_SERVICE_RESET_TOKEN", "").strip()
+    if not base_url or not token:
+        print("TOKEN_SERVICE_RESET_URL or TOKEN_SERVICE_RESET_TOKEN is not set; nothing sent. "
               "The merged code goes live when Token-Service's cache expires (up to an hour).")
         return 0
-    status = send(base_url, basic, scope)
+    status = send(base_url, token, scope)
     if 200 <= status < 300:
         print(f"Token-Service cache reset recorded ({described}); every worker applies it within about 10 s.")
         return 0
