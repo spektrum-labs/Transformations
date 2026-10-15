@@ -12,6 +12,12 @@ partial estate is not a clean estate, so Token-Service reads it as Unevaluated, 
 that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
 one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
 scan), so a response is only ever read for the key whose severity it scanned.
+
+A scan the Integration Service has no result for (status "error" with a reason such as asm_scan_in_progress or
+asm_scan_retry_backoff) returns None for both keys, and the reason is passed on as dataCollection.errorCode, so
+a scan that is still running is not mistaken for a failed one. Every error path returns None with the reason
+in dataCollection.errors, never False: any other reason, no reason, a malformed reason, an input that failed
+validation, a scan with zero or failed hosts, and an exception inside the transform.
 """
 
 import json
@@ -95,6 +101,59 @@ def capped_note(data):
             + " were scanned")
 
 
+# --- scan reason ----------------------------------------------------------------------------------------
+# The Integration Service answers a scan it has no result for as {"status": "error", "reason": "<code>",
+# "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
+# produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
+# asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
+SCAN_REASON_MAX_LENGTH = 60
+SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+SCAN_REASON_TEXT = {
+    "asm_scan_in_progress": "the scan is still running; its result is read on the next evaluation",
+    "asm_scan_retry_backoff": "the last scan produced no usable result, so a new scan has not started yet",
+    "asm_scan_shared_no_result": "the scan that was already running produced no usable result",
+    "asm_scan_max_duration_exceeded": "the scan ran past its time limit",
+}
+
+
+def scan_reason(data):
+    """The reason code of a scan reply that is not a result: a plain lower-case code of at most 60 characters,
+    else None (a successful scan, no reason, or a reason that is not a plain code)."""
+    if not isinstance(data, dict) or data.get("status") == "success":
+        return None
+    reason = data.get("reason")
+    if not isinstance(reason, str):
+        return None
+    reason = reason.strip().lower()
+    if not reason or len(reason) > SCAN_REASON_MAX_LENGTH:
+        return None
+    for ch in reason:
+        if ch not in SCAN_REASON_CHARS:
+            return None
+    return reason
+
+
+def scan_status_problem(status, domain, reason):
+    """The error text for a scan reply that is not a result."""
+    if reason is None:
+        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+    if reason.startswith("asm_scan_"):
+        return ("Nuclei scan not evaluated (" + reason + "): "
+                + SCAN_REASON_TEXT.get(reason, "the scan did not produce a result"))
+    return "Nuclei scan status: " + str(status) + " (" + reason + ") for " + str(domain)
+
+
+def with_error_code(response, error_code):
+    """Label a reply with the reason code the Integration Service gave, when it gave one."""
+    if error_code:
+        response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
+# --- end scan reason -------------------------------------------------------------------------------------
+
+
 def transform(input):
     try:
         if isinstance(input, str):
@@ -105,10 +164,12 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            reason = "Input validation failed: the scan response did not match its schema, so the findings are unknown"
             return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
+                result={"noCriticalFindings": None, "noHighFindings": None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=[reason],
+                fail_reasons=[reason]
             )
 
         pass_reasons = []
@@ -123,14 +184,25 @@ def transform(input):
         findings = data.get("findings", [])
         stderr = data.get("stderr", "")
 
-        # Check for scan errors
+        # Check for scan errors. A reply that carries a reason is labelled with it (dataCollection.errorCode);
+        # an asm_scan_ reason (still running, waiting to retry, ...) measured nothing, so both keys are None.
         if scan_status != "success":
-            return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
-                validation=validation,
-                api_errors=[f"Nuclei scan status: {scan_status}"],
-                fail_reasons=[f"Scan did not complete successfully for {domain}"],
-                input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
+            reason_code = scan_reason(data)
+            if reason_code is None:
+                problem = f"Nuclei scan status: {scan_status}"
+                scan_fail_reason = f"Scan did not complete successfully for {domain}"
+            else:
+                problem = scan_status_problem(scan_status, domain, reason_code)
+                scan_fail_reason = problem
+            return with_error_code(
+                create_response(
+                    result={"noCriticalFindings": None, "noHighFindings": None},
+                    validation=validation,
+                    api_errors=[problem],
+                    fail_reasons=[scan_fail_reason],
+                    input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
+                ),
+                reason_code
             )
 
         # A "success" that scanned nothing, or where a domain's scan errored, proves nothing:
@@ -154,7 +226,7 @@ def transform(input):
             reason = None
         if reason:
             return create_response(
-                result={"noCriticalFindings": False, "noHighFindings": False},
+                result={"noCriticalFindings": None, "noHighFindings": None},
                 validation=validation,
                 api_errors=[reason],
                 fail_reasons=[reason],
@@ -261,9 +333,11 @@ def transform(input):
         )
 
     except Exception as e:
+        reason = f"Transformation error, so the findings are unknown: {str(e)}"
         return create_response(
-            result={"noCriticalFindings": False, "noHighFindings": False},
+            result={"noCriticalFindings": None, "noHighFindings": None},
             validation={"status": "error", "errors": [], "warnings": []},
+            api_errors=[reason],
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[reason]
         )
