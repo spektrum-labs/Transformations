@@ -103,6 +103,65 @@ def to_int(value):
         return None
 
 
+# --- scan reason ----------------------------------------------------------------------------------------
+# The Integration Service answers a scan it has no result for as {"status": "error", "reason": "<code>",
+# "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
+# produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
+# asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
+# that is still running from a broken integration. Any asm_scan_ code means nothing was measured, so the
+# criterion stays None (Not evaluated), never False. A reply with any other reason keeps its answer and gains
+# the code; one with no reason, or a reason that is not a plain code, reads exactly as before.
+SCAN_REASON_MAX_LENGTH = 60
+SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+SCAN_REASON_TEXT = {
+    "asm_scan_in_progress": "the scan is still running; its result is read on the next evaluation",
+    "asm_scan_retry_backoff": "the last scan produced no usable result, so a new scan has not started yet",
+    "asm_scan_shared_no_result": "the scan that was already running produced no usable result",
+    "asm_scan_max_duration_exceeded": "the scan ran past its time limit",
+}
+
+
+def scan_reason(data):
+    """The reason code of a scan reply that is not a result: a plain lower-case code of at most 60 characters,
+    else None (a successful scan, no reason, or a reason that is not a plain code)."""
+    if not isinstance(data, dict) or data.get("status") == "success":
+        return None
+    reason = data.get("reason")
+    if not isinstance(reason, str):
+        return None
+    reason = reason.strip().lower()
+    if not reason or len(reason) > SCAN_REASON_MAX_LENGTH:
+        return None
+    for ch in reason:
+        if ch not in SCAN_REASON_CHARS:
+            return None
+    return reason
+
+
+def scan_not_measured(data):
+    """True when the Integration Service says no scan result exists (an asm_scan_ reason): nothing was measured."""
+    reason = scan_reason(data)
+    return reason is not None and reason.startswith("asm_scan_")
+
+
+def scan_status_problem(status, domain, reason):
+    """The error text for a scan reply that is not a result."""
+    if reason is None:
+        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+    if reason.startswith("asm_scan_"):
+        return ("Nuclei scan not evaluated (" + reason + "): "
+                + SCAN_REASON_TEXT.get(reason, "the scan did not produce a result"))
+    return "Nuclei scan status: " + str(status) + " (" + reason + ") for " + str(domain)
+
+
+def with_error_code(response, error_code):
+    """Label a reply with the reason code the Integration Service gave, when it gave one."""
+    if error_code:
+        response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
+# --- end scan reason -------------------------------------------------------------------------------------
+
+
 def scan_problem(data):
     """None when the scan completed across at least one host with no failed host, no error and an intact
     findings list; else the reason."""
@@ -111,7 +170,7 @@ def scan_problem(data):
     domain = data.get("primaryDomain") or data.get("domain") or "unknown"
     status = data.get("status", "unknown")
     if status != "success" or is_true(data.get("error")):
-        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+        return scan_status_problem(status, domain, scan_reason(data))
     scanned = to_int(data.get("domainsScanned"))
     if scanned is None or scanned <= 0:
         return "Nuclei scanned zero hosts for " + str(domain)
@@ -223,9 +282,11 @@ def describe(finding, percentile, score):
     return "EPSS " + finding_severity(finding).upper() + ": " + label + " at " + finding_where(finding) + " [" + epss + "]"
 
 
-def failed(reason, validation, summary):
-    return create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
-                           transformation_errors=[reason], fail_reasons=[reason], input_summary=summary)
+def failed(reason, validation, summary, error_code=None):
+    return with_error_code(
+        create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
+                        transformation_errors=[reason], fail_reasons=[reason], input_summary=summary),
+        error_code)
 
 
 def transform(input):
@@ -245,7 +306,7 @@ def transform(input):
                    "templatesScanned": to_int(data.get("templatesScanned")) if isinstance(data, dict) else None}
         problem = scan_problem(data)
         if problem:
-            return failed(problem, validation, summary)
+            return failed(problem, validation, summary, scan_reason(data))
         findings = [f for f in data.get("findings") if is_live_match(f)
                     and finding_severity(f) in ("critical", "high")]
         risky = []
