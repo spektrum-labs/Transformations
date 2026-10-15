@@ -84,7 +84,12 @@ MEASURED = [
     # Servers count, and staleness is not held against an endpoint: 9 of 10.
     (SOPHOS, sophos_body(), 90),
     (S1, s1_new_format(s1_body()), 100),
-    (NINJA, [{"id": i, "policyId": 7 if i < 18 else None} for i in range(21)], 85),
+    # A NinjaOne device counts only when an antivirus or EPP product reports ON (a policy id is not evidence): 18 of 21.
+    # The device list beside the report is the roster; every device in it is in the report here.
+    (NINJA, {"results": [{"deviceId": i, "productName": "Defender", "productState": "ON" if i < 18 else "OFF",
+                          "timestamp": datetime.now(timezone.utc).timestamp()} for i in range(21)],
+             "devices": [{"id": i, "nodeClass": "WINDOWS_WORKSTATION", "lastContact": datetime.now(timezone.utc).timestamp()}
+                         for i in range(21)]}, 85),
     (THREATDOWN, {"policies": [threatdown_policy(), threatdown_policy(), threatdown_policy(False)]}, 66),
     (FALCON, {"resources": [falcon_host(i) for i in range(9)] + [falcon_host(9, rfm="yes")],
               "meta": {"pagination": {"total": 10}}}, 90),
