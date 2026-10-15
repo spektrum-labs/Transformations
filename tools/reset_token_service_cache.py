@@ -93,9 +93,14 @@ def self_test() -> int:
     assert scope_for([f"p{i}.py" for i in range(MAX_PATHS + 1)]) == {"all": True}
     assert scope_for([f"p{i}.py" for i in range(MAX_PATHS)]) == {"paths": [f"p{i}.py" for i in range(MAX_PATHS)]}
     assert scope_for([], everything=True) == {"all": True}
+    # A path the server would refuse (git quotes spaces, "+" and non-ASCII) resets everything rather than
+    # failing the whole request.
+    assert scope_for(["safeguards/a/x.py", "safeguards/a/with space.py"]) == {"all": True}
+    assert scope_for(['"safeguards/a/caf\\303\\251.py"']) == {"all": True}
+    assert scope_for(["safeguards/a/x+y.py"]) == {"all": True}
 
     # Unset configuration sends nothing and does not fail the run.
-    saved = {k: os.environ.pop(k, None) for k in ("TOKEN_SERVICE_RESET_URL", "TOKEN_SERVICE_RESET_BASIC_AUTH")}
+    saved = {k: os.environ.pop(k, None) for k in ("TOKEN_SERVICE_RESET_URL", "TOKEN_SERVICE_RESET_TOKEN")}
     try:
         import io
         stdin, sys.stdin = sys.stdin, io.StringIO("safeguards/a/x.py\n")
@@ -105,9 +110,14 @@ def self_test() -> int:
         try:
             assert main([]) == 0 and sent == []
             os.environ["TOKEN_SERVICE_RESET_URL"] = "https://example.invalid"
-            os.environ["TOKEN_SERVICE_RESET_BASIC_AUTH"] = "dXNlcjpwYXNz"
+            os.environ["TOKEN_SERVICE_RESET_TOKEN"] = "t" * 40
             sys.stdin = io.StringIO("safeguards/a/x.py\n")
-            assert main([]) == 0 and sent[-1][2] == {"paths": ["safeguards/a/x.py"]}
+            assert main([]) == 0 and sent[-1][1] == "t" * 40 and sent[-1][2] == {"paths": ["safeguards/a/x.py"]}
+            # The reset-only token goes in its own header; never an Authorization header.
+            req = build_request("https://example.invalid/", "t" * 40, {"all": True})
+            assert req.get_header("X-transform-reset-token") == "t" * 40
+            assert req.get_header("Authorization") is None
+            assert req.full_url == "https://example.invalid/admin/cache/transformations/reset"
             send = lambda *a, **k: 403  # noqa: E731
             sys.stdin = io.StringIO("safeguards/a/x.py\n")
             assert main([]) == 1
