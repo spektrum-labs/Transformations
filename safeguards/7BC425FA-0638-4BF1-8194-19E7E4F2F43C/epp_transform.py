@@ -1,14 +1,50 @@
 """
-Transformation: epp_transform (comprehensive)
-Vendor: Endpoint Protection Platform
+Transformation: epp_transform (Windows Defender)
+Vendor: Microsoft Defender for Endpoint
 Category: Endpoint Security
 
-Evaluates safeguard types coverage based on endpoints response data
-and assigns a score from 0 to 100 for each safeguard type.
+Answers isEPPEnabled, isEPPDeployed, isEDRDeployed and isEPPLoggingEnabled from the Defender for
+Endpoint machine inventory, GET /api/machines (Machine resource type: onboardingStatus, healthStatus,
+lastSeen).
+
+This file used to be a copy of the Sophos Central transform, reading Sophos fields
+(items[].assignedProducts, health.services.serviceDetails, type == "computer") out of a Defender
+ALERT list. No Defender payload carries those fields, so one alert made six controls pass and a
+clean tenant with no alerts failed all of them. An alert proves Defender detected something once; it
+is not evidence that protection is deployed, enabled or logging. A body that is not a machine
+inventory -- the alert list included -- is now not measured (None, dataCollection error), never an
+answer.
+
+Reporting: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_WINDOW_DAYS of now.
+  isEPPEnabled / isEPPDeployed / isEDRDeployed -- at least one eligible machine is reporting.
+      Onboarding to Defender for Endpoint is the EDR sensor; this is the same reading the One-Click
+      definition takes (microsoft_endpoint_edrdeployed.py), plus recency.
+  isEPPLoggingEnabled -- at least one machine is reporting, and every reporting machine's
+      healthStatus is Active (its sensor is sending data).
+Not measured: an error body, records with no onboardingStatus (the alert list is one), a page with
+@odata.nextLink still set, no eligible machine at all, or a reporting machine that carries no
+healthStatus (one missing field used to read as a logging failure). dataCollection.status is one
+flag for the whole response, so if any key cannot be decided none is reported -- a key left None
+under a "success" status would be graded as a failure nobody measured.
+
+A pass on the three deployment keys says the sensor is deployed somewhere, not that it covers the
+fleet: one reporting machine out of a thousand passes all three, the same reading as One-Click's
+microsoft_endpoint_edrdeployed.py. requiredCoveragePercentage is the control that grades coverage,
+and additionalFindings carries the reporting/eligible gap beside the verdict.
 """
 
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
+
+
+# Microsoft documents lastSeen as "the last received full device report. A device typically sends a
+# full report every 24 hours", and counts a device silent for more than seven days as Inactive. 15 days
+# is the endpoint window the CrowdStrike, SentinelOne and Sophos checks already apply, written the same
+# way in requiredcoveragepercentage.py so both files agree on which machine is reporting.
+ACTIVE_WINDOW_DAYS = 15
+INELIGIBLE_STATUSES = ("unsupported", "insufficientinfo")
+KEYS = ("isEPPEnabled", "isEPPDeployed", "isEDRDeployed", "isEPPLoggingEnabled")
 
 
 def extract_input(input_data):
@@ -60,14 +96,104 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "epp_transform",
-                "vendor": "Endpoint Protection Platform",
+                "vendor": "Microsoft Defender for Endpoint",
                 "category": "Endpoint Security"
             }
         }
     }
 
 
+def parse_time(value):
+    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
+    Microsoft sends seven fractional digits and Z. None if unreadable."""
+    if not isinstance(value, str):
+        return None
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
+    if not match:
+        return None
+    try:
+        when = datetime.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+    offset = match.group(3)
+    if offset and offset != "Z":
+        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
+        when = when - shift if offset[0] == "+" else when + shift
+    return when
+
+
+def status_of(machine):
+    return str(machine.get("onboardingStatus") or "").strip().lower()
+
+
+def read_machines(data, raw):
+    """(machines, partial, reason). machines is None when the body is not a readable machine list."""
+    if isinstance(data, list):
+        data = {"value": data}
+    if not isinstance(data, dict) or "error" in data or "PSError" in data:
+        return None, False, "Microsoft Defender did not return a machine list (error or unreadable body)"
+    machines = data.get("value")
+    if not isinstance(machines, list):
+        return None, False, "Microsoft Defender response carries no value[] machine list"
+    if any(not isinstance(machine, dict) for machine in machines):
+        return None, False, "Microsoft Defender machine list contains a record that is not a machine"
+    alert_list = (isinstance(raw, dict) and "alerts" in raw) or any("alertCreationTime" in m for m in machines)
+    if alert_list:
+        return None, False, ("This is the Defender alert list (GET /api/alerts). An alert does not evidence "
+                             "endpoint protection; these checks read the machine inventory (getMachines)")
+    if machines and not any("onboardingStatus" in machine for machine in machines):
+        return None, False, "No machine record carries onboardingStatus, so onboarding cannot be read"
+    if not machines:
+        return None, False, "The Defender machine inventory is empty; there is nothing to measure"
+    next_link = data.get("@odata.nextLink")
+    partial = isinstance(next_link, str) and next_link.strip() not in ("", "None", "null")
+    return machines, partial, None
+
+
+def measure(machines, partial):
+    """Values for KEYS, None where this read cannot decide."""
+    cutoff = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
+    eligible = [m for m in machines
+                if str(m.get("isExcluded", "false")).lower() != "true" and status_of(m) not in INELIGIBLE_STATUSES]
+    onboarded = [m for m in eligible if status_of(m) == "onboarded"]
+    reporting = [m for m in onboarded
+                 if parse_time(m.get("lastSeen")) is not None and parse_time(m.get("lastSeen")) >= cutoff]
+    healthy = [m for m in reporting if str(m.get("healthStatus") or "").strip().lower() == "active"]
+    counts = {
+        "eligibleDevices": len(eligible),
+        "onboardedDevices": len(onboarded),
+        "reportingDevices": len(reporting),
+        "activeSensorDevices": len(healthy),
+    }
+    values = {}
+    for key in KEYS:
+        values[key] = None
+    if partial or not eligible:
+        return values, counts
+    # EVERY reporting machine has to carry healthStatus, not just one of them. A machine without
+    # the field got "" here, fell out of healthy, and read isEPPLoggingEnabled False -- a fail
+    # nobody measured, which is the failure this file exists to remove. dataCollection.status is
+    # one flag for the whole response, so an unreadable sensor health leaves every key None.
+    if reporting and not all("healthStatus" in m for m in reporting):
+        return values, counts
+    for key in ("isEPPEnabled", "isEPPDeployed", "isEDRDeployed"):
+        values[key] = len(reporting) > 0
+    values["isEPPLoggingEnabled"] = len(reporting) > 0 and len(healthy) == len(reporting)
+    return values, counts
+
+
 def transform(input):
+    values = {}
+    for key in KEYS:
+        values[key] = None
+    counts = {}
+    reason = None
+    validation = {"status": "unknown", "errors": [], "warnings": []}
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
+    additional_findings = []
+
     try:
         if isinstance(input, str):
             input = json.loads(input)
@@ -77,272 +203,64 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={"isEPPEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # Initialize counters
-        # A DEFAULT OF True ON BOTH BRANCHES MEANT NOTHING COULD DISCONFIRM THIS. The line
-        # read `data.get("isEPPConfigured", True) if isinstance(data, dict) else True`, so a
-        # body missing the key reported endpoint protection CONFIGURED, and a body that was
-        # not a dict at all -- null, a bare string, an unparsed response -- did too, via the
-        # else. Measured 2026-09-21: transform(None) returned isEPPConfigured true across
-        # all six copies of this file. The key is absent from every real vendor payload
-        # this transform handles; it is a passthrough for a caller-supplied hint, and its
-        # absence is the normal case, which made True the answer almost every time.
-        #
-        # Absence of the hint is now resolved from what WAS read: endpoint protection is
-        # configured if any coverage was actually observed. An unreadable body observes
-        # nothing and is False.
-        if not isinstance(data, dict) or not data:
-            isEPPConfigured = False
-        elif "isEPPConfigured" in data:
-            isEPPConfigured = bool(data.get("isEPPConfigured"))
+            reason = "Input validation failed"
         else:
-            isEPPConfigured = epp_coverage_observed(data)
-
-        endpoints = []
-        if isinstance(data, dict) and 'value' in data:
-            endpoints = data['value']
-        elif isinstance(data, list):
-            endpoints = data
-
-        if not isEPPConfigured:
-            isEPPConfigured = len(endpoints) > 0
-
-        total_endpoints = len(endpoints)
-        total_computers = 0
-        total_servers = 0
-        total_mobile_devices = 0
-        total_cloud_endpoints = 0
-
-        safeguard_counters = {
-            "Endpoint Protection": 0,
-            "Endpoint Security": 0,
-            "Server Protection": 0,
-            "MDR": 0,
-            "Network Protection": 0,
-            "Cloud Security": 0,
-            "Mobile Protection": 0,
-            "Email Security": 0,
-            "Phishing Protection": 0,
-            "Zero Trust Network Access": 0,
-            "Encryption": 0
-        }
-
-        items = data.get("items", []) if isinstance(data, dict) else []
-
-        for endpoint in items:
-            assigned_products = {product["code"]: product for product in endpoint.get("assignedProducts", [])}
-            services = {service["name"]: service for service in endpoint.get("health", {}).get("services", {}).get("serviceDetails", [])}
-            endpoint_type = endpoint.get("type")
-
-            # Count total number of computers, servers, mobile devices, and cloud endpoints
-            if endpoint_type == "computer":
-                total_computers += 1
-            elif endpoint_type == "server":
-                total_servers += 1
-            elif endpoint_type == "mobile":
-                total_mobile_devices += 1
-
-            if "cloud" in endpoint:
-                total_cloud_endpoints += 1
-
-            # 1. Endpoint Protection
-            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Protection"] = safeguard_counters["Endpoint Protection"] + 1
-
-            # 1.1 Endpoint Security
-            if endpoint_type == "computer" and "endpointProtection" in assigned_products:
-                safeguard_counters["Endpoint Security"] = safeguard_counters["Endpoint Security"] + 1
-
-            # 2. Server Protection
-            if endpoint_type == "server" and "endpointProtection" in assigned_products:
-                safeguard_counters["Server Protection"] = safeguard_counters["Server Protection"] + 1
-
-            # 3. MDR (Managed Detection and Response)
-            if "mtr" in assigned_products:
-                safeguard_counters["MDR"] = safeguard_counters["MDR"] + 1
-
-            # 4. Network Protection
-            if any("Network Threat Protection" in service_name for service_name in services):
-                safeguard_counters["Network Protection"] = safeguard_counters["Network Protection"] + 1
-
-            # 5. Cloud Security
-            if endpoint.get("cloud", {}).get("provider") and "endpointProtection" in assigned_products:
-                safeguard_counters["Cloud Security"] = safeguard_counters["Cloud Security"] + 1
-
-            # 6. Mobile Protection
-            if endpoint_type == "mobile" and "mobileProtection" in assigned_products:
-                safeguard_counters["Mobile Protection"] = safeguard_counters["Mobile Protection"] + 1
-
-            # 7. Email Security
-            if "emailSecurity" in assigned_products:
-                safeguard_counters["Email Security"] = safeguard_counters["Email Security"] + 1
-
-            # 8. Phishing Protection
-            if "interceptX" in assigned_products:
-                safeguard_counters["Phishing Protection"] = safeguard_counters["Phishing Protection"] + 1
-
-            # 9. Zero Trust Network Access
-            ztna_product = assigned_products.get("ztna")
-            if ztna_product and ztna_product.get("status") == "installed":
-                safeguard_counters["Zero Trust Network Access"] = safeguard_counters["Zero Trust Network Access"] + 1
-
-            # 10. Encryption
-            if endpoint.get("encryption", {}).get("volumes"):
-                safeguard_counters["Encryption"] = safeguard_counters["Encryption"] + 1
-
-        # Initialize coverage scores
-        coverage_scores = {}
-
-        # Calculate scores
-        coverage_scores["Endpoint Protection"] = round(
-            (safeguard_counters["Endpoint Protection"] / total_computers) * 100
-            if total_computers > 0 else 0
-        )
-
-        coverage_scores["Endpoint Security"] = round(
-            (safeguard_counters["Endpoint Security"] / total_computers) * 100
-            if total_computers > 0 else 0
-        )
-
-        coverage_scores["Server Protection"] = round(
-            (safeguard_counters["Server Protection"] / total_servers) * 100
-            if total_servers > 0 else 0
-        )
-
-        coverage_scores["MDR"] = round(
-            (safeguard_counters["MDR"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Network Protection"] = round(
-            (safeguard_counters["Network Protection"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Cloud Security"] = round(
-            (safeguard_counters["Cloud Security"] / total_cloud_endpoints) * 100
-            if total_cloud_endpoints > 0 else 0
-        )
-
-        coverage_scores["Mobile Protection"] = round(
-            (safeguard_counters["Mobile Protection"] / total_mobile_devices) * 100
-            if total_mobile_devices > 0 else 0
-        )
-
-        coverage_scores["Email Security"] = round(
-            (safeguard_counters["Email Security"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Phishing Protection"] = round(
-            (safeguard_counters["Phishing Protection"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Zero Trust Network Access"] = round(
-            (safeguard_counters["Zero Trust Network Access"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        coverage_scores["Encryption"] = round(
-            (safeguard_counters["Encryption"] / total_endpoints) * 100
-            if total_endpoints > 0 else 0
-        )
-
-        # Endpoint Protection boolean flags
-        coverage_scores["isEPPEnabled"] = coverage_scores["Endpoint Protection"] > 0 or isEPPConfigured
-        coverage_scores["isEPPDeployed"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEPPLoggingEnabled"] = coverage_scores["Endpoint Protection"] > 0 or isEPPConfigured
-        coverage_scores["isEPPEnabledForCriticalSystems"] = coverage_scores["Endpoint Protection"] > 0
-        coverage_scores["isEDRDeployed"] = coverage_scores["Endpoint Protection"] > 0
-
-        # Endpoint Security
-        coverage_scores["isEndpointSecurityEnabled"] = coverage_scores["Endpoint Security"] > 0
-
-        # MDR
-        coverage_scores["isMDREnabled"] = coverage_scores["MDR"] > 0
-        coverage_scores["isMDRLoggingEnabled"] = coverage_scores["MDR"] > 0
-        coverage_scores["requiredCoveragePercentage"] = coverage_scores["Endpoint Protection"]
-        coverage_scores["requiredConfigurationPercentage"] = coverage_scores["Endpoint Protection"]
-
-        coverage_scores["isEPPConfigured"] = isEPPConfigured
-
-        # Build pass/fail reasons
-        epp_coverage = coverage_scores.get('Endpoint Protection', 0)
-        if coverage_scores["isEPPEnabled"]:
-            if epp_coverage > 0:
-                pass_reasons.append(f"Endpoint protection active: {epp_coverage}% of devices protected")
-            else:
-                pass_reasons.append("Endpoint protection configured but no devices currently protected")
-                recommendations.append("Verify endpoint agent deployment status")
-        else:
-            fail_reasons.append("Endpoint protection not deployed or not reporting data")
-            recommendations.append("Deploy endpoint protection to all computers")
-
-        server_coverage = coverage_scores.get("Server Protection", 0)
-        if server_coverage > 0:
-            pass_reasons.append(f"Server protection active: {server_coverage}% of servers protected")
-
-        mdr_coverage = coverage_scores.get("MDR", 0)
-        if coverage_scores["isMDREnabled"]:
-            if mdr_coverage > 0:
-                pass_reasons.append(f"MDR active: {mdr_coverage}% coverage")
-            else:
-                pass_reasons.append("MDR configured but no devices currently monitored")
-
-        return create_response(
-            result=coverage_scores,
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={
-                "totalEndpoints": total_endpoints,
-                "totalComputers": total_computers,
-                "totalServers": total_servers,
-                "totalMobileDevices": total_mobile_devices,
-                "totalCloudEndpoints": total_cloud_endpoints,
-                "safeguardCounters": safeguard_counters
-            }
-        )
-
+            raw = input.get("data") if isinstance(input, dict) and "validation" in input else input
+            machines, partial, reason = read_machines(data, raw)
+            if machines is not None:
+                values, counts = measure(machines, partial)
+                if not counts["eligibleDevices"]:
+                    reason = "No eligible machine in the Defender inventory; nothing to measure"
+                elif partial:
+                    reason = ("The machine list has more pages than were read (@odata.nextLink present); "
+                              "not judged on a sample")
+                elif values["isEPPDeployed"] is None:
+                    reason = ("Not every reporting machine carries healthStatus, so sensor health cannot be "
+                              "read for the whole inventory")
+                line = (str(counts["reportingDevices"]) + " of " + str(counts["eligibleDevices"])
+                        + " eligible machines are onboarded to Defender for Endpoint and sent a full device report "
+                        "within " + str(ACTIVE_WINDOW_DAYS) + " days; " + str(counts["activeSensorDevices"])
+                        + " of those report an Active sensor")
+                if values["isEPPDeployed"] is not None:
+                    # These three keys read "at least one machine is reporting", so a pass says
+                    # nothing about how much of the fleet is covered. Put the gap beside the
+                    # verdict so a reviewer sees it without opening the transformed response;
+                    # requiredCoveragePercentage is the control that grades it.
+                    if counts["reportingDevices"] < counts["eligibleDevices"]:
+                        additional_findings.append(
+                            str(counts["eligibleDevices"] - counts["reportingDevices"]) + " of "
+                            + str(counts["eligibleDevices"]) + " eligible machines are not reporting to Defender "
+                            "for Endpoint. These keys read whether the sensor is deployed at all, not how much "
+                            "of the fleet it covers; requiredCoveragePercentage grades the coverage")
+                    if values["isEPPDeployed"]:
+                        pass_reasons.append(line)
+                    if values["isEPPDeployed"] is False or values["isEPPLoggingEnabled"] is False:
+                        fail_reasons.append(line)
+                    if values["isEPPDeployed"] is False:
+                        recommendations.append("Onboard the organisation's devices to Defender for Endpoint, and "
+                                               "investigate onboarded devices that have stopped reporting")
+                    elif values["isEPPLoggingEnabled"] is False:
+                        recommendations.append("Repair the sensors on onboarded devices whose health status is "
+                                               "not Active")
     except Exception as e:
-        return create_response(
-            result={"isEPPEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        values = {}
+        for key in KEYS:
+            values[key] = None
+        reason = "Transformation error: " + str(e)
 
-
-def epp_coverage_observed(data):
-    """True when the payload actually evidences endpoint protection on something.
-
-    Deliberately narrow: it looks for a non-empty population of devices/agents/hosts, or
-    an explicit enabled/installed flag. An error envelope carries none of these, so it
-    resolves False rather than inheriting the old optimistic default.
-    """
-    if not isinstance(data, dict):
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault"):
-        if data.get(key):
-            return False
-    for key in ("devices", "agents", "hosts", "endpoints", "resources", "items", "data"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    for key in ("isEnabled", "enabled", "installed", "protectionEnabled", "eppEnabled"):
-        if data.get(key) is True:
-            return True
-    return False
+    # Measured is decided by the values, never by the branch: one key left None makes the whole read a
+    # data-collection error, because the status is shared by every key in the response.
+    measured = all(values.get(key) is not None for key in KEYS)
+    unmeasured_reason = reason or "Endpoint protection could not be measured from this read"
+    result = dict(values)
+    result.update(counts)
+    return create_response(
+        result=result,
+        validation=validation,
+        pass_reasons=pass_reasons,
+        fail_reasons=fail_reasons if measured else [unmeasured_reason],
+        recommendations=recommendations,
+        input_summary=counts,
+        api_errors=[] if measured else [unmeasured_reason],
+        additional_findings=additional_findings if measured else [],
+    )

@@ -3,29 +3,17 @@ Transformation: isPatchManagementEnabled
 Vendor: Endpoint Protection Platform
 Category: Endpoint Security / Patch Management
 
-Evaluates if patch management is enabled and valid.
+Windows Defender: reported as not measured (see below).
+
+Windows Defender's definition routes these two keys to GET /api/alerts. An alert is a detection; it
+says nothing about whether patches are managed or current, and the old `affirmative_signal` turned any
+non-empty alert list into a pass. The candidate source is Defender vulnerability management (the
+One-Click definition's getPatchComplianceStatus, read by microsoft_endpoint_patchmanagement.py), which
+this definition does not call and which has not been validated for this purpose. Until a validated
+source is wired, every body this file receives is not measured.
 """
 
-import json
 from datetime import datetime
-
-
-def extract_input(input_data):
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -66,139 +54,22 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+KEYS = ("isPatchManagementEnabled", "isPatchManagementValid")
+REASON = ("Windows Defender's alert list (GET /api/alerts) does not evidence patch management; "
+          "this check is not measured")
+
+
 def transform(input):
-    try:
-        if isinstance(input, str):
-            input = json.loads(input)
-        elif isinstance(input, bytes):
-            input = json.loads(input.decode("utf-8"))
-
-        data, validation = extract_input(input)
-
-        if validation.get("status") == "failed":
-            return create_response(
-                result={"isPatchManagementEnabled": False, "isPatchManagementValid": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
-
-        is_patch_management_enabled = False
-        is_patch_management_valid = False
-
-        if isinstance(data, dict):
-            is_patch_management_enabled = data.get('isPatchManagementEnabled', default_value)
-            is_patch_management_valid = data.get('isPatchManagementValid', default_value)
-        else:
-            is_patch_management_enabled = default_value
-            is_patch_management_valid = default_value
-
-        additional_findings = []
-
-        # Primary criteria: isPatchManagementEnabled
-        if is_patch_management_enabled:
-            pass_reasons.append("Patch management is enabled")
-        else:
-            fail_reasons.append("Patch management is not enabled")
-            recommendations.append("Enable patch management for endpoint security")
-
-        # Additional finding: isPatchManagementValid
-        if is_patch_management_valid:
-            additional_findings.append({
-                "metric": "isPatchManagementValid",
-                "status": "pass",
-                "reason": "Patch management configuration is valid"
-            })
-        else:
-            additional_findings.append({
-                "metric": "isPatchManagementValid",
-                "status": "fail",
-                "reason": "Patch management configuration is not valid",
-                "recommendation": "Review and correct patch management configuration"
-            })
-
-        return create_response(
-            result={
-                "isPatchManagementEnabled": is_patch_management_enabled,
-                "isPatchManagementValid": is_patch_management_valid
-            },
-            validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            additional_findings=additional_findings,
-            input_summary={
-                "patchManagementEnabled": is_patch_management_enabled,
-                "patchManagementValid": is_patch_management_valid
-            }
-        )
-
-    except Exception as e:
-        return create_response(
-            result={"isPatchManagementEnabled": False, "isPatchManagementValid": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
-
-
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
-
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
-    """
-    if isinstance(data, list):
-        # A top-level JSON array is a population of records, as {"items": [...]} already is,
-        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
-        for item in data:
-            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
-                return False
-        data = {"items": [item for item in data if item]}
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
-        if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
+    # Nothing this definition sends can decide the control, so every key is None and the status is
+    # derived from that value: not measured, never a pass and never a gap.
+    result = {}
+    for key in KEYS:
+        result[key] = None
+    measured = all(result[key] is not None for key in KEYS)
+    return create_response(
+        result=result,
+        validation={"status": "unknown", "errors": [], "warnings": []},
+        fail_reasons=[] if measured else [REASON],
+        recommendations=["Wire this check to Defender vulnerability management (getPatchComplianceStatus) rather than the alert list"],
+        api_errors=[] if measured else [REASON],
+    )
