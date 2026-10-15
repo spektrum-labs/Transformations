@@ -179,8 +179,9 @@ def test_infinite_retention_and_flip():
     assert t(retention_body("P6M"))["isInfiniteCloudRetentionEnabled"] is False
 
 
-@pytest.mark.parametrize("name,key", [("isdeletionretentionperiodenforced", "isDeletionRetentionPeriodEnforced"),
-                                      ("isinfinitecloudretentionenabled", "isInfiniteCloudRetentionEnabled")])
+# isDeletionRetentionPeriodEnforced reads Not evaluated (None) on these bodies, never False: its fail-closed
+# cases are in test_keepit_deletion_retention_period.py.
+@pytest.mark.parametrize("name,key", [("isinfinitecloudretentionenabled", "isInfiniteCloudRetentionEnabled")])
 def test_retention_fail_closed(name, key):
     t = load(name)
     for body in FAIL_CLOSED + [devices(4), resources(generic_snapshot_retention="P99Y")]:
