@@ -6,10 +6,11 @@ these tests pin:
 Twelve test-mapped checks (one criterion each, mapped by Vanta's stable test ids):
 - True only when at least one mapped test counts and every mapped test that counts is OK;
 - False when any mapped test is NEEDS_ATTENTION, even when the read was cut short;
-- None (Not evaluated, dataCollection.status "error") when every mapped test is absent, all are DEACTIVATED or
+- None (Not evaluated, dataCollection.status "error") when every mapped test is absent, any is DEACTIVATED, all are
   NOT_APPLICABLE, one is IN_PROGRESS, INVALID or unknown, an entry is unreadable, the read is not proven complete,
   or the body is an error, empty or unrecognised;
-- DEACTIVATED and NOT_APPLICABLE tests are left out of the answer.
+- NOT_APPLICABLE tests are left out of the answer; a DEACTIVATED mapped test makes the check None (named in the
+  reason), unless another mapped test needs attention, which is still False (a failure already seen settles it).
 
 Two vulnerability counts (openCriticalVulnerabilitiesCount, overdueVulnerabilityRemediationCount):
 - a count of 0 is reported only when the vulnerability read succeeded, was not truncated, and the Vanta test
@@ -153,10 +154,43 @@ def test_a_pass_in_a_read_that_is_not_proven_complete_is_none(name):
 
 
 @pytest.mark.parametrize("name", sorted(TEST_CHECKS))
-def test_a_deactivated_mapped_test_is_left_out_beside_an_ok_one(name):
+def test_a_deactivated_mapped_test_is_none_and_names_the_test(name):
     _, mapped, _ = TEST_CHECKS[name]
-    value, _ = run(name, make_tests_body([make_entry(mapped), make_entry(mapped + "-extra", "DEACTIVATED")]))
-    assert value is True
+    value, out = run(name, make_tests_body([make_entry(mapped, "DEACTIVATED"), make_entry(UNRELATED_ID, "OK")]))
+    assert value is None and not_evaluated(out)
+    assert mapped in json.dumps(out["additionalInfo"]["dataCollection"]["errors"])
+
+
+@pytest.mark.parametrize("name", ["isstrongauthrequired", "confirmpasswordpolicyenforced"])
+def test_a_deactivated_prefix_mapped_test_beside_an_ok_one_is_none(name):
+    _, mapped, prefixed = TEST_CHECKS[name]
+    value, out = run(name, make_tests_body([make_entry(mapped, "OK"), make_entry(prefixed, "DEACTIVATED")]))
+    assert value is None and not_evaluated(out)
+    assert prefixed in json.dumps(out["additionalInfo"]["dataCollection"]["errors"])
+
+
+@pytest.mark.parametrize("name", sorted(TEST_CHECKS))
+def test_a_failing_mapped_test_beside_a_deactivated_one_is_still_false(name):
+    _, mapped, prefixed = TEST_CHECKS[name]
+    entries = [make_entry(mapped, "NEEDS_ATTENTION")]
+    if prefixed is not None:
+        entries.append(make_entry(prefixed, "DEACTIVATED"))
+    value, _ = run(name, make_tests_body(entries))
+    assert value is False
+    if prefixed is not None:
+        entries = [make_entry(mapped, "DEACTIVATED"), make_entry(prefixed, "NEEDS_ATTENTION")]
+        value, _ = run(name, make_tests_body(entries))
+        assert value is False
+
+
+def test_two_id_check_deactivated_ok_and_all_ok():
+    ebs, rds = "aws-ebs-snapshot-encryption", "aws-rds-snapshot-encryption"
+    out = load("isbackupencrypted").transform(make_tests_body([make_entry(ebs, "DEACTIVATED"), make_entry(rds, "DEACTIVATED")]))
+    errors = json.dumps(out["additionalInfo"]["dataCollection"]["errors"])
+    assert ebs in errors and rds in errors
+    assert run("isbackupencrypted", make_tests_body([make_entry(ebs, "OK"), make_entry(rds, "DEACTIVATED")]))[0] is None
+    assert run("isbackupencrypted", make_tests_body([make_entry(ebs, "OK"), make_entry(rds, "OK")]))[0] is True
+    assert run("isbackupencrypted", make_tests_body([make_entry(ebs, "OK"), make_entry(rds, "NOT_APPLICABLE")]))[0] is True
 
 
 @pytest.mark.parametrize("name", sorted(TEST_CHECKS))
