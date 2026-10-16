@@ -78,7 +78,8 @@ def create_response(result, validation, *, errors=(), summary=None, readings=(),
 # a Windows client version (Windows10, Windows11, ...) or macOS is a workstation. Anything else (iOS, Android, a missing or unknown value) is unclassified and counted
 # in neither class.
 LINUX_PLATFORMS = ("ubuntu", "debian", "centos", "rhel", "redhat", "fedora", "suse", "sles", "mint", "kali")
-WINDOWS_CLIENT_VERSIONS = ("7", "8", "8.1", "10", "11", "vista", "xp")
+# Windows client builds by prefix, so variants such as Windows8Blue or Windows10WVD are covered too.
+WINDOWS_CLIENT_PREFIXES = ("windows7", "windows8", "windows10", "windows11", "windowsxp", "windowsvista")
 
 
 def os_class(machine):
@@ -95,8 +96,9 @@ def os_class(machine):
             return "server"
     if platform.startswith("mac"):
         return "workstation"
-    if platform.startswith("windows") and platform[len("windows"):] in WINDOWS_CLIENT_VERSIONS:
-        return "workstation"
+    for prefix in WINDOWS_CLIENT_PREFIXES:
+        if platform.startswith(prefix):
+            return "workstation"
     return None
 
 
@@ -104,7 +106,9 @@ def class_percentage(protected, total):
     """None when the class has no machine: no machines proves nothing, so it is never 0."""
     if total <= 0:
         return None
-    return round(100 * protected / total)
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
 
 
 def evaluate_machines(data):

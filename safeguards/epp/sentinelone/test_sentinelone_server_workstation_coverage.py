@@ -117,3 +117,18 @@ def test_partial_or_failed_read_gives_none_for_every_split_field():
         assert response["transformedResponse"]["requiredCoveragePercentage"] is None
         for key in SPLIT_KEYS:
             assert response["transformedResponse"][key] is None, key
+
+
+def fleet(n_servers, bad_servers, n_workstations, bad_workstations):
+    agents = [agent(i, "server", good=i >= bad_servers) for i in range(n_servers)]
+    agents += [agent(100000 + i, "laptop", good=i >= bad_workstations) for i in range(n_workstations)]
+    return ts(agents)
+
+
+def test_edr_percentages_never_round_up_to_a_boundary():
+    # 100 only when every agent in the class is protected; 94.9 stays below a 95 bar.
+    for servers, bad, want in ((200, 1, 99.5), (2000, 1, 99.95), (20000, 1, 99.99), (200, 0, 100)):
+        assert out(fleet(servers, bad, 0, 0))["edrServerCoveragePercentage"] == want
+    assert out(fleet(0, 0, 1000, 51))["edrWorkstationCoveragePercentage"] == 94.9
+    assert out(fleet(0, 0, 3, 1))["edrWorkstationCoveragePercentage"] == 66.66
+    assert out(fleet(0, 0, 1000, 50))["edrWorkstationCoveragePercentage"] == 95

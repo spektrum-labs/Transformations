@@ -11,7 +11,7 @@
   },
   "population": "servers among the endpoints requiredCoveragePercentage divides by. Class rule per vendor: CrowdStrike product_type_desc Server or Domain Controller (product_type 3 or 2 when the description is absent); SentinelOne machineType server; Defender osPlatform containing 'server' or any Linux distribution (ruling 2026-10-16). The denominator and the protected test are exactly the ones the same transform uses for requiredCoveragePercentage, so the split agrees with the blended figure.",
   "polarity": "higher_is_better",
-  "evidenceRequiredForTrue": "A complete read of the device inventory; 100 only when every server in it is protected. No server in the inventory is null (not measured), never 0.",
+  "evidenceRequiredForTrue": "A complete read of the device inventory; 100 only when every server in it is protected. No server in the inventory is null (not measured), never 0. The value is floored to two decimals, never rounded up, so it is 100 only when every device in the class is protected.",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,

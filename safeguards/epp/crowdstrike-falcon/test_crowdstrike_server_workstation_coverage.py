@@ -128,9 +128,24 @@ def test_truncated_or_failed_read_gives_none_for_every_split_field():
             assert response["transformedResponse"][key] is None, key
 
 
-def test_empty_device_list_has_no_class_coverage():
+def test_empty_device_list_gives_none_for_every_edr_field():
     result = out(body([]))
     assert result["requiredCoveragePercentage"] == 0
-    assert result["edrServerCoveragePercentage"] is None
-    assert result["edrWorkstationCoveragePercentage"] is None
-    assert result["edrUnclassifiedDeviceCount"] == 0
+    # An empty fleet with no error measures nothing: every edr* field is None, as in SentinelOne and Defender.
+    for key in SPLIT_KEYS:
+        assert result[key] is None, key
+
+
+def fleet(n_servers, bad_servers, n_workstations, bad_workstations):
+    hosts = [host(i, "Server", good=i >= bad_servers) for i in range(n_servers)]
+    hosts += [host(100000 + i, "Workstation", good=i >= bad_workstations) for i in range(n_workstations)]
+    return body(hosts)
+
+
+def test_edr_percentages_never_round_up_to_a_boundary():
+    # 100 only when every device in the class is protected; 94.9 stays below a 95 bar.
+    for servers, bad, want in ((200, 1, 99.5), (2000, 1, 99.95), (20000, 1, 99.99), (200, 0, 100)):
+        assert out(fleet(servers, bad, 0, 0))["edrServerCoveragePercentage"] == want
+    assert out(fleet(0, 0, 1000, 51))["edrWorkstationCoveragePercentage"] == 94.9
+    assert out(fleet(0, 0, 3, 1))["edrWorkstationCoveragePercentage"] == 66.66
+    assert out(fleet(0, 0, 1000, 50))["edrWorkstationCoveragePercentage"] == 95

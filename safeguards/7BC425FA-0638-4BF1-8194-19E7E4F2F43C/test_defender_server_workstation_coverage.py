@@ -178,3 +178,41 @@ def test_oneclick_partial_or_failed_read_gives_none_for_the_edr_fields():
         assert response["additionalInfo"]["dataCollection"]["status"] == "error"
         for key in SPLIT_KEYS:
             assert response["transformedResponse"].get(key) is None, key
+
+
+def fleet(n_servers, bad_servers, n_workstations, bad_workstations):
+    machines = [machine("WindowsServer2022", "CanBeOnboarded" if i < bad_servers else "Onboarded")
+                for i in range(n_servers)]
+    machines += [machine("Windows11", "CanBeOnboarded" if i < bad_workstations else "Onboarded")
+                 for i in range(n_workstations)]
+    return {"value": machines}
+
+
+def test_edr_percentages_never_round_up_to_a_boundary():
+    # 100 only when every machine in the class is onboarded; 94.9 stays below a 95 bar.
+    for module in BOTH:
+        for servers, bad, want in ((200, 1, 99.5), (2000, 1, 99.95), (20000, 1, 99.99), (200, 0, 100)):
+            assert out(module, fleet(servers, bad, 0, 0))["edrServerCoveragePercentage"] == want
+        assert out(module, fleet(0, 0, 1000, 51))["edrWorkstationCoveragePercentage"] == 94.9
+        assert out(module, fleet(0, 0, 3, 1))["edrWorkstationCoveragePercentage"] == 66.66
+        assert out(module, fleet(0, 0, 1000, 50))["edrWorkstationCoveragePercentage"] == 95
+
+
+def test_existing_fields_keep_their_rounding():
+    # Only the edr* fields floor; the existing figures keep their rounding (199/200 -> 100).
+    assert out(LEGACY, fleet(200, 1, 0, 0))["requiredCoveragePercentage"] == 100
+    result = out(ONECLICK, fleet(200, 1, 0, 0))
+    assert (result["requiredCoveragePercentage"], result["serverCoveragePercentage"]) == (100, 100)
+
+
+def test_windows_client_platform_variants_are_workstations():
+    variants = ["Windows7", "Windows8", "Windows8.1", "Windows8Blue", "Windows10", "Windows10WVD",
+                "Windows11", "Windows11WVD", "WindowsXP", "WindowsVista"]
+    for module in BOTH:
+        result = out(module, {"value": [machine(v) for v in variants]})
+        assert result["edrTotalWorkstationCount"] == len(variants)
+        assert result["edrUnclassifiedDeviceCount"] == 0
+        # A server build still reads as a server, and an unknown Windows value stays unclassified.
+        result = out(module, {"value": [machine("WindowsServer2022"), machine("Windows"), machine("WindowsIoT")]})
+        assert (result["edrTotalServerCount"], result["edrTotalWorkstationCount"]) == (1, 0)
+        assert result["edrUnclassifiedDeviceCount"] == 2

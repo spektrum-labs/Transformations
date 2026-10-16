@@ -11,7 +11,7 @@
   },
   "population": "workstations among the endpoints requiredCoveragePercentage divides by. Class rule per vendor: CrowdStrike product_type_desc Workstation (product_type 1 when the description is absent); SentinelOne machineType desktop or laptop; Defender osPlatform a Windows client version (Windows10, Windows11, ...) or macOS (ruling 2026-10-16). The denominator and the protected test are exactly the ones the same transform uses for requiredCoveragePercentage, so the split agrees with the blended figure.",
   "polarity": "higher_is_better",
-  "evidenceRequiredForTrue": "A complete read of the device inventory; 100 only when every workstation in it is protected. No workstation in the inventory is null (not measured), never 0.",
+  "evidenceRequiredForTrue": "A complete read of the device inventory; 100 only when every workstation in it is protected. No workstation in the inventory is null (not measured), never 0. The value is floored to two decimals, never rounded up, so it is 100 only when every device in the class is protected.",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,

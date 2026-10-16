@@ -201,7 +201,9 @@ def class_percentage(protected, total):
     """None when the class has no agent: no agents proves nothing, so it is never 0."""
     if total <= 0:
         return None
-    return round((protected / total) * 100, 2)
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
 
 
 def parse_seen(value):

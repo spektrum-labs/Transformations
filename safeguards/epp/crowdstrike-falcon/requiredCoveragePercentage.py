@@ -163,7 +163,9 @@ def class_percentage(protected, total):
     """None when the class has no device: no devices proves nothing, so it is never 0."""
     if total <= 0:
         return None
-    return round((protected / total) * 100, 2)
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
 
 
 def transform(input):
@@ -318,7 +320,9 @@ def transform(input):
     }
     # The split, over the same devices and the same active test as requiredCoveragePercentage. A failed
     # or truncated read is not measured, so every split field is None rather than a confident number.
-    if api_errors:
+    # An empty device list (no error) measures nothing either, so the split is None there too, as it is in
+    # the SentinelOne and Defender transforms.
+    if api_errors or total == 0:
         result.update({
             "edrServerCoveragePercentage": None,
             "edrWorkstationCoveragePercentage": None,
