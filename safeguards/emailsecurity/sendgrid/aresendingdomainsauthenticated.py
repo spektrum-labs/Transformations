@@ -9,12 +9,15 @@ Integration-Service workflow getSenderAuthenticationPosture:
 True when the account has at least one authenticated sending domain and every authenticated
 domain has a record SendGrid reports as valid (valid is true: the DNS records for the SPF and
 DKIM alignment resolve), so mail from those domains passes DKIM and SPF alignment checks. False
-when the account has no authenticated domain, or a domain has no valid record. A stale invalid
+when the account has no authenticated domain (a successful read of an empty list is the real
+state, "0 authenticated sending domains", not a failed read), or a domain has no valid record. A stale invalid
 duplicate beside a valid record for the same domain is reported as a finding and does not fail
 the check. Authentication of a domain that sends through another provider is out of scope.
 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json
@@ -188,7 +191,7 @@ def transform(input):
         if stale:
             findings.append("Domains that also hold an invalid, stale authentication record (delete it in SendGrid): " + named(stale))
         if not items:
-            return build_response(result, fail_reasons=["No sending domain is authenticated in SendGrid"],
+            return build_response(result, fail_reasons=["0 authenticated sending domains in SendGrid"],
                                   recommendations=["In SendGrid, open Settings, Sender Authentication and authenticate the domain mail is sent from"],
                                   summary=summary, transform_id=TRANSFORM_ID, findings=findings)
         if invalid:

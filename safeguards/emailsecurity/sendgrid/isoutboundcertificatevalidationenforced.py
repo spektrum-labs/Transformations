@@ -10,8 +10,10 @@ True when SendGrid requires the receiving server to present a valid TLS certific
 (require_valid_cert is true), so mail is not handed to a server that cannot prove who it is.
 False when require_valid_cert is false: SendGrid accepts self-signed or expired certificates.
 Whether TLS is required at all is a separate check (isOutboundTLSEnforced). 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json

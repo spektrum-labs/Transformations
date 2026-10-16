@@ -10,8 +10,10 @@ True when TLS is required (require_tls is true) and the minimum TLS version Send
 1.2 or higher. False when the minimum version is below 1.2 (TLS 1.0 and 1.1 are deprecated), or
 when TLS is not required, because SendGrid applies the minimum version only to mail it delivers
 under a required-TLS policy. 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json

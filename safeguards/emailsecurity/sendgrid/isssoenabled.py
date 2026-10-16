@@ -9,10 +9,13 @@ Integration-Service workflow getSsoPosture:
 True when at least one SAML single sign-on integration is configured, finished (the identity
 provider setup is completed) and enabled, so people can sign in to SendGrid through the company
 identity provider. False when the account has no integration, or none is both completed and
-enabled. This does not prove SSO is the only way in: SendGrid exposes no setting that forces
-every teammate through SSO, so enforcement is not judged here. 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+enabled. A successful read that lists no integration is the real state (False, "0 integrations"),
+not a failed read. That every teammate actually signs in with SSO is a separate check
+(isSSOEnforcedForAllUsers). 
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json
@@ -178,7 +181,9 @@ def transform(input):
         if active:
             return build_response(result, pass_reasons=["SAML single sign-on is configured and enabled: " + named(active)],
                                   summary=summary, transform_id=TRANSFORM_ID, findings=findings)
-        reason = "No SAML single sign-on integration is configured in SendGrid" if not items else "SAML single sign-on integrations exist but none is both completed and enabled"
+        reason = ("0 SAML single sign-on integrations are configured in SendGrid" if not items else
+                  str(len(items)) + " SAML single sign-on integration" + ("" if len(items) == 1 else "s") +
+                  " configured, 0 both completed and enabled")
         return build_response(result, fail_reasons=[reason],
                               recommendations=["In SendGrid, open Settings, Single Sign-On and configure and enable a SAML integration with the company identity provider"],
                               summary=summary, transform_id=TRANSFORM_ID, findings=findings)
