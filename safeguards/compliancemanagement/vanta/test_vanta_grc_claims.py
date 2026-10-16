@@ -74,9 +74,14 @@ class Poisoned(dict):
         return 1
 
 
+#: the people criteria that sit beside the four claim files (test_vanta_criteria.py)
+MEASURED = {"backgroundcheckcompletionrate", "policyacknowledgmentcompletionrate", "trainingassignmentcompletionrate",
+            "devicemonitoringinstallcompletionrate", "offboardingcompletionrate", "overdueoffboardingcount"}
+
+
 def test_one_file_per_criterion():
     on_disk = {p.stem for p in HERE.glob("*.py") if not p.stem.startswith("test_")}
-    assert on_disk == set(CHECKS)
+    assert on_disk == set(CHECKS) | MEASURED
 
 
 def vt(pair, status="OK"):
