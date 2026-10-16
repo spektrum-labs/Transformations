@@ -15,7 +15,8 @@
   },
   "emptyPopulationMeans": "non_compliant",
   "allowedCategories": [
-    "Email Security"
+    "Email Security",
+    "Messaging Security"
   ],
   "integrationPolicy": "any",
   "allowedIntegrations": [],
@@ -35,5 +36,5 @@
       "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
     }
   ],
-  "notes": "Judges the service's own report that the DNS records resolve (valid). Stale invalid duplicates beside a valid record are a finding."
+  "notes": "Judges the service's own report that the DNS records resolve (valid). Stale invalid duplicates beside a valid record are a finding. Messaging Security is allowed too because the SendGrid integration is catalogued under communication (Messaging Security)."
 }

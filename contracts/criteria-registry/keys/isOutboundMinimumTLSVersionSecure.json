@@ -15,7 +15,8 @@
   },
   "emptyPopulationMeans": "not_measured",
   "allowedCategories": [
-    "Email Security"
+    "Email Security",
+    "Messaging Security"
   ],
   "integrationPolicy": "any",
   "allowedIntegrations": [],
@@ -36,5 +37,5 @@
       "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
     }
   ],
-  "notes": "The 1.2 bar follows RFC 8996. Read from SendGrid require_tls and version."
+  "notes": "The 1.2 bar follows RFC 8996. Read from SendGrid require_tls and version. Messaging Security is allowed too because the SendGrid integration is catalogued under communication (Messaging Security)."
 }
