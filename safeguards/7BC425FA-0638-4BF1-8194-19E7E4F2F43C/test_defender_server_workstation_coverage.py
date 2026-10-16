@@ -1,4 +1,8 @@
-"""Defender requiredcoveragepercentage and microsoft_endpoint_oneclick: the server / workstation split.
+"""Defender requiredcoveragepercentage and microsoft_endpoint_oneclick: the EDR server / workstation split.
+
+The split is reported under new edr* keys only. The one-click transform's existing serverCoveragePercentage
+and totalServerCount are live criteria elsewhere, so they keep exactly their old rule and values (0 for no
+server, "server" in osPlatform only); the rulings below apply to the edr* keys alone.
 
 Classification on osPlatform (rulings applied 2026-10-16): containing "server" is a server; any Linux
 distribution is a server; Windows client versions (Windows10, Windows11, ...) and macOS are workstations;
@@ -21,11 +25,9 @@ def load(name):
 LEGACY = load("requiredcoveragepercentage")
 ONECLICK = load("microsoft_endpoint_oneclick")
 BOTH = (LEGACY, ONECLICK)
-SPLIT_KEYS = ("serverCoveragePercentage", "workstationCoveragePercentage", "totalServerCount",
-              "protectedServerCount", "totalWorkstationCount", "protectedWorkstationCount",
-              "unclassifiedDeviceCount")
-NEW_ONECLICK_KEYS = ("workstationCoveragePercentage", "protectedServerCount", "totalWorkstationCount",
-                     "protectedWorkstationCount", "unclassifiedDeviceCount")
+SPLIT_KEYS = ("edrServerCoveragePercentage", "edrWorkstationCoveragePercentage", "edrTotalServerCount",
+              "edrProtectedServerCount", "edrTotalWorkstationCount", "edrProtectedWorkstationCount",
+              "edrUnclassifiedDeviceCount")
 
 
 def machine(os_platform, status="Onboarded", excluded=False):
@@ -50,11 +52,11 @@ def test_mixed_fleet_one_unprotected_server_with_blended_coverage_at_least_95():
     for module in BOTH:
         result = out(module, {"value": machines})
         assert result["requiredCoveragePercentage"] == 99
-        assert (result["totalServerCount"], result["protectedServerCount"]) == (10, 9)
-        assert result["serverCoveragePercentage"] == 90
-        assert (result["totalWorkstationCount"], result["protectedWorkstationCount"]) == (90, 90)
-        assert result["workstationCoveragePercentage"] == 100
-        assert result["unclassifiedDeviceCount"] == 0
+        assert (result["edrTotalServerCount"], result["edrProtectedServerCount"]) == (10, 9)
+        assert result["edrServerCoveragePercentage"] == 90
+        assert (result["edrTotalWorkstationCount"], result["edrProtectedWorkstationCount"]) == (90, 90)
+        assert result["edrWorkstationCoveragePercentage"] == 100
+        assert result["edrUnclassifiedDeviceCount"] == 0
 
 
 def test_linux_is_a_server_and_macos_is_a_workstation():
@@ -63,24 +65,24 @@ def test_linux_is_a_server_and_macos_is_a_workstation():
                 machine("Windows8.1"), machine("WindowsServer2016")]
     for module in BOTH:
         result = out(module, {"value": machines})
-        assert (result["totalServerCount"], result["protectedServerCount"]) == (4, 3)
-        assert result["serverCoveragePercentage"] == 75
-        assert (result["totalWorkstationCount"], result["protectedWorkstationCount"]) == (4, 3)
-        assert result["workstationCoveragePercentage"] == 75
-        assert result["unclassifiedDeviceCount"] == 0
+        assert (result["edrTotalServerCount"], result["edrProtectedServerCount"]) == (4, 3)
+        assert result["edrServerCoveragePercentage"] == 75
+        assert (result["edrTotalWorkstationCount"], result["edrProtectedWorkstationCount"]) == (4, 3)
+        assert result["edrWorkstationCoveragePercentage"] == 75
+        assert result["edrUnclassifiedDeviceCount"] == 0
 
 
 def test_no_servers_means_server_coverage_is_none_not_zero():
     machines = [machine("Windows11"), machine("Windows10", "CanBeOnboarded")]
     for module in BOTH:
         result = out(module, {"value": machines})
-        assert result["serverCoveragePercentage"] is None
-        assert result["totalServerCount"] == 0
-        assert result["workstationCoveragePercentage"] == 50
+        assert result["edrServerCoveragePercentage"] is None
+        assert result["edrTotalServerCount"] == 0
+        assert result["edrWorkstationCoveragePercentage"] == 50
     for module in BOTH:
         result = out(module, {"value": [machine("WindowsServer2022")]})
-        assert result["workstationCoveragePercentage"] is None
-        assert result["serverCoveragePercentage"] == 100
+        assert result["edrWorkstationCoveragePercentage"] is None
+        assert result["edrServerCoveragePercentage"] == 100
 
 
 def test_unclassifiable_machine_counts_in_neither_class():
@@ -88,9 +90,9 @@ def test_unclassifiable_machine_counts_in_neither_class():
                 machine(None), machine("WindowsIoTSomething")]
     for module in BOTH:
         result = out(module, {"value": machines})
-        assert result["unclassifiedDeviceCount"] == 4
-        assert result["totalServerCount"] == 1
-        assert result["totalWorkstationCount"] == 1
+        assert result["edrUnclassifiedDeviceCount"] == 4
+        assert result["edrTotalServerCount"] == 1
+        assert result["edrTotalWorkstationCount"] == 1
 
 
 def test_split_counts_only_the_machines_the_blend_divides_by():
@@ -98,9 +100,9 @@ def test_split_counts_only_the_machines_the_blend_divides_by():
                 machine("Windows11", "Unsupported"), machine("Linux", "InsufficientInfo"), machine("Windows11")]
     for module in BOTH:
         result = out(module, {"value": machines})
-        assert result["totalServerCount"] == 1
-        assert result["totalWorkstationCount"] == 1
-        assert result["unclassifiedDeviceCount"] == 0
+        assert result["edrTotalServerCount"] == 1
+        assert result["edrTotalWorkstationCount"] == 1
+        assert result["edrUnclassifiedDeviceCount"] == 0
 
 
 def test_legacy_existing_fields_are_unchanged():
@@ -128,7 +130,7 @@ def test_oneclick_existing_fields_are_unchanged():
                 "requiredCoveragePercentage": 95, "serverCoveragePercentage": 0, "totalEndpointCount": 20,
                 "totalServerCount": 1, "eligibleDevices": 20, "protectedDevices": 19, "reportingDevices": 19}
     assert {k: result[k] for k in existing} == existing
-    assert set(result) == set(existing) | set(NEW_ONECLICK_KEYS)
+    assert set(result) == set(existing) | set(SPLIT_KEYS)
     assert response["additionalInfo"]["evaluation"]["failReasons"] == [
         "19 of 20 eligible machines are onboarded to Defender for Endpoint (95%)",
         "19 of 19 onboarded machines report an active sensor",
@@ -136,10 +138,19 @@ def test_oneclick_existing_fields_are_unchanged():
         "isEPPConfigured failed"]
 
 
-def test_oneclick_no_server_reading_text_is_unchanged():
+def test_oneclick_live_server_keys_keep_the_old_rule():
+    # No server: the live serverCoveragePercentage stays 0, while the new edr key is None.
     response = run(ONECLICK, {"value": [machine("Windows11")]})
-    assert response["transformedResponse"]["serverCoveragePercentage"] is None
     assert "0 eligible servers in the inventory (0% onboarded)" in response["additionalInfo"]["evaluation"]["passReasons"]
+    result = response["transformedResponse"]
+    assert result["serverCoveragePercentage"] == 0
+    assert result["totalServerCount"] == 0
+    assert result["edrServerCoveragePercentage"] is None
+    # Linux: not a server under the live keys' old rule, a server under the edr keys.
+    result = out(ONECLICK, {"value": [machine("Linux", "CanBeOnboarded"), machine("WindowsServer2022"),
+                                      machine("Windows11")]})
+    assert (result["totalServerCount"], result["serverCoveragePercentage"]) == (1, 100)
+    assert (result["edrTotalServerCount"], result["edrServerCoveragePercentage"]) == (2, 50)
 
 
 def test_legacy_partial_or_failed_read_gives_none_for_every_split_field():
@@ -153,19 +164,17 @@ def test_legacy_partial_or_failed_read_gives_none_for_every_split_field():
             assert response["transformedResponse"].get(key) is None, key
 
 
-def test_oneclick_partial_or_failed_read_gives_none_for_the_new_fields():
+def test_oneclick_partial_or_failed_read_gives_none_for_the_edr_fields():
     pages_left = {"value": [machine("WindowsServer2022"), machine("Windows11")],
                   "@odata.nextLink": "https://api.example.invalid/api/machines?$skip=10000"}
     result = out(ONECLICK, pages_left)
-    for key in NEW_ONECLICK_KEYS:
+    for key in SPLIT_KEYS:
         assert result[key] is None, key
     # Existing fields keep today's values on that path.
     assert result["requiredCoveragePercentage"] == 100
-    assert result["totalServerCount"] == 1
+    assert (result["totalServerCount"], result["serverCoveragePercentage"]) == (1, 100)
     for payload in ({}, {"error": {"code": "Forbidden"}}, {"value": []}, {"value": [machine("iOS", "Unsupported")]}):
         response = run(ONECLICK, payload)
         assert response["additionalInfo"]["dataCollection"]["status"] == "error"
-        for key in NEW_ONECLICK_KEYS + ("serverCoveragePercentage",):
+        for key in SPLIT_KEYS:
             assert response["transformedResponse"].get(key) is None, key
-        # totalServerCount keeps today's value (0 for an empty inventory, absent on an error).
-        assert response["transformedResponse"].get("totalServerCount") in (0, None)

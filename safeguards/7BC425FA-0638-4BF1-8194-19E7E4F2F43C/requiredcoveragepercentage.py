@@ -66,7 +66,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-# Server / workstation split (additive; rulings applied 2026-10-16). osPlatform containing "server" is a
+# EDR server / workstation split, under new edr* keys (additive; rulings applied 2026-10-16). osPlatform containing "server" is a
 # server, and so is any Linux distribution; a Windows client version (Windows10, Windows11, ...) or macOS
 # is a workstation. Anything else (iOS, Android, a missing or unknown value) is unclassified and counted
 # in neither class.
@@ -101,13 +101,13 @@ def class_percentage(protected, total):
 
 # Every split field, None: what a partial, failed or empty read reports instead of a confident number.
 SPLIT_NOT_MEASURED = {
-    "serverCoveragePercentage": None,
-    "workstationCoveragePercentage": None,
-    "totalServerCount": None,
-    "protectedServerCount": None,
-    "totalWorkstationCount": None,
-    "protectedWorkstationCount": None,
-    "unclassifiedDeviceCount": None,
+    "edrServerCoveragePercentage": None,
+    "edrWorkstationCoveragePercentage": None,
+    "edrTotalServerCount": None,
+    "edrProtectedServerCount": None,
+    "edrTotalWorkstationCount": None,
+    "edrProtectedWorkstationCount": None,
+    "edrUnclassifiedDeviceCount": None,
 }
 
 
@@ -138,13 +138,13 @@ def coverage_split(eligible_machines):
         else:
             unclassified = unclassified + 1
     return {
-        "serverCoveragePercentage": class_percentage(protected_servers, servers),
-        "workstationCoveragePercentage": class_percentage(protected_workstations, workstations),
-        "totalServerCount": servers,
-        "protectedServerCount": protected_servers,
-        "totalWorkstationCount": workstations,
-        "protectedWorkstationCount": protected_workstations,
-        "unclassifiedDeviceCount": unclassified,
+        "edrServerCoveragePercentage": class_percentage(protected_servers, servers),
+        "edrWorkstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+        "edrTotalServerCount": servers,
+        "edrProtectedServerCount": protected_servers,
+        "edrTotalWorkstationCount": workstations,
+        "edrProtectedWorkstationCount": protected_workstations,
+        "edrUnclassifiedDeviceCount": unclassified,
     }
 
 

@@ -176,10 +176,11 @@ def test_assessment_with_no_applicable_device_names_the_count():
 
 def test_onboarded_fleet_values_are_unchanged():
     tr = out(ONECLICK, FLEET)["transformedResponse"]
-    # The server / workstation split fields are additive (test_defender_server_workstation_coverage.py);
-    # every field that existed before keeps its value.
-    split = ("workstationCoveragePercentage", "protectedServerCount", "totalWorkstationCount",
-             "protectedWorkstationCount", "unclassifiedDeviceCount")
+    # The edr* split fields are additive (test_defender_server_workstation_coverage.py); every
+    # field that existed before keeps its value, compared strictly.
+    split = ("edrServerCoveragePercentage", "edrWorkstationCoveragePercentage", "edrTotalServerCount",
+             "edrProtectedServerCount", "edrTotalWorkstationCount", "edrProtectedWorkstationCount",
+             "edrUnclassifiedDeviceCount")
     assert {k: v for k, v in tr.items() if k not in split} == {
         "isEPPEnabled": True, "isEPPConfigured": False, "isEPPLoggingEnabled": False,
         "requiredCoveragePercentage": 75, "serverCoveragePercentage": 50, "totalEndpointCount": 4,

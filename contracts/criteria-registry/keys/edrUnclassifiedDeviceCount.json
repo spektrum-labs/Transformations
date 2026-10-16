@@ -1,14 +1,14 @@
 {
-  "name": "protectedWorkstationCount",
+  "name": "edrUnclassifiedDeviceCount",
   "revision": 1,
   "status": "proposed",
-  "definition": "The number of workstations in the vendor's endpoint inventory that count as protected under the same transform's requiredCoveragePercentage rule.",
+  "definition": "The number of devices in the endpoint inventory that requiredCoveragePercentage divides by and that the transform can classify as neither a server nor a workstation.",
   "valueType": "integer",
   "unit": "count",
   "domain": {
     "min": 0
   },
-  "population": "protected workstations. Class rule per vendor: CrowdStrike product_type_desc Workstation (product_type 1 when the description is absent); SentinelOne machineType desktop or laptop; Defender osPlatform a Windows client version (Windows10, Windows11, ...) or macOS (ruling 2026-10-16). The denominator and the protected test are exactly the ones the same transform uses for requiredCoveragePercentage, so the split agrees with the blended figure.",
+  "population": "devices in neither class (for example mobile devices, storage or Kubernetes nodes, or a missing type). The denominator and the protected test are exactly the ones the same transform uses for requiredCoveragePercentage, so the split agrees with the blended figure.",
   "polarity": "unknown",
   "evidenceRequiredForTrue": "A complete read of the device inventory. Null when the read is partial or failed.",
   "evidenceClass": "measured",
@@ -38,7 +38,7 @@
     {
       "revision": 1,
       "date": "2026-10-16",
-      "change": "Registered with the server / workstation coverage split added to four EDR coverage transforms (additive; no requirement reads it yet)."
+      "change": "Registered with the EDR server / workstation coverage split added to four EDR coverage transforms under edr* names (additive; no requirement reads it yet)."
     }
   ],
   "notes": "Supporting count for the server / workstation coverage split; not a criterion on its own today."

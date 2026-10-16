@@ -16,9 +16,9 @@ COV = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(COV)
 
 NOW = datetime.utcnow()
-SPLIT_KEYS = ("serverCoveragePercentage", "workstationCoveragePercentage", "totalServerCount",
-              "protectedServerCount", "totalWorkstationCount", "protectedWorkstationCount",
-              "unclassifiedDeviceCount")
+SPLIT_KEYS = ("edrServerCoveragePercentage", "edrWorkstationCoveragePercentage", "edrTotalServerCount",
+              "edrProtectedServerCount", "edrTotalWorkstationCount", "edrProtectedWorkstationCount",
+              "edrUnclassifiedDeviceCount")
 EXISTING_KEYS = ("requiredCoveragePercentage", "installedAgents", "activeAgents", "inactiveAgents",
                  "totalEnrolledAgents", "uninstalledAgents", "decommissionedAgents", "staleAgentCount")
 
@@ -52,33 +52,33 @@ def test_mixed_fleet_one_unprotected_server_with_blended_coverage_at_least_95():
     agents += [agent(200 + i, "server") for i in range(9)] + [agent(300, "server", good=False)]
     result = out(ts(agents))
     assert result["requiredCoveragePercentage"] == 99.0
-    assert (result["totalServerCount"], result["protectedServerCount"]) == (10, 9)
-    assert result["serverCoveragePercentage"] == 90.0
-    assert (result["totalWorkstationCount"], result["protectedWorkstationCount"]) == (90, 90)
-    assert result["workstationCoveragePercentage"] == 100.0
-    assert result["unclassifiedDeviceCount"] == 0
+    assert (result["edrTotalServerCount"], result["edrProtectedServerCount"]) == (10, 9)
+    assert result["edrServerCoveragePercentage"] == 90.0
+    assert (result["edrTotalWorkstationCount"], result["edrProtectedWorkstationCount"]) == (90, 90)
+    assert result["edrWorkstationCoveragePercentage"] == 100.0
+    assert result["edrUnclassifiedDeviceCount"] == 0
 
 
 def test_machine_type_is_case_insensitive():
     result = out(ts([agent(1, "Server"), agent(2, "DESKTOP"), agent(3, " Laptop ")]))
-    assert result["totalServerCount"] == 1
-    assert result["totalWorkstationCount"] == 2
+    assert result["edrTotalServerCount"] == 1
+    assert result["edrTotalWorkstationCount"] == 2
 
 
 def test_no_servers_means_server_coverage_is_none_not_zero():
     result = out(ts([agent(1, "laptop"), agent(2, "desktop", good=False)]))
-    assert result["serverCoveragePercentage"] is None
-    assert result["totalServerCount"] == 0
-    assert result["workstationCoveragePercentage"] == 50.0
+    assert result["edrServerCoveragePercentage"] is None
+    assert result["edrTotalServerCount"] == 0
+    assert result["edrWorkstationCoveragePercentage"] == 50.0
 
 
 def test_unclassifiable_agent_counts_in_neither_class():
     agents = [agent(1, "server"), agent(2, "laptop"), agent(3, "kubernetes node"),
               agent(4, "storage"), agent(5, "unknown"), agent(6, None)]
     result = out(ts(agents))
-    assert result["unclassifiedDeviceCount"] == 4
-    assert result["totalServerCount"] == 1
-    assert result["totalWorkstationCount"] == 1
+    assert result["edrUnclassifiedDeviceCount"] == 4
+    assert result["edrTotalServerCount"] == 1
+    assert result["edrTotalWorkstationCount"] == 1
     assert result["totalEnrolledAgents"] == 6
 
 
@@ -86,8 +86,8 @@ def test_stale_agents_are_left_out_of_the_split_as_they_are_of_the_blend():
     agents = [agent(1, "server"), agent(2, "laptop"), agent(3, "server", days_ago=40)]
     result = out(ts(agents))
     assert result["staleAgentCount"] == 1
-    assert result["totalServerCount"] == 1
-    assert result["totalServerCount"] + result["totalWorkstationCount"] + result["unclassifiedDeviceCount"] \
+    assert result["edrTotalServerCount"] == 1
+    assert result["edrTotalServerCount"] + result["edrTotalWorkstationCount"] + result["edrUnclassifiedDeviceCount"] \
         == result["totalEnrolledAgents"]
 
 

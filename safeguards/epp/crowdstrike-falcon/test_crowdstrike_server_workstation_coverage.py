@@ -19,9 +19,9 @@ COV = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(COV)
 
 RECENT = (datetime.utcnow() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-SPLIT_KEYS = ("serverCoveragePercentage", "workstationCoveragePercentage", "totalServerCount",
-              "protectedServerCount", "totalWorkstationCount", "protectedWorkstationCount",
-              "unclassifiedDeviceCount")
+SPLIT_KEYS = ("edrServerCoveragePercentage", "edrWorkstationCoveragePercentage", "edrTotalServerCount",
+              "edrProtectedServerCount", "edrTotalWorkstationCount", "edrProtectedWorkstationCount",
+              "edrUnclassifiedDeviceCount")
 EXISTING_KEYS = ("requiredCoveragePercentage", "activeDevices", "totalDevices", "notReportingDevices",
                  "containedDevices", "activeWindowDays")
 DEVICES = json.loads((HERE / "fixtures" / "xdr_devices_unpaged_real_2026-09-25.json").read_text())
@@ -57,40 +57,40 @@ def test_mixed_fleet_one_unprotected_server_with_blended_coverage_at_least_95():
     hosts += [host(200, "Domain Controller"), host(201, "Server", good=False)]
     result = out(body(hosts))
     assert result["requiredCoveragePercentage"] == 99.0
-    assert result["totalServerCount"] == 10
-    assert result["protectedServerCount"] == 9
-    assert result["serverCoveragePercentage"] == 90.0
-    assert result["totalWorkstationCount"] == 90
-    assert result["protectedWorkstationCount"] == 90
-    assert result["workstationCoveragePercentage"] == 100.0
-    assert result["unclassifiedDeviceCount"] == 0
+    assert result["edrTotalServerCount"] == 10
+    assert result["edrProtectedServerCount"] == 9
+    assert result["edrServerCoveragePercentage"] == 90.0
+    assert result["edrTotalWorkstationCount"] == 90
+    assert result["edrProtectedWorkstationCount"] == 90
+    assert result["edrWorkstationCoveragePercentage"] == 100.0
+    assert result["edrUnclassifiedDeviceCount"] == 0
 
 
 def test_product_type_number_classifies_when_the_description_is_absent():
     hosts = [host(1, ptype="1"), host(2, ptype=1), host(3, ptype="3"), host(4, ptype="2", good=False)]
     result = out(body(hosts))
-    assert (result["totalWorkstationCount"], result["protectedWorkstationCount"]) == (2, 2)
-    assert (result["totalServerCount"], result["protectedServerCount"]) == (2, 1)
-    assert result["serverCoveragePercentage"] == 50.0
-    assert result["unclassifiedDeviceCount"] == 0
+    assert (result["edrTotalWorkstationCount"], result["edrProtectedWorkstationCount"]) == (2, 2)
+    assert (result["edrTotalServerCount"], result["edrProtectedServerCount"]) == (2, 1)
+    assert result["edrServerCoveragePercentage"] == 50.0
+    assert result["edrUnclassifiedDeviceCount"] == 0
 
 
 def test_no_servers_means_server_coverage_is_none_not_zero():
     result = out(body([host(i, "Workstation") for i in range(3)]))
-    assert result["serverCoveragePercentage"] is None
-    assert result["totalServerCount"] == 0
-    assert result["workstationCoveragePercentage"] == 100.0
+    assert result["edrServerCoveragePercentage"] is None
+    assert result["edrTotalServerCount"] == 0
+    assert result["edrWorkstationCoveragePercentage"] == 100.0
     no_workstations = out(body([host(1, "Server")]))
-    assert no_workstations["workstationCoveragePercentage"] is None
-    assert no_workstations["serverCoveragePercentage"] == 100.0
+    assert no_workstations["edrWorkstationCoveragePercentage"] is None
+    assert no_workstations["edrServerCoveragePercentage"] == 100.0
 
 
 def test_unclassifiable_device_counts_in_neither_class():
     hosts = [host(1, "Workstation"), host(2, "Server"), host(3, "Mobile"), host(4), host(5, ptype="9")]
     result = out(body(hosts))
-    assert result["unclassifiedDeviceCount"] == 3
-    assert result["totalServerCount"] == 1
-    assert result["totalWorkstationCount"] == 1
+    assert result["edrUnclassifiedDeviceCount"] == 3
+    assert result["edrTotalServerCount"] == 1
+    assert result["edrTotalWorkstationCount"] == 1
     assert result["totalDevices"] == 5
 
 
@@ -131,6 +131,6 @@ def test_truncated_or_failed_read_gives_none_for_every_split_field():
 def test_empty_device_list_has_no_class_coverage():
     result = out(body([]))
     assert result["requiredCoveragePercentage"] == 0
-    assert result["serverCoveragePercentage"] is None
-    assert result["workstationCoveragePercentage"] is None
-    assert result["unclassifiedDeviceCount"] == 0
+    assert result["edrServerCoveragePercentage"] is None
+    assert result["edrWorkstationCoveragePercentage"] is None
+    assert result["edrUnclassifiedDeviceCount"] == 0

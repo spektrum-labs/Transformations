@@ -134,7 +134,7 @@ def is_reporting(device, clock):
 CONTAINMENT_STATUSES = ("contained", "containment_pending", "lift_containment_pending")
 
 
-# Server / workstation split (additive; no existing field reads it). Falcon's product_type_desc is
+# EDR server / workstation split, under new edr* keys (additive; no existing field reads it). Falcon's product_type_desc is
 # "Workstation", "Server" or "Domain Controller" (a domain controller is a server); product_type is the
 # same as a number (1 workstation, 2 domain controller, 3 server) and is read only when the description is
 # absent. Anything else (Mobile, a missing or unknown value) is unclassified and counted in neither class.
@@ -320,23 +320,23 @@ def transform(input):
     # or truncated read is not measured, so every split field is None rather than a confident number.
     if api_errors:
         result.update({
-            "serverCoveragePercentage": None,
-            "workstationCoveragePercentage": None,
-            "totalServerCount": None,
-            "protectedServerCount": None,
-            "totalWorkstationCount": None,
-            "protectedWorkstationCount": None,
-            "unclassifiedDeviceCount": None,
+            "edrServerCoveragePercentage": None,
+            "edrWorkstationCoveragePercentage": None,
+            "edrTotalServerCount": None,
+            "edrProtectedServerCount": None,
+            "edrTotalWorkstationCount": None,
+            "edrProtectedWorkstationCount": None,
+            "edrUnclassifiedDeviceCount": None,
         })
     else:
         result.update({
-            "serverCoveragePercentage": class_percentage(protected_servers, servers),
-            "workstationCoveragePercentage": class_percentage(protected_workstations, workstations),
-            "totalServerCount": servers,
-            "protectedServerCount": protected_servers,
-            "totalWorkstationCount": workstations,
-            "protectedWorkstationCount": protected_workstations,
-            "unclassifiedDeviceCount": unclassified,
+            "edrServerCoveragePercentage": class_percentage(protected_servers, servers),
+            "edrWorkstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+            "edrTotalServerCount": servers,
+            "edrProtectedServerCount": protected_servers,
+            "edrTotalWorkstationCount": workstations,
+            "edrProtectedWorkstationCount": protected_workstations,
+            "edrUnclassifiedDeviceCount": unclassified,
         })
 
     return create_response(

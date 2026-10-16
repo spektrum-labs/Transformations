@@ -1,8 +1,8 @@
 {
-  "name": "workstationCoveragePercentage",
+  "name": "edrWorkstationCoveragePercentage",
   "revision": 1,
   "status": "proposed",
-  "definition": "Percentage of the workstations in the vendor's endpoint inventory whose protection agent counts as protected under the same transform's requiredCoveragePercentage rule.",
+  "definition": "Percentage of the workstations in the vendor's endpoint inventory whose protection agent counts as protected under the same EDR coverage transform's requiredCoveragePercentage rule.",
   "valueType": "number",
   "unit": "percent",
   "domain": {
@@ -39,7 +39,7 @@
     {
       "revision": 1,
       "date": "2026-10-16",
-      "change": "Registered with the server / workstation coverage split added to four EDR coverage transforms (additive; no requirement reads it yet)."
+      "change": "Registered with the EDR server / workstation coverage split added to four EDR coverage transforms under edr* names (additive; no requirement reads it yet)."
     }
   ],
   "notes": "Added for the EP-001 server / workstation split; the rule that would read it is a later Token-Service change behind a flag."

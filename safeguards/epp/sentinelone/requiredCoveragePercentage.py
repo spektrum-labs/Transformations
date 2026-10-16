@@ -162,20 +162,20 @@ def complete_agent_read(raw):
 ACTIVE_WINDOW_DAYS = 15
 
 
-# Server / workstation split (additive; no existing field reads it). SentinelOne's machineType is one of
+# EDR server / workstation split, under new edr* keys (additive; no existing field reads it). SentinelOne's machineType is one of
 # desktop, laptop, server, kubernetes node, storage or unknown: server is a server, desktop and laptop are
 # workstations, and anything else (or a missing value) is unclassified and counted in neither class.
 WORKSTATION_MACHINE_TYPES = ("desktop", "laptop")
 
 # Every split field, None: what a partial, failed or empty read reports instead of a confident number.
 SPLIT_NOT_MEASURED = {
-    "serverCoveragePercentage": None,
-    "workstationCoveragePercentage": None,
-    "totalServerCount": None,
-    "protectedServerCount": None,
-    "totalWorkstationCount": None,
-    "protectedWorkstationCount": None,
-    "unclassifiedDeviceCount": None,
+    "edrServerCoveragePercentage": None,
+    "edrWorkstationCoveragePercentage": None,
+    "edrTotalServerCount": None,
+    "edrProtectedServerCount": None,
+    "edrTotalWorkstationCount": None,
+    "edrProtectedWorkstationCount": None,
+    "edrUnclassifiedDeviceCount": None,
 }
 
 
@@ -395,13 +395,13 @@ def transform(input):
             "decommissionedAgents": decommissioned_count,
             "staleAgentCount": stale_count,
             # The split, over the same judged agents and the same covered test as above.
-            "serverCoveragePercentage": class_percentage(protected_servers, servers),
-            "workstationCoveragePercentage": class_percentage(protected_workstations, workstations),
-            "totalServerCount": servers,
-            "protectedServerCount": protected_servers,
-            "totalWorkstationCount": workstations,
-            "protectedWorkstationCount": protected_workstations,
-            "unclassifiedDeviceCount": unclassified,
+            "edrServerCoveragePercentage": class_percentage(protected_servers, servers),
+            "edrWorkstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+            "edrTotalServerCount": servers,
+            "edrProtectedServerCount": protected_servers,
+            "edrTotalWorkstationCount": workstations,
+            "edrProtectedWorkstationCount": protected_workstations,
+            "edrUnclassifiedDeviceCount": unclassified,
         },
         validation=validation,
         pass_reasons=pass_reasons,
