@@ -200,12 +200,12 @@ def transform(input):
         found, body = find_leg(data, LEG)
         if not found:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "no SendGrid teammates read in the response")
-        incomplete = completeness(data, LEG, "GET /v3/teammates")
-        if incomplete:
-            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, incomplete)
         items, problem = list_of(body)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/teammates: " + problem)
+        incomplete = completeness(data, LEG, "GET /v3/teammates")
+        if incomplete:
+            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, incomplete)
         if not items:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/teammates returned no teammates")
         enforced, not_sso = 0, []

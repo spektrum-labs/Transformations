@@ -211,12 +211,12 @@ def transform(input):
         found, body = find_leg(data, LEG)
         if not found:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "no SendGrid domain authentication read in the response")
-        incomplete = completeness(data, LEG, "GET /v3/whitelabel/domains")
-        if incomplete:
-            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, incomplete)
         items, problem = list_of(body)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/whitelabel/domains: " + problem)
+        incomplete = completeness(data, LEG, "GET /v3/whitelabel/domains")
+        if incomplete:
+            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, incomplete)
         valid, invalid, stale, problem = group_by_domain(items, "GET /v3/whitelabel/domains", ())
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, problem)
