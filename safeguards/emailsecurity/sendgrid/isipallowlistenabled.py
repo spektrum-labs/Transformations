@@ -8,10 +8,13 @@ Integration-Service workflow getIpAccessPosture:
 
 True when the account's IP Access Management allow list holds at least one address: SendGrid
 then accepts account access (the API and the sign-in) only from the listed addresses. False
-when the list is empty, which means any address can reach the account. The contents of the
-list (addresses) are never kept, only the count. 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+when the list is empty, which means any address can reach the account: a successful read of an
+empty list is the real state (False, "0 IP allow-list entries"), not a failed read. The contents
+of the list (addresses) are never kept, only the count. 
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json
@@ -151,9 +154,12 @@ def transform(input):
         found, body = find_leg(parse(input), LEG)
         if not found:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "no SendGrid IP access read in the response")
-        items, problem = list_of(body)
+        problem = error_text(body)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/access_settings/whitelist: " + problem)
+        if not isinstance(body, dict) or not isinstance(body.get("result"), list):
+            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/access_settings/whitelist: the response has no result list")
+        items = body.get("result")
         if len(items) >= MAX_ITEMS:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/access_settings/whitelist returned " + str(len(items)) + " entries; the list may be cut off")
         for item in items:
@@ -165,7 +171,7 @@ def transform(input):
         if count > 0:
             return build_response(result, pass_reasons=["IP Access Management is on: " + str(count) + " allowed address" + ("" if count == 1 else "es")],
                                   summary=summary, transform_id=TRANSFORM_ID)
-        return build_response(result, fail_reasons=["The IP Access Management allow list is empty, so any address can reach the SendGrid account"],
+        return build_response(result, fail_reasons=["0 IP allow-list entries: the IP Access Management allow list is empty, so any address can reach the SendGrid account"],
                               recommendations=["In SendGrid, open Settings, IP Access Management and add the company's trusted addresses, keeping an address you can sign in from"],
                               summary=summary, transform_id=TRANSFORM_ID)
     except Exception as error:

@@ -9,8 +9,10 @@ Integration-Service workflow getEnforcedTlsPosture:
 True when SendGrid requires TLS on every message it delivers (require_tls is true), so mail is
 never sent to a receiving server in clear text. False when require_tls is false: SendGrid then
 uses TLS only when the receiving server offers it. 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json

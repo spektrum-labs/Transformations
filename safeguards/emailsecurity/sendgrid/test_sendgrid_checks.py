@@ -26,6 +26,7 @@ KEYS = {
     "isOutboundCertificateValidationEnforced": "enforcedTls",
     "isOutboundMinimumTLSVersionSecure": "enforcedTls",
     "isSSOEnabled": "ssoIntegrations",
+    "isSSOEnforcedForAllUsers": "teammates",
     "isIPAllowlistEnabled": "ipAllowlist",
     "areSendingDomainsAuthenticated": "authenticatedDomains",
     "isLinkBrandingValid": "brandedLinks",
@@ -37,6 +38,11 @@ TLS_ON = {"require_tls": True, "require_valid_cert": True, "version": 1.2}
 SSO = [{"id": "11111111-aaaa-4aaa-8aaa-000000000001", "name": "Okta IdP configuration", "enabled": True,
         "completed_integration": True, "jit_provisioning_enabled": True}]
 WHITELIST = {"result": [{"id": 1, "ip": "203.0.113.0/24", "created_at": 1700000000, "updated_at": 1700000000}]}
+TEAMMATES_OK = {"result": [{"username": "alex@example.com", "is_sso": True, "user_type": "admin"},
+                           {"username": "sam", "is_sso": True, "user_type": "teammate"}]}
+# A live read, shape and counts (6 teammates, 4 with SSO, 2 without), synthetic names.
+TEAMMATES_LIVE = {"result": [{"username": n + "@example.com", "email": n + "@example.com", "is_sso": v}
+                             for n, v in (("a", True), ("b", True), ("c", True), ("d", True), ("e", False), ("f", False))]}
 ACTIVITY_UNUSED = {"result": []}
 
 
@@ -146,7 +152,7 @@ def test_missing_leg_is_not_evaluated(key, input):
 @pytest.mark.parametrize("key", list(KEYS))
 def test_input_as_json_string_and_wrappers(key):
     good = {"isOutboundTLSEnforced": TLS_ON, "isOutboundCertificateValidationEnforced": TLS_ON,
-            "isOutboundMinimumTLSVersionSecure": TLS_ON, "isSSOEnabled": SSO, "isIPAllowlistEnabled": WHITELIST,
+            "isOutboundMinimumTLSVersionSecure": TLS_ON, "isSSOEnabled": SSO, "isSSOEnforcedForAllUsers": TEAMMATES_OK, "isIPAllowlistEnabled": WHITELIST,
             "areSendingDomainsAuthenticated": [domain("example.com")], "isLinkBrandingValid": [link("example.com")]}[key]
     plain = value(run(key, good), key)
     assert plain is True
@@ -307,10 +313,126 @@ def test_link_branding_stale_duplicate_is_a_finding():
 @pytest.mark.parametrize("key", list(KEYS))
 def test_metadata_and_never_leaks_a_key(key):
     good = {"isOutboundTLSEnforced": TLS_ON, "isOutboundCertificateValidationEnforced": TLS_ON,
-            "isOutboundMinimumTLSVersionSecure": TLS_ON, "isSSOEnabled": SSO, "isIPAllowlistEnabled": WHITELIST,
+            "isOutboundMinimumTLSVersionSecure": TLS_ON, "isSSOEnabled": SSO, "isSSOEnforcedForAllUsers": TEAMMATES_OK, "isIPAllowlistEnabled": WHITELIST,
             "areSendingDomainsAuthenticated": [domain("example.com")], "isLinkBrandingValid": [link("example.com")]}[key]
     result = run(key, good)
     meta = result["additionalInfo"]["metadata"]
     assert meta["vendor"] == "SendGrid" and meta["category"] == "Email Security"
     assert meta["transformationId"] == key.lower()
     assert "SG." not in json.dumps(result)
+
+
+# ---- SSO enforced for every user ----------------------------------------------------------------
+
+def test_every_teammate_with_sso_is_true():
+    result = run("isSSOEnforcedForAllUsers", TEAMMATES_OK)
+    assert value(result, "isSSOEnforcedForAllUsers") is True
+    assert result["additionalInfo"]["evaluation"]["passReasons"] == ["All 2 teammates sign in with SSO (is_sso true)"]
+    assert "owner" in result["additionalInfo"]["evaluation"]["additionalFindings"][0]
+
+
+def test_any_teammate_without_sso_is_false_with_count_and_names_only():
+    result = run("isSSOEnforcedForAllUsers", TEAMMATES_LIVE)
+    assert value(result, "isSSOEnforcedForAllUsers") is False
+    assert result["transformedResponse"]["teammatesTotal"] == 6
+    assert result["transformedResponse"]["teammatesWithSso"] == 4
+    assert result["transformedResponse"]["teammatesWithoutSso"] == 2
+    assert result["additionalInfo"]["evaluation"]["failReasons"] == [
+        "2 of 6 teammates do not sign in with SSO (is_sso false): e, f"]
+    assert "@" not in json.dumps(result)
+
+
+def test_a_plain_username_is_shown_and_an_email_username_loses_its_domain():
+    body = {"result": [{"username": "plain-user", "is_sso": False}, {"username": "pat@example.org", "is_sso": False}]}
+    reason = run("isSSOEnforcedForAllUsers", body)["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert reason.endswith(": plain-user, pat") and "@" not in reason
+
+
+def test_teammates_as_bare_list_and_string_flags():
+    body = [{"username": "a", "is_sso": "true"}, {"username": "b", "is_sso": "false"}]
+    assert value(T["isSSOEnforcedForAllUsers"]({"teammates": body}), "isSSOEnforcedForAllUsers") is False
+
+
+def test_teammates_cut_off_by_the_page_cap_is_not_evaluated():
+    for marker in ({"paginationTruncated": True}, {"paginationStats": {"teammates": {"paginationTruncated": True}}}):
+        data = dict({"teammates": copy.deepcopy(TEAMMATES_OK)}, **marker)
+        result = T["isSSOEnforcedForAllUsers"](data)
+        assert value(result, "isSSOEnforcedForAllUsers") is None
+        assert status(result) == "error"
+        wrapped = T["isSSOEnforcedForAllUsers"]({"data": data})
+        assert value(wrapped, "isSSOEnforcedForAllUsers") is None
+    clean = {"teammates": copy.deepcopy(TEAMMATES_OK), "paginationStats": {"teammates": {"paginationTruncated": False}}}
+    assert value(T["isSSOEnforcedForAllUsers"](clean), "isSSOEnforcedForAllUsers") is True
+
+
+@pytest.mark.parametrize("body", [
+    {"errors": [{"field": None, "message": "access forbidden"}]}, {"statusCode": 403}, {"statusCode": 500},
+    {"error": True, "statusCode": 401}, "text", None, {"unrecognised": []}, {"result": []}, [],
+    {"result": [{"username": "a"}]}, {"result": [{"username": "a", "is_sso": "maybe"}]}, {"result": ["x"]},
+])
+def test_teammates_unreadable_is_not_evaluated(body):
+    result = T["isSSOEnforcedForAllUsers"]({"teammates": body})
+    assert value(result, "isSSOEnforcedForAllUsers") is None
+    assert status(result) == "error"
+
+
+# ---- Not evaluated versus not configured, for every check -----------------------------------------
+# A successful 200 read that shows the control is not configured is the real state: False, with a
+# reason that says how many there are. Not evaluated (None) is only for a 401/403, a 5xx, a timeout,
+# a body that does not parse or lacks the expected field.
+
+NOT_CONFIGURED = [
+    ("isSSOEnabled", [], "0 SAML single sign-on integrations"),
+    ("isIPAllowlistEnabled", {"result": []}, "0 IP allow-list entries"),
+    ("areSendingDomainsAuthenticated", [], "0 authenticated sending domains"),
+    ("isLinkBrandingValid", [], "0 branded link domains"),
+    ("isOutboundTLSEnforced", TLS_OFF, "require_tls is false"),
+    ("isOutboundCertificateValidationEnforced", TLS_OFF, "require_valid_cert is false"),
+    ("isOutboundMinimumTLSVersionSecure", TLS_OFF, "minimum TLS version is 1.1"),
+]
+
+
+@pytest.mark.parametrize("key,body,words", NOT_CONFIGURED)
+def test_a_good_read_of_an_unconfigured_control_is_false_with_the_count_in_the_reason(key, body, words):
+    result = run(key, body)
+    assert value(result, key) is False
+    assert status(result) == "success" and not result["additionalInfo"]["dataCollection"]["errors"]
+    assert words in result["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+FAILED_READS = [
+    {"errors": [{"field": None, "message": "authorization required"}]},   # 401 body
+    {"errors": [{"field": None, "message": "access forbidden"}]},         # 403 body
+    {"statusCode": 401}, {"statusCode": 403}, {"statusCode": 500}, {"statusCode": 502}, {"statusCode": 504},
+    {"error": True, "errorType": "Timeout", "message": "timed out"},
+    {"error": "upstream connect error"},
+]
+
+
+@pytest.mark.parametrize("key", list(KEYS))
+@pytest.mark.parametrize("body", FAILED_READS)
+def test_a_failed_read_is_not_evaluated_for_every_check(key, body):
+    result = T[key]({KEYS[key]: copy.deepcopy(body)})
+    assert value(result, key) is None
+    assert status(result) == "error"
+    assert result["additionalInfo"]["dataCollection"]["errors"]
+
+
+@pytest.mark.parametrize("key", list(KEYS))
+@pytest.mark.parametrize("body", ["this is not json", "", None, {}, {"unexpected": "shape"}, 7])
+def test_an_unparsable_or_field_less_body_is_not_evaluated_for_every_check(key, body):
+    result = T[key]({KEYS[key]: body})
+    assert value(result, key) is None
+    assert status(result) == "error"
+
+
+@pytest.mark.parametrize("key", list(KEYS))
+def test_a_workflow_input_that_is_invalid_json_text_is_not_evaluated(key):
+    result = T[key]("{not json")
+    assert value(result, key) is None
+    assert status(result) == "error"
+
+
+def test_the_ip_allow_list_needs_its_result_field():
+    assert value(T["isIPAllowlistEnabled"]({"ipAllowlist": []}), "isIPAllowlistEnabled") is None
+    assert value(T["isIPAllowlistEnabled"]({"ipAllowlist": {"other": []}}), "isIPAllowlistEnabled") is None

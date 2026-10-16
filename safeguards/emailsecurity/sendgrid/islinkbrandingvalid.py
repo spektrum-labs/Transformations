@@ -9,11 +9,14 @@ Integration-Service workflow getLinkBrandingPosture:
 True when the account has at least one branded link domain and every branded domain has a
 record SendGrid reports as valid (valid is true), so click-tracking links in mail point at the
 company's own domain instead of a shared sendgrid.net address. False when the account has no
-branded link domain or a domain has no valid record. A stale invalid duplicate beside a valid
+branded link domain (a successful read of an empty list is the real state, "0 branded link
+domains", not a failed read) or a domain has no valid record. A stale invalid duplicate beside a valid
 record for the same domain is a finding and does not fail the check.
 
-Fail closed: an error, 401/403 (for example a key without the scope), empty or unrecognised
-read is null with dataCollection status "error" (Not evaluated), never a pass or a fail.
+Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
+empty or unparsable body, or a body without the expected field is null with dataCollection status
+"error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
+configured is the real state and is False.
 """
 
 import json
@@ -187,7 +190,7 @@ def transform(input):
         if stale:
             findings.append("Domains that also hold an invalid, stale link branding record (delete it in SendGrid): " + named(stale))
         if not items:
-            return build_response(result, fail_reasons=["No link branding domain is set up in SendGrid"],
+            return build_response(result, fail_reasons=["0 branded link domains in SendGrid"],
                                   recommendations=["In SendGrid, open Settings, Sender Authentication, Link Branding and brand the link domain"],
                                   summary=summary, transform_id=TRANSFORM_ID, findings=findings)
         if invalid:
