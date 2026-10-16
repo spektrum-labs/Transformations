@@ -99,6 +99,19 @@ def test_control_readiness_sums_active_frameworks_only():
     assert value(module, key, frameworks([fw(0, 20)])) == 0.0
 
 
+def test_control_readiness_is_not_evaluated_on_a_status_it_does_not_know():
+    module = load("controlreadinesspercentage")
+    key = "controlReadinessPercentage"
+    # an unknown status beside an ACTIVE one must not read as a confident 100
+    assert_not_measured(module.transform(frameworks([fw(10, 10), fw(0, 80, "ENABLED")])), key)
+    assert_not_measured(module.transform(frameworks([fw(10, 10), fw(0, 80, "MYSTERY")])), key)
+    # the statuses Vanta documents as inactive are left out, with no error
+    out = module.transform(frameworks([fw(10, 10), fw(0, 80, "DRAFT"), fw(0, 5, "SNOOZED"),
+                                       fw(0, 5, "ARCHIVED"), fw(0, 5, "NEW_UPGRADE")]))
+    assert out["transformedResponse"][key] == 100.0
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
 def test_control_readiness_is_not_evaluated_without_a_readable_population():
     module = load("controlreadinesspercentage")
     key = "controlReadinessPercentage"

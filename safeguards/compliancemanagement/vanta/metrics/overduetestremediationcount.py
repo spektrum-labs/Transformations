@@ -151,9 +151,9 @@ def transform(input):
                 counts["unreadable"] = counts["unreadable"] + 1
             elif status not in STATUSES:
                 counts["unrecognised"] = counts["unrecognised"] + 1
-            elif True and remediation is None:
+            elif remediation is None:
                 counts["unreadable"] = counts["unreadable"] + 1
-            elif True and remediation not in REMEDIATION:
+            elif remediation not in REMEDIATION:
                 counts["unrecognised"] = counts["unrecognised"] + 1
             elif remediation == "OVERDUE":
                 counts["hit"] = counts["hit"] + 1
