@@ -72,6 +72,39 @@ def create_response(result, validation, *, errors=(), summary=None, readings=(),
     }
 
 
+# Server / workstation split (additive; rulings applied 2026-10-16). osPlatform containing "server" is a
+# server, and so is any Linux distribution; a Windows client version (Windows10, Windows11, ...) or macOS
+# is a workstation. Anything else (iOS, Android, a missing or unknown value) is unclassified and counted
+# in neither class.
+LINUX_PLATFORMS = ("ubuntu", "debian", "centos", "rhel", "redhat", "fedora", "suse", "sles", "mint", "kali")
+WINDOWS_CLIENT_VERSIONS = ("7", "8", "8.1", "10", "11", "vista", "xp")
+
+
+def os_class(machine):
+    """The class of a machine: "server", "workstation", or None (unclassified)."""
+    if not isinstance(machine, dict):
+        return None
+    platform = str(machine.get("osPlatform") or "").strip().lower().replace(" ", "")
+    if not platform:
+        return None
+    if "server" in platform or "linux" in platform:
+        return "server"
+    for distribution in LINUX_PLATFORMS:
+        if platform.startswith(distribution):
+            return "server"
+    if platform.startswith("mac"):
+        return "workstation"
+    if platform.startswith("windows") and platform[len("windows"):] in WINDOWS_CLIENT_VERSIONS:
+        return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no machine: no machines proves nothing, so it is never 0."""
+    if total <= 0:
+        return None
+    return round(100 * protected / total)
+
 def evaluate_machines(data):
     machines = data.get("value") if isinstance(data, dict) else None
     if not isinstance(machines, list):
@@ -89,8 +122,13 @@ def evaluate_machines(data):
         if machine.get("lastSeen")
         and str(machine.get("healthStatus") or "").lower() in HEALTHY_SENSOR_STATES
     ]
-    servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
+    servers = [machine for machine in eligible if os_class(machine) == "server"]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
+    workstations = [machine for machine in eligible if os_class(machine) == "workstation"]
+    protected_workstations = [
+        machine for machine in workstations if str(machine.get("onboardingStatus") or "").lower() == "onboarded"
+    ]
+    unclassified = len(eligible) - len(servers) - len(workstations)
     if not eligible:
         return {
             "isEPPEnabled": None,
@@ -103,9 +141,18 @@ def evaluate_machines(data):
             "eligibleDevices": 0,
             "protectedDevices": 0,
             "reportingDevices": 0,
+            "workstationCoveragePercentage": None,
+            "protectedServerCount": None,
+            "totalWorkstationCount": None,
+            "protectedWorkstationCount": None,
+            "unclassifiedDeviceCount": None,
         }
     coverage = round(100 * len(onboarded) / len(eligible))
-    server_coverage = round(100 * len(protected_servers) / len(servers)) if servers else 0
+    # No server is None (no servers proves nothing), never 0.
+    server_coverage = class_percentage(len(protected_servers), len(servers))
+    # A page that still has a next link is a partial read: the new split fields are not measured on it.
+    next_link = data.get("@odata.nextLink")
+    partial = isinstance(next_link, str) and next_link.strip() not in ("", "None", "null")
     return {
         "isEPPEnabled": bool(onboarded),
         "isEPPConfigured": bool(eligible) and len(onboarded) == len(eligible),
@@ -117,6 +164,11 @@ def evaluate_machines(data):
         "eligibleDevices": len(eligible),
         "protectedDevices": len(onboarded),
         "reportingDevices": len(reporting),
+        "workstationCoveragePercentage": None if partial else class_percentage(len(protected_workstations), len(workstations)),
+        "protectedServerCount": None if partial else len(protected_servers),
+        "totalWorkstationCount": None if partial else len(workstations),
+        "protectedWorkstationCount": None if partial else len(protected_workstations),
+        "unclassifiedDeviceCount": None if partial else unclassified,
     }
 
 
@@ -142,8 +194,9 @@ def describe(result):
             str(onboarded) + " of " + str(eligible) + " eligible machines are onboarded to Defender for Endpoint ("
             + str(result["requiredCoveragePercentage"]) + "%)",
             str(result["reportingDevices"]) + " of " + str(onboarded) + " onboarded machines report an active sensor",
+            # Text kept as before: with no server the value is None, and the reading still says 0%.
             str(result["totalServerCount"]) + " eligible servers in the inventory ("
-            + str(result["serverCoveragePercentage"]) + "% onboarded)",
+            + str(result["serverCoveragePercentage"] or 0) + "% onboarded)",
         ],
         [],
     )

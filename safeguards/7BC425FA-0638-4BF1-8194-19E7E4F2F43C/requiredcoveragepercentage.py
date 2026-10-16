@@ -66,14 +66,96 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# Server / workstation split (additive; rulings applied 2026-10-16). osPlatform containing "server" is a
+# server, and so is any Linux distribution; a Windows client version (Windows10, Windows11, ...) or macOS
+# is a workstation. Anything else (iOS, Android, a missing or unknown value) is unclassified and counted
+# in neither class.
+LINUX_PLATFORMS = ("ubuntu", "debian", "centos", "rhel", "redhat", "fedora", "suse", "sles", "mint", "kali")
+WINDOWS_CLIENT_VERSIONS = ("7", "8", "8.1", "10", "11", "vista", "xp")
+
+
+def os_class(machine):
+    """The class of a machine: "server", "workstation", or None (unclassified)."""
+    if not isinstance(machine, dict):
+        return None
+    platform = str(machine.get("osPlatform") or "").strip().lower().replace(" ", "")
+    if not platform:
+        return None
+    if "server" in platform or "linux" in platform:
+        return "server"
+    for distribution in LINUX_PLATFORMS:
+        if platform.startswith(distribution):
+            return "server"
+    if platform.startswith("mac"):
+        return "workstation"
+    if platform.startswith("windows") and platform[len("windows"):] in WINDOWS_CLIENT_VERSIONS:
+        return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no machine: no machines proves nothing, so it is never 0."""
+    if total <= 0:
+        return None
+    return round(100 * protected / total)
+
+# Every split field, None: what a partial, failed or empty read reports instead of a confident number.
+SPLIT_NOT_MEASURED = {
+    "serverCoveragePercentage": None,
+    "workstationCoveragePercentage": None,
+    "totalServerCount": None,
+    "protectedServerCount": None,
+    "totalWorkstationCount": None,
+    "protectedWorkstationCount": None,
+    "unclassifiedDeviceCount": None,
+}
+
+
+def with_split_not_measured(result):
+    merged = dict(result)
+    merged.update(SPLIT_NOT_MEASURED)
+    return merged
+
+
+def coverage_split(eligible_machines):
+    """The split over the machines requiredCoveragePercentage divides by, protected meaning Onboarded."""
+    servers = 0
+    protected_servers = 0
+    workstations = 0
+    protected_workstations = 0
+    unclassified = 0
+    for machine in eligible_machines:
+        kind = os_class(machine)
+        onboarded = machine.get("onboardingStatus") == "Onboarded"
+        if kind == "server":
+            servers = servers + 1
+            if onboarded:
+                protected_servers = protected_servers + 1
+        elif kind == "workstation":
+            workstations = workstations + 1
+            if onboarded:
+                protected_workstations = protected_workstations + 1
+        else:
+            unclassified = unclassified + 1
+    return {
+        "serverCoveragePercentage": class_percentage(protected_servers, servers),
+        "workstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+        "totalServerCount": servers,
+        "protectedServerCount": protected_servers,
+        "totalWorkstationCount": workstations,
+        "protectedWorkstationCount": protected_workstations,
+        "unclassifiedDeviceCount": unclassified,
+    }
+
+
 def not_evaluated(validation, reason, recommendations=None, input_summary=None):
     """Not evaluated: the criterion is None and dataCollection carries the reason."""
     return create_response(
-        result={
+        result=with_split_not_measured({
             "requiredCoveragePercentage": None,
             "allDevicesPercentageofCoverage": None,
             "eligibleDevicesPercentageofCoverage": None,
-        },
+        }),
         validation=validation,
         recommendations=recommendations,
         input_summary=input_summary,
@@ -94,7 +176,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: None},
+                result=with_split_not_measured({criteriaKey: None}),
                 validation=validation,
                 api_errors=["Input validation failed"]
             )
@@ -159,15 +241,18 @@ def transform(input):
             ineligible = allDevices - eligibleDevices
             pass_reasons.append(f"{ineligible} device(s) excluded from eligibility (Unsupported/InsufficientInfo)")
 
+        result = {
+            criteriaKey: criteriaValue,
+            "allDevicesPercentageofCoverage": allDevicesPercentage,
+            "eligibleDevicesPercentageofCoverage": eligibleDevicesPercentage,
+            "allDevices": allDevices,
+            "eligibleDevices": eligibleDevices,
+            "protectedDevices": protectedDevices
+        }
+        result.update(coverage_split(eligibleMachines))
+
         return create_response(
-            result={
-                criteriaKey: criteriaValue,
-                "allDevicesPercentageofCoverage": allDevicesPercentage,
-                "eligibleDevicesPercentageofCoverage": eligibleDevicesPercentage,
-                "allDevices": allDevices,
-                "eligibleDevices": eligibleDevices,
-                "protectedDevices": protectedDevices
-            },
+            result=result,
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
@@ -182,7 +267,7 @@ def transform(input):
     except Exception as e:
         # An error is Not evaluated, never a fail: None plus a dataCollection error.
         return create_response(
-            result={criteriaKey: None},
+            result=with_split_not_measured({criteriaKey: None}),
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             api_errors=[f"Transformation error: {str(e)}"]

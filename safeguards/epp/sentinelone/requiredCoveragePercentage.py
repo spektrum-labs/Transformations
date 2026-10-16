@@ -162,6 +162,48 @@ def complete_agent_read(raw):
 ACTIVE_WINDOW_DAYS = 15
 
 
+# Server / workstation split (additive; no existing field reads it). SentinelOne's machineType is one of
+# desktop, laptop, server, kubernetes node, storage or unknown: server is a server, desktop and laptop are
+# workstations, and anything else (or a missing value) is unclassified and counted in neither class.
+WORKSTATION_MACHINE_TYPES = ("desktop", "laptop")
+
+# Every split field, None: what a partial, failed or empty read reports instead of a confident number.
+SPLIT_NOT_MEASURED = {
+    "serverCoveragePercentage": None,
+    "workstationCoveragePercentage": None,
+    "totalServerCount": None,
+    "protectedServerCount": None,
+    "totalWorkstationCount": None,
+    "protectedWorkstationCount": None,
+    "unclassifiedDeviceCount": None,
+}
+
+
+def with_split_not_measured(result):
+    merged = dict(result)
+    merged.update(SPLIT_NOT_MEASURED)
+    return merged
+
+
+def agent_class(agent):
+    """The class of an agent: "server", "workstation", or None (unclassified)."""
+    if not isinstance(agent, dict):
+        return None
+    machine_type = str(agent.get("machineType") or "").strip().lower()
+    if machine_type == "server":
+        return "server"
+    if machine_type in WORKSTATION_MACHINE_TYPES:
+        return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no agent: no agents proves nothing, so it is never 0."""
+    if total <= 0:
+        return None
+    return round((protected / total) * 100, 2)
+
+
 def parse_seen(value):
     try:
         # strptime imports _strptime, which the Token-Service sandbox refuses.
@@ -205,7 +247,7 @@ def transform(input):
     agents, problem = complete_agent_read(raw)
     if problem is not None:
         return create_response(
-            result={"requiredCoveragePercentage": None},
+            result=with_split_not_measured({"requiredCoveragePercentage": None}),
             validation=validation,
             fail_reasons=[problem],
             api_errors=[problem],
@@ -237,11 +279,11 @@ def transform(input):
             if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
         )
         return create_response(
-            result={
+            result=with_split_not_measured({
                 "requiredCoveragePercentage": None,
                 "totalEnrolledAgents": 0,
                 "staleAgentCount": stale_count,
-            },
+            }),
             validation=validation,
             api_errors=[reason],
             fail_reasons=[reason],
@@ -256,8 +298,20 @@ def transform(input):
     uninstalled_count = 0
     decommissioned_count = 0
     inactive_installed_count = 0
+    servers = 0
+    protected_servers = 0
+    workstations = 0
+    protected_workstations = 0
+    unclassified = 0
 
     for agent in items:
+        kind = agent_class(agent)
+        if kind == "server":
+            servers = servers + 1
+        elif kind == "workstation":
+            workstations = workstations + 1
+        else:
+            unclassified = unclassified + 1
         if not isinstance(agent, dict):
             continue
         if coerce_bool(agent.get("isUninstalled")):
@@ -272,6 +326,10 @@ def transform(input):
         # tracks a recent console check-in and flips to false for offline but
         # still-protected endpoints.
         installed_count = installed_count + 1
+        if kind == "server":
+            protected_servers = protected_servers + 1
+        elif kind == "workstation":
+            protected_workstations = protected_workstations + 1
         is_active = agent.get("isActive")
         if is_active is not None and not coerce_bool(is_active):
             inactive_installed_count = inactive_installed_count + 1
@@ -336,6 +394,14 @@ def transform(input):
             "uninstalledAgents": uninstalled_count,
             "decommissionedAgents": decommissioned_count,
             "staleAgentCount": stale_count,
+            # The split, over the same judged agents and the same covered test as above.
+            "serverCoveragePercentage": class_percentage(protected_servers, servers),
+            "workstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+            "totalServerCount": servers,
+            "protectedServerCount": protected_servers,
+            "totalWorkstationCount": workstations,
+            "protectedWorkstationCount": protected_workstations,
+            "unclassifiedDeviceCount": unclassified,
         },
         validation=validation,
         pass_reasons=pass_reasons,
