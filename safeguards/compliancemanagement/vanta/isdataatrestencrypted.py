@@ -9,9 +9,12 @@ Answers whether customer data is encrypted at rest, according to Vanta's own sec
 True only when at least one mapped Vanta test counts and every mapped test that counts reports OK.
 False when any mapped test reports NEEDS_ATTENTION (a failing test already seen settles the answer, even if the
 read was cut short).
-A mapped test that is DEACTIVATED or NOT_APPLICABLE is left out (the company turned it off, or Vanta says it does not apply).
+A mapped test that is NOT_APPLICABLE is left out (Vanta says it does not apply).
+A mapped test that is DEACTIVATED (switched off) makes the check Not evaluated, whatever the other tests say, and
+the reason names the test id(s): switching a failing test off must not turn the check green. If another mapped test
+needs attention the answer is still False (a failure already seen settles it; checked first).
 Not evaluated (None, with a data-collection error) in every other case: an error, empty or unrecognised body; no
-mapped test present (or all of them deactivated); a mapped test that is IN_PROGRESS, INVALID or reports a status this
+mapped test present (or all of them not applicable); a mapped test that is IN_PROGRESS, INVALID or reports a status this
 file does not know; an entry that cannot be read; a read that was not proven complete (the paged read was cut short,
 or the workflow did not say). Not evaluated is never reported as False.
 
@@ -149,6 +152,7 @@ def transform(input):
         ok = []
         failing = []
         left_out = []
+        deactivated = []
         counts = {"unclear": 0, "unreadable": 0, "unrecognised": 0}
         for test in tests:
             if not isinstance(test, dict):
@@ -168,6 +172,9 @@ def transform(input):
                 ok.append(test_id)
             elif status == "NEEDS_ATTENTION":
                 failing.append(test_id)
+            elif status == "DEACTIVATED":
+                deactivated.append(test_id)
+                left_out.append(test_id)
             elif status in LEFT_OUT:
                 left_out.append(test_id)
             elif status in UNCLEAR:
@@ -176,7 +183,8 @@ def transform(input):
                 counts["unrecognised"] = counts["unrecognised"] + 1
         mapped_counting = len(ok) + len(failing)
         summary = {"testsRead": len(tests), "mappedTestsOk": len(ok), "mappedTestsFailing": len(failing),
-                   "mappedTestsLeftOut": len(left_out), "mappedTestsUnclear": counts["unclear"],
+                   "mappedTestsLeftOut": len(left_out), "mappedTestsDeactivated": len(deactivated),
+                   "mappedTestsUnclear": counts["unclear"],
                    "unreadableEntries": counts["unreadable"], "unrecognisedStatuses": counts["unrecognised"],
                    "readComplete": complete}
         extra = {"mappedTestsOk": len(ok), "mappedTestsFailing": len(failing),
@@ -186,6 +194,10 @@ def transform(input):
                 False, extra=extra, input_summary=summary,
                 fail_reasons=[str(len(failing)) + " of " + str(mapped_counting) + " mapped Vanta tests need attention: "
                               + ", ".join(sorted(failing)) + " (third-party proof, level 3)"])
+        if len(deactivated) > 0:
+            return not_measured("A mapped Vanta test is switched off (DEACTIVATED), so the check cannot be shown to "
+                                "hold: " + ", ".join(sorted(deactivated)) + "; nothing is measured.",
+                                input_summary=summary)
         if counts["unreadable"] > 0 or counts["unrecognised"] > 0 or counts["unclear"] > 0:
             return not_measured("Entries in the Vanta response could not be read, are still in progress or carry a "
                                 "status this check does not know, so the verdict would be a guess; nothing is "
@@ -196,7 +208,7 @@ def transform(input):
                                 input_summary=summary)
         if mapped_counting == 0:
             return not_measured("No active Vanta test for this check is present in the response (none mapped, or all "
-                                "deactivated or not applicable); nothing is measured.", input_summary=summary)
+                                "not applicable); nothing is measured.", input_summary=summary)
         return create_response(
             True, extra=extra, input_summary=summary,
             pass_reasons=[str(len(ok)) + " of " + str(mapped_counting) + " mapped Vanta tests report OK (third-party "
