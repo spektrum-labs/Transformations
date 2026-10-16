@@ -502,3 +502,19 @@ def test_a_workflow_input_that_is_invalid_json_text_is_not_evaluated(key):
 def test_the_ip_allow_list_needs_its_result_field():
     assert value(T["isIPAllowlistEnabled"]({"ipAllowlist": []}), "isIPAllowlistEnabled") is None
     assert value(T["isIPAllowlistEnabled"]({"ipAllowlist": {"other": []}}), "isIPAllowlistEnabled") is None
+
+
+# ---- A real error wins over the completeness reason -----------------------------------------------
+
+@pytest.mark.parametrize("key", PAGED)
+@pytest.mark.parametrize("body,words", [
+    ({"statusCode": 403}, "HTTP 403"),
+    ({"statusCode": 401}, "HTTP 401"),
+    ({"errors": [{"field": None, "message": "access forbidden"}]}, "access forbidden"),
+    ({"error": True, "statusCode": 502, "message": "bad gateway"}, "502"),
+])
+def test_an_error_leg_without_a_marker_reports_the_real_error_not_the_pager(key, body, words):
+    result = T[key]({KEYS[key]: copy.deepcopy(body)})
+    assert value(result, key) is None
+    errors = result["additionalInfo"]["dataCollection"]["errors"]
+    assert words in errors[0] and "paged read" not in errors[0]
