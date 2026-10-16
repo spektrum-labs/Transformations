@@ -123,20 +123,14 @@ def transform(input):
             return value.strip().upper()
         return None
 
-    def pick(record, flat, path):
-        """A field from the projected record (flat name) or, when the body is unprojected, from the nested
-        Vanta shape (dotted path). None when neither holds it."""
-        if flat in record:
-            return record[flat]
-        node = record
-        for part in path.split("."):
-            if not isinstance(node, dict):
-                return None
-            node = node.get(part)
-        return node
-
     def whole(value):
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    # The framework lifecycle statuses Vanta documents (API reference, "List frameworks", field status:
+    # ACTIVE, DRAFT, SNOOZED, ARCHIVED, NEW_UPGRADE, or null for none). Only ACTIVE is counted; the others are
+    # known to be out of scope. Any other value is not known, so the figure is not measured.
+    ACTIVE_STATUS = "ACTIVE"
+    INACTIVE_STATUSES = ("DRAFT", "SNOOZED", "ARCHIVED", "NEW_UPGRADE")
 
     def judge(frameworks, complete):
         """Percent of controls Vanta reports as completed across the frameworks it marks ACTIVE: summed
@@ -144,7 +138,7 @@ def transform(input):
         done = 0
         total = 0
         active = 0
-        counts = {"unreadable": 0}
+        counts = {"unreadable": 0, "unrecognised": 0}
         for fw in frameworks:
             if not isinstance(fw, dict):
                 counts["unreadable"] = counts["unreadable"] + 1
@@ -153,7 +147,10 @@ def transform(input):
             if status is None:
                 counts["unreadable"] = counts["unreadable"] + 1
                 continue
-            if status != "ACTIVE":
+            if status in INACTIVE_STATUSES:
+                continue
+            if status != ACTIVE_STATUS:
+                counts["unrecognised"] = counts["unrecognised"] + 1
                 continue
             c = fw.get("numControlsCompleted")
             t = fw.get("numControlsTotal")
@@ -164,10 +161,12 @@ def transform(input):
             done = done + c
             total = total + t
         summary = {"frameworksRead": len(frameworks), "activeFrameworks": active, "controlsCompleted": done,
-                   "controlsTotal": total, "unreadableEntries": counts["unreadable"], "readComplete": complete}
-        if counts["unreadable"] > 0:
-            return not_measured("A framework in the Vanta response could not be read (no status, or control counts "
-                                "that are missing or inconsistent); nothing is measured.", input_summary=summary)
+                   "controlsTotal": total, "unreadableEntries": counts["unreadable"], "unrecognisedStatuses": counts["unrecognised"],
+                   "readComplete": complete}
+        if counts["unreadable"] > 0 or counts["unrecognised"] > 0:
+            return not_measured("A framework in the Vanta response could not be read (no status, a status this "
+                                "check does not know, or control counts that are missing or inconsistent); "
+                                "nothing is measured.", input_summary=summary)
         if not complete:
             return not_measured("The Vanta read was not proven complete (the paged list was cut short or the "
                                 "workflow did not say); nothing is measured.", input_summary=summary)

@@ -123,20 +123,7 @@ def transform(input):
             return value.strip().upper()
         return None
 
-    def pick(record, flat, path):
-        """A field from the projected record (flat name) or, when the body is unprojected, from the nested
-        Vanta shape (dotted path). None when neither holds it."""
-        if flat in record:
-            return record[flat]
-        node = record
-        for part in path.split("."):
-            if not isinstance(node, dict):
-                return None
-            node = node.get(part)
-        return node
-
     STATUSES = ("OK", "NEEDS_ATTENTION", "DEACTIVATED", "IN_PROGRESS", "INVALID", "NOT_APPLICABLE")
-    REMEDIATION = ("DISABLED", "DUE_SOON", "INVALID", "IN_PROGRESS", "NA", "NEEDS_WORK", "OVERDUE", "PASS")
 
     def judge(tests, complete):
         """Count of tests whose status is NEEDS_ATTENTION."""
@@ -146,14 +133,9 @@ def transform(input):
                 counts["unreadable"] = counts["unreadable"] + 1
                 continue
             status = up(test.get("status"))
-            remediation = up(pick(test, "remediationStatus", "remediationStatusInfo.status"))
             if status is None:
                 counts["unreadable"] = counts["unreadable"] + 1
             elif status not in STATUSES:
-                counts["unrecognised"] = counts["unrecognised"] + 1
-            elif False and remediation is None:
-                counts["unreadable"] = counts["unreadable"] + 1
-            elif False and remediation not in REMEDIATION:
                 counts["unrecognised"] = counts["unrecognised"] + 1
             elif status == "NEEDS_ATTENTION":
                 counts["hit"] = counts["hit"] + 1
