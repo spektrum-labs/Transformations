@@ -10,7 +10,8 @@ True when the account's IP Access Management allow list holds at least one addre
 then accepts account access (the API and the sign-in) only from the listed addresses. False
 when the list is empty, which means any address can reach the account: a successful read of an
 empty list is the real state (False, "0 IP allow-list entries"), not a failed read. The contents
-of the list (addresses) are never kept, only the count. 
+of the list (addresses) are never kept, only the count. Every entry must carry an ip; an entry
+without one does not show an allowed address and the read is Not evaluated.
 Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
 empty or unparsable body, or a body without the expected field is null with dataCollection status
 "error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
@@ -165,6 +166,8 @@ def transform(input):
         for item in items:
             if not isinstance(item, dict):
                 return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/access_settings/whitelist: an entry is not an object")
+            if not str(item.get("ip") or "").strip():
+                return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/access_settings/whitelist: an entry has no ip address")
         count = len(items)
         summary = {"allowlistEntries": count}
         result = {CRITERIA_KEY: count > 0, "allowlistEntries": count}

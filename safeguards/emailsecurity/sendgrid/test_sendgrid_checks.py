@@ -40,9 +40,9 @@ SSO = [{"id": "11111111-aaaa-4aaa-8aaa-000000000001", "name": "Okta IdP configur
 WHITELIST = {"result": [{"id": 1, "ip": "203.0.113.0/24", "created_at": 1700000000, "updated_at": 1700000000}]}
 TEAMMATES_OK = {"result": [{"username": "alex@example.com", "is_sso": True, "user_type": "admin"},
                            {"username": "sam", "is_sso": True, "user_type": "teammate"}]}
-# A live read, shape and counts (6 teammates, 4 with SSO, 2 without), synthetic names.
-TEAMMATES_LIVE = {"result": [{"username": n + "@example.com", "email": n + "@example.com", "is_sso": v}
-                             for n, v in (("a", True), ("b", True), ("c", True), ("d", True), ("e", False), ("f", False))]}
+# Shape only (synthetic names and counts): 5 teammates, 3 with SSO, 2 without.
+TEAMMATES_MIXED = {"result": [{"username": n + "@example.com", "email": n + "@example.com", "is_sso": v}
+                              for n, v in (("a", True), ("b", True), ("c", True), ("d", False), ("e", False))]}
 ACTIVITY_UNUSED = {"result": []}
 
 
@@ -56,8 +56,20 @@ def link(name, valid=True):
             "dns": {"domain_cname": {"valid": valid}, "owner_cname": {"valid": valid}}}
 
 
-def run(key, body, wrap=None):
+PAGED = ("isSSOEnforcedForAllUsers", "areSendingDomainsAuthenticated", "isLinkBrandingValid")
+
+
+def payload(key, body):
+    """What the workflow hands the transform: the leg, plus (for the paged reads) the completeness marker
+    reportPagination attaches: paginationStats[leg].paginationTruncated false."""
     data = {KEYS[key]: copy.deepcopy(body)}
+    if key in PAGED:
+        data["paginationStats"] = {KEYS[key]: {"paginationTruncated": False}}
+    return data
+
+
+def run(key, body, wrap=None):
+    data = payload(key, body)
     if wrap:
         for name in wrap:
             data = {name: data}
@@ -93,6 +105,24 @@ def test_tls_and_certificate_are_independent():
     body = {"require_tls": True, "require_valid_cert": False, "version": 1.2}
     assert value(run("isOutboundTLSEnforced", body), "isOutboundTLSEnforced") is True
     assert value(run("isOutboundCertificateValidationEnforced", body), "isOutboundCertificateValidationEnforced") is False
+
+
+def test_certificate_check_is_false_when_tls_is_not_required_like_the_version_check():
+    body = {"require_tls": False, "require_valid_cert": True, "version": 1.2}
+    result = run("isOutboundCertificateValidationEnforced", body)
+    assert value(result, "isOutboundCertificateValidationEnforced") is False
+    assert status(result) == "success"
+    assert "TLS is not required" in result["additionalInfo"]["evaluation"]["failReasons"][0]
+    for text in ("false", "False"):
+        assert value(run("isOutboundCertificateValidationEnforced", dict(body, require_tls=text)),
+                     "isOutboundCertificateValidationEnforced") is False
+
+
+def test_certificate_check_needs_both_flags_to_be_readable():
+    for body in ({"require_valid_cert": True}, {"require_tls": True}, {"require_tls": None, "require_valid_cert": True}):
+        result = run("isOutboundCertificateValidationEnforced", body)
+        assert value(result, "isOutboundCertificateValidationEnforced") is None
+        assert status(result) == "error"
 
 
 def test_minimum_version_below_1_2_is_false_even_when_tls_required():
@@ -158,8 +188,8 @@ def test_input_as_json_string_and_wrappers(key):
     assert plain is True
     assert value(run(key, good, wrap=["data"]), key) is True
     assert value(run(key, good, wrap=["apiResponse", "response"]), key) is True
-    assert value(T[key](json.dumps({KEYS[key]: good})), key) is True
-    assert value(T[key](json.dumps({KEYS[key]: good}).encode("utf-8")), key) is True
+    assert value(T[key](json.dumps(payload(key, good))), key) is True
+    assert value(T[key](json.dumps(payload(key, good)).encode("utf-8")), key) is True
 
 
 # ---- SSO ----------------------------------------------------------------------------------------
@@ -205,9 +235,9 @@ def test_sso_unreadable_is_not_evaluated(body):
     assert status(result) == "error"
 
 
-def test_sso_cut_off_list_is_not_evaluated():
-    items = [dict(SSO[0], enabled=False) for index in range(100)]
-    assert value(run("isSSOEnabled", items), "isSSOEnabled") is None
+def test_sso_list_is_not_paged_so_a_long_list_is_read_whole():
+    items = [dict(SSO[0], enabled=False) for index in range(120)] + [SSO[0]]
+    assert value(run("isSSOEnabled", items), "isSSOEnabled") is True
 
 
 # ---- IP allow list ------------------------------------------------------------------------------
@@ -217,6 +247,15 @@ def test_ip_allowlist_with_entries_is_true_and_addresses_are_not_kept():
     assert value(result, "isIPAllowlistEnabled") is True
     assert result["transformedResponse"]["allowlistEntries"] == 1
     assert "203.0.113" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("entries", [[{}], [{"id": 1}], [{"id": 1, "ip": ""}], [{"id": 1, "ip": "   "}],
+                                     [{"id": 1, "ip": None}], [{"ip": "203.0.113.5"}, {"id": 2}]])
+def test_ip_allowlist_entry_without_an_address_is_not_evaluated(entries):
+    result = T["isIPAllowlistEnabled"]({"ipAllowlist": {"result": entries}})
+    assert value(result, "isIPAllowlistEnabled") is None
+    assert status(result) == "error"
+    assert "no ip address" in result["additionalInfo"]["dataCollection"]["errors"][0]
 
 
 def test_ip_allowlist_empty_is_false():
@@ -281,9 +320,36 @@ def test_sender_reads_unreadable_are_not_evaluated(key, maker, body):
 
 
 @pytest.mark.parametrize("key,maker", [("areSendingDomainsAuthenticated", domain), ("isLinkBrandingValid", link)])
-def test_cut_off_sender_list_is_not_evaluated(key, maker):
+def test_a_full_hundred_page_that_the_workflow_reports_complete_is_read(key, maker):
     items = [maker("d" + str(index) + ".example.com") for index in range(100)]
-    assert value(run(key, items), key) is None
+    assert value(run(key, items), key) is True
+
+
+MARKERS_NOT_COMPLETE = [
+    {},                                                                              # no marker at all
+    {"paginationStats": {}},
+    {"paginationStats": {"other": {"paginationTruncated": False}}},
+    {"paginationStats": {"LEG": {}}},
+    {"paginationStats": {"LEG": {"paginationTruncated": None}}},
+    {"paginationStats": {"LEG": {"paginationTruncated": "false"}}},
+    {"paginationStats": {"LEG": {"paginationTruncated": True}}},
+    {"paginationStats": {"LEG": {"paginationTruncated": False}}, "paginationTruncated": True},
+]
+
+
+@pytest.mark.parametrize("key,maker", [("areSendingDomainsAuthenticated", domain), ("isLinkBrandingValid", link),
+                                       ("isSSOEnforcedForAllUsers", None)])
+@pytest.mark.parametrize("marker", MARKERS_NOT_COMPLETE)
+def test_a_paged_read_not_reported_complete_is_not_evaluated(key, maker, marker):
+    leg = KEYS[key]
+    body = copy.deepcopy(TEAMMATES_OK) if maker is None else [maker("example.com")]
+    data = {leg: body}
+    data.update(json.loads(json.dumps(marker).replace("LEG", leg)))
+    for wrapped in (data, {"data": data}):
+        result = T[key](wrapped)
+        assert value(result, key) is None
+        assert status(result) == "error"
+        assert result["additionalInfo"]["dataCollection"]["errors"]
 
 
 # ---- Link branding ------------------------------------------------------------------------------
@@ -332,13 +398,13 @@ def test_every_teammate_with_sso_is_true():
 
 
 def test_any_teammate_without_sso_is_false_with_count_and_names_only():
-    result = run("isSSOEnforcedForAllUsers", TEAMMATES_LIVE)
+    result = run("isSSOEnforcedForAllUsers", TEAMMATES_MIXED)
     assert value(result, "isSSOEnforcedForAllUsers") is False
-    assert result["transformedResponse"]["teammatesTotal"] == 6
-    assert result["transformedResponse"]["teammatesWithSso"] == 4
+    assert result["transformedResponse"]["teammatesTotal"] == 5
+    assert result["transformedResponse"]["teammatesWithSso"] == 3
     assert result["transformedResponse"]["teammatesWithoutSso"] == 2
     assert result["additionalInfo"]["evaluation"]["failReasons"] == [
-        "2 of 6 teammates do not sign in with SSO (is_sso false): e, f"]
+        "2 of 5 teammates do not sign in with SSO (is_sso false): d, e"]
     assert "@" not in json.dumps(result)
 
 
@@ -350,7 +416,7 @@ def test_a_plain_username_is_shown_and_an_email_username_loses_its_domain():
 
 def test_teammates_as_bare_list_and_string_flags():
     body = [{"username": "a", "is_sso": "true"}, {"username": "b", "is_sso": "false"}]
-    assert value(T["isSSOEnforcedForAllUsers"]({"teammates": body}), "isSSOEnforcedForAllUsers") is False
+    assert value(T["isSSOEnforcedForAllUsers"](payload("isSSOEnforcedForAllUsers", body)), "isSSOEnforcedForAllUsers") is False
 
 
 def test_teammates_cut_off_by_the_page_cap_is_not_evaluated():
@@ -387,7 +453,7 @@ NOT_CONFIGURED = [
     ("areSendingDomainsAuthenticated", [], "0 authenticated sending domains"),
     ("isLinkBrandingValid", [], "0 branded link domains"),
     ("isOutboundTLSEnforced", TLS_OFF, "require_tls is false"),
-    ("isOutboundCertificateValidationEnforced", TLS_OFF, "require_valid_cert is false"),
+    ("isOutboundCertificateValidationEnforced", TLS_OFF, "require_tls is false"),
     ("isOutboundMinimumTLSVersionSecure", TLS_OFF, "minimum TLS version is 1.1"),
 ]
 

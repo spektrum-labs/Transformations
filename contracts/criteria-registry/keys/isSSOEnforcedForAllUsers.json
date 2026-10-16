@@ -33,7 +33,7 @@
     {
       "revision": 1,
       "date": "2026-10-16",
-      "change": "Registered so the SendGrid transformation can emit it. Meaning written from the public SendGrid API reference and one read of a real account (6 teammates, 4 SSO, 2 not); no replay-backed validation yet, so the key stays proposed and V0."
+      "change": "Registered so the SendGrid transformation can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
     }
   ],
   "notes": "Messaging Security is allowed too because the SendGrid integration is catalogued under communication (Messaging Security). Evidence names users by the part before any @, never an email address. SendGrid's parent account owner login is outside its teammates list. SSO enforcement in the sense of 'password sign-in switched off' is not exposed by SendGrid; this key is the per-user fact."

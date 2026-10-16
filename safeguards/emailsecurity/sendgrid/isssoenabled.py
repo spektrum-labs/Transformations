@@ -11,7 +11,8 @@ provider setup is completed) and enabled, so people can sign in to SendGrid thro
 identity provider. False when the account has no integration, or none is both completed and
 enabled. A successful read that lists no integration is the real state (False, "0 integrations"),
 not a failed read. That every teammate actually signs in with SSO is a separate check
-(isSSOEnforcedForAllUsers). 
+(isSSOEnforcedForAllUsers). SendGrid does not page this list: one call returns every
+integration, so there is no cut-off guard (a True needs only one active integration).
 Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
 empty or unparsable body, or a body without the expected field is null with dataCollection status
 "error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
@@ -147,8 +148,6 @@ def not_evaluated(key, transform_id, problem, summary=None):
 CRITERIA_KEY = "isSSOEnabled"
 TRANSFORM_ID = "isssoenabled"
 LEG = "ssoIntegrations"
-MAX_ITEMS = 100
-
 
 def transform(input):
     try:
@@ -158,8 +157,6 @@ def transform(input):
         items, problem = list_of(body)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/sso/integrations: " + problem)
-        if len(items) >= MAX_ITEMS:
-            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/sso/integrations returned " + str(len(items)) + " entries; the list may be cut off")
         active, inactive = [], []
         for item in items:
             if not isinstance(item, dict):

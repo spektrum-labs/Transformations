@@ -9,7 +9,10 @@ Integration-Service workflow getEnforcedTlsPosture:
 True when SendGrid requires the receiving server to present a valid TLS certificate
 (require_valid_cert is true), so mail is not handed to a server that cannot prove who it is.
 False when require_valid_cert is false: SendGrid accepts self-signed or expired certificates.
-Whether TLS is required at all is a separate check (isOutboundTLSEnforced). 
+It is judged together with require_tls, as the minimum-version check is: when TLS is not
+required (require_tls is false) mail can still go out in clear text, so certificate validation
+is not enforced and the check is False whatever require_valid_cert says. Whether TLS is required
+at all is also reported separately (isOutboundTLSEnforced).
 Fail closed: a 401/403 (for example a key without the scope), 5xx, timeout or other error, an
 empty or unparsable body, or a body without the expected field is null with dataCollection status
 "error" (Not evaluated), never a pass or a fail. A successful read that shows the control is not
@@ -166,13 +169,18 @@ def transform(input):
         body, problem = read_tls(input)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, problem)
+        tls = flag(body.get("require_tls"))
         state = flag(body.get("require_valid_cert"))
-        if state is None:
-            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "require_valid_cert was not returned as true or false")
-        summary = {"requireValidCert": state}
-        result = {CRITERIA_KEY: state}
+        if tls is None or state is None:
+            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "require_tls or require_valid_cert was not returned as true or false")
+        summary = {"requireTls": tls, "requireValidCert": state}
+        result = {CRITERIA_KEY: tls and state}
+        if not tls:
+            return build_response(result, fail_reasons=["TLS is not required (require_tls is false), so mail can still be delivered without TLS and certificate validation is not enforced"],
+                                  recommendations=["In SendGrid, open Settings, Mail Settings, Enforced TLS and turn on Require TLS and Require Valid Certificate"],
+                                  summary=summary, transform_id=TRANSFORM_ID)
         if state:
-            return build_response(result, pass_reasons=["SendGrid requires a valid TLS certificate on the receiving server (require_valid_cert is true)"],
+            return build_response(result, pass_reasons=["SendGrid requires TLS and a valid certificate on the receiving server (require_tls and require_valid_cert are true)"],
                                   summary=summary, transform_id=TRANSFORM_ID)
         return build_response(result, fail_reasons=["SendGrid does not require a valid TLS certificate (require_valid_cert is false); mail can be delivered to a server with a self-signed or expired certificate"],
                               recommendations=["In SendGrid, open Settings, Mail Settings, Enforced TLS and turn on Require Valid Certificate"],
