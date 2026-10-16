@@ -1,0 +1,39 @@
+{
+  "name": "isIPAllowlistEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the tool restricts account access to a list of trusted network addresses and the list holds at least one address. False when the list is empty, which means any address can reach the account.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the allowed-address entries of one tool account's IP access management; the count is kept, never the addresses",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the account's IP allow list showing at least one entry; an error, 401/403 or unrecognised read is Not evaluated. An empty list is a real read of no restriction and is False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Email Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "SendGrid API reference, IP Access Management (twilio.com/docs/sendgrid/api-reference/ip-access-management): GET /v3/access_settings/whitelist"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Account-level access control, not mail delivery. Read from SendGrid, whose restricted key lists this read under the Security permission."
+}
