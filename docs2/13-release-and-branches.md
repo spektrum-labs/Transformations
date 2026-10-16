@@ -236,6 +236,17 @@ This is a stated open question, not a finding with an owner. What the history sh
 
 No document in the repo assigns this responsibility (`CONTRIBUTING.md` describes no branch, merge, or deploy process at all), and no in-repo evidence identifies who, if anyone, owns it.
 
+## Promotion and release PRs use merge commits, never squash
+
+**Ruled 2026-09-29 by J.J.:** every `develop → staging` promotion and every `staging → main` release PR in this repo merges with **Create a merge commit** (`gh pr merge <number> --merge`). Squash and rebase are for single-change PRs only.
+
+**Why.** A squash writes the promoted tree as one new commit with a single parent, so the two branches keep no shared history past their old merge-base. Every later promotion is computed against that stale base, and git can silently keep the target's copy of a file the source already fixed:
+
+- #665 (`develop → staging`, 2026-09-28) was squashed, so staging shared no history with develop. The next develop PRs had to be cherry-picked across (#673).
+- #674 (`staging → main`, 2026-09-28 16:07 ET) was squashed. Staging had restored NinjaOne `isEDRDeployed` / `isEPPDeployed` one minute earlier (#675), but main and staging still met only at `2002dfe7`, where those files already held the good versions. Relative to that base staging had "not changed" them, so `git merge-tree origin/main origin/staging` returned main's own tree and dropped the fix. It reached production only through a hotfix straight to main (#677).
+
+**Before merging a release PR**, run `git merge-tree --write-tree origin/main <head>` and confirm it is the tree the release checks ran on. If a squash has already happened, back-merge the target into the source branch before the next promotion, so the merge-base moves forward.
+
 ## What a safe develop→main promotion would require
 
 Derived directly from the simulation and the failure modes above — this is the checklist, in order:

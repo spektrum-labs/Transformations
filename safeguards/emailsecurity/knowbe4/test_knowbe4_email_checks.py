@@ -32,7 +32,9 @@ FAIL_CLOSED = [{}, None, "{}", "", {"error": True, "statusCode": 401, "message":
 @pytest.mark.parametrize("body", FAIL_CLOSED)
 def test_fail_closed(body):
     assert load("averageuserriskscore")(body)["averageUserRiskScore"] is None
-    assert load("isattacksimulationtrainingenabled")(body)["isAttackSimulationTrainingEnabled"] is False
+    out = load("isattacksimulationtrainingenabled")(body)  # not a test list: Not evaluated, never False
+    assert out["isAttackSimulationTrainingEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert load("phishingsimulationclickrate")(body)["phishingSimulationClickRate"] is None
     assert load("trainingcompletionrate")(body)["trainingCompletionRate"] is None
 
