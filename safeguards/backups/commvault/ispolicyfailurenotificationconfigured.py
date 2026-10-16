@@ -14,6 +14,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isPolicyFailureNotificationConfigured = true when an ENABLED alert definition with criteria "Backup Job
@@ -81,18 +102,18 @@ def transform(input):
         data = unwrap(parse_input(input), "alertDefinitions")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         listed = data.get("alertDefinitions")
         if not isinstance(listed, list):
-            return {key: False, "reason": "Response has no alertDefinitions list"}
+            return respond(key, None, "Response has no alertDefinitions list")
         if len(listed) == 0:
-            return {key: False, "reason": "No alert definitions exist"}
+            return respond(key, False, "No alert definitions exist")
         details = data.get("alertDefinitionDetails")
         if isinstance(details, dict):
             details = [details]
         if not isinstance(details, list) or len(details) != len(listed):
             n = len(details) if isinstance(details, list) else 0
-            return {key: False, "reason": "Read " + str(n) + " alert detail bodies for " + str(len(listed)) + " definitions"}
+            return respond(key, None, "Read " + str(n) + " alert detail bodies for " + str(len(listed)) + " definitions")
         enabled = {}
         for a in listed:
             if isinstance(a, dict):
@@ -102,7 +123,7 @@ def transform(input):
         for b in details:
             b = unwrap(b, "alertSummary")
             if vendor_error(b) or not isinstance(b.get("alertSummary"), dict):
-                return {key: False, "reason": "An alert detail body is unreadable"}
+                return respond(key, None, "An alert detail body is unreadable")
             crit = b["alertSummary"].get("criteria") if isinstance(b["alertSummary"].get("criteria"), dict) else {}
             if str(crit.get("name") or "").strip().lower() not in wanted:
                 continue
@@ -118,7 +139,7 @@ def transform(input):
             if ok:
                 hits.append(str(b.get("name")) + " (" + ", ".join([c for c in channels if c in ("EMAIL", "WEBHOOK", "SNMP")]) + ")")
         if len(hits) == 0:
-            return {key: False, "reason": "No enabled backup-failure alert notifies by email, webhook or SNMP (" + str(len(listed)) + " definitions read)"}
-        return {key: True, "reason": str(len(hits)) + " enabled backup-failure alerts notify outside the console", "alerts": hits[:10]}
+            return respond(key, False, "No enabled backup-failure alert notifies by email, webhook or SNMP (" + str(len(listed)) + " definitions read)")
+        return respond(key, True, str(len(hits)) + " enabled backup-failure alerts notify outside the console", {"alerts": hits[:10]})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

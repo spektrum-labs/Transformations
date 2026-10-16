@@ -16,23 +16,18 @@ METHOD = "getAccount"
 
 def transform_bare(input):
     """
-    Returns confirmedLicensePurchased as a boolean, the type the requirement compares
-    (isEquals true). The old "confirmed" / "unconfirmed" strings never matched a boolean, so the
-    licence check could not be satisfied.
-
-    True: Keepit reports the account enabled (<enabled>true</enabled>), subscribed
-    (<subscribed>true</subscribed>), with a product assigned (<product> present) and not scheduled
-    for deletion (no <deletion-deadline>).
-    False: the account was read and Keepit states one of those conditions the other way (not
-    enabled, not subscribed, or scheduled for deletion).
-    None (not measured): the body has no <user> element, cannot be parsed, or leaves enabled,
-    subscribed or product unstated. Missing data is never a pass and never a fail.
+    Returns confirmedLicensePurchased = "confirmed" when Keepit reports the account as
+    enabled (<enabled>true</enabled>), subscribed (<subscribed>true</subscribed>), with a
+    product assigned (<product> present) and not scheduled for deletion (no
+    <deletion-deadline>). A readable <user> that fails any of these returns "unconfirmed".
+    A body without <user>, or one that cannot be read, returns None (not measured). The
+    requirement compares with isEquals "confirmed".
 
     Proves: Keepit itself says the account holds an active subscription with a product.
     Does not prove: which workloads the product licenses, seat counts, or the product's grace
     period (that is on the Products API and is not read here).
     """
-    key = KEY
+    key = "confirmedLicensePurchased"
 
     def parse_input(value):
         if isinstance(value, bytes):
@@ -71,30 +66,24 @@ def transform_bare(input):
         has_product = isinstance(product, str) and product.strip() != ""
         deletion = user.get("deletion-deadline")
 
-        negatives = []
-        if enabled is False:
-            negatives.append("account is reported not enabled")
-        if subscribed is False:
-            negatives.append("account is reported not subscribed")
-        if deletion:
-            negatives.append("account is scheduled for deletion")
-
-        detail = {"enabled": enabled, "subscribed": subscribed, "productAssigned": has_product}
-
-        if negatives:
-            return dict({key: False, "reason": "; ".join(negatives)}, **detail)
-
-        unstated = []
-        if enabled is None:
-            unstated.append("enabled is not stated")
-        if subscribed is None:
-            unstated.append("subscribed is not stated")
+        problems = []
+        if enabled is not True:
+            problems.append("account is not reported enabled")
+        if subscribed is not True:
+            problems.append("account is not reported subscribed")
         if not has_product:
-            unstated.append("no product is stated")
-        if unstated:
-            return dict({key: None, "reason": "Account could not be confirmed: " + "; ".join(unstated)}, **detail)
+            problems.append("no product is assigned")
+        if deletion:
+            problems.append("account is scheduled for deletion")
 
-        return dict({key: True, "reason": "Account is enabled, subscribed and has a product assigned"}, **detail)
+        confirmed = len(problems) == 0
+        return {
+            key: "confirmed" if confirmed else "unconfirmed",
+            "reason": "Account is enabled, subscribed and has a product assigned" if confirmed else "; ".join(problems),
+            "enabled": enabled,
+            "subscribed": subscribed,
+            "productAssigned": has_product,
+        }
     except Exception as e:
         return {key: None, "error": str(e)}
 
@@ -109,14 +98,14 @@ def envelope(key, method, bare):
     value = bare.get(key)
     reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
     measured = value is not None
-    passed = value is True
+    passed = value is True or value == "confirmed"
     return {
         "transformedResponse": bare,
         "additionalInfo": {
             "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
             "validation": {"status": "unknown", "errors": [], "warnings": []},
             "transformation": {"status": "success", "errors": [], "inputSummary": {}},
-            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [reason] if measured and not passed else [],
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
                            "recommendations": [], "additionalFindings": []},
             "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
                          "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},

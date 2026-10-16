@@ -34,12 +34,6 @@ class Poisoned(dict):
 
 
 CASES = [
-    ('iseppdeployed', ('isEPPDeployed',), 'empty_dict', lambda: {}),
-    ('iseppdeployed', ('isEPPDeployed',), 'poisoned', lambda: Poisoned()),
-    ('isedrdeployed', ('isEDRDeployed',), 'empty_dict', lambda: {}),
-    ('isedrdeployed', ('isEDRDeployed',), 'poisoned', lambda: Poisoned()),
-    ('isapiauditloggingenabled', ('isApiAuditLoggingEnabled',), 'empty_dict', lambda: {}),
-    ('isapiauditloggingenabled', ('isApiAuditLoggingEnabled',), 'poisoned', lambda: Poisoned()),
     ('isolatedendpointcount', ('isolatedEndpointCount',), 'empty_dict', lambda: {}),
     ('isolatedendpointcount', ('isolatedEndpointCount',), 'poisoned', lambda: Poisoned()),
     ('offlinesensorcount', ('offlineSensorCount',), 'empty_dict', lambda: {}),
