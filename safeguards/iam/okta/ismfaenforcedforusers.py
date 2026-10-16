@@ -38,9 +38,21 @@ def transform(input):
     every ACTIVE rule that ALLOWs access
     in every ACTIVE global session (OKTA_SIGN_ON) policy has requireFactor true.
 
-    Fails closed on: an error body, missing policy or rule lists, a rule list whose length does not
-    match its policy list, an active policy with no active rules, and any verification method this
-    code does not recognise (AUTH_METHOD_CHAIN, ID_PROOFING).
+    Not measured (None on both keys, dataCollection.status "error"): an error body, missing policy or
+    rule lists, a rule list whose length does not match its policy list, an active policy with no
+    active rules, no rule that allows sign-on, and a transformation error. A verification method this
+    code does not read (AUTH_METHOD_CHAIN, ID_PROOFING, missing) is not a single-factor path: it leaves
+    isMFAEnforcedForUsers None unless a readable rule already accepts one factor, and leaves
+    isMFAEnabled None unless a readable rule already requires two. dataCollection.status belongs to the
+    whole output and Token-Service grades on that status alone, so a value beside a None would be dropped by
+    the evaluator while still reading as a measurement: when either key is None both are set to None, and the
+    half that was sound is stated in dataCollection.errors instead of carried in transformedResponse.
+    That withholding is a limit of one output serving two keys, not a verdict on isMFAEnabled: ismfaenabled.py
+    answers isMFAEnabled alone, so one readable two-factor rule beside rules this code cannot read stays True
+    there. A definition that points isMFAEnabled at this file still gets Not evaluated in that shape.
+
+    A remediation is recommended only for a measured False. A not-measured output recommends nothing,
+    because there is nothing yet to tell the customer to fix.
 
     Does not prove: which authenticators can satisfy the second factor (see authTypesAllowed), or
     that every user has enrolled one.
@@ -50,21 +62,46 @@ def transform(input):
     try:
         state = checks["evaluate"](input)
     except Exception as e:
-        return checks["respond"]({key: False, "isMFAEnabled": False}, [], ["Transformation error: " + str(e)], {}, [str(e)])
-    ok = state["error"] is None and state["enforced"]
-    enabled = state["error"] is None and state["enabled"]
+        reason = "Transformation error: " + str(e)
+        return checks["respond"]({key: None, "isMFAEnabled": None}, [], [reason], {}, [str(e)], [reason])
+    if state["error"] is not None:
+        return with_user_accounts(checks["respond"]({key: None, "isMFAEnabled": None}, [], [state["error"]],
+                                                    state["inputSummary"], [], [state["error"]]), input, key)
+    ok = state["enforced"]
+    enabled = state["enabled"]
+    # dataCollection.status belongs to the whole output and Token-Service's not-evaluated gate reads only that
+    # status, so when one key is None the other key's value is discarded with it. A verdict sitting beside a
+    # None is therefore graded as nothing while still reading, in transformedResponse, as a measurement -- the
+    # one shape that can be believed by a reader and dropped by the evaluator at the same time. Both keys go to
+    # None together and the half that was sound is kept as text, where nothing mistakes it for a value.
+    withheld = []
+    if ok is None or enabled is None:
+        if ok is False:
+            withheld.append("a rule that allows sign-on accepts a single factor, so isMFAEnforcedForUsers is "
+                            "False on the rules that could be read")
+        if enabled is True:
+            withheld.append("a rule that allows sign-on requires two factors, so isMFAEnabled is True on the "
+                            "rules that could be read")
+        ok = None
+        enabled = None
     passes = []
     fails = []
-    if state["error"] is not None:
-        fails.append(state["error"])
-    elif ok:
+    if ok:
         passes.append(state["summary"])
     else:
         fails.append(state["summary"])
         for weak in state["weak"][:10]:
             fails.append("Single-factor path: " + weak)
-    return with_user_accounts(checks["respond"]({key: ok, "isMFAEnabled": enabled}, passes, fails, state["inputSummary"], []),
-                              input, key)
+        for unread in state["unread"][:10]:
+            fails.append("Not evaluated: " + unread)
+    not_measured = []
+    if ok is None:
+        not_measured.append(str(len(state["unread"])) + " allowing sign-on rule(s) use a verification method this check "
+                            "does not read: " + "; ".join(state["unread"][:5]))
+        for line in withheld:
+            not_measured.append("Not reported as a verdict because the read was incomplete: " + line)
+    return with_user_accounts(checks["respond"]({key: ok, "isMFAEnabled": enabled}, passes, fails, state["inputSummary"],
+                                                [], not_measured), input, key)
 
 
 def MFA_CHECKS():
@@ -136,7 +173,8 @@ def MFA_CHECKS():
 
     def evaluate(raw):
         data = parse(raw)
-        state = {"error": None, "enforced": False, "enabled": False, "weak": [], "summary": "", "inputSummary": {}}
+        state = {"error": None, "enforced": None, "enabled": None, "weak": [], "unread": [], "summary": "",
+                 "inputSummary": {}}
         problem = error_in(data)
         if problem is not None:
             state["error"] = problem
@@ -159,6 +197,7 @@ def MFA_CHECKS():
                 other_policies.append(as_text(policy.get("name")) + " (" + kind + ")")
 
         weak = []
+        unread = []
         strong = 0
         judged_rules = 0
         if app_policies:
@@ -183,7 +222,7 @@ def MFA_CHECKS():
                     elif method_type == "ASSURANCE":
                         weak.append(where + " (factorMode " + (mode or "missing") + ")")
                     else:
-                        weak.append(where + " (verification method " + (method_type or "missing") + " not evaluated)")
+                        unread.append(where + " (verification method " + (method_type or "missing") + ")")
         elif signon is not None:
             engine = "Classic Engine"
             active_policies = [(p, r) for (p, r) in signon if is_active(p)]
@@ -210,9 +249,20 @@ def MFA_CHECKS():
             state["error"] = "No active app authentication policy, and " + (signon_problem or "no global session policy")
             return state
 
+        if judged_rules == 0:
+            state["error"] = "No active rule allows sign-on, so there is no sign-in path to judge"
+            return state
         state["weak"] = weak
-        state["enabled"] = strong > 0
-        state["enforced"] = judged_rules > 0 and not weak
+        state["unread"] = unread
+        # A rule this code cannot read is neither evidence of two factors nor of one.
+        if strong > 0:
+            state["enabled"] = True
+        elif not unread:
+            state["enabled"] = False
+        if weak:
+            state["enforced"] = False
+        elif not unread:
+            state["enforced"] = True
         state["summary"] = (engine + ": " + str(strong) + " of " + str(judged_rules) + " allowing sign-on rules require two factors across "
                             + str(len(app_policies) if app_policies else len(signon or [])) + " policies")
         state["inputSummary"] = {
@@ -222,20 +272,29 @@ def MFA_CHECKS():
             "allowRules": judged_rules,
             "twoFactorRules": strong,
             "singleFactorRules": len(weak),
+            "unreadRules": len(unread),
         }
         return state
 
-    def respond(result, passes, fails, summary, errors):
-        value = all(result.values())
+    def respond(result, passes, fails, summary, errors, api_errors):
+        # Not measured is decided by the value, in both directions: no path returns None under a "success"
+        # status, and no path returns a value under an "error" status. A remediation follows the same rule --
+        # `all(result.values())` was False for a None as well as for a False, which told a customer to fix
+        # something nobody measured, so it is a measured False that earns the recommendation.
+        unmeasured = [k for k in result if result[k] is None]
+        failed = [k for k in result if result[k] is False]
+        if unmeasured and not api_errors:
+            api_errors = ["Not measured: " + ", ".join(unmeasured)]
         return {
             "transformedResponse": result,
             "additionalInfo": {
-                "dataCollection": {"status": "success", "errors": []},
+                "dataCollection": {"status": "error" if unmeasured else "success",
+                                   "errors": api_errors if unmeasured else []},
                 "validation": {"status": "success" if not errors else "error", "errors": [], "warnings": []},
                 "transformation": {"status": "error" if errors else "success", "errors": errors, "inputSummary": summary},
-                "evaluation": {"passReasons": passes, "failReasons": fails, "recommendations": [] if value else
-                               ["Require two factors (factorMode 2FA) on every rule that allows access in every Okta authentication policy"],
-                               "additionalFindings": []},
+                "evaluation": {"passReasons": passes, "failReasons": fails, "recommendations":
+                               ["Require two factors (factorMode 2FA) on every rule that allows access in every Okta authentication policy"]
+                               if failed else [], "additionalFindings": []},
                 "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "1.0",
                              "transformationId": "isMFAEnforcedForUsers", "vendor": "Okta", "category": "Identity"},
             },
