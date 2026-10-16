@@ -240,14 +240,15 @@ def test_domains_all_valid_is_true():
 def test_domain_with_only_invalid_record_is_false():
     result = run("areSendingDomainsAuthenticated", [domain("example.com"), domain("example.net", valid=False)])
     assert value(result, "areSendingDomainsAuthenticated") is False
-    assert "example.net" in result["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert result["additionalInfo"]["evaluation"]["failReasons"] == ["No valid SendGrid domain authentication record for: example.net"]
 
 
 def test_stale_invalid_duplicate_beside_a_valid_record_is_a_finding_not_a_fail():
     items = [domain("example.com", valid=False), domain("example.com"), domain("example.net")]
     result = run("areSendingDomainsAuthenticated", items)
     assert value(result, "areSendingDomainsAuthenticated") is True
-    assert "example.com" in result["additionalInfo"]["evaluation"]["additionalFindings"][0]
+    assert result["additionalInfo"]["evaluation"]["additionalFindings"] == [
+        "Domains that also hold an invalid, stale authentication record (delete it in SendGrid): example.com"]
 
 
 def test_domains_none_authenticated_is_false():
@@ -288,7 +289,7 @@ def test_link_branding_valid_is_true():
 def test_link_branding_invalid_is_false():
     result = run("isLinkBrandingValid", [link("example.com"), link("example.net", valid=False)])
     assert value(result, "isLinkBrandingValid") is False
-    assert "example.net" in result["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert result["additionalInfo"]["evaluation"]["failReasons"] == ["No valid SendGrid link branding record for: example.net"]
 
 
 def test_link_branding_none_is_false():
