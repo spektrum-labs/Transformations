@@ -1,6 +1,6 @@
 {
   "name": "openCriticalVulnerabilitiesCount",
-  "revision": 1,
+  "revision": 2,
   "status": "proposed",
   "definition": "The number of currently open vulnerabilities classified Critical across the in-scope assets; 0 only from a complete read in which every in-scope asset reports none.",
   "valueType": "integer",
@@ -15,7 +15,8 @@
   },
   "emptyPopulationMeans": "not_measured",
   "allowedCategories": [
-    "Threat & Vulnerability Management"
+    "Threat & Vulnerability Management",
+    "Compliance Management"
   ],
   "integrationPolicy": "any",
   "allowedIntegrations": [],
@@ -27,13 +28,19 @@
   },
   "citations": [
     "safeguards/threat-vulnerability-management/connectsecure/ (the six transforms and test_connectsecure.py)",
-    "ConnectSecure public Swagger, GET /r/asset/asset_view: <pod>/apidocs/swagger.yaml (each vendor pod publishes it), see https://cybercns.atlassian.net/wiki/spaces/CVB/pages/2128314664/V4+API+Information (read 2026-10-12)"
+    "ConnectSecure public Swagger, GET /r/asset/asset_view: <pod>/apidocs/swagger.yaml (each vendor pod publishes it), see https://cybercns.atlassian.net/wiki/spaces/CVB/pages/2128314664/V4+API+Information (read 2026-10-12)",
+    "safeguards/compliancemanagement/vanta/opencriticalvulnerabilitiescount.py (third-party proof from the GRC platform, level 3; counts severity CRITICAL, 0 only with the scanner test OK). Field names doc-verified at https://developer.vanta.com/reference/listvulnerabilities, not live-verified"
   ],
   "changeLog": [
     {
       "revision": 1,
       "date": "2026-10-12",
       "change": "Registered so the ConnectSecure transforms can emit it. The meaning is the catalogue description made precise; unverified fields are named in the transform docstring."
+    },
+    {
+      "revision": 2,
+      "date": "2026-10-15",
+      "change": "A Vanta proof-source transform now emits this key from the GRC platform's own vulnerability list; allowedCategories gains Compliance Management for it."
     }
   ],
   "notes": "Registered for the ConnectSecure transforms. Other vendors' transforms already emit this key (Intruder, Rapid7, Action1, Amazon Inspector); whether they measure the same population was not reviewed, so the key stays proposed and V0 and the owner is not yet named."
