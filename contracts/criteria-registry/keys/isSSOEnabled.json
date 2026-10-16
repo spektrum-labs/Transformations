@@ -1,0 +1,40 @@
+{
+  "name": "isSSOEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when single sign-on through the company identity provider is configured, finished and switched on for the tool, so people can sign in through it. It does not prove password sign-in is switched off.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the single sign-on integrations configured in one tool account; denominator = every integration the read lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the tool's SSO integrations showing at least one that is complete and enabled; an error, 401/403 or unrecognised read is Not evaluated. An empty list is a real read of no integration and is False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Email Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "SendGrid API reference, Single Sign-On Settings (twilio.com/docs/sendgrid/api-reference/single-sign-on-settings): GET /v3/sso/integrations returns enabled and completed_integration per integration",
+    "Existing implementations of isSSOEnabled in other categories (allowlisted, not reviewed)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Registered for the SendGrid transform. About thirty existing implementations in other categories emit this name and were not reviewed against this meaning, so the key stays proposed and V0. SendGrid has no setting that forces every teammate through SSO, so enforcement is not judged."
+}
