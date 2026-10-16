@@ -3,7 +3,7 @@ Transformation: isLinkBrandingValid
 Vendor: SendGrid  |  Product: SendGrid  |  Category: Email Security
 
 Integration-Service workflow getLinkBrandingPosture:
-  GET /v3/whitelabel/links?limit=100   (scope: whitelabel.read, "Sender Authentication")
+  GET /v3/whitelabel/links?limit=100&offset=...   (paged until a short page; scope: whitelabel.read, "Sender Authentication")
   API reference: https://www.twilio.com/docs/sendgrid/api-reference/link-branding
 
 True when the account has at least one branded link domain and every branded domain has a
@@ -147,7 +147,40 @@ def not_evaluated(key, transform_id, problem, summary=None):
 
 CRITERIA_KEY = "isLinkBrandingValid"
 TRANSFORM_ID = "islinkbrandingvalid"
-MAX_ITEMS = 100
+
+def find_marked(data, leg):
+    """The container that carries the leg (and so its pagination markers), under the usual wrappers."""
+    for depth in range(6):
+        if not isinstance(data, dict):
+            return None
+        if leg in data:
+            return data
+        nxt = None
+        for key in WRAPPERS:
+            if isinstance(data.get(key), dict):
+                nxt = data[key]
+                break
+        if nxt is None:
+            return None
+        data = nxt
+    return None
+
+
+def completeness(data, leg, path):
+    """None when the workflow reports the paged read of `leg` was complete (paginationStats[leg].paginationTruncated
+    is exactly false). Otherwise the reason it cannot be trusted as the whole list: marked cut off by the page cap,
+    or no completeness marker at all (the Integration-Service step must set reportPagination)."""
+    marked = find_marked(data, leg)
+    for container in (marked, data):
+        if isinstance(container, dict) and container.get("paginationTruncated") is True:
+            return path + ": the read was cut off by the page cap; not every entry was read"
+    stats = marked.get("paginationStats") if isinstance(marked, dict) else None
+    state = stats.get(leg) if isinstance(stats, dict) else None
+    if isinstance(state, dict) and state.get("paginationTruncated") is True:
+        return path + ": the read was cut off by the page cap; not every entry was read"
+    if not isinstance(state, dict) or state.get("paginationTruncated") is not False:
+        return path + ": the workflow did not report whether the paged read was complete"
+    return None
 
 
 def group_by_domain(items, label, dns_keys):
@@ -173,14 +206,16 @@ LEG = "brandedLinks"
 
 def transform(input):
     try:
-        found, body = find_leg(parse(input), LEG)
+        data = parse(input)
+        found, body = find_leg(data, LEG)
         if not found:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "no SendGrid link branding read in the response")
+        incomplete = completeness(data, LEG, "GET /v3/whitelabel/links")
+        if incomplete:
+            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, incomplete)
         items, problem = list_of(body)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/whitelabel/links: " + problem)
-        if len(items) >= MAX_ITEMS:
-            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/whitelabel/links returned " + str(len(items)) + " entries; the list may be cut off")
         valid, invalid, stale, problem = group_by_domain(items, "GET /v3/whitelabel/links", ())
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, problem)

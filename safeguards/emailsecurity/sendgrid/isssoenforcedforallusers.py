@@ -14,7 +14,8 @@ integration exists at all is a separate check (isSSOEnabled).
 
 Fail closed: a 401/403 (for example a key without the teammates.read scope), 5xx, timeout or
 other error, an empty or unparsable body, a body without the expected field, an empty teammates
-list, or a read cut off by the page cap is null with dataCollection status "error"
+list, a read cut off by the page cap, or a read the workflow does not report as complete
+(paginationStats.teammates.paginationTruncated must be false) is null with dataCollection status "error"
 (Not evaluated), never a pass or a fail.
 """
 
@@ -158,24 +159,12 @@ def short_name(item):
     return name[:40] or "unnamed teammate"
 
 
-def cut_off(data):
-    """True when the workflow marked the teammates read as cut off by the page cap."""
-    if not isinstance(data, dict):
-        return False
-    if data.get("paginationTruncated") is True:
-        return True
-    stats = data.get("paginationStats")
-    if isinstance(stats, dict) and isinstance(stats.get(LEG), dict):
-        return stats[LEG].get("paginationTruncated") is True
-    return False
-
-
-def find_marked(data):
+def find_marked(data, leg):
     """The container that carries the leg (and so its pagination markers), under the usual wrappers."""
     for depth in range(6):
         if not isinstance(data, dict):
             return None
-        if LEG in data:
+        if leg in data:
             return data
         nxt = None
         for key in WRAPPERS:
@@ -188,14 +177,32 @@ def find_marked(data):
     return None
 
 
+def completeness(data, leg, path):
+    """None when the workflow reports the paged read of `leg` was complete (paginationStats[leg].paginationTruncated
+    is exactly false). Otherwise the reason it cannot be trusted as the whole list: marked cut off by the page cap,
+    or no completeness marker at all (the Integration-Service step must set reportPagination)."""
+    marked = find_marked(data, leg)
+    for container in (marked, data):
+        if isinstance(container, dict) and container.get("paginationTruncated") is True:
+            return path + ": the read was cut off by the page cap; not every entry was read"
+    stats = marked.get("paginationStats") if isinstance(marked, dict) else None
+    state = stats.get(leg) if isinstance(stats, dict) else None
+    if isinstance(state, dict) and state.get("paginationTruncated") is True:
+        return path + ": the read was cut off by the page cap; not every entry was read"
+    if not isinstance(state, dict) or state.get("paginationTruncated") is not False:
+        return path + ": the workflow did not report whether the paged read was complete"
+    return None
+
+
 def transform(input):
     try:
         data = parse(input)
         found, body = find_leg(data, LEG)
         if not found:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "no SendGrid teammates read in the response")
-        if cut_off(find_marked(data)) or cut_off(data):
-            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/teammates: the read was cut off by the page cap; not every teammate was read")
+        incomplete = completeness(data, LEG, "GET /v3/teammates")
+        if incomplete:
+            return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, incomplete)
         items, problem = list_of(body)
         if problem:
             return not_evaluated(CRITERIA_KEY, TRANSFORM_ID, "GET /v3/teammates: " + problem)
