@@ -8,21 +8,6 @@ API Source: getEffectiveOrganizationSettings
 import json
 from datetime import datetime
 
-#: The criteria this file answers. A None among them means "not measured", never "failed".
-NONE_MEANS_NOT_EVALUATED = ('isCodeExecutionNetworkEgressEnabled',)
-
-
-def criteria_unmeasured(result):
-    """True when every criterion this file answers that the result carries is None.
-
-    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
-    is "error". The status is read per response, so it is set only when no criterion in the
-    result was measured; marking a partly measured result would hide the measured ones.
-    """
-    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
-    return len(present) > 0 and all(result[k] is None for k in present)
-
-
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
     # Decode a JSON string or bytes BEFORE inspecting shape. Without this a str body
@@ -57,14 +42,24 @@ def extract_input(input_data):
     return data, validation
 
 
+#: The criterion key Token-Service extracts from this file's transformedResponse. Every
+#: result dict below is built with this same name, so the name that carries the answer and
+#: the name create_response reads to decide whether there WAS an answer cannot drift apart.
+#: That is the whole difference from a separate list of key names, which can be -- and has
+#: been -- left behind when a file gains a key.
+CRITERION = "isCodeExecutionNetworkEgressEnabled"
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
-    # A None criterion was not measured. Token-Service grades None as FAILED unless
-    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
-    # reason across when the caller did not.
-    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+    # Value-keyed, never name-keyed. A criterion reported as None was not measured, and
+    # Token-Service grades an unmeasured criterion as FAILED unless dataCollection.status is
+    # "error" -- which only a non-empty api_errors produces. Deriving that from the criterion's
+    # own value covers the branches nobody thought about, transform()'s except included,
+    # because the branch never has to remember to say so.
+    if not api_errors and isinstance(result, dict) and result.get(CRITERION) is None:
         api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
                       or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
@@ -161,19 +156,34 @@ TRUE_WORDS = ("true", "enabled", "on")
 FALSE_WORDS = ("false", "disabled", "off")
 
 
+# Anthropic's documented error body carries no HTTP status of its own: it is
+# {"error": {"type": ..., "message": ...}} and the status is on the response. The vendor's
+# guidance is "Match on the HTTP status code and error.type, not on the message string"
+# (compliance-errors.md), so the type is mapped back to the status REFUSAL_REASONS is keyed
+# on. Without this the tailored 403 paragraph -- the one that tells an administrator to swap
+# their key class -- never fires on the shape Anthropic actually sends.
+ERROR_TYPE_STATUS = {
+    "authentication_error": 401,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "rate_limit_error": 429,
+}
+
+
 def detect_refusal(data):
     """Return (status, why, fix) when the payload is an error envelope, else None.
 
-    Two envelope shapes reach a transform: the generic one (error / errorType /
-    status=="Error" with statusCode) and Integration-Service's vendor relay
-    ({"integrationName", "errorMessage", "vendorStatus": 401, "vendorError", ...}),
-    which is what /integration/run returned for this definition on 2026-09-25.
+    Three shapes reach a transform: Anthropic's own ({"error": {"type", "message"}}), the
+    generic one (error / errorType / status == "Error" alongside statusCode), and
+    Integration-Service's vendor relay ({"errorMessage", "vendorStatus": 403, ...}), which is
+    what /integration/run returns when the vendor refuses.
     """
     if not isinstance(data, dict):
         return None
+    err = data.get("error")
     relay_status = data.get("vendorStatus")
     is_relay = "errorMessage" in data or relay_status is not None
-    is_generic = bool(data.get("error") or data.get("errorType") or data.get("status") == "Error")
+    is_generic = bool(err or data.get("errorType") or data.get("status") == "Error")
     if not (is_relay or is_generic):
         return None
     status = relay_status if relay_status is not None else (data.get("statusCode") or data.get("status_code"))
@@ -181,12 +191,14 @@ def detect_refusal(data):
         status = int(status)
     except (TypeError, ValueError):
         status = None
+    if status is None and isinstance(err, dict):
+        status = ERROR_TYPE_STATUS.get(err.get("type"))
     why, fix = REFUSAL_REASONS.get(status, (
         "the vendor call did not succeed",
         "Inspect the integration method response for the underlying error."))
     detail = data.get("errorMessage") or data.get("message") or ""
-    if not detail and isinstance(data.get("error"), dict):
-        detail = data["error"].get("message") or ""
+    if not detail and isinstance(err, dict):
+        detail = err.get("message") or ""
     if detail:
         why = why + " (" + str(detail) + ")"
     return status, why, fix
