@@ -28,6 +28,14 @@ FAIL stays only when both were read and they show no MFA: no Microsoft MFA metho
 method and some other member-targeted method enabled (for example SMS, voice or member Email OTP), or, with no external method enabled, no enabled Conditional Access
 policy requiring MFA for users. An external method (e.g. Duo) with no Conditional Access policy
 requiring MFA reads not evaluated, not FAIL.
+
+All-users scope (Entra MFA review, overstated passes, for J.J.'s review): an "All users" policy counts only when it
+applies to all cloud apps (includeApplications "All") and is not narrowed by platform, client app type, named
+locations or a device filter -- the rule the group-scoped path already applies (group_candidate, unnarrowed).
+Including all locations and excluding trusted ones is not narrowing (same as entra_ca_mfa_coverage.py). A narrowed
+All-users policy is set aside with NARROWED_REASON; like a risk-only policy it reaches only some sign-ins, so with
+nothing else counting the key reads False, not not-evaluated. A policy with no includeApplications list (Graph always
+returns one) is set aside with APPS_UNREAD_REASON and keeps the key not evaluated, never False.
 """
 
 import json
@@ -105,6 +113,8 @@ SET_ASIDE_SHOWN = 5
 SET_ASIDE_NAME_CHARS = 80
 USER_KEYWORDS = ("all", "none", "guestsorexternalusers")
 GROUP_REASON = "targets groups, not all users"
+NARROWED_REASON = "applies only to some apps, platforms, client app types, locations or devices"
+APPS_UNREAD_REASON = "does not say which apps it applies to"
 MEMBERSHIP_KEYS = ("workforceUsers", "caPolicyGroups", "groupMembers")
 
 
@@ -225,7 +235,15 @@ def set_aside_reason(conditions, users, targets_all):
         excluded = all_users_exclusions(users)
         if excluded:
             return "excludes " + excluded
+        if not isinstance(as_dict(conditions.get("applications")).get("includeApplications"), list):
+            return APPS_UNREAD_REASON
+        if not all_apps(conditions) or not unnarrowed(conditions):
+            return NARROWED_REASON
     return ""
+
+
+def all_apps(conditions):
+    return "all" in lowered(as_dict(conditions.get("applications")).get("includeApplications"))
 
 
 def set_aside_text(entries):
@@ -294,7 +312,7 @@ def group_candidate(policy, conditions, users):
         return False
     if not as_list(users.get("includeGroups")):
         return False
-    if "all" not in lowered(as_dict(conditions.get("applications")).get("includeApplications")):
+    if not all_apps(conditions):
         return False
     if risk_conditioned(conditions) or not mfa_only_grant(policy):
         return False
@@ -887,7 +905,7 @@ def transform(input):
                 + ", so the authentication methods policy does not show whether MFA is enforced for users",
                 validation, input_summary=input_summary, extra=details)
 
-        scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
+        scope_unknown = [(name, why) for name, why in set_aside if why not in (RISK_REASON, NARROWED_REASON)]
         membership_note = ""
         if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
                 and scope_unknown and any(k in data for k in MEMBERSHIP_KEYS)):
