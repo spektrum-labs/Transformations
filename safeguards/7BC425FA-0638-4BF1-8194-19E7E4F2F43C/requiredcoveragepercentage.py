@@ -29,10 +29,11 @@ def extract_input(input_data):
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
-                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
+                    recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None,
+                    exposure=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    return {
+    response = {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
@@ -64,6 +65,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
             }
         }
     }
+    if exposure is not None:
+        response["additionalInfo"]["exposure"] = exposure
+    return response
 
 
 # EDR server / workstation split, under new edr* keys (additive; rulings applied 2026-10-16). osPlatform containing "server" is a
@@ -221,6 +225,16 @@ def transform(input):
         eligibleDevices = len(eligibleMachines)
         protectedDevices = len(protectedMachines)
 
+        # Why each device is outside the eligible population. These are not alike: an Unsupported
+        # device is often not an endpoint at all (network gear, IoT), while an InsufficientInfo device
+        # may be an unmanaged workstation and an excluded one was hidden from this figure by an
+        # admin. Reported in additionalInfo.exposure only, never in transformedResponse and never scored:
+        # requiredCoveragePercentage still divides by eligible devices.
+        excludedDevices = len([m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() == "true"])
+        unsupportedDevices = len([m for m in non_excluded if m.get("onboardingStatus") == "Unsupported"])
+        insufficientInfoDevices = len([m for m in non_excluded if m.get("onboardingStatus") == "InsufficientInfo"])
+        unreadableDevices = len([m for m in machine_data if not isinstance(m, dict)])
+
         allDevicesPercentage = round((protectedDevices / allDevices) * 100) if allDevices > 0 else 0
         eligibleDevicesPercentage = round((protectedDevices / eligibleDevices) * 100) if eligibleDevices > 0 else 0
 
@@ -255,6 +269,25 @@ def transform(input):
         }
         result.update(coverage_split(eligibleMachines))
 
+        # The population this number divides by, declared by the transform that computed it, so a
+        # reader of the result never has to infer the denominator.
+        exposure = {
+            "criteriaKey": criteriaKey,
+            "exposureClass": "coverage",
+            "population": ("eligible endpoints: devices in the Defender inventory that are not excluded "
+                           "and whose onboardingStatus is not Unsupported or InsufficientInfo"),
+            "coveredRule": "onboardingStatus Onboarded (Active or Inactive)",
+            "denominator": eligibleDevices,
+            "covered": protectedDevices,
+            "inventoryTotal": allDevices,
+            "outOfModel": {
+                "excluded": excludedDevices,
+                "unsupported": unsupportedDevices,
+                "insufficientInfo": insufficientInfoDevices,
+                "unreadable": unreadableDevices,
+            },
+        }
+
         return create_response(
             result=result,
             validation=validation,
@@ -265,7 +298,8 @@ def transform(input):
                 "allDevices": allDevices,
                 "eligibleDevices": eligibleDevices,
                 "protectedDevices": protectedDevices
-            }
+            },
+            exposure=exposure
         )
 
     except Exception as e:
