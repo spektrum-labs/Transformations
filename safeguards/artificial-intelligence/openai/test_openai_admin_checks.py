@@ -87,21 +87,30 @@ def enriched(body):
     return {"data": body, "validation": {"status": "unknown", "errors": [], "warnings": []}}
 
 
+# The audit-trail check has no readable "off" in the API: an empty log or a refused call is
+# Not evaluated (None), never False. See test_audit_trail_not_evaluated.py.
+NO_ANSWER = {"isActivityAuditTrailEnabled": None}
+
+
+def expected_no(key):
+    return NO_ANSWER.get(key, False)
+
+
 @pytest.mark.parametrize("name,key,good,bad", CASES)
 def test_good_and_flip(name, key, good, bad):
     module = load(name)
     for form in (good, enriched(good)):
         assert module.transform(form)["transformedResponse"][key] is True
     for form in (bad, enriched(bad)):
-        assert module.transform(form)["transformedResponse"][key] is False
+        assert module.transform(form)["transformedResponse"][key] is expected_no(key)
 
 
 @pytest.mark.parametrize("name,key,good,bad", CASES)
 def test_fail_closed(name, key, good, bad):
     module = load(name)
     for body in BAD:
-        assert module.transform(body)["transformedResponse"][key] is False
-        assert module.transform(enriched(body))["transformedResponse"][key] is False
+        assert module.transform(body)["transformedResponse"][key] is expected_no(key)
+        assert module.transform(enriched(body))["transformedResponse"][key] is expected_no(key)
 
 
 # A single audit event or SCIM-managed member is proof on its own, and the spend limit is not a list.
