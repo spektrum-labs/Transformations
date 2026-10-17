@@ -31,7 +31,17 @@ def test_full_timestamp_still_parsed():
 
 def test_free_level_fails():
     assert verdict(dict(ACCOUNT, subscription_level="Free")) is False
-    assert verdict(dict(ACCOUNT, subscription_level="")) is False
+    assert verdict(dict(ACCOUNT, subscription_level=" free ")) is False
+
+
+def test_no_readable_subscription_level_is_not_evaluated():
+    """A level that is null, empty, blank or not text says nothing about the subscription: None plus a
+    data-collection error (Not evaluated), never a failed or a passed check."""
+    for level in [None, "", "   ", 5, True, ["Diamond"], {"a": 1}]:
+        out = LICENCE.transform(dict(ACCOUNT, subscription_level=level))
+        assert out["transformedResponse"]["confirmedLicensePurchased"] is None, level
+        collection = out["additionalInfo"]["dataCollection"]
+        assert collection["status"] == "error" and collection["errors"], level
 
 
 def test_no_evidence_is_not_evaluated():
@@ -50,3 +60,18 @@ def test_unreadable_end_date_is_not_evaluated():
     out = LICENCE.transform(dict(ACCOUNT, subscription_end_date="not a date"))
     assert out["transformedResponse"]["confirmedLicensePurchased"] is None
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_reasons_are_fixed_text_never_exception_or_vendor_text():
+    secret = "SECRET-VENDOR-VALUE-123"
+    bodies = [dict(ACCOUNT, subscription_end_date=secret),
+              "{not json " + secret,
+              dict(ACCOUNT, subscription_level=secret, subscription_end_date=object())]
+    for body in bodies:
+        out = LICENCE.transform(body)
+        text = repr(out)
+        assert secret not in text
+        for fragment in ("Invalid isoformat", "Expecting", "object has no attribute", "TypeError", "ValueError"):
+            assert fragment not in text, (fragment, text)
+        assert out["transformedResponse"]["confirmedLicensePurchased"] is None
+        assert out["additionalInfo"]["dataCollection"]["status"] == "error"
