@@ -120,7 +120,10 @@ def ca_policy(include_users=None, include_groups=None, exclude_users=None, exclu
     return {"id": oid(9000), "displayName": "Require MFA", "state": state,
             "conditions": {"users": {"includeUsers": ["All"] if include_users is None else include_users,
                                      "excludeUsers": exclude_users or [], "includeGroups": include_groups or [],
-                                     "excludeGroups": exclude_groups or [], "includeRoles": [], "excludeRoles": []}},
+                                     "excludeGroups": exclude_groups or [], "includeRoles": [], "excludeRoles": []},
+                           # Graph always returns the applications condition; an All-users policy counts only on all
+                           # apps (row 36 overstated passes).
+                           "applications": {"includeApplications": ["All"], "excludeApplications": []}},
             "grantControls": {"operator": "OR", "builtInControls": ["mfa"]}}
 
 
