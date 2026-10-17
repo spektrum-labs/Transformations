@@ -127,11 +127,17 @@ def evaluate(input):
         devices = []
 
     api_error = error_reason(input) or error_reason(data)
+    if not api_error:
+        for body in (input, data):
+            if isinstance(body, dict) and (body.get("paginationTruncated") or body.get("iterateTruncated") or body.get("itemErrors")):
+                api_error = "The device summary read was cut short; " + CRITERIA_KEY + " was not measured."
     if api_error:
         devices = []
 
     now = datetime.utcnow()
-    bad_statuses = ["Failed", "Offline", "Blocked", "Cancelled", "Suspended"]
+    # Compared lower-case. The IDrive API returns "Failure" for a failed last backup (its docs also
+    # list "Failed"), and "Not protected" for a device no backup plan protects: neither is healthy.
+    bad_statuses = ["failed", "failure", "not protected", "offline", "blocked", "cancelled", "suspended"]
 
     stale_devices = []
     total_devices = len(devices)
@@ -152,7 +158,7 @@ def evaluate(input):
         next_backup_dt = parse_date(next_backup_raw)
         is_stale = False
         reason = ""
-        if status in bad_statuses:
+        if isinstance(status, str) and status.strip().lower() in bad_statuses:
             is_stale = True
             reason = f"backup_status={status}"
         elif next_backup_dt is not None and next_backup_dt < now:
