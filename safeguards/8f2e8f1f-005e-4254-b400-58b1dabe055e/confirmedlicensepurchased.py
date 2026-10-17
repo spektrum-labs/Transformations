@@ -91,7 +91,9 @@ def transform(input):
         # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
         # 2xx body -- including one describing the control as OFF -- satisfied this
         # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
+        default_value = bitsight_licence(data)
+        if default_value is None:
+            default_value = affirmative_signal(data)
 
         if isinstance(data, dict) and 'errors' in data:
             default_value = False
@@ -124,6 +126,31 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def not_expired(stamp):
+    """True when `stamp` is absent or in the future; an unreadable stamp is not evidence."""
+    if stamp in (None, ""):
+        return True
+    try:
+        end = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return end.replace(tzinfo=None) > datetime.utcnow()
+
+
+def bitsight_licence(data):
+    """Verdict from Bitsight's company profile, or None when the body is not that shape.
+
+    Bitsight has no licence endpoint; the company profile (GET /ratings/v1/companies/{guid})
+    carries `subscription_type_key` and `subscription_end_date`, and an unsubscribed account
+    gets an error instead of a profile. affirmative_signal knows neither key, so a subscribed
+    tenant read False. True when a subscription type is present and the end date is empty
+    (open-ended) or in the future.
+    """
+    if not isinstance(data, dict) or "subscription_type_key" not in data:
+        return None
+    return bool(data.get("subscription_type_key")) and not_expired(data.get("subscription_end_date"))
 
 
 def affirmative_signal(data):
