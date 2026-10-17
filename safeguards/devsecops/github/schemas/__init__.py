@@ -2,6 +2,7 @@
 
 from .isAdvancedSecurityEnabled import IsAdvancedSecurityEnabledInput
 from .isDependabotAlertsEnabled import IsDependabotAlertsEnabledInput
+from .isPullRequestApprovalRequired import IsPullRequestApprovalRequiredInput
 from .isSecretScanningPushProtectionEnabled import IsSecretScanningPushProtectionEnabledInput
 from .openCriticalDependabotAlertsCount import OpenCriticalDependabotAlertsCountInput
 from .openSecretScanningAlertsCount import OpenSecretScanningAlertsCountInput
@@ -9,6 +10,7 @@ from .openSecretScanningAlertsCount import OpenSecretScanningAlertsCountInput
 __all__ = [
     "IsAdvancedSecurityEnabledInput",
     "IsDependabotAlertsEnabledInput",
+    "IsPullRequestApprovalRequiredInput",
     "IsSecretScanningPushProtectionEnabledInput",
     "OpenCriticalDependabotAlertsCountInput",
     "OpenSecretScanningAlertsCountInput",
