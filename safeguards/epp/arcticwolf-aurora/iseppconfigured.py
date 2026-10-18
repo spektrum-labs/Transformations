@@ -67,7 +67,8 @@ def has_policy(device):
     policy = device.get("policy")
     if isinstance(policy, str):
         return bool(policy.strip())
-    return isinstance(policy, dict) and bool(policy)
+    # a placeholder such as {"id": null, "name": null} is no assignment: some value must be there
+    return isinstance(policy, dict) and any(isinstance(v, str) and v.strip() for v in policy.values())
 
 
 def response(key, passed, summary, pass_reasons=None, fail_reasons=None, errors=None):
