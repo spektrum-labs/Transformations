@@ -736,6 +736,25 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         input_summary=input_summary)
 
 
+
+def migration_pending(policy):
+    """The policy's policyMigrationState (cut to 40 characters) when it is anything but migrationComplete, else "".
+
+    Until the migration to the authentication methods policy is complete, the legacy per-user MFA and SSPR
+    policies still decide which methods members can use and cannot be read here. A policy with no state reads
+    as before."""
+    state = str(policy.get('policyMigrationState') or '').strip() if isinstance(policy, dict) else ''
+    if state and state.lower() != 'migrationcomplete':
+        return state[:40]
+    return ''
+
+
+def migration_reason(state, what):
+    return ("The authentication methods policy lists no " + what + " (policyMigrationState: " + state + "): the legacy "
+            "per-user MFA and SSPR policies still apply and cannot be read here, so the policy alone does not "
+            "show that MFA is unavailable")
+
+
 def transform(input):
     criteriaKey = "isMFAEnforcedForUsers"
 
@@ -885,6 +904,16 @@ def transform(input):
                 "No authentication method that targets members is enabled"
                 + (" (Email one-time passcode is enabled for B2B guests only)" if guest_only_email else "")
                 + ", so the authentication methods policy does not show whether MFA is enforced for users",
+                validation, input_summary=input_summary, extra=details)
+
+        # 3c. Methods are listed but none of them counts as MFA while the policy is still migrating: the legacy
+        # per-user MFA and SSPR policies may enable Microsoft Authenticator or OATH codes, so the new policy
+        # alone is not evidence that no MFA method is available (not a FAIL).
+        pending = migration_pending(auth_methods)
+        if pending and not methods_available:
+            return not_evaluated(
+                criteriaKey,
+                migration_reason(pending, "Microsoft Authenticator, FIDO2, OATH or Temporary Access Pass method"),
                 validation, input_summary=input_summary, extra=details)
 
         scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
