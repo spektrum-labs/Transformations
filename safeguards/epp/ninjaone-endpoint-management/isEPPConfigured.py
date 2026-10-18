@@ -8,9 +8,14 @@ A policy id is not evidence. policyId only says which NinjaOne policy a device u
 inherited from the device role), not that a protection product is installed or running, so it is never read here:
 it can neither make a device configured nor count against one. With no product rows (the device list alone, an empty
 or error body) the check is not evaluated (dataCollection error, no value), never a pass and never a 0.
+A device in the device list that the report does not mention is not shown protected: it counts in the denominator and
+never in the numerator. The device list is the roster for that count, so an absent or unreadable list (missing, not a
+list, an error reply) leaves the check not evaluated, never a percentage from the report alone. A well-formed empty
+list is readable.
 Endpoint rules (2026-09-29) as in the other NinjaOne antivirus-status checks: devices seen within 15 days of the newest
 row, phones and tablets left out, a Mac with only third-party products not reporting ON is unreadable and left out.
 """
+import json
 from datetime import datetime, timezone
 
 
@@ -157,6 +162,61 @@ def endpoint_rows(rows, data, mac_unreadable, need_state=True):
     return kept, scope
 
 
+def device_roster(data):
+    """The device list riding beside the report (workflow key "devices") as a list, or None when it is absent or unreadable.
+
+    The list is the roster the percentage is measured against. A missing key, a value that is not a list, an error
+    reply (an error or errors field, or an HTTP status of 400 or more) and a wrapper with no list inside are all
+    unreadable. A well-formed empty list is readable.
+    """
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(devices, dict):
+        if devices.get("error") or devices.get("errors"):
+            return None
+        code = devices.get("status_code") or devices.get("statusCode") or devices.get("status")
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return None
+        for key in ("data", "results"):
+            if isinstance(devices.get(key), list):
+                return devices.get(key)
+        return None
+    return devices if isinstance(devices, list) else None
+
+
+def devices_without_report(devices, rows):
+    """Devices in the device list (workflow key "devices") that the antivirus-status report does not mention.
+
+    A device the report does not mention is not shown protected: it counts in the denominator and never in
+    the numerator (missing is never a pass). Phones and tablets, and devices not seen within ACTIVE_WINDOW_DAYS
+    (or with a last contact more than a day ahead of now), are left out as in the other endpoint rules.
+    `devices` is the roster from device_roster. Returns (devices counted as not covered, devices left out).
+    """
+    reported = set()
+    for row in rows:
+        if isinstance(row, dict) and row.get("deviceId") is not None:
+            reported.add(str(row.get("deviceId")))
+    now = datetime.now(timezone.utc).timestamp()
+    seen_ids = set()
+    counted = 0
+    left_out = 0
+    for device in devices:
+        if not isinstance(device, dict) or device.get("id") is None:
+            continue
+        device_id = str(device.get("id"))
+        if device_id in reported or device_id in seen_ids:
+            continue
+        seen_ids.add(device_id)
+        if str(device.get("nodeClass") or "").upper() in MOBILE_NODE_CLASSES:
+            left_out = left_out + 1
+            continue
+        last_contact = epoch(device.get("lastContact"))
+        if last_contact is not None and (last_contact < now - ACTIVE_WINDOW_DAYS * 86400 or last_contact > now + 86400):
+            left_out = left_out + 1
+            continue
+        counted = counted + 1
+    return counted, left_out
+
+
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -223,6 +283,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
+    if isinstance(input, (str, bytes)):
+        try:
+            input = json.loads(input)
+        except Exception:
+            input = {}
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else []
     problem = body_problem(input, data)
@@ -255,6 +320,21 @@ def transform(input):
             metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
         )
 
+    roster = device_roster(data)
+    if roster is None:
+        reason = ("The NinjaOne device list was not returned or could not be read, so devices the antivirus-status report "
+                  "does not mention cannot be counted and the percentage is not evaluated here.")
+        return create_response(
+            result={"isEPPConfigured": None, "devicesReported": len({str(r.get("deviceId")) for r in rows if r.get("deviceId") is not None}),
+                    "deviceListRead": False},
+            validation=validation,
+            fail_reasons=[reason],
+            recommendations=["Confirm the NinjaOne API client can read the device list for this tenant."],
+            api_errors=[reason],
+            input_summary={"productRows": len(rows)},
+            metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
+        )
+
     judged_rows, scope = endpoint_rows(rows, data, True)
     if not scope["devicesJudged"]:
         reason = ("Every device in the antivirus-status report was left out (stale, phone or tablet, without a readable product state, or a Mac whose "
@@ -278,7 +358,8 @@ def transform(input):
         if name != "NONE" and state == "ON":
             device_state[device_id] = True
 
-    total_devices = len(device_state)
+    missing, missing_left_out = devices_without_report(roster, rows)
+    total_devices = len(device_state) + missing
     covered = len([d for d in device_state if device_state[d]])
     configured_pct = (covered * 100) // total_devices
 
@@ -294,11 +375,19 @@ def transform(input):
         fail_reasons = ["None of the %d devices judged have an antivirus or EPP product reporting ON." % total_devices]
         recommendations = ["Deploy and enable an antivirus or EPP product on managed devices so NinjaOne can report its state."]
 
+    if missing:
+        fail_reasons.append("%d devices in the device list have no antivirus-status row, so they count as not covered." % missing)
+        if not recommendations:
+            recommendations = ["Check why these devices do not report an antivirus or EPP product to NinjaOne, and deploy one."]
+
     result = {
         **scope,
         "isEPPConfigured": configured_pct,
         "totalDevices": total_devices,
         "devicesWithRunningProduct": covered,
+        "devicesNotInReport": missing,
+        "devicesNotInReportLeftOut": missing_left_out,
+        "deviceListRead": True,
     }
 
     return create_response(
