@@ -65,9 +65,35 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def status_of(sec, name):
+    """security_and_analysis.<name>.status, or None when GitHub did not report it."""
+    block = sec.get(name) if isinstance(sec, dict) else None
+    if isinstance(block, dict):
+        return block.get("status")
+    return None
+
+
 def transform(input):
+    """GitHub Advanced Security on every active private or internal repository.
+
+    Reads security_and_analysis on GET /orgs/{org}/repos: the per-repository state,
+    not a configuration that may or may not be applied.
+
+    GitHub unbundled GHAS in 2025 into GitHub Code Security and GitHub Secret
+    Protection. A repository on the unbundled products reports code_security and
+    secret_scanning, and may report no advanced_security block at all. A repository
+    counts as covered when either
+      * advanced_security.status == "enabled" (the bundled product), or
+      * code_security.status == "enabled" AND secret_scanning.status == "enabled"
+        (both unbundled products; on a private repository secret scanning needs
+        Secret Protection).
+    One half alone is reported as partial and does not pass, because the criterion
+    asks for code scanning and secret scanning together.
+
+    Fails closed: no private repositories, a repository without security_and_analysis
+    (the token cannot see it), or any uncovered repository.
+    """
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
 
     if isinstance(data, list):
         repos = data
@@ -82,62 +108,72 @@ def transform(input):
     for r in repos:
         if not isinstance(r, dict):
             continue
-        if r.get("archived"):
+        if r.get("archived") is True or r.get("disabled") is True:
             continue
-        if r.get("private"):
+        if r.get("private") is True or r.get("visibility") in ("private", "internal"):
             private_repos.append(r)
 
     total_private = len(private_repos)
-    enabled_count = 0
-    disabled_repos = []
-    unknown_repos = []
+    covered = []
+    code_only = []
+    secret_only = []
+    uncovered = []
+    unknown = []
 
     for r in private_repos:
-        sec = r.get("security_and_analysis") or {}
-        ghas = sec.get("advanced_security") or {}
-        status = ghas.get("status")
-        if status == "enabled":
-            enabled_count = enabled_count + 1
-        elif status == "disabled":
-            disabled_repos.append(r.get("full_name") or r.get("name") or "unknown")
+        name = r.get("full_name") or r.get("name") or "unknown"
+        sec = r.get("security_and_analysis")
+        if not isinstance(sec, dict) or not sec:
+            unknown.append(name)
+            continue
+        ghas = status_of(sec, "advanced_security")
+        code = status_of(sec, "code_security")
+        secret = status_of(sec, "secret_scanning")
+        if ghas == "enabled" or (code == "enabled" and secret == "enabled"):
+            covered.append(name)
+        elif code == "enabled":
+            code_only.append(name)
+        elif secret == "enabled":
+            secret_only.append(name)
         else:
-            unknown_repos.append(r.get("full_name") or r.get("name") or "unknown")
+            uncovered.append(name)
 
+    not_covered = len(code_only) + len(secret_only) + len(uncovered) + len(unknown)
+    is_enabled = total_private > 0 and not_covered == 0
+
+    pass_reasons = []
+    fail_reasons = []
+    recommendations = []
     if total_private == 0:
-        is_enabled = False
-        pass_reasons = []
-        fail_reasons = [
-            "No non-archived private repositories were found in the organization's repository list, so GitHub Advanced Security enablement cannot be confirmed."
-        ]
-        recommendations = [
-            "Verify that the organization has private repositories, and enable GitHub Advanced Security for them."
-        ]
+        fail_reasons.append("No active private or internal repositories were returned, so GitHub Advanced Security cannot be confirmed on any.")
+        recommendations.append("Check that the token can list the organization's private repositories.")
+    elif is_enabled:
+        pass_reasons.append(
+            f"All {total_private} active private/internal repositories have GitHub Advanced Security, or both GitHub Code Security and Secret Protection, enabled (security_and_analysis per repository)."
+        )
     else:
-        is_enabled = (enabled_count == total_private)
-        if is_enabled:
-            pass_reasons = [
-                f"All {total_private} non-archived private repositories report security_and_analysis.advanced_security.status='enabled' (checked via listOrgRepositories)."
-            ]
-            fail_reasons = []
-            recommendations = []
-        else:
-            pass_reasons = []
-            fail_reasons = [
-                f"{enabled_count} of {total_private} non-archived private repositories have advanced_security.status='enabled'. "
-                f"Repositories without GHAS enabled: {', '.join(disabled_repos[:10]) if disabled_repos else 'see unknown status list'}."
-            ]
-            if unknown_repos:
-                fail_reasons.append(
-                    f"{len(unknown_repos)} private repositories did not report an advanced_security status field: {', '.join(unknown_repos[:10])}."
-                )
-            recommendations = [
-                "Enable GitHub Advanced Security organization-wide (or via a policy/enterprise setting) so all new private repositories inherit code scanning, CodeQL, and expanded secret scanning by default."
-            ]
+        fail_reasons.append(
+            f"{len(covered)} of {total_private} active private/internal repositories have GitHub Advanced Security (or Code Security plus Secret Protection) enabled."
+        )
+        if uncovered:
+            fail_reasons.append(f"{len(uncovered)} have neither code security nor secret scanning enabled (e.g. {', '.join(uncovered[:5])}).")
+        if code_only:
+            fail_reasons.append(f"{len(code_only)} have Code Security but not secret scanning (e.g. {', '.join(code_only[:5])}).")
+        if secret_only:
+            fail_reasons.append(f"{len(secret_only)} have secret scanning but not Code Security (e.g. {', '.join(secret_only[:5])}).")
+        if unknown:
+            fail_reasons.append(f"{len(unknown)} returned no security_and_analysis block; the token needs admin or security-manager visibility (e.g. {', '.join(unknown[:5])}).")
+        recommendations.append(
+            "Attach a code security configuration that enables Code Security and Secret Protection (or GHAS) to every private and internal repository, and confirm each repository reports them enabled."
+        )
 
     result = {
         "isAdvancedSecurityEnabled": is_enabled,
         "totalPrivateRepositories": total_private,
-        "advancedSecurityEnabledCount": enabled_count,
+        "advancedSecurityEnabledCount": len(covered),
+        "codeSecurityOnlyCount": len(code_only),
+        "secretProtectionOnlyCount": len(secret_only),
+        "unknownStatusCount": len(unknown),
     }
 
     return create_response(
@@ -149,9 +185,9 @@ def transform(input):
         input_summary={
             "totalReposSeen": len(repos),
             "totalPrivateRepositories": total_private,
-            "advancedSecurityEnabledCount": enabled_count,
-            "disabledRepos": disabled_repos[:20],
-            "unknownStatusRepos": unknown_repos[:20],
+            "coveredRepos": covered[:20],
+            "uncoveredRepos": uncovered[:20],
+            "unknownStatusRepos": unknown[:20],
         },
         metadata={
             "transformationId": "isAdvancedSecurityEnabled",

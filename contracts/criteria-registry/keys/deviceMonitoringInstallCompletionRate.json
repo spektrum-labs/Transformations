@@ -1,0 +1,44 @@
+{
+  "name": "deviceMonitoringInstallCompletionRate",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The percent (0 to 100) of current employees whose device monitoring agent install is complete in Vanta, over the people the task is assigned to.",
+  "valueType": "number",
+  "unit": "percent",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "the people Vanta lists as CURRENT or ON_LEAVE with the task assigned and not disabled; denominator = that set",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A complete paged read of Vanta's people list in which every entry was readable, every status was one the transform knows and at least one current employee has the task assigned. An error, empty, partial or unreadable read is Not evaluated.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Compliance Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/compliancemanagement/vanta/devicemonitoringinstallcompletionrate.py",
+    "safeguards/compliancemanagement/vanta/test_vanta_criteria.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-15",
+      "change": "Registered with its first implementation, a Vanta third-party-proof (level 3) transform. Synthetic-fixture tests only; no real Vanta body with values was replayed, so V0."
+    }
+  ],
+  "notes": "Rounded to two decimals. A real 0 is reported with its denominator (peopleApplicable); a body that holds people but yields no readable population is null, never 0. People who are not CURRENT or ON_LEAVE, people the task is disabled for and unassigned tasks (NONE) are left out. The figure is Vanta's own task state (third-party proof, level 3), not a read of the tool."
+}

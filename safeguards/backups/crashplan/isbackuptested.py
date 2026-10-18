@@ -73,7 +73,7 @@ def transform(input):
                         if "T" in str(restore_date_str):
                             restore_date = datetime.fromisoformat(restore_date_str.replace("Z", "+00:00").replace("+00:00", ""))
                         else:
-                            restore_date = datetime.strptime(str(restore_date_str)[:10], "%Y-%m-%d")
+                            restore_date = datetime.fromisoformat(str(restore_date_str)[:10])
 
                         # Track last restore date
                         if last_restore_date is None or restore_date > last_restore_date:

@@ -96,6 +96,19 @@ def to_int(value):
         return None
 
 
+def scan_reason_suffix(data):
+    """The reason Integration-Service gave for a scan that has no result (asm_scan_in_progress,
+    asm_scan_retry_backoff, ...) as " (reason: ...)", or "" when it gave none. Only a short
+    lower-case token is passed on, so a body cannot put free text into the stream."""
+    reason = str(data.get("reason") or "").strip().lower() if isinstance(data, dict) else ""
+    if not reason or len(reason) > 60:
+        return ""
+    for ch in reason:
+        if ch not in "abcdefghijklmnopqrstuvwxyz0123456789_":
+            return ""
+    return " (reason: " + reason + ")"
+
+
 def scan_problem(data):
     """None when the scan completed across at least one host with no failed host, no error and an intact
     findings list; else the reason. Same gate as knownexploitedvulncount.py."""
@@ -104,7 +117,7 @@ def scan_problem(data):
     domain = data.get("primaryDomain") or data.get("domain") or "unknown"
     status = data.get("status", "unknown")
     if status != "success":
-        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+        return "Nuclei scan status: " + str(status) + " for " + str(domain) + scan_reason_suffix(data)
     scanned = to_int(data.get("domainsScanned"))
     if scanned is None or scanned <= 0:
         return "Nuclei scanned zero hosts for " + str(domain)

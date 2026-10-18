@@ -51,7 +51,8 @@ User.Read.All), which the One-Click app already holds.
 FAIL CLOSED. An empty, null, unrecognised or error body (PSError, Graph {"error": {...}},
 an HTTP 4xx/5xx envelope, an IS error status), a Secure Score body, a read with no
 privileged role holders (every tenant has a Global Administrator), a truncated read
-(@odata.nextLink) or a role holder that cannot be resolved returns
+(@odata.nextLink), a role holder that cannot be resolved or an enabled administrator whose
+own user row has no assignedLicenses list (missing or null) returns
 areAdminAccountsSeparate = false together with a dataCollection error, so the check reads
 "not evaluated" rather than pass or fail. A role holder that is shown to have a mailbox or
 a productivity licence (or an enabled Exchange plan) is a measured fail, whatever else is
@@ -79,12 +80,36 @@ def extract_input(input_data):
     return unwrap(input_data), validation
 
 
+# The validator's text can carry vendor text, so what is echoed under additionalInfo.validation is
+# bounded: at most MAX_ECHOED_ITEMS strings of at most MAX_ECHOED_TEXT characters each.
+MAX_ECHOED_ITEMS = 20
+MAX_ECHOED_TEXT = 300
+
+
+def bounded_texts(items):
+    """A list of at most MAX_ECHOED_ITEMS strings, each cut to MAX_ECHOED_TEXT characters."""
+    if not items:
+        return []
+    if not isinstance(items, list):
+        items = [items]
+    bounded = []
+    for item in items[:MAX_ECHOED_ITEMS]:
+        text = str(item)
+        if len(text) > MAX_ECHOED_TEXT:
+            text = text[:MAX_ECHOED_TEXT] + "..."
+        bounded.append(text)
+    return bounded
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create a standardized transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    validation_status = validation.get("status", "unknown")
+    if isinstance(validation_status, str):
+        validation_status = validation_status[:40]
 
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
@@ -104,9 +129,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "errors": api_errors or [],
             },
             "validation": {
-                "status": validation.get("status", "unknown"),
-                "errors": validation.get("errors", []),
-                "warnings": validation.get("warnings", []),
+                "status": validation_status,
+                "errors": bounded_texts(validation.get("errors")),
+                "warnings": bounded_texts(validation.get("warnings")),
             },
             "transformation": {
                 "status": "error" if (transformation_errors or []) else "success",
@@ -439,10 +464,14 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
+            # Input that failed validation is not a measurement of the tenant: carry it as a data
+            # collection error so the check reads "not evaluated", never a measured fail.
+            validation_text = short("; ".join(bounded_texts(validation.get("errors"))), 300)
             return create_response(
                 result=default_result,
                 validation=validation,
-                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
+                api_errors=["Input validation failed" + (": " + validation_text if validation_text else "")],
+                fail_reasons=["Input validation failed" + (": " + validation_text if validation_text else "")],
                 recommendations=["Verify the Microsoft integration is configured correctly"],
             )
 
@@ -497,6 +526,7 @@ def transform(input):
         violations = []
         mail_only = []
         unclassified = []
+        licence_unread = []
         for pid in sorted(principals):
             kind = principals[pid]
             if kind == "serviceprincipal":
@@ -519,6 +549,10 @@ def transform(input):
                 if has_mail_address(user):
                     reasons = ["has a mail address"] + reasons
                 violations.append(name + ": " + ", ".join(reasons))
+            elif not isinstance(user.get("assignedLicenses"), list):
+                # This administrator's own row carries no licence list (missing or null), so the
+                # licence question was never asked of them: not a clean row, whatever other rows hold.
+                licence_unread.append(name)
             elif has_mail_address(user):
                 if mail_only_is_classified(user):
                     mail_only.append(name)
@@ -540,6 +574,7 @@ def transform(input):
             "servicePrincipalAdmins": service_principals,
             "userCount": len(users_by_id),
             "hasLicenceData": has_licence_field,
+            "adminsWithoutLicenceList": len(licence_unread),
             "truncated": truncated,
         }
         findings = []
@@ -558,8 +593,9 @@ def transform(input):
             # is unresolved; the unresolved admins are named in the reason.
             fail_reason = (f"{len(violations)} of {admin_count} privileged admin account(s) are day-to-day "
                            f"accounts with a mailbox or productivity licence: " + "; ".join(violations[:5]))
-            if unresolved or unclassified:
-                fail_reason += "; also unresolved: " + "; ".join((unresolved + unclassified)[:5])
+            unread_names = [name + " (no assignedLicenses list)" for name in licence_unread]
+            if unresolved or unclassified or unread_names:
+                fail_reason += "; also unresolved: " + "; ".join((unresolved + unclassified + unread_names)[:5])
             return create_response(
                 result=result,
                 validation=validation,
@@ -575,6 +611,9 @@ def transform(input):
         incomplete = []
         if not has_licence_field and len(users_by_id) > 0:
             incomplete.append("the user read carries no assignedLicenses field")
+        elif licence_unread:
+            incomplete.append(f"{len(licence_unread)} privileged admin account(s) have no assignedLicenses list in "
+                              f"the read, so their licences were not checked: " + "; ".join(licence_unread[:5]))
         if truncated:
             incomplete.append("the read is truncated (@odata.nextLink on " + ", ".join(truncated) + ")")
         if unresolved:
@@ -616,9 +655,13 @@ def transform(input):
         )
 
     except Exception as e:
+        # An exception means the body was not understood, not that admins are shared: report it as a
+        # data collection error too, so the check reads "not evaluated" and never a measured fail.
+        error_message = short(e, 200)
         return create_response(
             result=default_result,
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"],
+            transformation_errors=[error_message],
+            api_errors=["Transformation error: " + error_message],
+            fail_reasons=["Transformation error: " + error_message],
         )
