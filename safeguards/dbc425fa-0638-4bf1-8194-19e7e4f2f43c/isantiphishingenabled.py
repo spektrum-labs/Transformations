@@ -8,7 +8,10 @@ domain spoofing and employee name spoofing detection.
 
 Google returns several gmail.spoofing_and_authentication policies for one org unit (SYSTEM defaults for
 unlicensed and licensed entities, and any ADMIN override) and applies the one with the greatest
-policyQuery.sortOrder; only that policy is judged per org unit or group.
+policyQuery.sortOrder; only that policy is judged per org unit or group. A policy of that setting type is
+judged even when it reports neither spoofing setting, so an override in force that omits them reads Not
+evaluated rather than letting the default it supersedes decide. A body without setting types is matched by
+the spoofing settings a policy carries.
 
 Measured: a policy list that was read. isEmailSecurityEnabled is true when it holds a policy;
 isAntiPhishingEnabled is true when a policy in force carries both spoofing settings and none is off, and
@@ -206,6 +209,7 @@ def transform(input):
         recommendations = []
 
         filter_attributes = ["detectDomainNameSpoofing", "detectEmployeeNameSpoofing"]
+        spoofing_setting = "gmail.spoofing_and_authentication"
 
         policies = data.get("policies")
         if not isinstance(policies, list):
@@ -226,16 +230,21 @@ def transform(input):
             if isinstance(policy, dict) and "setting" in policy:
                 setting = policy.get("setting", {})
                 value = setting.get("value", {}) if isinstance(setting, dict) else {}
-                if isinstance(value, dict):
-                    filtered = {key: value[key] for key in value if key in filter_attributes}
-                    if filtered:
-                        query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
-                        target = str(query.get("orgUnit") or "unknown")
-                        if query.get("group"):
-                            target = target + " " + str(query.get("group"))
-                        matching.append({"orgUnit": target, "value": filtered,
-                                         "order": as_order(query.get("sortOrder")),
-                                         "policyType": str(policy.get("type") or "")})
+                typed = isinstance(setting, dict) and str(setting.get("type", "")).endswith(spoofing_setting)
+                if not isinstance(value, dict):
+                    value = {}
+                filtered = {key: value[key] for key in value if key in filter_attributes}
+                # A spoofing policy is kept even when it reports neither setting, so an override in force that
+                # omits them is judged (Not evaluated) instead of letting a superseded default decide. A body
+                # without setting types is matched by the settings it carries.
+                if typed or filtered:
+                    query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
+                    target = str(query.get("orgUnit") or "unknown")
+                    if query.get("group"):
+                        target = target + " " + str(query.get("group"))
+                    matching.append({"orgUnit": target, "value": filtered,
+                                     "order": as_order(query.get("sortOrder")),
+                                     "policyType": str(policy.get("type") or "")})
         # Judge only the policy in force on each org unit or group; Google's own precedence decides which.
         matching, superseded = in_force(matching)
         matching_values = [rec["value"] for rec in matching]
