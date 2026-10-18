@@ -2,6 +2,9 @@ import json
 from datetime import datetime
 
 
+CRITERIA_KEY = "isJobExecutionLogAccessible"
+
+
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
@@ -30,9 +33,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    api_err_list = api_errors or []
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    api_err_list = [] if measured else (api_errors or transformation_errors or fail_reasons
+                                        or [CRITERIA_KEY + " could not be measured from the response"])
     transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
+    data_collection_status = "success" if measured else "error"
     transformation_status = "error" if transform_err_list else "success"
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
@@ -65,7 +73,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def evaluate(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -98,6 +106,9 @@ def transform(input):
                 sample_device = d
 
     is_accessible = total_devices > 0 and accessible_count == total_devices
+    if total_devices == 0:
+        # No devices: no per-job execution field could be verified, so not measured.
+        is_accessible = None
 
     pass_reasons = []
     fail_reasons = []
@@ -142,3 +153,15 @@ def transform(input):
             "category": "backup",
         },
     )
+
+
+def transform(input):
+    try:
+        return evaluate(input)
+    except Exception as e:
+        return create_response(
+            result={CRITERIA_KEY: None},
+            fail_reasons=["Transformation error: " + str(e)],
+            transformation_errors=["Transformation error: " + str(e)],
+            metadata={"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup"},
+        )

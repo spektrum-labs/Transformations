@@ -33,10 +33,34 @@ class Poisoned(dict):
         return 1
 
 
+ERROR_BODY = {"error": True, "message": "Integration execution error: HTTP 500"}
+
 CASES = [
     ('openquarantinedmessagescount', ('openQuarantinedMessagesCount',), 'poisoned', lambda: Poisoned()),
     ('unverifiedallowpolicycount', ('unverifiedAllowPolicyCount',), 'poisoned', lambda: Poisoned()),
 ]
+
+# Every other transform in the folder: a poisoned read, an error body and an empty body are all Not
+# evaluated. test_checkpoint_harmony_email_error_body_not_evaluated.py holds the full battery.
+for fname, fkey in [
+    ('confirmedlicensepurchased', 'confirmedLicensePurchased'),
+    ('isaccounttakeoverdetectionenabled', 'isAccountTakeoverDetectionEnabled'),
+    ('isantiphishingenabled', 'isAntiPhishingEnabled'),
+    ('isantivirusverdictengineenabled', 'isAntivirusVerdictEngineEnabled'),
+    ('isclicktimeurlrewriteenabled', 'isClickTimeURLRewriteEnabled'),
+    ('isclouddataleakpreventionenabled', 'isCloudDataLeakPreventionEnabled'),
+    ('isemailsecurityloggingenabled', 'isEmailSecurityLoggingEnabled'),
+    ('isimposteremaildetectionenabled', 'isImposterEmailDetectionEnabled'),
+    ('islinkedo365accountactive', 'isLinkedO365AccountActive'),
+    ('ispostdeliveryquarantineenabled', 'isPostDeliveryQuarantineEnabled'),
+    ('isshadowitdiscoveryenabled', 'isShadowITDiscoveryEnabled'),
+    ('isspfenforced', 'isSPFEnforced'),
+    ('isurlreputationblocklistenforced', 'isURLReputationBlockListEnforced'),
+    ('messagemoveaudittrailenabled', 'messageMoveAuditTrailEnabled'),
+]:
+    CASES.append((fname, (fkey,), 'poisoned', lambda: Poisoned()))
+    CASES.append((fname, (fkey,), 'error body', lambda: dict(ERROR_BODY)))
+    CASES.append((fname, (fkey,), 'empty body', lambda: {}))
 
 
 class NoneReadsAsNotEvaluated(unittest.TestCase):

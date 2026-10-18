@@ -4,9 +4,10 @@ The three checks answered from /v1/threats/{threatId} and /v1/vendor-cases used 
 envelope, an empty body or an unrecognised body into False. None is "not measured": the criterion
 is None and the data-collection status is error, which the evaluator shows as Not evaluated.
 
-A well-formed response that lists nothing (no messages, no vendor cases) keeps its previous
-verdict; whether that should also be Not evaluated is a separate product decision. All payloads
-here are synthetic.
+A well-formed response that lists no messages keeps its previous verdict. A well-formed response
+that lists no vendor cases is Not evaluated: vendor cases only exist once detection has flagged
+something, so a quiet tenant cannot be told from a tenant with detection off. All payloads here are
+synthetic.
 """
 import importlib.util
 import json
@@ -114,9 +115,19 @@ class WellFormedResponsesKeepTheirVerdict(unittest.TestCase):
         self.assertIs(self.verdict(VENDOR, VENDOR, cases), True)
         self.assertIs(self.verdict(VENDOR, VENDOR, enveloped({"vendorCases": cases})), True)
 
-    def test_empty_vendor_case_list_keeps_the_previous_verdict(self):
-        self.assertIs(self.verdict(VENDOR, VENDOR, {"vendorCases": [], "pageNumber": 1}), False)
-        self.assertIs(self.verdict(VENDOR, VENDOR, []), False)
+    def test_empty_vendor_case_list_is_not_evaluated(self):
+        for label, body in [
+            ("wrapped", {"vendorCases": [], "pageNumber": 1}),
+            ("bare list", []),
+            ("data", {"data": []}),
+            ("enveloped", enveloped({"vendorCases": []})),
+        ]:
+            with self.subTest(shape=label):
+                out = load(VENDOR).transform(body)
+                self.assertIsNone(out["transformedResponse"][VENDOR])
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
 
 
 class MalformedListItemsAreNotRecords(unittest.TestCase):
@@ -162,6 +173,159 @@ class MalformedListItemsAreNotRecords(unittest.TestCase):
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
                 out = self.run_check(CAMPAIGN, {"threatId": "t", "messages": [{"threatId": "t", "attackType": bad}]})
                 self.assertIs(out["transformedResponse"][CAMPAIGN], False)
+
+
+class OnlyRealCaseRecordsAreCounted(unittest.TestCase):
+    """A vendor case is an object with a real vendorCaseId. An error-shaped or empty object in the list
+    is not a case: it is not counted, and a list with no real case in it is not measured."""
+
+    def run_vendor(self, body):
+        return load(VENDOR).transform(body)
+
+    def test_error_shaped_items_are_not_cases(self):
+        for label, items in [
+            ("error object", [{"error": "x"}]),
+            ("error flag object", [{"error": True, "message": "boom"}]),
+            ("empty object", [{}]),
+            ("no id", [{"message": "x"}, {"vendorCaseId": None}]),
+            ("blank id", [{"vendorCaseId": ""}, {"vendorCaseId": "   "}]),
+            ("boolean id", [{"vendorCaseId": True}]),
+            ("id is an object", [{"vendorCaseId": {"a": 1}}]),
+        ]:
+            for shape, body in [("wrapped", {"vendorCases": items}), ("bare", items), ("data", {"data": items})]:
+                with self.subTest(items=label, shape=shape):
+                    out = self.run_vendor(body)
+                    self.assertIsNone(out["transformedResponse"][VENDOR])
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                    self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                    self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+
+    def test_only_real_records_are_counted_next_to_junk(self):
+        body = {"vendorCases": [{"error": "x"}, {"vendorCaseId": "1"}, {}, {"vendorCaseId": 7}, {"vendorCaseId": ""}]}
+        out = self.run_vendor(body)
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 2)
+
+    def test_a_numeric_case_id_is_a_real_record(self):
+        out = self.run_vendor({"vendorCases": [{"vendorCaseId": 42}]})
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 1)
+
+    def test_the_empty_list_is_not_evaluated_and_still_reports_the_zero_count(self):
+        out = self.run_vendor({"vendorCases": []})
+        self.assertIsNone(out["transformedResponse"][VENDOR])
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 0)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+
+class VendorCaseValidationAndPaging(unittest.TestCase):
+    """A body that failed input validation, and an empty first page that says more follows, prove nothing
+    about whether the tenant has vendor cases: both are Not evaluated, never False."""
+
+    def run_vendor(self, body):
+        return load(VENDOR).transform(body)
+
+    def assert_not_evaluated(self, out):
+        self.assertIsNone(out["transformedResponse"][VENDOR])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+        self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+
+    def test_a_failed_validation_is_not_evaluated(self):
+        for status in ["failed", "FAILED", "error", " Failed "]:
+            for data in [{"vendorCases": []}, {"vendorCases": [{"vendorCaseId": "1"}]}, []]:
+                with self.subTest(status=status, data=data):
+                    self.assert_not_evaluated(self.run_vendor(
+                        {"data": data, "validation": {"status": status, "errors": [], "warnings": []}}))
+
+    def test_a_validation_that_passed_or_was_skipped_keeps_the_verdict(self):
+        for status in ["passed", "success", "skipped", "unknown"]:
+            with self.subTest(status=status):
+                out = self.run_vendor({"data": {"vendorCases": []}, "validation": {"status": status}})
+                self.assertIsNone(out["transformedResponse"][VENDOR])
+                out = self.run_vendor({"data": {"vendorCases": [{"vendorCaseId": "1"}]}, "validation": {"status": status}})
+                self.assertIs(out["transformedResponse"][VENDOR], True)
+
+    def test_a_validation_that_is_not_an_object_does_not_raise(self):
+        for validation in [None, "failed", 5, ["failed"]]:
+            with self.subTest(validation=validation):
+                out = self.run_vendor({"data": {"vendorCases": []}, "validation": validation})
+                self.assertIsNone(out["transformedResponse"][VENDOR])
+
+    def test_an_empty_first_page_with_a_next_page_is_not_evaluated(self):
+        for token in [{"nextPageNumber": 2}, {"nextPageNumber": "2"}, {"nextPageToken": "abc"}]:
+            for shape, body in [
+                ("wrapped", dict({"vendorCases": [], "pageNumber": 1}, **token)),
+                ("data", dict({"data": [], "pageNumber": 1}, **token)),
+                ("enveloped", {"data": dict({"vendorCases": []}, **token), "validation": {"status": "passed"}}),
+            ]:
+                with self.subTest(token=token, shape=shape):
+                    self.assert_not_evaluated(self.run_vendor(body))
+
+    def test_an_empty_last_page_is_not_evaluated_either(self):
+        for token in [{}, {"nextPageNumber": None}, {"nextPageNumber": ""}, {"nextPageToken": None}]:
+            with self.subTest(token=token):
+                self.assert_not_evaluated(self.run_vendor(dict({"vendorCases": [], "pageNumber": 1}, **token)))
+
+    def test_a_page_with_cases_and_a_next_page_is_still_true(self):
+        out = self.run_vendor({"vendorCases": [{"vendorCaseId": "1"}], "pageNumber": 1, "nextPageNumber": 2})
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+
+    def test_a_case_id_that_is_nan_or_infinite_is_not_a_case(self):
+        for label, body in [
+            ("nan", {"vendorCases": [{"vendorCaseId": float("nan")}]}),
+            ("inf", {"vendorCases": [{"vendorCaseId": float("inf")}]}),
+            ("-inf", {"vendorCases": [{"vendorCaseId": float("-inf")}]}),
+            ("json NaN", json.loads('{"vendorCases": [{"vendorCaseId": NaN}, {"vendorCaseId": Infinity}]}')),
+        ]:
+            with self.subTest(case=label):
+                self.assert_not_evaluated(self.run_vendor(body))
+
+    def test_nan_beside_a_real_case_is_ignored(self):
+        out = self.run_vendor({"vendorCases": [{"vendorCaseId": float("nan")}, {"vendorCaseId": 7}, {"vendorCaseId": 1.5}]})
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 2)
+
+
+class ZeroVendorCasesIsNotEvaluatedNeverFalse(unittest.TestCase):
+    """A successful read with no vendor cases proves nothing about whether detection is on. It must
+    never read False (which raises a gap); only real case data gives True."""
+
+    def run_vendor(self, body):
+        return load(VENDOR).transform(body)
+
+    def test_no_shape_of_an_empty_case_list_reads_false(self):
+        for label, body in [
+            ("wrapped", {"vendorCases": []}),
+            ("wrapped with paging fields", {"vendorCases": [], "pageNumber": 1, "nextPageNumber": None}),
+            ("bare", []),
+            ("data", {"data": []}),
+            ("enveloped passed", {"data": {"vendorCases": []}, "validation": {"status": "passed"}}),
+            ("enveloped skipped", {"data": [], "validation": VALIDATION}),
+        ]:
+            with self.subTest(shape=label):
+                out = self.run_vendor(body)
+                self.assertIsNone(out["transformedResponse"][VENDOR])
+                self.assertIsNot(out["transformedResponse"][VENDOR], False)
+                self.assertEqual(out["transformedResponse"]["vendorCaseCount"], 0)
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+
+    def test_the_reason_is_fixed_text_and_names_no_gap_to_fix(self):
+        out = self.run_vendor({"vendorCases": []})
+        reasons = out["additionalInfo"]["dataCollection"]["errors"] + out["additionalInfo"]["evaluation"]["failReasons"]
+        self.assertTrue(reasons)
+        self.assertEqual(out["additionalInfo"]["evaluation"]["recommendations"], [])
+
+    def test_real_case_data_still_gives_true(self):
+        out = self.run_vendor({"vendorCases": [{"vendorCaseId": "1"}]})
+        self.assertIs(out["transformedResponse"][VENDOR], True)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_junk_next_to_nothing_is_still_not_evaluated(self):
+        out = self.run_vendor({"vendorCases": [{"error": "x"}, {}]})
+        self.assertIsNone(out["transformedResponse"][VENDOR])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
 
 
 if __name__ == "__main__":

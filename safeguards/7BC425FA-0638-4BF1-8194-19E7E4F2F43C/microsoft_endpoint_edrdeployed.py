@@ -7,12 +7,12 @@ including tenants with thousands of onboarded machines (2026-09-29).
 
 Value: true when at least one eligible machine (not excluded, onboardingStatus not Unsupported or
 InsufficientInfo) is onboarded to MDE, whose sensor is the EDR and whose Defender AV platform is the
-EPP; false when machines are eligible but none is onboarded. How much of the estate is covered is
+EPP; false when machines are eligible but none is onboarded. How much of the environment is covered is
 requiredCoveragePercentage, a number, not this flag.
 
 Not evaluated (dataCollection error, values None): an error or unrecognised body, an inventory that
 still carries @odata.nextLink (pages left unread), or an inventory with no eligible machine at all
-("Defender has no onboarded devices"). An empty result proves nothing about the estate, so it is never
+("Defender has no onboarded devices"). An empty result proves nothing about the environment, so it is never
 a fail; the onboard-or-disconnect hint is guidance only.
 """
 

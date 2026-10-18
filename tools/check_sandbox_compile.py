@@ -30,7 +30,7 @@ WHAT IS MODELLED, and what deliberately is not. Only behaviour confirmed against
   * calls that compile but die at run time because CPython imports a module inside them
     and the executor's `safe_import` refuses it: `datetime.strftime()` imports `time`,
     `datetime.strptime()` imports `_strptime`. Measured 2026-09-29 by running each call
-    under Token-Service's real PyCodeExecutor, and in production: ThreatDown at Trebron
+    under Token-Service's real PyCodeExecutor, and in production: ThreatDown on a live connection
     reported a blank `earliestExpiry` across 9 licences because its `strptime` died inside
     an `except Exception`. The banned calls are not a hand-kept list -- PROBES runs each
     candidate under tools/restricted_sandbox.py's import hook and bans only the ones it

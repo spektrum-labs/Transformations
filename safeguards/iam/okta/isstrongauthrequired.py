@@ -17,7 +17,7 @@
 #   OktaSignOnPolicyRule.actions.signon.{access, requireFactor}
 #
 # Replaces the generic safeguards/86ded564.../isstrongauthrequired.py for Okta. That file was wired to
-# getEstateSecondFactors (GET /api/v1/org/factors), a catalogue of factor TYPES, not of policies, so on Okta it
+# the second-factors method (GET /api/v1/org/factors), a catalogue of factor TYPES, not of policies, so on Okta it
 # can only answer None. This file reads the policies and rules themselves.
 
 

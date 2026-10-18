@@ -13,15 +13,19 @@
 # the evidence would mix companies.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isDeletionRetentionPeriodEnforced"
 
 
-def transform(input):
+def transform_bare(input):
     """
     Returns isDeletionRetentionPeriodEnforced = True when every protected domain of the organization uses
     Infinite Cloud Retention (retentionType "ICR"): Datto keeps every backed-up version, deleted items included.
 
     Proves: retention is infinite for each domain. Does not prove: the period of Time-Based Retention (TBR); the
-    API documents no period, so a TBR domain returns None (not evidenced) rather than a pass or a fail.
+    API documents no period, so a TBR domain returns None (not evidenced) rather than a pass or a fail, as do
+    an unreadable body and a missing or unrecognised retentionType.
     """
     key = "isDeletionRetentionPeriodEnforced"
 
@@ -87,8 +91,9 @@ def transform(input):
     try:
         domains, problem = read_domains(input)
         if domains is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         tbr = []
+        odd = []
         for d in domains:
             kind = str(d.get("retentionType") or "").strip().upper()
             if kind == "ICR":
@@ -96,9 +101,42 @@ def transform(input):
             if kind == "TBR":
                 tbr.append(str(d.get("domain")))
                 continue
-            return {key: False, "reason": "Domain " + str(d.get("domain")) + " has an unrecognised retentionType " + repr(d.get("retentionType"))}
+            odd.append("Domain " + str(d.get("domain")) + " has an unrecognised retentionType " + repr(d.get("retentionType")))
+        if odd:
+            return {key: None, "reason": "; ".join(odd)}
         if tbr:
             return {key: None, "reason": "Time-Based Retention on " + ", ".join(tbr) + "; the API does not expose the retention period"}
         return {key: True, "reason": "All " + str(len(domains)) + " protected domains use Infinite Cloud Retention"}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Datto", "product": "SaaS Protection",
+                         "method": "getSaasDomains", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, transform_bare(input))

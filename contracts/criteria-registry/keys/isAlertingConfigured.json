@@ -1,0 +1,38 @@
+{
+  "name": "isAlertingConfigured",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "intrusion detection is on and its alerts are sent to people (GuardDuty enabled with notifications), according to the GRC platform's own security tests. True only when every mapped test that counts is OK.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the Vanta security tests mapped to this key by their stable test ids, as one company's Vanta account reports them",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the company's Vanta tests (every page, no truncation) in which at least one mapped test is present and every mapped test that counts reports OK; deactivated and not-applicable tests are left out.",
+  "evidenceClass": "unknown",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/compliancemanagement/vanta/isalertingconfigured.py (third-party proof: the GRC platform's own test result, level 3 in the proof ladder)",
+    "Vanta public API reference, GET /v1/tests: https://developer.vanta.com/reference/listtests"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-15",
+      "change": "Registered so the Vanta proof-source transform can emit it."
+    }
+  ],
+  "notes": "Registered for the Vanta proof-source transform. It answers from Vanta's own test results (third-party proof, level 3), never from a read of the tool, so allowedCategories is empty (cross-category evidence). Whether other implementations of this key measure the same thing was not reviewed."
+}

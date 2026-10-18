@@ -9,7 +9,7 @@ class SophosSiemRecord(BaseModel):
     /siem/v1/alerts).
 
     Field set derived from 521 live records across three production tenants
-    (Spektrum Labs, 10370, Trebron) on 2026-07-15. Both feeds share one envelope
+    on 2026-07-15. Both feeds share one envelope
     but carry different keys - the event fields below are near-universal, while
     the alert-only fields appear on roughly 2% of records. Everything is therefore
     Optional: a missing field is normal, not a data problem.

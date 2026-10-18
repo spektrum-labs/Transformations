@@ -10,6 +10,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isBackupTypesScheduled = true when at least one server plan protects something and every server plan
@@ -101,13 +122,13 @@ def transform(input):
     try:
         used, problem = server_plans(input)
         if used is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         if len(used) == 0:
-            return {key: False, "reason": "No server plan has associated entities"}
+            return respond(key, False, "No server plan has associated entities")
         bad = [pname(p) + " (status " + str(p.get("status")) + ", RPO " + str(p.get("RPO")) + ")" for p in used
                if str(p.get("status") or "").upper() != "ENABLED" or (as_int(p.get("RPO")) or 0) <= 0]
         if bad:
-            return {key: False, "reason": str(len(bad)) + " of " + str(len(used)) + " server plans in use are not enabled with a schedule", "plans": bad[:25]}
-        return {key: True, "reason": "All " + str(len(used)) + " server plans in use are enabled with a positive RPO"}
+            return respond(key, False, str(len(bad)) + " of " + str(len(used)) + " server plans in use are not enabled with a schedule", {"plans": bad[:25]})
+        return respond(key, True, "All " + str(len(used)) + " server plans in use are enabled with a positive RPO")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

@@ -109,6 +109,12 @@ def transform(input):
         nodes = []
         if not api_errors:
             api_errors.append("The response has no data.organization.repositories.nodes list.")
+    if isinstance(nodes, list) and not nodes and not api_errors and total_count is None:
+        # An empty list with no totalCount is what the paginator leaves when the organization could not be
+        # read at all (a wrong organization name, or a token that cannot see it): the connection object, and
+        # with it totalCount, never arrived. That is not "this organization has no repositories", which
+        # would carry totalCount 0, so it is withheld as a read failure rather than scored.
+        api_errors.append("No repositories came back for the organization, and the response carries no repository count: the organization name may be wrong or the token cannot see it.")
     if isinstance(page_info, dict) and page_info.get("truncated") is True:
         api_errors.append("The paginator stopped at its page limit, so not every repository was read.")
     if isinstance(total_count, int) and len(nodes) < total_count:
@@ -143,11 +149,10 @@ def transform(input):
     # True: every repository read reports alerts on. False: a repository was READ and has
     # alerts off. None (Not evaluated, with a data collection error): the answer could not be
     # read, which is an error, a short or truncated read, no repository, or an unreported flag.
-    if api_errors:
-        is_enabled = None
-    elif disabled:
+    # A repository read with alerts off fails the check even when other repositories could not be read.
+    if disabled:
         is_enabled = False
-    elif unknown:
+    elif api_errors or unknown:
         is_enabled = None
     else:
         is_enabled = True
@@ -155,16 +160,17 @@ def transform(input):
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-    if api_errors:
+    if is_enabled is None:
         fail_reasons.append("Dependabot alert enablement could not be read for every repository: " + " ".join(api_errors))
         recommendations.append("Give the token read access to the organization's repositories and Dependabot alerts, then re-run.")
     elif is_enabled:
         pass_reasons.append(f"All {len(active)} active repositories report hasVulnerabilityAlertsEnabled=true.")
     else:
-        if disabled:
-            fail_reasons.append(f"{len(disabled)} of {len(active)} active repositories have Dependabot alerts off (e.g. {', '.join(disabled[:5])}).")
+        fail_reasons.append(f"{len(disabled)} of {len(active)} active repositories have Dependabot alerts off (e.g. {', '.join(disabled[:5])}).")
         if unknown:
             fail_reasons.append(f"{len(unknown)} active repositories did not report hasVulnerabilityAlertsEnabled (e.g. {', '.join(unknown[:5])}).")
+        if api_errors:
+            fail_reasons.append("Not every repository could be read, so others may also have alerts off: " + " ".join(api_errors))
         recommendations.append("Enable Dependabot alerts on every repository, for example through a code security configuration attached to all repositories.")
 
     result = {
@@ -187,7 +193,7 @@ def transform(input):
             "activeRepositories": len(active),
             "disabledRepos": disabled[:20],
         },
-        api_errors=api_errors,
+        api_errors=api_errors if is_enabled is None else None,
         metadata={
             "transformationId": "isDependabotAlertsEnabled",
             "vendor": "GitHub",

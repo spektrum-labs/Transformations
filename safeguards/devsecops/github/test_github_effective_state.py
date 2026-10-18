@@ -160,3 +160,48 @@ def test_dependabot_alerts_unreported_flag_reads_not_evaluated_but_read_off_stil
     assert value(m, gql()) == (None, "error")
     assert value(m, gql(True, False)) == (False, "success")
     assert value(m, gql(None, False)) == (False, "success")
+
+
+def test_dependabot_repository_read_with_alerts_off_still_fails_beside_a_short_read():
+    m = "isDependabotAlertsEnabled"
+    # 150 repositories, 2 read, one with alerts off: a known gap is a fail, not hidden as Not evaluated.
+    assert value(m, gql(False, True, total=150)) == (False, "success")
+    trunc = gql(True, False)
+    trunc["data"]["organization"]["repositories"]["pageInfo"]["truncated"] = True
+    out = load(m).transform(trunc)
+    assert (out["transformedResponse"][m], collection_status(out)) == (False, "success")
+    assert any("Not every repository could be read" in r for r in out["additionalInfo"]["evaluation"]["failReasons"])
+    errs = gql(False)
+    errs["errors"] = [{"message": "partial"}]
+    assert value(m, errs) == (False, "success")
+    # A short read with every repository read on is still Not evaluated.
+    assert value(m, gql(True, True, total=150)) == (None, "error")
+
+
+def _empty_connection(**extra):
+    """The shape the paginator leaves when the organization could not be read: a nodes list and nothing else."""
+    return {"organization": {"repositories": {"nodes": [], **extra}}}
+
+
+def test_dependabot_withholds_when_the_organization_could_not_be_read():
+    """No nodes and no totalCount: the connection never arrived (wrong organization name, or a token that cannot
+    see it). That is a read failure, so the criterion is not evaluated; it must not be scored as a finding."""
+    out = load("isDependabotAlertsEnabled").transform(_empty_connection())
+    assert out["transformedResponse"]["isDependabotAlertsEnabled"] is None
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert "organization name may be wrong" in collection["errors"][0]
+
+
+def test_dependabot_organization_with_no_repositories_is_not_evaluated():
+    """totalCount 0 arrived, so the organization was read, but no active repository reports a Dependabot state:
+    there is nothing to judge, so the criterion is Not evaluated (never a pass), like an empty list elsewhere."""
+    out = load("isDependabotAlertsEnabled").transform(_empty_connection(totalCount=0))
+    assert out["transformedResponse"]["isDependabotAlertsEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+def test_dependabot_pass_is_unchanged_by_the_empty_read_rule():
+    out = load("isDependabotAlertsEnabled").transform(gql(True, True))
+    assert out["transformedResponse"]["isDependabotAlertsEnabled"] is True
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"

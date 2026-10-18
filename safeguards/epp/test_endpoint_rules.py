@@ -106,16 +106,18 @@ def device(device_id, node_class, policy, days_ago):
 
 
 class TestNinjaOneDeviceRules:
-    def test_phones_and_stale_devices_leave_the_policy_percentage(self):
-        body = {"data": [device(1, "MAC", "37", 1), device(2, "MAC", [], 20), device(3, "APPLE_IOS", [], 1)]}
-        result = out(NINJA / "isEPPConfigured.py", body)
+    def test_phones_and_stale_devices_leave_the_protection_percentage(self):
+        devices = [device(1, "MAC", "37", 1), device(2, "MAC", [], 20), device(3, "APPLE_IOS", [], 1)]
+        rows = [av_row(1, "Defender", "ON", 1), av_row(2, "Defender", "OFF", 20), av_row(3, "Defender", "OFF", 1)]
+        result = out(NINJA / "isEPPConfigured.py", {"results": rows, "devices": devices})
         assert result["isEPPConfigured"] == 100
         assert result["devicesLeftOutMobile"] == 1
         assert result["devicesLeftOutStale"] == 1
 
-    def test_dark_fleet_policy_percentage_is_not_evaluated(self):
-        body = {"data": [device(1, "MAC", "37", 30), device(2, "MAC", "37", 31)]}
-        result = out(NINJA / "isEPPConfigured.py", body)
+    def test_dark_fleet_protection_percentage_is_not_evaluated(self):
+        rows = [av_row(1, "Defender", "ON", 30), av_row(2, "Defender", "ON", 31)]
+        devices = [device(1, "WINDOWS_WORKSTATION", [], 30), device(2, "WINDOWS_WORKSTATION", [], 31)]
+        result = out(NINJA / "isEPPConfigured.py", {"results": rows, "devices": devices})
         assert result["isEPPConfigured"] is None
         assert result["fleetDark"] is True
 

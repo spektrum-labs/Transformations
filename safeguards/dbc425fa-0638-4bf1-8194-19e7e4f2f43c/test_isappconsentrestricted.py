@@ -62,16 +62,45 @@ class AppConsentTests(unittest.TestCase):
         self.assertIs(out[KEY], False)
         self.assertEqual(out["appConsentRestrictedPolicyPercentage"], 50.0)
 
-    def test_setting_absent_fails_closed(self):
+    def assert_not_evaluated(self, payload):
+        full = self.t.transform(payload)
+        out = full["transformedResponse"]
+        self.assertIsNone(out[KEY], payload)
+        self.assertIsNone(out["appConsentRestrictedPolicyPercentage"], payload)
+        collection = full["additionalInfo"]["dataCollection"]
+        self.assertEqual(collection["status"], "error", payload)
+        self.assertTrue(collection["errors"], payload)
+
+    def test_setting_absent_is_not_evaluated(self):
+        # Without the unconfigured-third-party-apps setting nothing can be judged, so it is Not evaluated.
         data = copy.deepcopy(REAL)
         del data["result"]["apiResponse"]["policies"][2]
-        self.assertIs(self.out(data)[KEY], False)
+        self.assert_not_evaluated(data)
 
-    def test_no_evidence_fails_closed(self):
+    def test_no_evidence_is_not_evaluated(self):
         for body in [{}, None, "{}", [], {"policies": []}, {"statusCode": 401, "error": "Unauthorized"},
                      {"statusCode": 403, "error": "Forbidden"},
                      {"error": {"code": 403, "message": "Request had insufficient authentication scopes.", "status": "PERMISSION_DENIED"}}]:
-            self.assertIs(self.out(body)[KEY], False, body)
+            self.assert_not_evaluated(body)
+
+    def test_truncated_list_with_an_open_policy_already_seen_stays_false(self):
+        # The policy read so far states third-party apps are open: later pages cannot change that, so the answer is
+        # still No, but with no percentage because the list was not read in full.
+        data = copy.deepcopy(REAL)
+        data["result"]["apiResponse"]["nextPageToken"] = "next-page"
+        out = self.out(data)
+        self.assertIs(out[KEY], False)
+        self.assertIsNone(out["appConsentRestrictedPolicyPercentage"])
+
+    def test_truncated_list_with_only_restricted_policies_is_not_evaluated(self):
+        # Later pages could still hold an open policy, so nothing seen so far proves the control.
+        data = copy.deepcopy(REAL)
+        data["result"]["apiResponse"]["policies"][2]["setting"]["value"]["accessLevel"] = "BLOCK_ALL"
+        data["result"]["apiResponse"]["nextPageToken"] = "next-page"
+        self.assert_not_evaluated(data)
+
+    def test_exception_is_not_evaluated(self):
+        self.assert_not_evaluated("{not json")
 
 
 if __name__ == "__main__":

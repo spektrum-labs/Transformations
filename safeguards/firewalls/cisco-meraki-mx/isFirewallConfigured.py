@@ -150,8 +150,16 @@ def evaluate(data):
         else:
             empty.append(name)
     measured = len(configured) + len(empty)
+    if not reached or measured == 0:
+        verdict = None
+    elif empty:
+        verdict = False
+    elif unreadable:
+        verdict = None
+    else:
+        verdict = True
     result = {
-        "isFirewallConfigured": reached and measured > 0 and not empty and not unreadable,
+        "isFirewallConfigured": verdict,
         "ruleCoveragePercentage": pct(len(configured), measured),
         "networksEvaluated": measured,
         "userRuleCount": total_rules,
@@ -159,34 +167,41 @@ def evaluate(data):
         "networksNotMeasured": unreadable[:25],
         "endpointReached": reached,
     }
-    passes, fails, recs = [], [], []
+    passes, fails, recs, api_errors = [], [], [], []
     if not reached:
-
-        fails.append(
-            "The response carries no appliance network list and no per-network results, "
-            "so it is indistinguishable from an authentication failure. Not measured."
+        api_errors.append(
+            "The Meraki response carries no appliance network list and no per-network results; "
+            "nothing to measure."
         )
-
     elif measured == 0:
-        fails.append("No appliance network returned L3 firewall rules.")
-    elif not empty and not unreadable:
-        passes.append(
-            "All %d appliance network(s) carry user-defined L3 rules (%d in total)."
-            % (measured, total_rules)
-        )
-    else:
+        api_errors.append("No appliance network returned L3 firewall rules; nothing to measure.")
+    elif empty:
         fails.append(
             "%d of %d appliance network(s) run only Meraki's implicit allow-any default rule: %s."
             % (len(empty), measured, ", ".join(empty[:10]))
         )
         recs.append("Define outbound L3 firewall rules on each network listed.")
-    return result, passes, fails, recs, {"networksEvaluated": measured}
+    elif unreadable:
+        api_errors.append(
+            "%d of %d appliance network(s) could not be read (%s), so user-defined L3 rules cannot be confirmed on every network."
+            % (len(unreadable), len(unreadable) + measured, ", ".join(unreadable[:10]))
+        )
+    else:
+        passes.append(
+            "All %d appliance network(s) carry user-defined L3 rules (%d in total)."
+            % (measured, total_rules)
+        )
+    if api_errors:
+        fails = list(api_errors)
+    elif unreadable:
+        fails.append("%d more network(s) could not be read and were not counted: %s." % (len(unreadable), ", ".join(unreadable[:10])))
+    return result, passes, fails, recs, api_errors, {"networksEvaluated": measured}
 
 
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
-    result, pass_reasons, fail_reasons, recommendations, input_summary = evaluate(data)
+    result, pass_reasons, fail_reasons, recommendations, api_errors, input_summary = evaluate(data)
     return create_response(
         result=result,
         validation=validation,
@@ -194,6 +209,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "isFirewallConfigured",
             "vendor": "Cisco Meraki MX",

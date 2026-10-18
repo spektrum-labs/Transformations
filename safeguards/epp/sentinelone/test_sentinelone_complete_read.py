@@ -1,7 +1,7 @@
 """SentinelOne (2bc425fa): every getEndpoints transform scores only a complete agent read; the licence reads every site.
 
 Complete = SentinelOne's pagination block with a numeric totalItems, no nextCursor left, no IS `truncated` marker,
-and at least totalItems agents. Carlex (2026-09-29) has 1,056 agents under one account with 8 sites: the old
+and at least totalItems agents. A live account (2026-09-29) has 1,056 agents under one account with 8 sites: the old
 definition read one page of 1,000, and the licence call read one site. Shapes below are the IS run_with_override
 response for GET /agents and GET /sites (result -> data, pagination, apiResponse) and the Token-Service new-format
 envelope {"data": <that response>, "validation": {...}}.
@@ -79,7 +79,7 @@ class AgentReads(unittest.TestCase):
                 self.assertEqual(self.value(key, body), (None, "error"), (key, body))
 
     def test_measured_zero_fleet_is_not_evaluated(self):
-        # A complete read with no agents proves nothing either way (2026-10-02, Collaborative Fund): Unevaluated
+        # A complete read with no agents proves nothing either way (2 Oct 2026): Unevaluated
         # (None plus a dataCollection reason Token-Service renders as "Not evaluated"), never False or 0%.
         for key in AGENT_KEYS:
             self.assertEqual(self.value(key, ts(is_response([], 0))), (None, "error"), key)
