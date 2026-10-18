@@ -6,11 +6,11 @@ Threat: abuse of the ConnectWise Cloud Backup (506e08f9-6e9a-4da4-942b-a099a0364
 ConnectWise Cloud Management - MS Teams (24205314-2b89-4e07-a2a4-579e898a5640) multitenant OAuth
 apps, from 15 Oct 2026 (see isfreeofconnectwiseappexposure.py beside this file).
 
-Criterion: True when the service-principal sign-in feeds and the directory-audit feed were read
-whole and show none of the published indicators since 2026-10-15T00:00:00Z. False when any
+Criterion: True when the three sign-in feeds and the directory-audit feed were read whole, the
+window start is still inside Entra's 30-day log retention, and they show none of the published indicators since 2026-10-15T00:00:00Z. False when any
 readable feed shows one (an indicator found is evidence even if another feed failed).
 Indicators:
-  - a sign-in from 144.172.64.128;
+  - a sign-in from 144.172.64.128 (service principal, interactive or non-interactive user);
   - a ConnectWise app signing in with Python-urllib/3.12, python-requests/2.31 or 2.34.2;
   - credentials added to a ConnectWise service principal;
   - a ConnectWise app adding credentials, roles, grants or owners anywhere (including itself as
@@ -20,18 +20,24 @@ Indicators:
 Defender alerts (Graph security/alerts_v2, SecurityAlert.Read.All) are optional: most connections
 do not grant that permission, so an unreadable alert feed is reported but does not block True.
 
-Data source: Integration-Service workflow isFreeOfConnectWiseCompromiseIndicators:
+Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria):
   spSignInsByApp            GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-15T00:00:00Z and (appId eq ... or appId eq ...)
   spSignInsFromIndicatorIp  GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-15T00:00:00Z and ipAddress eq '144.172.64.128'
+  userSignInsFromIndicatorIp GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser') and createdDateTime ge ... and ipAddress eq '144.172.64.128'
+                            (a separate read: Graph documents that user and service-principal event types
+                            cannot be combined in one filter)
                             (AuditLog.Read.All plus Directory.Read.All; sign-in logs need Entra ID P1 or P2)
-  directoryAudits           GET /v1.0/auditLogs/directoryAudits?$filter=activityDateTime ge 2026-10-15T00:00:00Z and (category eq 'ApplicationManagement' or category eq 'RoleManagement')  (AuditLog.Read.All)
+  directoryAudits           GET /v1.0/auditLogs/directoryAudits?$filter=activityDateTime ge 2026-10-15T00:00:00Z  (AuditLog.Read.All;
+                            category is not a documented filter, so this file picks the activities)
   securityAlerts            GET /v1.0/security/alerts_v2?$filter=createdDateTime ge 2026-10-15T00:00:00Z   (optional)
   plus the presence and grant feeds the sibling file reads, so both files report one verdict.
-Entra keeps sign-in and audit logs for 30 days with P1/P2 and 7 days without, so this check loses
-the 15 Oct activity after about 22 Oct 2026 on tenants without P1/P2.
+Entra keeps sign-in and audit logs for 30 days with P1/P2 and 7 days without. Without P1/P2 the
+sign-in reads are refused, so the check is Not evaluated there. With P1/P2, once the window start is
+30 days old (14 Nov 2026) a clean read reads Not evaluated; an indicator found still reads False.
 
-Not evaluated (None and dataCollection.status "error"): no indicator found and either sign-in feed
-or the audit feed is missing, refused, errored or paged.
+Not evaluated (None and dataCollection.status "error"): no indicator found and a sign-in feed or the
+audit feed is missing, refused, errored or paged, or the window has aged out of log retention. An
+indicator in a partial (paged) feed still counts.
 """
 import json
 from datetime import datetime
@@ -48,6 +54,11 @@ CONNECTWISE_APPS = {
 INDICATOR_IPS = ("144.172.64.128",)
 INDICATOR_USER_AGENTS = ("python-urllib/3.12", "python-requests/2.31", "python-requests/2.34.2")
 WINDOW_START = "2026-10-15T00:00:00"
+WINDOW_START_DT = datetime(2026, 10, 15)
+# Entra keeps sign-in and audit logs 30 days with P1/P2 (the sign-in reads need P1/P2, so a tenant whose
+# sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
+# longer show the start of the activity, so "no indicators" is not evaluated.
+LOG_RETENTION_DAYS = 30
 # Microsoft Graph application permissions (app role ids, identical in every tenant) that let an app
 # take over a directory. Directory.ReadWrite.All is the one named in the advisory.
 HIGH_RISK_APP_ROLES = {
@@ -109,6 +120,18 @@ def create_response(result, pass_reasons=None, fail_reasons=None, input_summary=
     }
 
 
+def utc_now():
+    return datetime.utcnow()
+
+
+today = utc_now
+
+
+def retention_covers_window():
+    age = today() - WINDOW_START_DT
+    return age.days < LOG_RETENTION_DAYS
+
+
 def lower(value):
     return value.strip().lower() if isinstance(value, str) else ""
 
@@ -153,21 +176,23 @@ def unwrap(data):
 
 
 def read_feed(data, key):
-    """(records, state) for one merged Graph feed. state is ok, missing, error or paged; records is a
-    list only when state is ok."""
+    """(records, state) for one merged Graph feed. state is ok, missing, error or paged. records is a list
+    when state is ok or paged (a paged list is partial: an indicator in it counts, its absence proves
+    nothing), else None. Callers that need the whole list check state == "ok"."""
     feed = data.get(key)
     if feed is None:
         return None, "missing"
+    state = "ok"
     stats = data.get("paginationStats")
     if isinstance(stats, dict) and isinstance(stats.get(key), dict) and stats[key].get("paginationTruncated") is True:
-        return None, "paged"
+        state = "paged"
     if isinstance(feed, list):
         records = feed
     elif isinstance(feed, dict):
         if feed.get("stepError") or feed.get("error") or feed.get("errors"):
             return None, "error"
         if feed.get("@odata.nextLink"):
-            return None, "paged"
+            state = "paged"
         records = feed.get("value")
         if not isinstance(records, list):
             return None, "error"
@@ -176,7 +201,7 @@ def read_feed(data, key):
     for record in records:
         if not isinstance(record, dict):
             return None, "error"
-    return records, "ok"
+    return records, state
 
 
 def assess(data):
@@ -227,6 +252,8 @@ def assess(data):
                 for scope in HIGH_RISK_SCOPES:
                     if scope in scopes:
                         high.append(name + " holds a delegated grant including " + scope)
+        else:
+            unknown_risk = True
         sp_id = lower(record.get("id"))
         if roles_state == "ok":
             for item in roles:
@@ -239,9 +266,26 @@ def assess(data):
     indicators = []
     by_app, by_app_state = read_feed(data, "spSignInsByApp")
     by_ip, by_ip_state = read_feed(data, "spSignInsFromIndicatorIp")
+    by_user_ip, by_user_ip_state = read_feed(data, "userSignInsFromIndicatorIp")
     feeds["spSignInsByApp"] = by_app_state
     feeds["spSignInsFromIndicatorIp"] = by_ip_state
-    sign_ins = (by_app or []) + (by_ip or [])
+    feeds["userSignInsFromIndicatorIp"] = by_user_ip_state
+    sign_ins = (by_app or []) + (by_ip or []) + (by_user_ip or [])
+    # The apps' service principal ids, also from feeds other than the presence read, so an audit entry
+    # initiated by one still matches when the presence read failed.
+    for item in by_app or []:
+        if lower(item.get("appId")) in CONNECTWISE_APPS and lower(item.get("servicePrincipalId")):
+            sp_ids.append(lower(item.get("servicePrincipalId")))
+    for app_id in APP_ROLE_FEEDS:
+        role_feed, grant_feed = APP_ROLE_FEEDS[app_id]
+        assigned, assigned_state = read_feed(data, role_feed)
+        for item in assigned or []:
+            if lower(item.get("principalId")):
+                sp_ids.append(lower(item.get("principalId")))
+        grants, grants_state = read_feed(data, grant_feed)
+        for item in grants or []:
+            if lower(item.get("clientId")):
+                sp_ids.append(lower(item.get("clientId")))
     for item in sign_ins:
         if not in_window(item.get("createdDateTime")):
             continue
@@ -304,7 +348,10 @@ def assess(data):
                     hit = True
             if hit:
                 indicators.append("Defender alert '" + str(item.get("title")) + "' naming an indicator")
-    indicators_read = by_app_state == "ok" and by_ip_state == "ok" and audits_state == "ok"
+    retention_ok = retention_covers_window()
+    feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
+    indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
+                       and audits_state == "ok" and retention_ok)
 
     if indicators:
         verdict = "Indicators found"
@@ -332,6 +379,7 @@ def assess(data):
         "presenceKnown": presence_known, "present": present, "enabled": enabled, "names": names,
         "high": high, "risk": risk, "indicators": indicators, "indicatorsRead": indicators_read,
         "alertsState": alerts_state, "verdict": verdict, "feeds": feeds,
+        "retentionOk": retention_ok,
     }
 
 
@@ -370,13 +418,17 @@ def transform(input):
             result = {KEY: False}
             result.update(summary_fields(found))
             return create_response(result, fail_reasons=found["indicators"], input_summary=summary, findings=findings)
+        if not found["retentionOk"]:
+            return not_measured("The indicator window (from 15 Oct 2026) is now older than Entra's "
+                                + str(LOG_RETENTION_DAYS) + "-day sign-in and audit log retention, so a clean "
+                                "read can no longer rule out early activity; indicators are not evaluated.", found)
         if not found["indicatorsRead"]:
-            return not_measured("The service-principal sign-in logs or the directory audit log could not be read "
+            return not_measured("A sign-in log read or the directory audit log could not be read "
                                 "whole; indicators are not evaluated. Needs AuditLog.Read.All, and Entra ID P1 or P2 "
                                 "for sign-in logs.", found)
         result = {KEY: True}
         result.update(summary_fields(found))
-        reasons = ["No published indicator in service-principal sign-ins or the directory audit log since 15 Oct 2026."]
+        reasons = ["No published indicator in sign-ins (service principal, and user sign-ins from the indicator IP) or the directory audit log since 15 Oct 2026."]
         if found["alertsState"] != "ok":
             reasons.append("Defender alerts were not read (" + found["alertsState"] + ").")
         return create_response(result, pass_reasons=reasons, input_summary=summary, findings=findings)

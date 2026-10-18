@@ -63,9 +63,9 @@ def role_assignment(principal_id, role_id):
             "principal": {"@odata.type": "#microsoft.graph.servicePrincipal", "id": principal_id}}
 
 
-def sign_in(app_id, ip, when="2026-10-15T09:00:00Z", agent=""):
+def sign_in(app_id, ip, when="2026-10-15T09:00:00Z", agent="", sp_id=None, kind="servicePrincipal"):
     return {"id": "si-" + ip, "appId": app_id, "ipAddress": ip, "createdDateTime": when, "userAgent": agent,
-            "signInEventTypes": ["servicePrincipal"], "status": {"errorCode": 0}}
+            "servicePrincipalId": sp_id, "signInEventTypes": [kind], "status": {"errorCode": 0}}
 
 
 def audit(activity, target_id, when="2026-10-15T10:00:00Z", by_app=None, by_sp=None, target_name="Some app"):
@@ -87,6 +87,7 @@ def clean(**overrides):
         "roleAssignments": graph(role_assignment(OTHER_SP, GLOBAL_ADMIN)),
         "spSignInsByApp": graph(),
         "spSignInsFromIndicatorIp": graph(),
+        "userSignInsFromIndicatorIp": graph(),
         "directoryAudits": graph(audit("Add service principal credentials", OTHER_SP)),
     }
     body.update(overrides)
@@ -95,7 +96,7 @@ def clean(**overrides):
 
 def exposed_backup(**overrides):
     body = clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP, name="ConnectWise Cloud Backup")),
-                 cwBackupAppRoles=graph(app_role(USER_READ_ALL)))
+                 cwBackupAppRoles=graph(app_role(USER_READ_ALL)), cwBackupDelegatedGrants=graph())
     body.update(overrides)
     return body
 
@@ -191,7 +192,7 @@ def test_delegated_directory_readwrite_all_grant_is_high_risk():
 
 def test_teams_app_holding_global_admin_is_high_risk():
     body = clean(servicePrincipals=graph(sp(TEAMS_APP, TEAMS_SP, name="ConnectWise Cloud Management - MS Teams")),
-                 cwTeamsAppRoles=graph(),
+                 cwTeamsAppRoles=graph(), cwTeamsDelegatedGrants=graph(),
                  roleAssignments=graph(role_assignment(TEAMS_SP, GLOBAL_ADMIN)))
     exposure, _ = run_both(body)
     assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
@@ -376,3 +377,95 @@ def test_helper_block_is_identical_in_both_files():
         end = text.index("# ---- shared helper block: end")
         blocks.append(text[start:end])
     assert blocks[0] == blocks[1]
+
+
+# ---- gate follow-ups (17 Oct): M1 grant feed, M2 retention, M3 user sign-ins, paged and SP-id Lows
+
+def at(module_day):
+    """Pin the evaluation date in both files."""
+    from datetime import datetime as _dt
+    stamp = _dt(2026, 11, module_day) if isinstance(module_day, int) else module_day
+    for module in (EXPOSURE, INDICATORS):
+        module.today = lambda stamp=stamp: stamp
+
+
+def reset_clock():
+    for module in (EXPOSURE, INDICATORS):
+        module.today = module.__dict__["utc_now"]
+
+
+def test_unreadable_delegated_grants_for_an_enabled_app_leave_risk_unknown():
+    for broken in (STEP_403, None):
+        body = exposed_backup(cwBackupDelegatedGrants=broken)
+        if broken is None:
+            del body["cwBackupDelegatedGrants"]
+        exposure, _ = run_both(body)
+        assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+        assert value(exposure, "connectWiseRiskLevel") == "unknown", broken
+
+
+def test_clean_indicators_read_after_log_retention_passed_the_window_are_not_evaluated():
+    try:
+        at(13)
+        _, indicators = run_both(exposed_backup())
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
+        at(15)
+        exposure, indicators = run_both(exposed_backup())
+        assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+        assert "retention" in " ".join(indicators["additionalInfo"]["evaluation"]["failReasons"])
+        assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    finally:
+        reset_clock()
+
+
+def test_indicator_found_after_retention_still_counts():
+    try:
+        at(20)
+        _, indicators = run_both(exposed_backup(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP))))
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    finally:
+        reset_clock()
+
+
+def test_user_sign_in_from_indicator_ip_is_an_indicator():
+    hit = sign_in("de8bc8b5-d9f9-48b1-a8ad-b748da725064", IOC_IP, kind="nonInteractiveUser")
+    _, indicators = run_both(exposed_backup(userSignInsFromIndicatorIp=graph(hit)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+
+
+def test_unreadable_user_sign_ins_leave_indicators_not_evaluated():
+    body = exposed_backup(userSignInsFromIndicatorIp=STEP_403)
+    _, indicators = run_both(body)
+    assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+    body = exposed_backup()
+    del body["userSignInsFromIndicatorIp"]
+    _, indicators = run_both(body)
+    assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+
+
+def test_indicator_on_a_paged_feed_still_counts():
+    paged = {"value": [sign_in(BACKUP_APP, IOC_IP)], "@odata.nextLink": "https://graph.example/next"}
+    exposure, indicators = run_both(exposed_backup(spSignInsFromIndicatorIp=paged))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert value(exposure, "connectWiseVerdict") == "Indicators found"
+    body = exposed_backup(directoryAudits=graph(audit("Add service principal credentials", BACKUP_SP)),
+                          paginationStats={"directoryAudits": {"paginationTruncated": True}})
+    _, indicators = run_both(body)
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+
+
+def test_clean_paged_feed_is_still_not_evaluated():
+    paged = {"value": [], "@odata.nextLink": "https://graph.example/next"}
+    _, indicators = run_both(exposed_backup(spSignInsFromIndicatorIp=paged))
+    assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+
+
+def test_audit_by_connectwise_sp_id_counts_when_the_presence_read_failed():
+    # The SP id is learned from the app's own sign-ins, so the audit match does not need the presence feed.
+    body = clean(servicePrincipals=STEP_403,
+                 spSignInsByApp=graph(sign_in(BACKUP_APP, "203.0.113.7", sp_id=BACKUP_SP)),
+                 directoryAudits=graph(audit("Add member to role", OTHER_SP, by_sp=BACKUP_SP)))
+    exposure, indicators = run_both(body)
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert_not_measured(exposure, "isFreeOfConnectWiseAppExposure")
+    assert value(exposure, "connectWiseVerdict") == "Indicators found"

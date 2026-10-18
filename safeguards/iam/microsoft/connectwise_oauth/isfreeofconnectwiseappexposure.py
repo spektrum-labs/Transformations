@@ -12,21 +12,22 @@ Criterion: True when the tenant's service-principal list was read and neither ap
 service principal in it. False when either app is present and enabled (Exposed). A present but
 disabled service principal cannot get tokens, so it reads True and is named in the pass reason.
 
-Data source: Integration-Service workflow isFreeOfConnectWiseAppExposure, merged Graph reads:
+Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria), merged Graph reads:
   servicePrincipals         GET /v1.0/servicePrincipals?$filter=appId in (...)          (Application.Read.All or Directory.Read.All)
   cwBackupAppRoles          GET /v1.0/servicePrincipals(appId='506e...')/appRoleAssignments
   cwTeamsAppRoles           GET /v1.0/servicePrincipals(appId='2420...')/appRoleAssignments
-  cwBackupDelegatedGrants   GET /v1.0/servicePrincipals(appId='506e...')/oauth2PermissionGrants   (optional)
-  cwTeamsDelegatedGrants    GET /v1.0/servicePrincipals(appId='2420...')/oauth2PermissionGrants   (optional)
+  cwBackupDelegatedGrants   GET /v1.0/servicePrincipals(appId='506e...')/oauth2PermissionGrants
+  cwTeamsDelegatedGrants    GET /v1.0/servicePrincipals(appId='2420...')/oauth2PermissionGrants
   roleAssignments           GET /v1.0/roleManagement/directory/roleAssignments           (RoleManagement.Read.Directory or Directory.Read.All)
-  spSignInsByApp, spSignInsFromIndicatorIp, directoryAudits, securityAlerts  (see the sibling file)
+  spSignInsByApp, spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, directoryAudits, securityAlerts
+                            (see the sibling file)
 Every step runs with continueOnError, so a refused read arrives as {"stepError": true, ...}.
 
 Verdict fields (identical in both criterion files):
   connectWiseVerdict     Not evaluated | Not exposed | Exposed | Indicators found
   connectWiseRiskLevel   high (Directory.ReadWrite.All or a peer permission, or a privileged
                          directory role such as Global Administrator) | standard | unknown (a
-                         grant feed for a present app could not be read) | none
+                         grant, delegated-grant or role feed for an enabled app could not be read) | none
 Not evaluated (None and dataCollection.status "error"): the service-principal feed is missing,
 refused, errored, paged or unrecognised. A failed read is never "not exposed".
 """
@@ -45,6 +46,11 @@ CONNECTWISE_APPS = {
 INDICATOR_IPS = ("144.172.64.128",)
 INDICATOR_USER_AGENTS = ("python-urllib/3.12", "python-requests/2.31", "python-requests/2.34.2")
 WINDOW_START = "2026-10-15T00:00:00"
+WINDOW_START_DT = datetime(2026, 10, 15)
+# Entra keeps sign-in and audit logs 30 days with P1/P2 (the sign-in reads need P1/P2, so a tenant whose
+# sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
+# longer show the start of the activity, so "no indicators" is not evaluated.
+LOG_RETENTION_DAYS = 30
 # Microsoft Graph application permissions (app role ids, identical in every tenant) that let an app
 # take over a directory. Directory.ReadWrite.All is the one named in the advisory.
 HIGH_RISK_APP_ROLES = {
@@ -106,6 +112,18 @@ def create_response(result, pass_reasons=None, fail_reasons=None, input_summary=
     }
 
 
+def utc_now():
+    return datetime.utcnow()
+
+
+today = utc_now
+
+
+def retention_covers_window():
+    age = today() - WINDOW_START_DT
+    return age.days < LOG_RETENTION_DAYS
+
+
 def lower(value):
     return value.strip().lower() if isinstance(value, str) else ""
 
@@ -150,21 +168,23 @@ def unwrap(data):
 
 
 def read_feed(data, key):
-    """(records, state) for one merged Graph feed. state is ok, missing, error or paged; records is a
-    list only when state is ok."""
+    """(records, state) for one merged Graph feed. state is ok, missing, error or paged. records is a list
+    when state is ok or paged (a paged list is partial: an indicator in it counts, its absence proves
+    nothing), else None. Callers that need the whole list check state == "ok"."""
     feed = data.get(key)
     if feed is None:
         return None, "missing"
+    state = "ok"
     stats = data.get("paginationStats")
     if isinstance(stats, dict) and isinstance(stats.get(key), dict) and stats[key].get("paginationTruncated") is True:
-        return None, "paged"
+        state = "paged"
     if isinstance(feed, list):
         records = feed
     elif isinstance(feed, dict):
         if feed.get("stepError") or feed.get("error") or feed.get("errors"):
             return None, "error"
         if feed.get("@odata.nextLink"):
-            return None, "paged"
+            state = "paged"
         records = feed.get("value")
         if not isinstance(records, list):
             return None, "error"
@@ -173,7 +193,7 @@ def read_feed(data, key):
     for record in records:
         if not isinstance(record, dict):
             return None, "error"
-    return records, "ok"
+    return records, state
 
 
 def assess(data):
@@ -224,6 +244,8 @@ def assess(data):
                 for scope in HIGH_RISK_SCOPES:
                     if scope in scopes:
                         high.append(name + " holds a delegated grant including " + scope)
+        else:
+            unknown_risk = True
         sp_id = lower(record.get("id"))
         if roles_state == "ok":
             for item in roles:
@@ -236,9 +258,26 @@ def assess(data):
     indicators = []
     by_app, by_app_state = read_feed(data, "spSignInsByApp")
     by_ip, by_ip_state = read_feed(data, "spSignInsFromIndicatorIp")
+    by_user_ip, by_user_ip_state = read_feed(data, "userSignInsFromIndicatorIp")
     feeds["spSignInsByApp"] = by_app_state
     feeds["spSignInsFromIndicatorIp"] = by_ip_state
-    sign_ins = (by_app or []) + (by_ip or [])
+    feeds["userSignInsFromIndicatorIp"] = by_user_ip_state
+    sign_ins = (by_app or []) + (by_ip or []) + (by_user_ip or [])
+    # The apps' service principal ids, also from feeds other than the presence read, so an audit entry
+    # initiated by one still matches when the presence read failed.
+    for item in by_app or []:
+        if lower(item.get("appId")) in CONNECTWISE_APPS and lower(item.get("servicePrincipalId")):
+            sp_ids.append(lower(item.get("servicePrincipalId")))
+    for app_id in APP_ROLE_FEEDS:
+        role_feed, grant_feed = APP_ROLE_FEEDS[app_id]
+        assigned, assigned_state = read_feed(data, role_feed)
+        for item in assigned or []:
+            if lower(item.get("principalId")):
+                sp_ids.append(lower(item.get("principalId")))
+        grants, grants_state = read_feed(data, grant_feed)
+        for item in grants or []:
+            if lower(item.get("clientId")):
+                sp_ids.append(lower(item.get("clientId")))
     for item in sign_ins:
         if not in_window(item.get("createdDateTime")):
             continue
@@ -301,7 +340,10 @@ def assess(data):
                     hit = True
             if hit:
                 indicators.append("Defender alert '" + str(item.get("title")) + "' naming an indicator")
-    indicators_read = by_app_state == "ok" and by_ip_state == "ok" and audits_state == "ok"
+    retention_ok = retention_covers_window()
+    feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
+    indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
+                       and audits_state == "ok" and retention_ok)
 
     if indicators:
         verdict = "Indicators found"
@@ -329,6 +371,7 @@ def assess(data):
         "presenceKnown": presence_known, "present": present, "enabled": enabled, "names": names,
         "high": high, "risk": risk, "indicators": indicators, "indicatorsRead": indicators_read,
         "alertsState": alerts_state, "verdict": verdict, "feeds": feeds,
+        "retentionOk": retention_ok,
     }
 
 
