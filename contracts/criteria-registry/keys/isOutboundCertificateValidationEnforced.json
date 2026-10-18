@@ -1,0 +1,40 @@
+{
+  "name": "isOutboundCertificateValidationEnforced",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the email service requires TLS and refuses to deliver outbound mail to a receiving server whose TLS certificate is not valid (self-signed, expired or for another name). False when TLS is not required, because mail can then still go out unencrypted.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the outbound mail the email service sends for one account; one account-level setting",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the account's enforced TLS setting showing TLS is required and a valid certificate is required for delivery; an error, 401/403 or empty read is Not evaluated.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Email Security",
+    "Messaging Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "SendGrid API reference, Enforced TLS settings (twilio.com/docs/sendgrid/api-reference/settings-enforced-tls): GET /v3/user/settings/enforced_tls returns require_tls, require_valid_cert and version"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Judged together with require_tls, like isOutboundMinimumTLSVersionSecure, because SendGrid applies the certificate setting only under a required-TLS policy; isOutboundTLSEnforced reports require_tls on its own. Read from SendGrid require_tls and require_valid_cert. Messaging Security is allowed too because the SendGrid integration is catalogued under communication (Messaging Security)."
+}
