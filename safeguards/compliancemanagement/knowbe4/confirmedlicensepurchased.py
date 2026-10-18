@@ -49,9 +49,12 @@ def evaluate(data):
                 "error": "The response is not a KnowBe4 account with a subscription level; nothing to measure."}
     try:
         from datetime import timezone
-        sub_level = data.get('subscription_level', '')
+        sub_level = data.get('subscription_level')
         end_date = data.get('subscription_end_date', '')
-        is_active = bool(sub_level) and sub_level.lower() != 'free'
+        if not isinstance(sub_level, str) or not sub_level.strip():
+            return {"confirmedLicensePurchased": None,
+                    "error": "The KnowBe4 account has no readable subscription level; nothing to measure."}
+        is_active = sub_level.strip().lower() != 'free'
         if end_date:
             expiry = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
             if expiry.tzinfo is None:
@@ -101,8 +104,9 @@ def transform(input):
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
             pass_reasons=pass_reasons, fail_reasons=fail_reasons, recommendations=recommendations,
             input_summary={criteriaKey: result_value, **extra_fields})
-    except Exception as e:
+    except Exception:
         reason = "The KnowBe4 account response could not be read, so the subscription was not evaluated."
         return create_response(
             result={criteriaKey: None}, validation={"status": "error", "errors": [], "warnings": []},
-            api_errors=[reason], transformation_errors=[str(e)], fail_reasons=[reason])
+            api_errors=[reason], transformation_errors=["The KnowBe4 account response could not be processed."],
+            fail_reasons=[reason])
