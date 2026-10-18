@@ -98,13 +98,65 @@ def test_transformation_exception_is_unevaluated(monkeypatch):
 # ---- partial ----------------------------------------------------------------------------------
 
 def test_read_shorter_than_reported_census_is_unevaluated():
-    assert_unevaluated(envelope([endpoint(i) for i in range(10)], total=194), "incomplete")
+    assert_unevaluated(envelope([endpoint(i) for i in range(10)], total=200), "incomplete")
 
 
 def test_endpoint_without_monitoring_status_is_unevaluated():
     records = [endpoint(i) for i in range(8)] + [endpoint(50, monitoring=None), endpoint(51, monitoring="")]
     reason = assert_unevaluated(records, "monitoring_status")
     assert reason.startswith("2 of 10")
+
+
+def never_checked_in_endpoint(i):
+    """A listed, live endpoint whose sensor never checked in (all state fields empty)."""
+    attrs = {"display_identifier": "host-%03d.example.test" % i, "hostname": "host-%03d" % i,
+             "monitoring_status": None, "endpoint_status": None, "platform": None,
+             "registration_time": None, "last_checkin_time": None, "is_decommissioned": False,
+             "sensor": {"type": "Sensor", "id": "sensor-%03d" % i,
+                        "attributes": {"registration_time": None, "last_checkin_time": None}}}
+    return {"type": "Endpoint", "id": str(9000 + i), "attributes": attrs}
+
+
+def test_never_checked_in_endpoints_count_as_unmonitored_not_as_a_partial_census():
+    records = ([endpoint(i) for i in range(4)] + [endpoint(10 + i, "unmonitored", "suspended") for i in range(19)]
+               + [never_checked_in_endpoint(1)])
+    tr, info = run(envelope(records))
+    assert tr[KEY] == 16, tr  # 4 monitored of 24 live: floor(16.6)
+    assert tr["totalEndpoints"] == 24 and tr["monitoredEndpoints"] == 4
+    assert tr["neverCheckedInEndpoints"] == 1 and tr["unmonitoredEndpoints"] == 20
+    assert info["dataCollection"]["status"] == "success" and not info["dataCollection"]["errors"]
+    assert any("never checked in" in r for r in info["evaluation"]["failReasons"])
+
+
+def test_never_checked_in_endpoints_never_raise_coverage():
+    # 95 monitored of 100 live passes a 95 threshold; one more never-registered record drops it to 94
+    base = [endpoint(i) for i in range(95)] + [endpoint(200 + i, "unmonitored", "suspended") for i in range(5)]
+    assert run(base)[0][KEY] == 95
+    assert run(base + [never_checked_in_endpoint(1)])[0][KEY] == 94
+
+
+def test_all_monitored_plus_a_never_checked_in_endpoint_is_not_100():
+    tr, _ = run([endpoint(i) for i in range(9)] + [never_checked_in_endpoint(1)])
+    assert tr[KEY] == 90
+
+
+def test_no_live_endpoint_reporting_a_status_is_unevaluated():
+    reason = assert_unevaluated([never_checked_in_endpoint(i) for i in range(3)], "No live endpoint reports")
+    assert "3 never checked in" in reason
+
+
+def test_registered_but_never_checked_in_endpoint_counts_as_unmonitored():
+    attrs = never_checked_in_endpoint(2)["attributes"]
+    attrs["registration_time"] = "2026-09-11T21:50:50Z"
+    tr, _ = run([endpoint(i) for i in range(9)] + [{"type": "Endpoint", "id": "9002", "attributes": attrs}])
+    assert tr[KEY] == 90 and tr["neverCheckedInEndpoints"] == 1
+
+
+def test_endpoint_with_a_check_in_but_no_status_is_still_a_partial_census():
+    # it shows a check-in, so its missing monitoring_status is unexplained, not a never-checked-in record
+    records = [endpoint(i) for i in range(6)] + [never_checked_in_endpoint(1), endpoint(50, monitoring=None)]
+    reason = assert_unevaluated(records, "monitoring_status")
+    assert reason.startswith("1 of 8")
 
 
 def test_non_endpoint_record_in_census_is_unevaluated():
@@ -141,10 +193,10 @@ def test_decommissioned_are_left_out_of_the_denominator():
 # ---- partly monitored -------------------------------------------------------------------------
 
 @pytest.mark.parametrize("monitored,total,expected", [
-    (107, 194, 55),   # Ethico shape: 55.15% -> 55
-    (18, 21, 85),     # Gohlke shape: 85.71% -> 85
-    (5, 10, 50),      # Kingsmen shape
-    (63, 68, 92),     # Sycuan shape: 92.65% -> 92, below a 95 bar
+    (111, 200, 55),   # large fleet shape: 55.5% -> 55
+    (13, 15, 86),     # mid fleet shape: 86.67% -> 86
+    (5, 10, 50),      # small fleet shape
+    (46, 50, 92),     # just below a 95 bar: 92% -> 92
     (189, 199, 94),   # 94.97%: rounds DOWN, never up to the 95 bar
     (0, 2, 0),        # measured zero is a real 0, not an empty read
 ])
