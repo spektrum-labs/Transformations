@@ -5,6 +5,10 @@ Category: Email Security
 
 Evaluates Mail Policies to check for Anti-Phishing settings including
 domain spoofing and employee name spoofing detection.
+
+Google returns several gmail.spoofing_and_authentication policies for one org unit (SYSTEM defaults for
+unlicensed and licensed entities, and any ADMIN override) and applies the one with the greatest
+policyQuery.sortOrder; only that policy is judged per org unit or group.
 """
 
 import json
@@ -67,6 +71,37 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def as_order(value):
+    """policyQuery.sortOrder as a number; None when unreadable. Integration-Service hands scalars over as strings."""
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def in_force(records):
+    """Split matching policy records into the ones Google applies and the ones they supersede.
+
+    For one setting on one org unit (or group) Google returns several policies: the SYSTEM default for
+    entities without a Gmail licence, the SYSTEM default for licensed users, and any ADMIN override. It
+    resolves them by precedence: the policy with the greatest policyQuery.sortOrder is the one in force
+    (Policy API concepts, Max reducer), so only that one is judged. Equal sortOrders on one target, and a
+    sortOrder that cannot be read, are all judged (fail closed). Returns (judged, superseded).
+    """
+    top = {}
+    for rec in records:
+        if rec["order"] is not None and (rec["orgUnit"] not in top or rec["order"] > top[rec["orgUnit"]]):
+            top[rec["orgUnit"]] = rec["order"]
+    judged = []
+    superseded = []
+    for rec in records:
+        if rec["order"] is None or rec["orgUnit"] not in top or rec["order"] >= top[rec["orgUnit"]]:
+            judged.append(rec)
+        else:
+            superseded.append(rec)
+    return judged, superseded
+
+
 def transform(input):
     try:
         if isinstance(input, str):
@@ -93,7 +128,7 @@ def transform(input):
         if isinstance(data, dict):
             policies = data.get("policies", [])
 
-        matching_values = []
+        matching = []
         for policy in policies:
             if isinstance(policy, dict) and "setting" in policy:
                 setting = policy.get("setting", {})
@@ -101,7 +136,16 @@ def transform(input):
                 if isinstance(value, dict):
                     filtered = {key: value[key] for key in value if key in filter_attributes}
                     if filtered:
-                        matching_values.append(filtered)
+                        query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
+                        target = str(query.get("orgUnit") or "unknown")
+                        if query.get("group"):
+                            target = target + " " + str(query.get("group"))
+                        matching.append({"orgUnit": target, "value": filtered,
+                                         "order": as_order(query.get("sortOrder")),
+                                         "policyType": str(policy.get("type") or "")})
+        # Judge only the policy in force on each org unit or group; Google's own precedence decides which.
+        matching, superseded = in_force(matching)
+        matching_values = [rec["value"] for rec in matching]
 
         isAntiPhishingEnabled = False
         isEmailSecurityEnabled = False
@@ -142,7 +186,8 @@ def transform(input):
             recommendations=recommendations,
             input_summary={
                 "totalPolicies": len(policies),
-                "antiPhishingPolicies": len(matching_values)
+                "antiPhishingPolicies": len(matching_values),
+                "supersededPolicies": len(superseded)
             }
         )
 

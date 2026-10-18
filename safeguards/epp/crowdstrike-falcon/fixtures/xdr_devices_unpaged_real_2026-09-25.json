@@ -1,0 +1,714 @@
+{
+ "meta": {
+  "query_time": "0.118075941",
+  "pagination": {
+   "total": "1511",
+   "limit": "100",
+   "offset": "",
+   "next": "redacted-present"
+  },
+  "powered_by": "device-api"
+ },
+ "resources": [
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:27:09Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:07:37Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-02T10:34:33Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:49Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T16:42:17Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:02:15Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:27:20Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-16T06:30:40Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:04:40Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T11:36:28Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:19:09Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:09:52Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T15:59:05Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.39.21108.0",
+   "last_seen": "2026-08-26T16:24:08Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:04:57Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:09:03Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:10:21Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:22:07Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "yes",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:21:30Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T13:33:59Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:24:24Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:23:25Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:23:43Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:19:17Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:15:54Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:23Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:59:03Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:12:01Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:09:42Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:59:58Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T09:49:45Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-22T17:49:37Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:52:41Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:13:21Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:23:25Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:02:39Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:09:59Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:26:11Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:27:26Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:55:50Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:18:42Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:18:12Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:08:55Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:18:02Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:08:51Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:48Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:52Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:10:42Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-24T02:25:10Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:14:11Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:28:56Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:10:37Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:19:35Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:59:14Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:15:16Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:27:34Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:13:00Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:59Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:08:21Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:13:49Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:13:53Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:10:49Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:15:28Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:05:39Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:53Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:28:33Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:23:29Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:49Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:10:57Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:12:38Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:17:06Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:15:29Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:13:17Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:14:22Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-04T17:52:11Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:12:19Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:26:07Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:12:30Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:26:06Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:56:19Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:14:14Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:14:09Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:27:32Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:18:04Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T11:50:38Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:03:49Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:20:15Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:10:28Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:22:30Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:18:36Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:16:13Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:02:49Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:56:00Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T00:56:48Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21306.0",
+   "last_seen": "2026-09-11T18:15:48Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:06:11Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:27:24Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T12:31:46Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-24T11:48:15Z",
+   "platform_name": "Windows"
+  },
+  {
+   "status": "normal",
+   "reduced_functionality_mode": "no",
+   "agent_version": "7.40.21309.0",
+   "last_seen": "2026-09-25T01:15:54Z",
+   "platform_name": "Windows"
+  }
+ ]
+}

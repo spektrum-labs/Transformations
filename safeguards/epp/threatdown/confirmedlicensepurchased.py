@@ -69,7 +69,7 @@ def evaluate(data):
         expires_raw = lic.get("license_expires_at")
         if expires_raw:
             try:
-                expires_at = datetime.strptime(str(expires_raw)[:19], "%Y-%m-%dT%H:%M:%S")
+                expires_at = datetime.fromisoformat(str(expires_raw)[:19])
                 if expires_at < now:
                     continue
                 expiries.append(str(expires_raw)[:10])

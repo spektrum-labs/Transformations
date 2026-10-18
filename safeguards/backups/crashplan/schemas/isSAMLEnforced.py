@@ -7,6 +7,7 @@ class OrgSecurityModel(BaseModel):
     authenticationMethod: Optional[str] = Field(None, description="Authentication method as an alternate field name")
     ssoEnabled: Optional[Any] = Field(None, description="Boolean or string flag indicating SSO is enabled")
     samlEnabled: Optional[Any] = Field(None, description="Boolean or string flag indicating SAML is enabled")
+    ssoIdentityProviderUids: Optional[List[str]] = Field(None, description="SSO identity providers assigned to the org (CrashPlan settingsSummary)")
 
     class Config:
         extra = "allow"
@@ -14,6 +15,7 @@ class OrgSecurityModel(BaseModel):
 
 class IsSAMLEnforcedInput(BaseModel):
     orgSecurity: Optional[OrgSecurityModel] = Field(None, description="Organization security settings from getOrgSecurity endpoint")
+    securitySettings: Optional[OrgSecurityModel] = Field(None, description="CrashPlan org settingsSummary from /api/v1/Org/{orgId}?incSettings=true")
     authType: Optional[str] = Field(None, description="Top-level authType when orgSecurity is unwrapped")
     authenticationMethod: Optional[str] = Field(None, description="Top-level authenticationMethod when orgSecurity is unwrapped")
     ssoEnabled: Optional[Any] = Field(None, description="Top-level ssoEnabled flag when orgSecurity is unwrapped")

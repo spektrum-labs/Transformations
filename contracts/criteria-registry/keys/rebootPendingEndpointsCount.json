@@ -1,0 +1,43 @@
+{
+  "name": "rebootPendingEndpointsCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of distinct endpoints in scope that have patches installed or staged and are waiting for a restart to finish applying them.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the endpoints in scope; every endpoint the read lists. The value counts the endpoints the read says are waiting for a reboot",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete read of every in-scope endpoint's patch or reboot state showing none waiting for a reboot (0). A response that carries no reboot indicator at all cannot show 0 and is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Threat & Vulnerability Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/threat-vulnerability-management/connectwise-rmm/rebootPendingEndpointsCount.py (patch records of a remote monitoring tool; no public vendor document names the reboot field, so its spellings are unverified)",
+    "safeguards/threat-vulnerability-management/action1-com/rebootPendingEndpointsCount.py (an existing implementation; not reviewed for this entry)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the remote-monitoring patch-state transform can emit it. The meaning is the key name made precise; the existing implementation in the same category was not reviewed, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Registered for the ConnectWise RMM transform. A count of endpoints, lower is better, 0 only from a response that shows a reboot indicator on the records it read."
+}

@@ -120,7 +120,7 @@ def transform(input):
         recommendations = []
 
         # Def description references authenticationMethodsPolicy status == active, but that field
-        # does not exist on the merged getEstateMFAStatus payload; mirror the CA-based logic from
+        # does not exist on the merged MFA status payload; mirror the CA-based logic from
         # safeguards/mfa/azure/ismfaenforcedforusers.py instead.
         auth_methods = data.get("authMethodsPolicy") or {}
         method_configs = as_list(auth_methods.get("authenticationMethodConfigurations") or [])

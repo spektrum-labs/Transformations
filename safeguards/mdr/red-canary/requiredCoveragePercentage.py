@@ -12,11 +12,19 @@ Both come from GET /openapi/v3/endpoints. The threshold lives in the bundle crit
 
 2026-10-02: the previous version divided the number of listed endpoints by an "expected fleet"
 it looked for in the response body. The body never carries one, so the expected count fell back
-to the listed count and every tenant read 100%, whatever monitoring_status said (Ethico 107 of
-194 monitored, Gohlke 18 of 21, Kingsmen 5 of 10 all read 100%). It now reads monitoring_status.
+to the listed count and every tenant read 100%, whatever monitoring_status said (fleets with about half,
+most or half of their endpoints monitored all read 100%). It now reads monitoring_status.
 
 A read that cannot show the whole census -- empty, an error, cut short, or records that do not
 report a monitoring_status -- is Unevaluated with the reason: never 100% and never 0%.
+
+Never-checked-in records: Red Canary also lists endpoints whose sensor has never checked in (it
+may or may not have registered). Such a record carries no monitoring_status, no endpoint_status
+and no last_checkin_time. It is a listed, live endpoint that is not monitored, so it counts in the
+denominator and not in the numerator (it can only lower coverage, as in isEndpointCoverageValid),
+and it no longer makes the whole census "partial". A record with no monitoring_status that DOES
+show a check-in or an endpoint_status is still unexplained and still makes the census partial,
+and a census in which no live endpoint reports a monitoring_status at all is still Unevaluated.
 """
 import json
 from datetime import datetime
@@ -237,18 +245,33 @@ def unevaluated(keys, problem, validation=None, input_summary=None, transformati
     )
 
 
+def never_checked_in(fields):
+    """True for a live record that shows no sign of ever having a working sensor.
+
+    No monitoring_status, no endpoint_status and no last_checkin_time: Red Canary lists the
+    endpoint but its sensor has never checked in, so nothing about it is being monitored.
+    """
+    for name in ("monitoring_status", "endpoint_status", "last_checkin_time"):
+        if str(fields.get(name) or "").strip():
+            return False
+    return True
+
+
 def coverage_census(endpoints):
-    """(monitored, total, decommissioned, problem) over a complete endpoint census.
+    """(monitored, total, decommissioned, unregistered, problem) over a complete endpoint census.
 
     Red Canary v3 nests fields under attributes; a flat record is read the same way. Booleans
-    arrive as strings ("True"/"False"). A live endpoint that reports no monitoring_status makes
-    the census partial: coverage cannot be stated, so problem names how many are missing.
+    arrive as strings ("True"/"False"). A never-checked-in record counts as a live endpoint that is
+    not monitored. Any other live endpoint that reports no monitoring_status makes the census
+    partial: coverage cannot be stated, so problem names how many are missing.
     """
     monitored = 0
     total = 0
     decommissioned = 0
     unreadable = 0
     no_status = 0
+    unregistered = 0
+    reporting = 0
     for ep in endpoints:
         if not is_endpoint_record(ep):
             unreadable = unreadable + 1
@@ -261,22 +284,31 @@ def coverage_census(endpoints):
         total = total + 1
         status = str(fields.get("monitoring_status") or "").strip().lower()
         if not status:
-            no_status = no_status + 1
-        elif status == "monitored":
-            monitored = monitored + 1
+            if never_checked_in(fields):
+                unregistered = unregistered + 1
+            else:
+                no_status = no_status + 1
+        else:
+            reporting = reporting + 1
+            if status == "monitored":
+                monitored = monitored + 1
     if unreadable:
-        return monitored, total, decommissioned, (
+        return monitored, total, decommissioned, unregistered, (
             str(unreadable) + " of " + str(len(endpoints)) + " records in the endpoints read are "
             "not Red Canary endpoints: the census is partial, so coverage was not measured")
     if total == 0:
-        return monitored, total, decommissioned, (
+        return monitored, total, decommissioned, unregistered, (
             "Every endpoint Red Canary returned (" + str(decommissioned) + ") is decommissioned: "
             "there is no live endpoint to measure coverage over")
     if no_status:
-        return monitored, total, decommissioned, (
+        return monitored, total, decommissioned, unregistered, (
             str(no_status) + " of " + str(total) + " live endpoint(s) report no monitoring_status: "
             "the census is partial, so coverage was not measured")
-    return monitored, total, decommissioned, None
+    if reporting == 0:
+        return monitored, total, decommissioned, unregistered, (
+            "No live endpoint reports a monitoring_status (" + str(unregistered) + " never "
+            "checked in): coverage was not measured")
+    return monitored, total, decommissioned, unregistered, None
 
 
 def transform(input):
@@ -289,24 +321,26 @@ def transform(input):
         endpoints, meta, problem = endpoint_census(data)
         if problem:
             return unevaluated(keys, problem, validation, input_summary=empty_summary)
-        monitored, total, decommissioned, problem = coverage_census(endpoints)
+        monitored, total, decommissioned, unregistered, problem = coverage_census(endpoints)
         if problem:
             return unevaluated(keys, problem, validation, input_summary={
                 "monitoredEndpoints": monitored, "totalEndpoints": total,
                 "decommissionedEndpoints": decommissioned})
-        return measure(monitored, total, decommissioned, meta, validation)
+        return measure(monitored, total, decommissioned, unregistered, meta, validation)
     except Exception as e:
         message = "Transformation error: " + str(e)[:200]
         return unevaluated(keys, message, {"status": "error", "errors": [], "warnings": []},
                            transformation_errors=[message])
 
 
-def measure(monitored, total, decommissioned, meta, validation):
+def measure(monitored, total, decommissioned, unregistered, meta, validation):
     """The whole-number coverage from a complete census with total > 0 (see coverage_census)."""
     coverage_pct = (monitored * 100) // total
     unmonitored = total - monitored
     summary = (str(monitored) + " of " + str(total) + " live endpoint(s) are monitored by Red Canary ("
                + str(coverage_pct) + "%)")
+    if unregistered:
+        summary = summary + "; " + str(unregistered) + " never checked in"
     pass_reasons = []
     fail_reasons = []
     recommendations = []
@@ -322,6 +356,7 @@ def measure(monitored, total, decommissioned, meta, validation):
             "requiredCoveragePercentage": coverage_pct,
             "monitoredEndpoints": monitored,
             "unmonitoredEndpoints": unmonitored,
+            "neverCheckedInEndpoints": unregistered,
             "totalEndpoints": total,
             "decommissionedEndpoints": decommissioned,
         },

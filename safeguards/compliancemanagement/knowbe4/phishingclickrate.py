@@ -59,12 +59,11 @@ def evaluate(data):
             last_run = c.get('last_run') or c.get('completed_date') or c.get('created_date')
             if last_run:
                 try:
-                    parsed = datetime.strptime(last_run, '%Y-%m-%dT%H:%M:%S.%fZ')
-                except Exception:
-                    try:
-                        parsed = datetime.strptime(last_run, '%Y-%m-%dT%H:%M:%SZ')
-                    except Exception:
+                    if not last_run.endswith('Z'):
                         continue
+                    parsed = datetime.fromisoformat(last_run[:-1])
+                except Exception:
+                    continue
                 if most_recent_date is None or parsed > most_recent_date:
                     most_recent_date = parsed
                     most_recent = c
