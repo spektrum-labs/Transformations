@@ -84,7 +84,9 @@ MEASURED = [
     # Servers count, and staleness is not held against an endpoint: 9 of 10.
     (SOPHOS, sophos_body(), 90),
     (S1, s1_new_format(s1_body()), 100),
-    (NINJA, [{"id": i, "policyId": 7 if i < 18 else None} for i in range(21)], 85),
+    # A NinjaOne device counts only when an antivirus or EPP product reports ON (a policy id is not evidence): 18 of 21.
+    (NINJA, {"results": [{"deviceId": i, "productName": "Defender", "productState": "ON" if i < 18 else "OFF",
+                          "timestamp": datetime.now(timezone.utc).timestamp()} for i in range(21)]}, 85),
     (THREATDOWN, {"policies": [threatdown_policy(), threatdown_policy(), threatdown_policy(False)]}, 66),
     (FALCON, {"resources": [falcon_host(i) for i in range(9)] + [falcon_host(9, rfm="yes")],
               "meta": {"pagination": {"total": 10}}}, 90),
@@ -145,11 +147,14 @@ def test_zero_or_truncated_is_not_evaluated(rel, body):
     assert run(rel, body) == (None, "error")
 
 
-@pytest.mark.parametrize("body", [{"value": []}, {"value": [mde_machine("Active", onboarded=False)]}])
-def test_mde_connected_with_zero_onboarded_is_zero(body):
-    # A fully read MDE inventory with no onboarded machine: the tool is connected and protects nothing,
-    # a finding for that tool (0, with the reason), not a gap in the data.
-    assert run(MDE, body) == (0, "success")
+def test_mde_empty_inventory_is_not_evaluated():
+    # A fully read MDE inventory with no machine proves nothing: None, never a fail.
+    assert run(MDE, {"value": []}) == (None, "error")
+
+
+def test_mde_machines_present_but_none_onboarded_is_zero():
+    # Eligible machines exist and none is onboarded: a finding for that tool (0, with the reason).
+    assert run(MDE, {"value": [mde_machine("Active", onboarded=False)]}) == (0, "success")
 
 
 @pytest.mark.parametrize("rel", [SOPHOS, S1, NINJA, THREATDOWN, FALCON, MDE])

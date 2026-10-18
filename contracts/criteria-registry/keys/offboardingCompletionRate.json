@@ -1,0 +1,44 @@
+{
+  "name": "offboardingCompletionRate",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The percent (0 to 100) of the people Vanta has in offboarding whose offboarding tasks are complete.",
+  "valueType": "number",
+  "unit": "percent",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "the people whose Vanta task status is OFFBOARDING_COMPLETE, OFFBOARDING_DUE_SOON or OFFBOARDING_OVERDUE; denominator = that set",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A complete paged read of Vanta's people list, every entry readable with a known status, and at least one person in offboarding. Anything less is Not evaluated.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Compliance Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/compliancemanagement/vanta/offboardingcompletionrate.py",
+    "safeguards/compliancemanagement/vanta/test_vanta_criteria.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-15",
+      "change": "Registered with its first implementation, a Vanta third-party-proof (level 3) transform. Synthetic-fixture tests only; no real Vanta body with values was replayed, so V0."
+    }
+  ],
+  "notes": "Vanta's offboarding task state for logical access control. It shows offboarding was recorded as done, not that an account was disabled; level 3 third-party proof."
+}

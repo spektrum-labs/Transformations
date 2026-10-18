@@ -3,7 +3,7 @@
 Rule (5 Oct 2026): group math can turn "not evaluated" into True. It turns it into False only when membership was read
 whole and some enabled members are reached by no enabled MFA policy (code owner ruling, 5 Oct; see
 test_ismfaenforcedforusers_members_outside.py). With no membership keys in the input the output is identical to the
-shipped behaviour. Synthetic estate only (public repo).
+shipped behaviour. Synthetic environment only (public repo).
 """
 import builtins as real_builtins
 import copy
