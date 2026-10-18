@@ -1,7 +1,8 @@
 """Vanta test results are third-party proof (level 3): a failing control reads False, anything unproven reads None.
 
-Vanta is a proof source, not a safeguard tool. These four transforms judge the tests Vanta reports for
-one criterion each (MFA, account lifecycle, patching, role-based access). They never fetch, and they
+Vanta is a proof source, not a safeguard tool. These three transforms judge the tests Vanta reports for
+one criterion each (account lifecycle, patching, role-based access). Strong authentication moved to
+test-id mapping and is covered in test_vanta_security_test_checks.py. They never fetch, and they
 never read the tool itself: Spektrum's own read of a tool (level 4) always wins over what is decided here.
 
 The contract these tests pin:
@@ -30,15 +31,12 @@ HERE = pathlib.Path(__file__).resolve().parent
 SENTINEL = "planted-vendor-text-4d7a"
 
 CHECKS = {
-    "isstrongauthrequired": "isStrongAuthRequired",
     "islifecyclemanagementenabled": "isLifeCycleManagementEnabled",
     "ispatchmanagementenabled": "isPatchManagementEnabled",
     "isrbacimplemented": "isRBACImplemented",
 }
 #: two synthetic tests per criterion that the groups must map
 MAPPED = {
-    "isStrongAuthRequired": [("mfa-enabled-on-identity-provider-accounts", "MFA is enabled on identity provider accounts"),
-                             ("mfa-enforced-on-cloud-console", "Multi-factor authentication is enforced on the cloud console")],
     "isLifeCycleManagementEnabled": [("access-removed-on-termination", "Access is removed when an employee is terminated"),
                                      ("offboarding-accounts-deprovisioned", "Offboarded users are deprovisioned")],
     "isPatchManagementEnabled": [("operating-system-patches-applied", "Operating system patches are applied"),
@@ -74,9 +72,21 @@ class Poisoned(dict):
         return 1
 
 
+#: the security-test and vulnerability checks, tested in test_vanta_security_test_checks.py
+ID_MAPPED = {"isstrongauthrequired", "confirmpasswordpolicyenforced", "isdataatrestencrypted", "isbackupencrypted",
+             "isbackupenabled", "isdataintransitencrypted", "isauditloggingenabled", "isnetworksecurityloggingenabled",
+             "islogretentionconfigured", "isalertingconfigured", "isnetworkaccessrestricted",
+             "ispublicnetworkaccessdisabled", "opencriticalvulnerabilitiescount",
+             "overduevulnerabilityremediationcount"}
+
+#: the people criteria that sit beside the four claim files (test_vanta_criteria.py)
+MEASURED = {"backgroundcheckcompletionrate", "policyacknowledgmentcompletionrate", "trainingassignmentcompletionrate",
+            "devicemonitoringinstallcompletionrate", "offboardingcompletionrate", "overdueoffboardingcount"}
+
+
 def test_one_file_per_criterion():
     on_disk = {p.stem for p in HERE.glob("*.py") if not p.stem.startswith("test_")}
-    assert on_disk == set(CHECKS)
+    assert on_disk == set(CHECKS) | MEASURED | ID_MAPPED
 
 
 def vt(pair, status="OK"):
@@ -248,7 +258,7 @@ def test_error_empty_and_unrecognised_bodies_are_not_evaluated(check, data):
 
 
 def test_an_exception_text_goes_under_transformation_errors_only():
-    value, result = run("isstrongauthrequired", Poisoned())
+    value, result = run("islifecyclemanagementenabled", Poisoned())
     info = result["additionalInfo"]
     assert info["transformation"]["status"] == "error"
     assert "poisoned read" in json.dumps(info["transformation"]["errors"])
