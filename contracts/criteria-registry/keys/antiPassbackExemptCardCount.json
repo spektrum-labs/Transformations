@@ -10,7 +10,7 @@
   },
   "population": "the enabled card assignments of every person the connected access-control instance lists",
   "polarity": "lower_is_better",
-  "evidenceRequiredForTrue": "A complete read of the people list in which at least one enabled card assignment is present and each carries the AntiPassbackExempt field; the count is then exact (0 when none are exempt). A tenant with no enabled card, an error or refused answer, a partial read, or a missing field behind a zero is not measured.",
+  "evidenceRequiredForTrue": "A complete read of the people list in which at least one enabled card assignment is present and each carries the AntiPassbackExempt field; the count is then exact (0 when none are exempt). A tenant with no enabled card, an error or refused answer, a partial read, or any missing field is not measured (a count beside one is only a lower bound).",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,

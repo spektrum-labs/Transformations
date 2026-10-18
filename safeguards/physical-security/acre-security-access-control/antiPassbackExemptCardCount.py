@@ -166,8 +166,10 @@ def transform(input):
             unreadable = unreadable + 1
         elif flag:
             exempt = exempt + 1
-    if exempt == 0 and unreadable > 0:
-        return not_measured(key, str(unreadable) + " enabled card(s) carry no AntiPassbackExempt field, so a count of zero cannot be shown.", validation)
+    if unreadable > 0:
+        # a count beside unreadable flags is only a lower bound, and an inclusive lessThan would pass on it
+        return not_measured(key, str(unreadable) + " enabled card(s) carry no AntiPassbackExempt field, so the count of exempt cards (at least "
+                            + str(exempt) + ") cannot be shown exactly.", validation)
     text = (str(exempt) + " of " + str(len(cards)) + " enabled card assignments are exempt from anti-passback.")
     return create_response(
         result={key: exempt, "enabledCardCount": len(cards), "peopleEvaluated": people_count, "cardsNotMeasured": unreadable},
