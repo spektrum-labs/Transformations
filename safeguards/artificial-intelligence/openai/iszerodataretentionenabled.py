@@ -7,6 +7,12 @@ API Source: getDataRetentionPosture workflow (data_retention, projects, projects
 Credential: Admin API key (sk-admin-...). Endpoints confirmed in the OpenAI OpenAPI spec
 (github.com/openai/openai-openapi, security AdminApiKeyAuth).
 Fails closed: a refused call, an unrecognised body or a partial read is False with the reason.
+
+A 403 whose body says data retention controls are not enabled for the organization is OpenAI
+telling us the feature is off, not that the key lacks a permission. The methods opt in to
+receive exactly that body as data (vendorErrorAsResponse on the definition), and this check
+reports it as False with that reason. Every other 403 is still read as a refused call, i.e. a
+credential or permission problem.
 """
 import json
 from datetime import datetime, timezone
@@ -116,6 +122,34 @@ def detect_refusal(data):
     return why
 
 
+NOT_ENABLED = "data retention controls are not enabled for this organization"
+
+
+def vendor_answer(obj):
+    """The vendorErrorAsResponse envelope when obj is exactly that, else None.
+
+    Integration-Service hands a vendor error the method opted in to as data in this shape:
+    {"vendorErrorAsResponse": {"status": 403, "bodyContains": "...", "body": <vendor body>}}.
+    """
+    if isinstance(obj, dict) and len(obj) == 1 and isinstance(obj.get("vendorErrorAsResponse"), dict):
+        return obj["vendorErrorAsResponse"]
+    return None
+
+
+def says_not_enabled(obj):
+    """True only for OpenAI's 403 whose body says data retention controls are not enabled."""
+    envelope = vendor_answer(obj)
+    if envelope is not None:
+        # the vendor's own body only: bodyContains is the definition's matcher echoed back, not OpenAI's words
+        status, probe = envelope.get("status"), envelope.get("body")
+    elif isinstance(obj, dict) and (obj.get("error") or obj.get("errorType")):
+        status, probe = obj.get("statusCode") or obj.get("status_code"), obj
+    else:
+        return False
+    text = probe.lower() if isinstance(probe, str) else json.dumps(probe, default=str).lower()
+    return NOT_ENABLED in text and (status == 403 or (status is None and "http 403" in text))
+
+
 def read_list(obj):
     """(items, complete) for an OpenAI list envelope {object, data, has_more}.
 
@@ -188,7 +222,13 @@ def evaluate(input):
     if not isinstance(data, dict):
         return refused_or_unrecognised(data, validation, "Data retention")
     org = data.get("orgDataRetention")
-    if not isinstance(org, dict) or detect_refusal(org):
+    if says_not_enabled(org):
+        return fail(validation,
+                    "OpenAI reports that data retention controls are not enabled for this organization (HTTP 403), "
+                    "so Zero Data Retention is not in place.",
+                    "Zero Data Retention is granted by OpenAI on request; ask your account team, then set it in Data controls.",
+                    {"dataRetentionControlsEnabled": False}, {"dataRetentionControlsEnabled": False})
+    if not isinstance(org, dict) or vendor_answer(org) or detect_refusal(org):
         return refused_or_unrecognised(org if isinstance(org, dict) else data, validation, "Organization data retention")
     org_type = org.get("type")
     projects, projects_ok = read_list(data)
@@ -204,6 +244,9 @@ def evaluate(input):
     overrides = []
     for i in range(len(projects)):
         row = per_project[i] if isinstance(per_project[i], dict) else {}
+        if vendor_answer(row) is not None:
+            return fail(validation, "The organization is on " + str(org_type) + ", but project overrides were not fully read.",
+                        None, summary)
         if row.get("type") not in PROJECT_OK:
             overrides.append(str(projects[i].get("name") or projects[i].get("id")) + "=" + str(row.get("type")))
     summary["projects"] = len(projects)

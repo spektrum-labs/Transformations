@@ -72,6 +72,45 @@ def create_response(result, validation, *, errors=(), summary=None, readings=(),
     }
 
 
+# EDR server / workstation split, reported under new edr* keys only (rulings applied 2026-10-16). The live
+# serverCoveragePercentage and totalServerCount below are criteria elsewhere and keep their old rule and
+# values. For the edr* keys: osPlatform containing "server" is a server, and so is any Linux distribution;
+# a Windows client version (Windows10, Windows11, ...) or macOS is a workstation. Anything else (iOS, Android, a missing or unknown value) is unclassified and counted
+# in neither class.
+LINUX_PLATFORMS = ("ubuntu", "debian", "centos", "rhel", "redhat", "fedora", "suse", "sles", "mint", "kali")
+# Windows client builds by prefix, so variants such as Windows8Blue or Windows10WVD are covered too.
+WINDOWS_CLIENT_PREFIXES = ("windows7", "windows8", "windows10", "windows11", "windowsxp", "windowsvista")
+
+
+def os_class(machine):
+    """The class of a machine: "server", "workstation", or None (unclassified)."""
+    if not isinstance(machine, dict):
+        return None
+    platform = str(machine.get("osPlatform") or "").strip().lower().replace(" ", "")
+    if not platform:
+        return None
+    if "server" in platform or "linux" in platform:
+        return "server"
+    for distribution in LINUX_PLATFORMS:
+        if platform.startswith(distribution):
+            return "server"
+    if platform.startswith("mac"):
+        return "workstation"
+    for prefix in WINDOWS_CLIENT_PREFIXES:
+        if platform.startswith(prefix):
+            return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no machine: no machines proves nothing, so it is never 0."""
+    if total <= 0:
+        return None
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
+
+
 def evaluate_machines(data):
     machines = data.get("value") if isinstance(data, dict) else None
     if not isinstance(machines, list):
@@ -91,8 +130,29 @@ def evaluate_machines(data):
     ]
     servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
+    edr_servers = [machine for machine in eligible if os_class(machine) == "server"]
+    edr_workstations = [machine for machine in eligible if os_class(machine) == "workstation"]
+    edr_protected_servers = [m for m in edr_servers if str(m.get("onboardingStatus") or "").lower() == "onboarded"]
+    edr_protected_workstations = [
+        m for m in edr_workstations if str(m.get("onboardingStatus") or "").lower() == "onboarded"
+    ]
+    # A page that still has a next link is a partial read: the edr* fields are not measured on it.
+    next_link = data.get("@odata.nextLink")
+    edr_measured = bool(eligible) and not (
+        isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"))
+    edr_split = {
+        "edrServerCoveragePercentage": class_percentage(len(edr_protected_servers), len(edr_servers)),
+        "edrWorkstationCoveragePercentage": class_percentage(len(edr_protected_workstations), len(edr_workstations)),
+        "edrTotalServerCount": len(edr_servers),
+        "edrProtectedServerCount": len(edr_protected_servers),
+        "edrTotalWorkstationCount": len(edr_workstations),
+        "edrProtectedWorkstationCount": len(edr_protected_workstations),
+        "edrUnclassifiedDeviceCount": len(eligible) - len(edr_servers) - len(edr_workstations),
+    }
+    if not edr_measured:
+        edr_split = {key: None for key in edr_split}
     if not eligible:
-        return {
+        result = {
             "isEPPEnabled": None,
             "isEPPConfigured": None,
             "isEPPLoggingEnabled": None,
@@ -104,9 +164,11 @@ def evaluate_machines(data):
             "protectedDevices": 0,
             "reportingDevices": 0,
         }
+        result.update(edr_split)
+        return result
     coverage = round(100 * len(onboarded) / len(eligible))
     server_coverage = round(100 * len(protected_servers) / len(servers)) if servers else 0
-    return {
+    result = {
         "isEPPEnabled": bool(onboarded),
         "isEPPConfigured": bool(eligible) and len(onboarded) == len(eligible),
         "isEPPLoggingEnabled": bool(onboarded) and len(reporting) == len(onboarded),
@@ -118,6 +180,8 @@ def evaluate_machines(data):
         "protectedDevices": len(onboarded),
         "reportingDevices": len(reporting),
     }
+    result.update(edr_split)
+    return result
 
 
 def seen_in_inventory(count):
