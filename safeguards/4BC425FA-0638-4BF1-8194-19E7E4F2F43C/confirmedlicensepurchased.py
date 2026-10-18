@@ -9,6 +9,9 @@ Evaluates if the license has been purchased for the given Backup Provider.
 import json
 from datetime import datetime
 
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "confirmedLicensePurchased"
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -32,12 +35,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -67,7 +74,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def transform(input):
-    criteriaKey = "confirmedLicensePurchased"
+    criteriaKey = CRITERIA_KEY
 
     try:
         if isinstance(input, str):
@@ -79,7 +86,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -92,7 +99,16 @@ def transform(input):
         # response arrived, not what it said, so any parseable dict -- including {} and
         # an auth-error envelope -- defaulted `licensePurchased` to True. Never default
         # True now: an absent key means unproven, not purchased.
-        license_purchased = bool(data.get('licensePurchased', False)) if isinstance(data, dict) else False
+        if not isinstance(data, dict) or data.get('licensePurchased') is None:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Response has no licensePurchased; the RDS license status was not read"],
+                fail_reasons=["Not measured: " + "Response has no licensePurchased; the RDS license status was not read"],
+                recommendations=["Confirm the AWS credential can call the describe APIs and that each returned a 2xx body."]
+            )
+
+        license_purchased = bool(data.get('licensePurchased', False))
 
         if license_purchased:
             pass_reasons.append("Backup provider license active")
@@ -111,7 +127,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

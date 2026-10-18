@@ -3,7 +3,7 @@
 When group membership was read whole and some enabled Member accounts are in no group or user list of any enabled
 Conditional Access policy requiring MFA, the key reads False and the fail reason gives the count. Reach is read
 generously (narrowed policies still reach), so a False is never a guess. Security defaults or per-user MFA evidence,
-when present, keep it from failing: they pass the key or keep it not evaluated. Synthetic estate only (public repo).
+when present, keep it from failing: they pass the key or keep it not evaluated. Synthetic environment only (public repo).
 """
 import builtins as real_builtins
 import copy

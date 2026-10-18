@@ -35,10 +35,22 @@ already required by the authentication policy, so they add no block). A policy t
 is not conditional access. Lower Duo tiers do not return user_location or anonymous_networks at all; an
 absent section is simply not a condition.
 
-Application-group (group_app) bindings: some users of an application get a different policy, which
-application-level data cannot resolve. An application with any such binding is INDETERMINATE: counted neither
-covered nor uncovered, and while any application is indeterminate the boolean is never True. (Its group policies
-are still read, so an unreadable one fails closed.)
+Application-group (group_app) bindings: Duo can apply a policy to chosen groups inside one application. The
+policy summary (policy_applies_to) names those groups: each group_app entry carries groups[].group_id (and
+group_position, the stacking order). Users in a bound group get the group policy first, then the application's
+policy, then the global policy; every other user of the application keeps the application's own chain. So an
+application with a group binding is COVERED only when BOTH chains carry an access condition: the application's
+own chain (users outside the groups) and the chain [group policy, application policy, global policy] (users in
+the groups). A group policy that relaxes the only condition leaves the application uncovered, and so does an
+application chain with no condition. Group membership is not read: a group policy is judged by what it
+configures, not by how many users its group holds (the same way an application with no users still counts).
+A binding is UNRESOLVED, and its application INDETERMINATE (counted neither covered nor uncovered, never True),
+when the summary does not name its groups readably (groups missing, empty, not a list, or an entry without a
+group_id) or when more than one different group policy is bound to the same application (which policy reaches
+a user then depends on group overlap, which only membership can show). A summary that hides its bindings (an
+entry without a policy_applies_to list, an unrecognised apply_type, or no entry for a listed policy) is Not
+evaluated, because a hidden binding could change the answer. Group policies are always read, so an unreadable
+one fails closed.
 
 Rule:
   isConditionalAccessEnabled
@@ -49,17 +61,17 @@ Rule:
            (paginationTruncated / truncated set, metadata.next_offset remaining, or metadata.total_objects
            differing from the applications read); policies or summary
            missing; a truncated summary; a policy list whose size does not match summary.policy_count; no or
-           several global policies; an application whose policy_key is not in the policy list; a section of a
-           governing policy that is not an object, or a wrong-typed value or unrecognised enum in one; no
-           uncovered application but at least one indeterminate one; any exception.
+           several global policies; an application whose policy_key is not in the policy list; a summary that
+           hides its bindings (see above); a section of a governing policy that is not an object, or a
+           wrong-typed value or unrecognised enum in one; no uncovered application but at least one
+           indeterminate one; any exception.
   conditionalAccessAppPercentage  covered applications / all applications * 100, one decimal. Emitted whenever
            the applications were enumerated and read, including when the boolean is False.
   conditionalAccessAppsCovered, conditionalAccessAppsTotal, conditionalAccessAppsOnGlobalPolicy,
   conditionalAccessAppsIndeterminate: the supporting counts.
 
-Known limit: USER-GROUP policies (precedence below application, above global) are invisible in this data, so a
-tenant that applies its conditions by user group is UNDERSTATED here. Resolving them needs the group membership
-endpoints (GET /admin/v2/groups/{id}/users).
+Known limit: policies applied by a mechanism that policy_applies_to does not list are invisible in this data.
+Which users sit in a bound group is not read (GET /admin/v2/groups/{id}/users is not collected).
 
 Does not prove: impossible-travel or risk scoring (Duo Trust Monitor is not in the Policies API), or anything
 about services Duo does not sit in front of.
@@ -576,21 +588,53 @@ def named(labels):
     return shown
 
 
+APPLY_TYPES = ("app", "group_app")
+
+
+def group_problem(target):
+    """Why a group_app entry does not name its groups readably, '' when it does."""
+    groups = target.get("groups")
+    if not isinstance(groups, list) or len(groups) == 0:
+        return "a group binding carries no groups list"
+    for group in groups:
+        if not isinstance(group, dict) or not isinstance(group.get("group_id"), str) \
+                or group.get("group_id").strip() == "":
+            return "a group binding carries a group without a group_id"
+    return ""
+
+
 def group_bindings(summary):
-    """[(policy_key, integration_key)] for every application-group (group_app) binding in the summary."""
-    out = []
+    """(bindings, error). bindings maps an application's integration_key to {"policies": the distinct policy keys
+    bound to groups of it, "problems": why any of its bindings is unresolved}. error is the text of a summary that
+    cannot be read to the end of its policy_applies_to lists (the whole check is then Not evaluated)."""
+    bindings = {}
     for entry in summary["policies"]:
         if not isinstance(entry, dict):
-            continue
+            return None, "the policy summary carries an entry that is not a policy object"
         applies = entry.get("policy_applies_to")
         if not isinstance(applies, list):
-            continue
+            return None, ("the policy summary carries no policy_applies_to list for a policy, so its application "
+                          "bindings are unknown")
         for target in applies:
-            if not isinstance(target, dict) or word(target.get("apply_type")) != "group_app":
+            if not isinstance(target, dict):
+                return None, "the policy summary carries a policy_applies_to entry that is not an object"
+            kind = word(target.get("apply_type"))
+            if kind not in APPLY_TYPES:
+                return None, "the policy summary carries a policy_applies_to entry with an unrecognised apply_type"
+            if kind != "group_app":
                 continue
-            key = target.get("app_integration_key", target.get("integration_key"))
-            out.append((str(entry.get("policy_key")), str(key)))
-    return out
+            key = str(target.get("app_integration_key", target.get("integration_key")))
+            slot = bindings.get(key)
+            if slot is None:
+                slot = {"policies": [], "problems": []}
+                bindings[key] = slot
+            policy_key = str(entry.get("policy_key"))
+            if policy_key not in slot["policies"]:
+                slot["policies"].append(policy_key)
+            problem = group_problem(target)
+            if problem:
+                slot["problems"].append(problem)
+    return bindings, ""
 
 
 def transform(input):
@@ -633,18 +677,28 @@ def transform(input):
             by_key[str(p.get("policy_key"))] = p
 
         app_keys = [str(a.get("integration_key")) for a in apps]
-        groups = {}
-        for policy_key, integration_key in group_bindings(summary):
-            if policy_key not in by_key:
-                return not_evaluated("an application-group binding names a policy the policy list does not carry")
+        groups, text = group_bindings(summary)
+        if text:
+            return not_evaluated("GET /admin/v2/policies/summary cannot be used: " + text)
+        listed = [str(e.get("policy_key")) for e in summary["policies"]]
+        for policy_key in by_key.keys():
+            if policy_key not in listed:
+                return not_evaluated("the policy summary has no entry for a policy in the policy list, so where "
+                                     "it applies is unknown")
+        for integration_key, slot in groups.items():
+            for policy_key in slot["policies"]:
+                if policy_key not in by_key:
+                    return not_evaluated("an application-group binding names a policy the policy list does not "
+                                         "carry")
             if integration_key not in app_keys:
                 return not_evaluated("an application-group binding names an application the applications list "
                                      "does not carry, so the list is incomplete")
-            groups.setdefault(integration_key, []).append(by_key[policy_key])
 
         covered = []
         uncovered = []
         indeterminate = []
+        indeterminate_why = []
+        resolved_groups = []
         on_global = 0
         try:
             for app in apps:
@@ -660,16 +714,34 @@ def transform(input):
                     on_global = on_global + 1
                 chain = [glob] if own is glob else [own, glob]
                 found = conditions_of(chain)
-                bound = groups.get(str(app.get("integration_key")), [])
-                for group_policy in bound:
-                    # read every group policy so an unreadable one still fails closed
-                    conditions_of([group_policy] + chain)
-                if bound:
+                slot = groups.get(str(app.get("integration_key")))
+                if slot is None:
+                    if found:
+                        covered.append((app_name(app), found))
+                    else:
+                        uncovered.append(app_name(app))
+                    continue
+                # an application with group bindings: read every group policy first so an unreadable one fails
+                # closed, then judge the group chain beside the application's own chain
+                group_found = []
+                for policy_key in slot["policies"]:
+                    group_found.append(conditions_of([by_key[policy_key]] + chain))
+                if slot["problems"]:
                     indeterminate.append(app_name(app))
-                elif found:
+                    indeterminate_why.append(slot["problems"][0])
+                elif len(slot["policies"]) > 1:
+                    indeterminate.append(app_name(app))
+                    indeterminate_why.append("more than one different group policy applies to the application, and "
+                                             "which one reaches a user depends on group membership")
+                elif found and group_found[0]:
                     covered.append((app_name(app), found))
-                else:
+                    resolved_groups.append(app_name(app))
+                elif not found and not group_found[0]:
                     uncovered.append(app_name(app))
+                elif not found:
+                    uncovered.append(app_name(app) + " (its own policy, for users outside the bound groups)")
+                else:
+                    uncovered.append(app_name(app) + " (its group policy has no access condition)")
         except ValueError as e:
             if not str(e).startswith(UNREADABLE):
                 raise
@@ -681,15 +753,20 @@ def transform(input):
                   GLOBAL_COUNT_KEY: on_global, INDETERMINATE_KEY: len(indeterminate)}
         info = {"policiesRead": len(policies), "applications": total, "applicationsCovered": len(covered),
                 "applicationsUncovered": len(uncovered), "applicationsIndeterminate": len(indeterminate),
-                "applicationsOnGlobalPolicy": on_global, "groupBindings": sum([len(v) for v in groups.values()])}
+                "applicationsOnGlobalPolicy": on_global,
+                "groupBindings": sum([len(v["policies"]) for v in groups.values()]),
+                "groupBindingsResolved": len(resolved_groups)}
         described = [label + ": " + "; ".join(found[:6]) for label, found in covered[:NAMED_LIMIT]]
         indeterminate_note = []
         if indeterminate:
-            indeterminate_note = ["Application-group policies apply to some users of these applications, which "
-                                  "application-level data cannot resolve, so they are counted neither covered nor "
-                                  "uncovered: " + named(indeterminate)]
-        user_group_note = ("User-group policies are not visible to this check, so coverage applied by user group "
-                           "is understated")
+            indeterminate_note = ["The application-group bindings of these applications could not be resolved from "
+                                  "the policy summary (%s), so they are counted neither covered nor uncovered: %s"
+                                  % (indeterminate_why[0], named(indeterminate))]
+        if resolved_groups:
+            described = described + ["Application-group policies were resolved for: " + named(resolved_groups)
+                                     + " (the application's own policy and each group policy were both checked)"]
+        user_group_note = ("Group membership is not read: a group policy is judged by what it configures, not by "
+                           "how many users its group holds")
 
         if uncovered:
             result[CRITERIA_KEY] = False
@@ -706,12 +783,13 @@ def transform(input):
         if indeterminate:
             return create_response(result, input_summary=info, findings=described + indeterminate_note,
                                    fail_reasons=["Not evaluated: no application is uncovered, but %d cannot be "
-                                                 "decided from application-level data" % len(indeterminate)],
+                                                 "decided: %s" % (len(indeterminate), indeterminate_why[0])],
                                    api_errors=indeterminate_note, warnings=indeterminate_note)
         result[CRITERIA_KEY] = True
         return create_response(result, input_summary=info, findings=described, pass_reasons=[
             "All %d Duo applications have an access condition (location, network, device health, OS, browser or "
-            "endpoint trust) in their effective policy" % total], recommendations=[user_group_note])
+            "endpoint trust) in their effective policy, including each application-group policy" % total],
+                               recommendations=[user_group_note])
     except Exception as e:
         return create_response(empty_result(), transformation_errors=[str(e)],
                                fail_reasons=["Transformation error: %s" % str(e)])

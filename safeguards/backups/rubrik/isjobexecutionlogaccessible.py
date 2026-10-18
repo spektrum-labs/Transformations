@@ -7,7 +7,8 @@ Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/activitySeriesConnection/
 
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
-unrecognised body is False (booleans) or None (numbers), with the reason. Never True from missing data.
+unrecognised body is None with dataCollection status "error", so Token-Service records it as not
+evaluated rather than as a gap. Never True from missing data.
 """
 import json
 from datetime import datetime, timezone
@@ -47,10 +48,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
+    # Not measured is read off the value, so every path that leaves the criterion None -- the except
+    # branch included -- reports it to Token-Service as not evaluated rather than as a gap.
+    measured = result.get(KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "success" if measured else "error",
+                               "errors": [] if measured else (fail_reasons or errors or ["No reading."])},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -79,7 +84,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def unknown_value():
-    return False
+    return None
 
 
 def fail(validation, reason, recommendation=None, summary=None, extra=None, value=None):
@@ -220,7 +225,7 @@ def evaluate(input):
     validation = extract_input(input)[1]
     nodes = root.get("recentBackups").get("nodes")
     if not isinstance(nodes, list):
-        return fail(validation, "recentBackups returned no nodes list.", None, dict(c), value=False)
+        return fail(validation, "recentBackups returned no nodes list.", None, dict(c))
     if c["recentBackups"] < 1 or not nodes:
         return fail(validation, "RSC returned no backup activity for the last 7 days: either nothing ran or the activity log is not visible to this service account.",
                     "Confirm backups are running and the service account can view Events.", dict(c), value=False)

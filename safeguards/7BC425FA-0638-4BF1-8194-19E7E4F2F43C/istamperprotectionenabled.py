@@ -5,12 +5,13 @@ Evaluates: Whether tamper protection is enabled on all devices
 
 Data source: Advanced Hunting API (POST /api/advancedqueries/run)
 Query: DeviceTvmSecureConfigurationAssessment
-       | where ConfigurationId == 'scid-2010'
+       | where ConfigurationId == 'scid-2003'
        | project DeviceId, DeviceName, ConfigurationId, IsCompliant, IsApplicable
 Permission: AdvancedQuery.Read.All
 
 Response contains Results[] with IsCompliant (bool) per device.
-scid-2010 = "Turn on tamper protection" configuration check.
+scid-2010 is "Turn on Microsoft Defender Antivirus", NOT tamper protection (that is scid-2003); this file
+counts whatever rows its method returns, so the method query decides what is measured.
 """
 import json
 from datetime import datetime
@@ -87,7 +88,7 @@ def evaluate(data):
     """Evaluate tamper protection across all devices.
 
     Supports two response formats:
-    1. Advanced Hunting (scid-2010): IsCompliant field per device
+    1. Advanced Hunting (scid-2003): IsCompliant field per device
     2. Legacy machines API: isTamperProtected field per device
     """
     try:
@@ -106,7 +107,7 @@ def evaluate(data):
 
             device_name = device.get("DeviceName") or device.get("computerDnsName") or "Unknown"
 
-            # Advanced Hunting format (scid-2010): IsCompliant
+            # Advanced Hunting format (scid-2003): IsCompliant
             if "IsCompliant" in device:
                 is_applicable = to_bool(device.get("IsApplicable", True))
                 if not is_applicable:
@@ -143,6 +144,29 @@ def evaluate(data):
         return {"isTamperProtectionEnabled": False, "error": str(e)}
 
 
+#: The id the method used to query by mistake, and what it really measures. Its rows are not evidence for this
+#: check: they read Not evaluated until the method queries scid-2003.
+RETIRED_SCID = "scid-2010"
+
+
+#: The only configuration id this check reads from advanced-hunting rows.
+EXPECTED_SCID = "scid-2003"
+
+
+def retired_rows(data):
+    """True when any row evaluate() would count carries a configuration id other than EXPECTED_SCID (the retired
+    id, or any other, or an advanced-hunting row with no id at all). Machines-API rows carry neither
+    ConfigurationId nor IsCompliant and are unaffected."""
+    rows = extract_devices(data)
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if isinstance(row, dict) and ("ConfigurationId" in row or "IsCompliant" in row):
+            if str(row.get("ConfigurationId") or "").strip().lower() != EXPECTED_SCID:
+                return True
+    return False
+
+
 def transform(input):
     criteriaKey = "isTamperProtectionEnabled"
     try:
@@ -152,6 +176,17 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
 
         data, validation = extract_input(input)
+
+        if retired_rows(data):
+            reason = ("The query read a configuration other than " + EXPECTED_SCID + " (for example " + RETIRED_SCID + ", Defender Antivirus turned on), not tamper protection (scid-2003), so "
+                      "these rows are not evidence for this check")
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[reason],
+                recommendations=["Point the Windows Defender method at scid-2003 (tamper protection)"],
+                api_errors=[reason],
+            )
 
         eval_result = evaluate(data)
         result_value = eval_result.get(criteriaKey, False)

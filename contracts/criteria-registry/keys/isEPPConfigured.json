@@ -1,0 +1,128 @@
+{
+  "name": "isEPPConfigured",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- named as a boolean and used as a percentage. Fourteen implementations return a percentage of healthy, correctly configured endpoints; six return a boolean. No requirement bar fits both halves of the estate. See conflict.positions.",
+  "valueType": "unresolved",
+  "unit": "unknown",
+  "population": "unknown -- onboarded endpoints at most percentage vendors (definitions differ on whether inactive sensors and servers count); a vendor health check or MDM profile state at the boolean vendors",
+  "polarity": "unknown",
+  "evidenceRequiredForTrue": "unknown until the type is ruled",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Endpoint Security"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Windows Defender"},
+    {"srn": "02e2e8f9-8579-407f-910d-280db2ed6831", "name": "Windows Defender (One-Click)"},
+    {"srn": "2bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "SentinelOne"},
+    {"srn": "d61a39d7-f00a-4963-bc9c-38164918e883", "name": "CrowdStrike Falcon-Endpoint Security"},
+    {"srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e", "name": "Crowdstrike - XDR Falcon"},
+    {"srn": "dc607d10-7b24-4310-93aa-369cdf407240", "name": "Crowdstrike - MDR"},
+    {"srn": "a43b5841-639c-4db4-8e42-df7828d55ec2", "name": "ManageEngine - Endpoint Security"},
+    {"srn": "cac4b80f-a930-415e-b1e3-de285fe78452", "name": "NinjaOne - Endpoint Security"},
+    {"srn": "1a13bab7-9377-428a-b595-ba0843ec3366", "name": "Sophos - EDR Endpoint Security"},
+    {"srn": "c8efefeb-71e7-4f17-ae9b-ea6ff715bd56", "name": "Symantec (Broadcom) Endpoint Protection SEP-Endpoint Security"},
+    {"srn": "64507d3b-2d42-4570-bdb5-2577f7a1b4a1", "name": "Trend Micro XDR-Endpoint Security"},
+    {"srn": "69b438a1-cb1f-4103-a1fa-83123787bb21", "name": "ThreatLocker-Endpoint Security"},
+    {"srn": "7d6d3084-1be1-4fcc-9350-979b97cf92f7", "name": "Datto RMM - MSP partner account"},
+    {"srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Sophos - MDR"},
+    {"srn": "84d54986-1f6b-4eeb-83dd-5636ed82e99e", "name": "Sophos - Email Security"},
+    {"srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51", "name": "Sophos - Firewall"},
+    {"srn": "f451573a-d0ce-4d67-a014-80dc8e636fcb", "name": "Arctic Wolf - EDR Endpoint Security"},
+    {"srn": "5deab521-30a8-4250-9c18-2f02444b893f", "name": "Kaseya"},
+    {"srn": "a2b2fd52-a2bb-4a85-a158-715d6a912f5c", "name": "Addigy"},
+    {"srn": "0c281ce9-8024-4d70-ac85-d923a6b9635c", "name": "Trend Micro - Endpoint Security"},
+    {"srn": "f9522162-b193-44de-8a1f-9a03f36794b9", "name": "Threatdown - Endpoint Security"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "conflict": {
+    "summary": "24 requirements ask this key: 23 at greaterThanOrEqual \"98\", which no boolean vendor can meet (int(float(True)) is 1), and 1 at isEquals true, which no percentage vendor can meet. There is no customer for whom both readings work. Roughly half the estate's endpoint customers get a wrong answer on the most-asked endpoint criterion.",
+    "positions": [
+      {
+        "meaning": "Whole-number percentage of onboarded endpoints whose protection agent reports a healthy, correctly configured state (each vendor defines healthy and the staleness window differently).",
+        "valueType": "number",
+        "population": "onboarded endpoints",
+        "integrations": [
+          {"srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Windows Defender", "note": "inactive sensors counted as configured"},
+          {"srn": "02e2e8f9-8579-407f-910d-280db2ed6831", "name": "Windows Defender (One-Click)"},
+          {"srn": "2bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "SentinelOne"},
+          {"srn": "d61a39d7-f00a-4963-bc9c-38164918e883", "name": "CrowdStrike Falcon-Endpoint Security"},
+          {"srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e", "name": "Crowdstrike - XDR Falcon"},
+          {"srn": "dc607d10-7b24-4310-93aa-369cdf407240", "name": "Crowdstrike - MDR"},
+          {"srn": "a43b5841-639c-4db4-8e42-df7828d55ec2", "name": "ManageEngine - Endpoint Security"},
+          {"srn": "cac4b80f-a930-415e-b1e3-de285fe78452", "name": "NinjaOne - Endpoint Security"},
+          {"srn": "1a13bab7-9377-428a-b595-ba0843ec3366", "name": "Sophos - EDR Endpoint Security"},
+          {"srn": "c8efefeb-71e7-4f17-ae9b-ea6ff715bd56", "name": "Symantec (Broadcom) Endpoint Protection SEP-Endpoint Security"},
+          {"srn": "64507d3b-2d42-4570-bdb5-2577f7a1b4a1", "name": "Trend Micro XDR-Endpoint Security", "note": "static type is number; its RTA description reads as a boolean ('True when every endpoint...') -- unreconciled"},
+          {"srn": "69b438a1-cb1f-4103-a1fa-83123787bb21", "name": "ThreatLocker-Endpoint Security", "note": "pinned URL 404s"},
+          {"srn": "7d6d3084-1be1-4fcc-9350-979b97cf92f7", "name": "Datto RMM - MSP partner account", "note": "from RTA description"}
+        ],
+        "files": [
+          "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_iseppconfigured.py:110",
+          "safeguards/epp/sentinelone/isEPPConfigured.py:256",
+          "safeguards/epp/crowdstrike-falcon/isEPPConfiguredFromHosts.py:312",
+          "safeguards/epp/ninjaone-endpoint-management/isEPPConfigured.py:186",
+          "safeguards/epp/manageengine/iseppconfigured.py",
+          "safeguards/epp/sophos/iseppconfigured.py",
+          "safeguards/epp/symantec-sep/isEPPConfigured.py",
+          "safeguards/epp/trendmicro-visionone/iseppconfigured.py"
+        ],
+        "source": "key-registry.md F-KEY-06; _derived.json type_split; RTA descriptions"
+      },
+      {
+        "meaning": "A boolean from a vendor health check, a policy assignment or an MDM profile state.",
+        "valueType": "boolean",
+        "population": "unknown -- not a stated denominator at any of these",
+        "integrations": [
+          {"srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Sophos - MDR"},
+          {"srn": "84d54986-1f6b-4eeb-83dd-5636ed82e99e", "name": "Sophos - Email Security"},
+          {"srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51", "name": "Sophos - Firewall"},
+          {"srn": "f451573a-d0ce-4d67-a014-80dc8e636fcb", "name": "Arctic Wolf - EDR Endpoint Security"},
+          {"srn": "5deab521-30a8-4250-9c18-2f02444b893f", "name": "Kaseya", "note": "literal False at :47, :157, :164 -- no reachable true"},
+          {"srn": "a2b2fd52-a2bb-4a85-a158-715d6a912f5c", "name": "Addigy"}
+        ],
+        "files": [
+          "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py",
+          "safeguards/BBC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py",
+          "safeguards/epp/kaseya/vsa/epp_transform.py:47,:157,:164",
+          "safeguards/epp/addigy/iseppconfigured.py"
+        ],
+        "source": "key-registry.md F-KEY-06. The Sophos RTA description reads 'EPP vendor health check fails' -- copied from the inverted isEPPMisconfigured sibling (F-KEY-16)."
+      },
+      {
+        "meaning": "Unresolved: the wired file is named for the INVERTED key isEPPMisconfigured, or the pinned URL 404s.",
+        "valueType": "unknown",
+        "integrations": [
+          {"srn": "f9522162-b193-44de-8a1f-9a03f36794b9", "name": "Threatdown - Endpoint Security", "note": "wired to safeguards/epp/threatdown/iseppmisconfigured.py"},
+          {"srn": "0c281ce9-8024-4d70-ac85-d923a6b9635c", "name": "Trend Micro - Endpoint Security", "note": "URL 404s"}
+        ],
+        "source": "spektrum-labs-cli reports/qc-2026-10-06/wiring.json"
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Split, per F-KEY-06: the percentage moves to a new key that carries the 98% bar under atLeast; isEPPConfigured stays a boolean only if some vendor genuinely has no denominator to report. Additive first (decision Q6): emit the new key alongside, shadow-diff, re-point the 23 requirements, then deprecate.",
+      "splitKeys": [
+        {"name": "eppConfiguredCoveragePercentage", "definition": "Percentage of eligible endpoints whose endpoint-protection agent reports a healthy, correctly configured sensor; stale or inactive sensors count as not configured and stay in the denominator.", "valueType": "number", "unit": "percent", "existing": false, "wouldTake": ["the 13 percentage integrations in position 1"]},
+        {"name": "isEPPConfigured", "definition": "The vendor reports that endpoint protection is configured, where the vendor exposes no per-endpoint figure to compute a percentage from.", "valueType": "boolean", "existing": true, "wouldTake": ["only boolean vendors that cannot emit a percentage -- each to be shown at V1 to have no denominator"]}
+      ]
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Split isEPPConfigured into eppConfiguredCoveragePercentage (number) plus a residual boolean, and does 'configured' count an inactive sensor (Windows Defender does today; the QC's proposed population says it must not, which moves customers down and needs a shadow diff)?"
+    }
+  },
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-registry.md F-KEY-06, F-KEY-16 and the eppConfiguredCoveragePercentage worked example",
+    "spektrum-labs-cli docs/integration-qc-2026-10-06-remediation-plan.md D0b",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-census.csv: 21 integrations, 16 files, 24 requirements, contract verdicts TRUNCATED=11 UNSATISFIABLE=20",
+    "tools/check_criteria_registry.py census 2026-10-07: 24 files on main emit this key; on no-evidence bodies 13 emit a boolean, 1 an integer, 10 null"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-07", "change": "Seeded as contested from the 2026-10-06 integration QC. Type left unresolved."}
+  ]
+}

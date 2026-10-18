@@ -1,0 +1,131 @@
+{
+  "name": "isFirewallEnabled",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- every implementation returns a boolean, but they measure different things on different populations: a firewall's policy set, management connectivity of firewall devices, an endpoint agent, an intrusion engine's mode, and a cloud resource's network ACL. See conflict.positions.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- firewall policies, firewall devices, endpoint agents, appliance networks or a Key Vault resource, depending on the implementation",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown until the meaning is ruled; for the network-firewall reading, a complete read of every managed firewall showing it running and enforcing a policy",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Firewalls", "Network Security"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "0450d686-d997-4e20-b82f-827f61cb8371", "name": "Fortinet"},
+    {"srn": "2b2849d8-2fea-4cae-9a3c-8b315280752a", "name": "Cloudflare - Firewall"},
+    {"srn": "9b5d9e9c-a713-451c-826c-a57bb4322576", "name": "Cato Networks - Firewall"},
+    {"srn": "1c1643de-5c64-4dc2-b68c-9a857f647778", "name": "Cisco - FMC - Firewall"},
+    {"srn": "5bc68a9a-9e8e-4036-bb4b-310b250a6da5", "name": "Zscaler"},
+    {"srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51", "name": "Sophos - Firewall"},
+    {"srn": "93a0e8d1-eed1-47be-8f93-eabf80dbf9b3", "name": "DopeSecurity - Firewalls"},
+    {"srn": "182a41f5-ba7f-42c9-a3cd-7aa8399f5037", "name": "Cisco - Meraki - Network Security"},
+    {"srn": "2cd404c8-34d1-4e12-9b5b-7d3f045d5ff1", "name": "Azure KeyVault"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "conflict": {
+    "summary": "Nine integrations answer this key; eight have category null, which is the only reason the disagreement is not customer-visible today. 11 requirements ask it under Firewall/Firewalls while the one categorised answerer (Meraki) is filed Network Security -- a parent/child relationship the category matcher does not implement (plan A3 note). Wave F unmasks all of it at once, so the meaning has to be settled before the category is.",
+    "positions": [
+      {
+        "meaning": "The firewall's policy objects are enabled.",
+        "valueType": "boolean",
+        "population": "firewall policies",
+        "integrations": [
+          {"srn": "0450d686-d997-4e20-b82f-827f61cb8371", "name": "Fortinet", "note": "self-answer tautology today; Tx #1064 (draft, V1) replaces it"},
+          {"srn": "2b2849d8-2fea-4cae-9a3c-8b315280752a", "name": "Cloudflare - Firewall", "note": "self-answer tautology today; Tx #1063"},
+          {"srn": "9b5d9e9c-a713-451c-826c-a57bb4322576", "name": "Cato Networks - Firewall", "note": "real parse of both policy layers; the only implementation in the family the QC replayed as discriminating"},
+          {"srn": "5bc68a9a-9e8e-4036-bb4b-310b250a6da5", "name": "Zscaler", "note": "RTA description only: 'cloud firewall rules are configured and active'"}
+        ],
+        "files": [
+          "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/firewall_transform.py:114",
+          "safeguards/2B2849D8-2FEA-4CAE-9A3C-8B315280752A/firewall_transform.py:114",
+          "safeguards/9B5D9E9C-A713-451C-826C-A57BB4322576/firewall_transform.py",
+          "safeguards/sase/zscaler/isfirewallenabled.py"
+        ],
+        "source": "Plan C1 and Wave C status; contracts/no-self-answer-allowlist.json lists the Fortinet and Cloudflare files"
+      },
+      {
+        "meaning": "Every firewall device the management plane lists is connected to it.",
+        "valueType": "boolean",
+        "population": "managed firewall devices (standby members of an active-passive pair judged through the primary)",
+        "integrations": [{"srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51", "name": "Sophos - Firewall"}],
+        "files": ["safeguards/firewall/sophos/isfirewallenabled.py:1-24"],
+        "source": "Tx #1062 (C4), merged to main at acf42245: was 'any one connected', now 'every counted firewall connected'. status.connected is management connectivity, which the file's own header says is the only signal the API offers."
+      },
+      {
+        "meaning": "At least one endpoint agent reports healthy and admin-enabled.",
+        "valueType": "boolean",
+        "population": "endpoint agents of a secure web gateway",
+        "integrations": [{"srn": "93a0e8d1-eed1-47be-8f93-eabf80dbf9b3", "name": "DopeSecurity - Firewalls"}],
+        "files": ["safeguards/firewall/dope-security/isfirewallenabled.py"],
+        "source": "RTA description; plan C1 note: passes on 1 of 500 healthy and reads a truncated 1,000-record page as the whole estate"
+      },
+      {
+        "meaning": "Every appliance network runs the MX intrusion engine in detection or prevention mode.",
+        "valueType": "boolean",
+        "population": "Meraki appliance networks",
+        "integrations": [{"srn": "182a41f5-ba7f-42c9-a3cd-7aa8399f5037", "name": "Cisco - Meraki - Network Security", "note": "wired on develop"}],
+        "files": ["safeguards/firewalls/cisco-meraki-mx/isFirewallEnabled.py @ develop"],
+        "source": "RTA description (NW-03). An intrusion engine's mode is IDS/IPS evidence; isIDSEnabled and isIPSEnabled already exist in the estate."
+      },
+      {
+        "meaning": "Answered from the management audit log: an empty log graded PASS. The RTA description claims firmware currency instead.",
+        "valueType": "boolean",
+        "population": "admin audit records",
+        "integrations": [{"srn": "1c1643de-5c64-4dc2-b68c-9a857f647778", "name": "Cisco - FMC - Firewall", "note": "Tx #1063 rewrites it to read policy objects"}],
+        "files": ["safeguards/firewall/cisco/fmc/firewall_transform.py:93,:96-99"],
+        "source": "Plan C1 (F-NF-03b) and F-KEY-17"
+      },
+      {
+        "meaning": "A Key Vault's networkAcls.defaultAction is Deny -- a resource network restriction, not a network firewall.",
+        "valueType": "boolean",
+        "population": "one Azure Key Vault resource",
+        "integrations": [{"srn": "2cd404c8-34d1-4e12-9b5b-7d3f045d5ff1", "name": "Azure KeyVault", "note": "stored URL 404s; Tx #1066 (C2)"}],
+        "files": ["safeguards/encryption/microsoft/isFirewallEnabled.py"],
+        "source": "RTA description; plan F staging: Azure KeyVault is filed Encryption precisely so that this key does not unmask 11 firewall parameters"
+      }
+    ],
+    "proposedResolution": {
+      "summary": "isFirewallEnabled means a network firewall is running and enforcing policy, over every managed firewall. Implementations measuring something else move to keys named for it. Whether management connectivity (Sophos) counts as 'enabled' is a judgement, recorded in the decision.",
+      "splitKeys": [
+        {"name": "isFirewallEnabled", "definition": "Every managed network firewall is running and enforcing at least one enabled policy.", "valueType": "boolean", "existing": true, "wouldTake": ["Fortinet", "Cloudflare - Firewall", "Cato Networks - Firewall", "Cisco - FMC - Firewall (after Tx #1063)", "Zscaler (V0)"]},
+        {"name": "isIPSEnabled", "definition": "The intrusion engine runs in prevention mode on every protected network.", "valueType": "boolean", "existing": true, "wouldTake": ["Cisco - Meraki - Network Security, if prevention; isIDSEnabled if detection counts"]},
+        {"name": "isNetworkAccessDefaultDeny", "definition": "The resource's network access rules deny by default and admit only listed networks.", "valueType": "boolean", "existing": false, "wouldTake": ["Azure KeyVault"]},
+        {"name": "swgAgentCoveragePercentage", "definition": "Percentage of endpoints whose secure-web-gateway agent reports healthy and enabled.", "valueType": "number", "unit": "percent", "existing": false, "wouldTake": ["DopeSecurity - Firewalls"]}
+      ]
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Is isFirewallEnabled the network-firewall control only, so that Meraki's intrusion mode, DopeSecurity's endpoint agent and Azure Key Vault's network ACL move to their own keys -- and does Sophos's 'every firewall connected to Central' evidence that the firewall is enabled?"
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": [
+      {"integration": {"srn": "9b5d9e9c-a713-451c-826c-a57bb4322576", "name": "Cato Networks - Firewall"}, "transform": "safeguards/9B5D9E9C-A713-451C-826C-A57BB4322576/firewall_transform.py", "level": "V3",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}},
+       "evidence": ["Wave C status: C1a Tx #1063, V3 with no calculation change"]},
+      {"integration": {"srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51", "name": "Sophos - Firewall"}, "transform": "safeguards/firewall/sophos/isfirewallenabled.py", "level": "V2",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}},
+       "evidence": ["Wave C status: Tx #1062, V2"]},
+      {"integration": {"srn": "0450d686-d997-4e20-b82f-827f61cb8371", "name": "Fortinet"}, "transform": "safeguards/0450D686-D997-4E20-B82F-827F61CB8371/firewall_transform.py", "level": "V0",
+       "notMeasuredConformance": {"paths": {"refusal": "unverified", "emptyBody": "unverified", "poisoned": "unverified"}},
+       "evidence": ["Tautology on main; the replacement (Tx #1064) is V1 because the FortiOS reference is behind a vendor login"]}
+    ]
+  },
+  "citations": [
+    "spektrum-labs-cli docs/integration-qc-2026-10-06-remediation-plan.md: rule 2, A3 note, C1, Wave C status, F staging",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-registry.md F-KEY-17 and cross-vendor table",
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json and defs/<srn>.json: nine RTA rows and their descriptions",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-census.csv: 9 integrations, 8 with null category, asked by 11 requirements",
+    "tools/check_criteria_registry.py census 2026-10-07: 13 files on main emit this key; 12 emit a boolean on a no-evidence body, only Sophos emits null"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-07", "change": "Seeded as contested from the 2026-10-06 integration QC and Wave C."}
+  ],
+  "notes": "The QC's cross-vendor table recorded this key as 'yes in code'; the RTA descriptions and Wave C replays say otherwise, which is why it is seeded contested rather than active. Only 3 of 9 implementations are listed under validation; the omitted six would not raise the minimum above V0."
+}

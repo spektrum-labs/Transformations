@@ -1,0 +1,37 @@
+{
+  "name": "hasActiveIncidentTicketing",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the vendor's own incident records show incidents are routed to a connected ticketing (PSA) system.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the incident reports the connected managed-detection tenant lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "At least one incident report that carries a ticket id from the connected ticketing system (proof even on a partial read), or a complete read of at least one report none of which carries one (False). No incident report, an error or refused answer, or a partial read with no ticket id is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/mdr/huntress/hasActiveIncidentTicketing.py (Huntress REST API v1, GET /v1/incident_reports, IncidentReport.psa_ticket_eids: https://api.huntress.io/docs)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-18",
+      "change": "Registered so the Huntress transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}

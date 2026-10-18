@@ -1,0 +1,40 @@
+{
+  "name": "sslDeepInspectionEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when outbound TLS traffic is decrypted for inspection (forward proxy) with a decryption profile in place, covering all outbound traffic and not skipped for all traffic by an earlier rule.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the decryption rules (or decryption trust settings) the tool reads",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the decryption setup showing forward-proxy decryption with a profile in force across all traffic; a read with no decryption rules or an empty result, a decrypt rule limited to some zones or addresses, an error, an empty body or a possibly cut-off read is Not evaluated.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "A rule counts as covering all traffic only when every scope field the tool can read (hardware: zones, source, destination, user, URL category and service) is any. Three answers: True for an all-traffic decrypt rule with no all-traffic no-decrypt rule ahead of it; False when no decrypt rule with a profile exists among the rules read, or an all-traffic no-decrypt rule comes first; Not evaluated when the only decrypt rules are limited to some of those fields, because zone names are arbitrary and the tool cannot tell which zone faces the internet. A narrow no-decrypt exception is ignored."
+}

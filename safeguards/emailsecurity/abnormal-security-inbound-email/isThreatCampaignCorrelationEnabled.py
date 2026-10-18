@@ -65,29 +65,71 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+KEY = "isThreatCampaignCorrelationEnabled"
+
+
+def not_measured(reason, validation):
+    """No verdict: the result is None and the data-collection status is error, so the evaluator
+    shows Not evaluated instead of a failed check. The reason is fixed text: the vendor's own error
+    message is never copied into it."""
+    return create_response(
+        result={KEY: None},
+        validation=validation,
+        fail_reasons=[reason],
+        api_errors=[reason],
+        metadata={"transformationId": KEY, "vendor": "Abnormal Security Inbound Email", "category": "emailsecurity"},
+    )
+
+
+def is_error_body(data):
+    return isinstance(data, dict) and (data.get("error") is True or bool(data.get("errors")))
+
+
+def objects_only(items, noun):
+    """(objects, problem): the object items of a list.
+
+    A non-empty list with no object in it proves nothing, so it is "not measured". Items that are not
+    objects are never counted as records. An empty list is passed through unchanged."""
+    objects = [x for x in items if isinstance(x, dict)]
+    if items and not objects:
+        return None, "Abnormal returned a " + noun + " list with no objects in it; nothing to measure."
+    return objects, None
+
+
+def text_of(value):
+    """The value when it is a non-blank string, else an empty string; a number or a list is not a label."""
+    if isinstance(value, str) and value.strip():
+        return value
+    return ""
+
+
+def threat_detail_problem(data):
+    """Why a /v1/threats/{threatId} body proves nothing, or None when it is a threat detail."""
+    if is_error_body(data):
+        return "Abnormal returned an error for the threat detail; nothing to measure."
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        return "Abnormal returned no threat detail with a message list; nothing to measure."
+    return None
+
+
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
-
-    if isinstance(data, list):
-        threat_id = None
-        messages = []
-    else:
-        threat_id = data.get("threatId")
-        messages = data.get("messages") or []
-        if not isinstance(messages, list):
-            messages = []
+    problem = threat_detail_problem(data)
+    if problem is not None:
+        return not_measured(problem, validation)
+    threat_id = data.get("threatId")
+    messages, problem = objects_only(data.get("messages"), "threat message")
+    if problem is not None:
+        return not_measured(problem, validation)
 
     message_count = len(messages)
 
     same_threat_ids = 0
     analysis_fields_present = 0
     for m in messages:
-        if not isinstance(m, dict):
-            continue
         if m.get("threatId") == threat_id and threat_id:
             same_threat_ids = same_threat_ids + 1
-        if m.get("attackStrategy") or m.get("attackType") or m.get("attackedParty"):
+        if text_of(m.get("attackStrategy")) or text_of(m.get("attackType")) or text_of(m.get("attackedParty")):
             analysis_fields_present = analysis_fields_present + 1
 
     has_grouping_structure = bool(threat_id) and isinstance(messages, list) and message_count >= 1

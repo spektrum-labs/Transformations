@@ -1,6 +1,7 @@
 """Cohesity DataProtect (Helios v2 MCM) checks. Bodies follow the published OpenAPI shapes (GetMcmProtectionGroups
-with includeLastRunInfo, GetHeliosPolicies, GetMfaPreferences, GetIdps) with synthetic values; no customer has
-connected yet. Runs in the Token-Service sandbox replica when RestrictedPython is installed, else plain Python.
+with includeLastRunInfo, GetHeliosPolicies, GetMfaPreferences, GetIdps) with synthetic values, plus the shape the
+first real tenant returned: protection groups with no lastRun (and no isActive / isPaused / isDeleted) at all.
+Runs in the Token-Service sandbox replica when RestrictedPython is installed, else plain Python.
 Each check has a pass, a flip that must fail, and the fail-closed battery."""
 import copy
 import importlib.util
@@ -25,8 +26,13 @@ except ImportError:
         return ns
 
 
+def full(key, body):
+    return load_code((HERE / (key.lower() + ".py")).read_text(), key)["transform"](body)
+
+
 def run(key, body):
-    return load_code((HERE / (key.lower() + ".py")).read_text(), key)["transform"](body)[key]
+    out = full(key, body)
+    return out.get("transformedResponse", out)[key]
 
 
 NOW = int(time.time() * 1000000)
@@ -76,7 +82,8 @@ def test_groups():
     assert run("isBackupEnabled", {"response": json.loads(json.dumps(GROUPS))}) is True
     assert run("failedBackupJobsCount", GROUPS) == 1
     assert run("failedBackupJobsCount", {"protectionGroups": [group(0), group(1)]}) == 0
-    assert run("failedBackupJobsCount", {"protectionGroups": [group(0), {"name": "x", "isActive": True}]}) is None
+    # a group that has not run yet has no failed run: it is reported, not counted, beside groups that report runs
+    assert run("failedBackupJobsCount", {"protectionGroups": [group(0), {"name": "x", "isActive": True}]}) == 0
     assert run("failedBackupJobsCount", dict(GROUPS, paginationCookie="abc")) is None
     assert run("failedBackupJobsCount", {"protectionGroups": []}) is None
     assert run("backupSuccessRatePercentage", GROUPS) == round(200 / 3.0, 2)
@@ -93,7 +100,8 @@ def test_policies():
     assert run("isBackupImmutable", dict(GROUPS, policies=[policy(mode="Administrative")])) is True
     assert run("isBackupImmutable", dict(GROUPS, policies=[policy(mode=None)])) is False
     assert run("isBackupImmutable", dict(GROUPS, policies=[policy(duration=0)])) is False
-    assert run("isBackupImmutable", dict(GROUPS, policies=[policy("other")])) is False
+    # The group's policy was not returned: the lock cannot be read, so it is not measured (was False).
+    assert run("isBackupImmutable", dict(GROUPS, policies=[policy("other")])) is None
     assert run("isBackupImmutable", {"protectionGroups": [group(0), group(1, policy="p2")], "policies": [policy(), policy("p2", mode=None)]}) is False
     assert run("isDataLockComplianceModeEnabled", POSTURE) is True
     assert run("isDataLockComplianceModeEnabled", dict(GROUPS, policies=[policy(mode="Administrative")])) is False
@@ -112,3 +120,62 @@ def test_mfa_sso():
     assert run("isSSOEnabled", IDPS) is True
     assert run("isSSOEnabled", {"idps": [{"name": "Okta", "isEnabled": False}]}) is False
     assert run("isSSOEnabled", {"idps": []}) is False
+
+
+# What the first real tenant returned for includeLastRunInfo=true: groups with an id, a name, a policy id and an
+# environment, and null placeholders, but no lastRun and no isActive / isPaused / isDeleted. Synthetic values.
+def bare_group(i):
+    return {"id": "1:2:%d" % i, "name": "pg%d" % i, "policyId": "p1", "nextExpectedRuns": None, "sla": None,
+            "environment": "kVMware", "permissions": None, "missingEntities": None, "invalidEntities": None,
+            "advancedConfigs": None}
+
+
+BARE = {"protectionGroups": [bare_group(0), bare_group(1), bare_group(2)]}
+RUN_KEYS = ["isBackupEnabled", "failedBackupJobsCount", "backupSuccessRatePercentage",
+            "backupSlaComplianceRatePercentage", "staleProtectionJobsCount"]
+
+
+@pytest.mark.parametrize("key", RUN_KEYS)
+def test_no_run_info_is_not_evaluated_not_a_failure(key):
+    """No group carries lastRun: the response cannot say whether backups ran. None plus a dataCollection error
+    with errorCode VENDOR_DATA_NOT_EXPOSED, never False and never 'every group is stale'."""
+    out = full(key, copy.deepcopy(BARE))
+    assert out.get("transformedResponse", out)[key] is None
+    dc = out["additionalInfo"]["dataCollection"]
+    assert dc["status"] == "error" and dc["errors"]
+    assert dc["errorCode"] == "VENDOR_DATA_NOT_EXPOSED"
+
+
+def test_no_run_info_via_wrapped_response():
+    for key in RUN_KEYS:
+        out = full(key, {"apiResponse": copy.deepcopy(BARE)})
+        assert out.get("transformedResponse", out)[key] is None, key
+        assert out["additionalInfo"]["dataCollection"]["errorCode"] == "VENDOR_DATA_NOT_EXPOSED", key
+
+
+def test_error_envelope_is_none_for_is_backup_enabled():
+    for body in ({"error": True, "statusCode": 401}, {"errorCode": "KStatusUnauthorized", "message": "x"}, {"hello": "world"}):
+        out = full("isBackupEnabled", copy.deepcopy(body))
+        assert out.get("transformedResponse", out)["isBackupEnabled"] is None
+        dc = out["additionalInfo"]["dataCollection"]
+        assert dc["status"] == "error" and "errorCode" not in dc
+
+
+def test_partial_run_info_keeps_its_old_answers_and_carries_no_code():
+    mixed = {"protectionGroups": [group(0), bare_group(1)]}
+    assert run("isBackupEnabled", mixed) is True
+    assert run("staleProtectionJobsCount", mixed) == 1  # a group that never ran, beside groups that report runs
+    out = full("failedBackupJobsCount", mixed)
+    inner = out.get("transformedResponse", out)
+    assert inner["failedBackupJobsCount"] == 0 and inner["groupsNotRunYet"] == ["pg1"]
+    dc = out["additionalInfo"]["dataCollection"]
+    assert dc["status"] == "success" and "errorCode" not in dc
+
+
+def test_measured_answers_carry_no_code_and_no_marker():
+    for key in RUN_KEYS:
+        out = full(key, copy.deepcopy(GROUPS))
+        inner = out.get("transformedResponse", out)
+        assert inner[key] is not None, key
+        assert "runInfoReturned" not in inner, key
+        assert "errorCode" not in (out.get("additionalInfo", {}).get("dataCollection", {}) or {}), key
