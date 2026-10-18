@@ -186,6 +186,11 @@ def prepared(input):
     if problem:
         return None, None, None, unevaluated(problem)
     judged, stale = judged_computers(computers)
+    if not judged and stale == 0:
+        # Nothing stale and nothing judged: no live computer carries a readable check-in date.
+        return None, None, None, unevaluated("No live ThreatLocker computer has a readable lastCheckin, so recency "
+                                             "cannot be shown and nothing is judged.",
+                                             {"staleComputerCount": 0})
     if not judged:
         return None, None, None, unevaluated("No ThreatLocker computer checked in within " + str(ACTIVE_WINDOW_DAYS) +
                                              " days (" + str(stale) + " stale); computers without a check-in date "
