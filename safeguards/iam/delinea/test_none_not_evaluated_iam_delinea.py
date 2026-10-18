@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the connected environment, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -33,9 +33,26 @@ class Poisoned(dict):
         return 1
 
 
+ERROR_ENVELOPE = {"error": True, "statusCode": 401, "message": "Unauthorized"}
+
 CASES = [
     ('openorphanaccountscount', ('openOrphanAccountsCount',), 'empty_dict', lambda: {}),
     ('openorphanaccountscount', ('openOrphanAccountsCount',), 'poisoned', lambda: Poisoned()),
+    ('ispamenabled', ('isPAMEnabled',), 'empty_dict', lambda: {}),
+    ('ispamenabled', ('isPAMEnabled',), 'poisoned', lambda: Poisoned()),
+    ('ispamenabled', ('isPAMEnabled',), 'error_envelope', lambda: dict(ERROR_ENVELOPE)),
+    ('isprivilegedidentitymanagementenabled', ('isPrivilegedIdentityManagementEnabled',), 'empty_dict', lambda: {}),
+    ('isprivilegedidentitymanagementenabled', ('isPrivilegedIdentityManagementEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isprivilegedidentitymanagementenabled', ('isPrivilegedIdentityManagementEnabled',), 'error_envelope', lambda: dict(ERROR_ENVELOPE)),
+    ('isseparationofdutiesenabled', ('isSeparationOfDutiesEnabled',), 'empty_dict', lambda: {}),
+    ('isseparationofdutiesenabled', ('isSeparationOfDutiesEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isseparationofdutiesenabled', ('isSeparationOfDutiesEnabled',), 'error_envelope', lambda: dict(ERROR_ENVELOPE)),
+    ('isssoenabled', ('isSSOEnabled',), 'empty_dict', lambda: {}),
+    ('isssoenabled', ('isSSOEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isssoenabled', ('isSSOEnabled',), 'error_envelope', lambda: dict(ERROR_ENVELOPE)),
+    ('isworkflowautomationenabled', ('isWorkflowAutomationEnabled',), 'empty_dict', lambda: {}),
+    ('isworkflowautomationenabled', ('isWorkflowAutomationEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isworkflowautomationenabled', ('isWorkflowAutomationEnabled',), 'error_envelope', lambda: dict(ERROR_ENVELOPE)),
 ]
 
 
