@@ -992,14 +992,17 @@ def transform(input):
         # 3c. Methods are listed but none of them counts as MFA while the policy is still migrating: the legacy
         # per-user MFA and SSPR policies may enable Microsoft Authenticator or OATH codes, so the new policy
         # alone is not evidence that no MFA method is available (not a FAIL).
+        # Only when the method list is the sole failing input: an all-users MFA policy, or a policy whose scope is
+        # unknown (a risk-only policy is never all-user enforcement, so it keeps its False).
+        scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
         pending = migration_pending(auth_methods)
-        if pending and not methods_available and (mfa_enforced_for_users or set_aside):
+        if pending and not methods_available and (
+                mfa_enforced_for_users or (ALL_USERS_TARGET_MODE == "unevaluated" and scope_unknown)):
             return not_evaluated(
                 criteriaKey,
                 migration_reason(pending, "Microsoft Authenticator, FIDO2, OATH or Temporary Access Pass method"),
                 validation, input_summary=input_summary, extra=details)
 
-        scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
         membership_note = ""
         if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
                 and scope_unknown and any(k in data for k in MEMBERSHIP_KEYS)):
