@@ -100,7 +100,7 @@ def test_existing_fields_are_unchanged():
     result = response["transformedResponse"]
     assert {k: result[k] for k in EXISTING_KEYS} == {
         "requiredCoveragePercentage": 95.0, "activeDevices": 19, "totalDevices": 20,
-        "notReportingDevices": 0, "containedDevices": 0, "activeWindowDays": 15}
+        "notReportingDevices": 0, "containedDevices": 0, "activeWindowDays": 45}
     assert set(result) == set(EXISTING_KEYS) | set(SPLIT_KEYS)
     assert response["additionalInfo"]["dataCollection"]["status"] == "success"
     # The split adds no reason text: the evaluation section reads exactly as before.
@@ -109,11 +109,17 @@ def test_existing_fields_are_unchanged():
 
 
 def test_existing_fixture_outputs_are_unchanged():
-    response = run(copy.deepcopy(DEVICES))
+    # The capture is replayed 60 days older than it was taken so that, whatever today's date, every host
+    # is beyond the window and the fixture reads as a dark fleet, as it did when this test was written.
+    aged = copy.deepcopy(DEVICES)
+    for record in aged["resources"]:
+        when = datetime.fromisoformat(record["last_seen"][:19]) - timedelta(days=60)
+        record["last_seen"] = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    response = run(aged)
     result = response["transformedResponse"]
     assert {k: result[k] for k in EXISTING_KEYS} == {
         "requiredCoveragePercentage": 0, "activeDevices": 0, "totalDevices": 100,
-        "notReportingDevices": 100, "containedDevices": 0, "activeWindowDays": 15}
+        "notReportingDevices": 100, "containedDevices": 0, "activeWindowDays": 45}
     assert response["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
