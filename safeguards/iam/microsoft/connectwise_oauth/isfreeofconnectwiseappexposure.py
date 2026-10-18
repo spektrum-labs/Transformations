@@ -2,23 +2,31 @@
 Transformation: isFreeOfConnectWiseAppExposure
 Vendor: Microsoft Entra ID  |  Category: Identity and Access Management
 
-Threat: abuse of two ConnectWise multitenant OAuth apps (Microsoft Threat Intelligence and
-Huntress, 16-17 Oct 2026). A threat actor used customers' existing consent to these apps to get
-tokens in customer tenants, ran Graph reconnaissance and added credentials to service principals.
+Threat: abuse of ConnectWise multitenant OAuth apps (Microsoft Threat Intelligence and Huntress,
+16-17 Oct 2026). A threat actor used customers' existing consent to these apps to get tokens in
+customer tenants, ran Graph reconnaissance and added credentials to service principals. Scope: 7
+ConnectWise apps (J.J. 18 Oct 2026), app ids as published by Huntress and BleepingComputer:
   ConnectWise Cloud Backup (formerly SkyKick Backup)   appId 506e08f9-6e9a-4da4-942b-a099a03644ae
   ConnectWise Cloud Management - MS Teams              appId 24205314-2b89-4e07-a2a4-579e898a5640
+  ConnectWise Cloud Management                         appId 2399d300-6fca-4e6a-a686-399fefe75b83
+  ConnectWise Cloud Management - Exchange Online       appId b78f6a77-d4e5-46fb-87e5-d1648bd02519
+  ConnectWise Cloud Management - MS Graph              appId 0de14c77-b9b0-4137-9360-34878a929827
+  ConnectWise Cloud Management - Partner Center        appId 412dcf96-176d-4b3a-a1b0-4981ad66971e
+  ConnectWise Cloud Management - SharePoint Online     appId b2b55f5b-7758-4719-8d8f-88ae172e6bdb
+The first two are the ones the advisories name as abused; Huntress says to disable the others until
+they can be verified. Each app counts the same way (presence, grants, roles and indicators).
 
-Criterion: True when the tenant's service-principal list was read and neither app has a service
-principal in it. False when either app is present (Exposed). A present but disabled service principal
+Criterion: True when the tenant's service-principal list was read, the reads cover all seven apps,
+and none of them has a service principal in it. False when any app is present (Exposed). A present but disabled service principal
 is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps its consent, grants and
 credentials, so the fail reason tells the customer to remove it, not just leave it disabled.
 
 Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria), merged Graph reads:
   servicePrincipals         GET /v1.0/servicePrincipals?$filter=appId in (...)          (Application.Read.All or Directory.Read.All)
-  cwBackupAppRoles          GET /v1.0/servicePrincipals(appId='506e...')/appRoleAssignments
-  cwTeamsAppRoles           GET /v1.0/servicePrincipals(appId='2420...')/appRoleAssignments
-  cwBackupDelegatedGrants   GET /v1.0/servicePrincipals(appId='506e...')/oauth2PermissionGrants
-  cwTeamsDelegatedGrants    GET /v1.0/servicePrincipals(appId='2420...')/oauth2PermissionGrants
+  cw<App>AppRoles           GET /v1.0/servicePrincipals(appId='...')/appRoleAssignments     one per app (APP_ROLE_FEEDS)
+  cw<App>DelegatedGrants    GET /v1.0/servicePrincipals(appId='...')/oauth2PermissionGrants one per app
+                            Every app's role feed must be in the body (data or a stepError marker, for example
+                            404 when the app is absent); otherwise absence is Not evaluated.
   roleAssignments           GET /v1.0/roleManagement/directory/roleAssignments           (RoleManagement.Read.Directory or Directory.Read.All)
   spSignInsByApp, spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, directoryAudits, securityAlerts
                             (see the sibling file)
@@ -43,9 +51,17 @@ KEY = "isFreeOfConnectWiseAppExposure"
 TRANSFORMATION_ID = "isfreeofconnectwiseappexposure"
 
 # ---- shared helper block: start (identical in both criterion files; a test pins it)
+# Scope: 7 ConnectWise apps (J.J. 18 Oct 2026). The two the advisories name as abused, then the five other Cloud
+# Management apps whose ids Huntress ("ConnectWise (SkyKick) Vendor Credentials Abused in M365 Attacks", 16-17 Oct)
+# and BleepingComputer (Oct 2026) publish, and which Huntress says to disable until they can be verified.
 CONNECTWISE_APPS = {
     "506e08f9-6e9a-4da4-942b-a099a03644ae": "ConnectWise Cloud Backup (formerly SkyKick Backup)",
     "24205314-2b89-4e07-a2a4-579e898a5640": "ConnectWise Cloud Management - MS Teams",
+    "2399d300-6fca-4e6a-a686-399fefe75b83": "ConnectWise Cloud Management",
+    "b78f6a77-d4e5-46fb-87e5-d1648bd02519": "ConnectWise Cloud Management - Exchange Online",
+    "0de14c77-b9b0-4137-9360-34878a929827": "ConnectWise Cloud Management - MS Graph",
+    "412dcf96-176d-4b3a-a1b0-4981ad66971e": "ConnectWise Cloud Management - Partner Center",
+    "b2b55f5b-7758-4719-8d8f-88ae172e6bdb": "ConnectWise Cloud Management - SharePoint Online",
 }
 # Published indicators (Microsoft Threat Intelligence and Huntress, 16-17 Oct 2026). Data, not logic.
 INDICATOR_IPS = ("144.172.64.128",)
@@ -92,9 +108,19 @@ GENERIC_ALERT_TITLES = ("suspicious sign-in",)
 APP_ROLE_FEEDS = {
     "506e08f9-6e9a-4da4-942b-a099a03644ae": ("cwBackupAppRoles", "cwBackupDelegatedGrants"),
     "24205314-2b89-4e07-a2a4-579e898a5640": ("cwTeamsAppRoles", "cwTeamsDelegatedGrants"),
+    "2399d300-6fca-4e6a-a686-399fefe75b83": ("cwMgmtAppRoles", "cwMgmtDelegatedGrants"),
+    "b78f6a77-d4e5-46fb-87e5-d1648bd02519": ("cwExchangeAppRoles", "cwExchangeDelegatedGrants"),
+    "0de14c77-b9b0-4137-9360-34878a929827": ("cwGraphAppRoles", "cwGraphDelegatedGrants"),
+    "412dcf96-176d-4b3a-a1b0-4981ad66971e": ("cwPartnerCenterAppRoles", "cwPartnerCenterDelegatedGrants"),
+    "b2b55f5b-7758-4719-8d8f-88ae172e6bdb": ("cwSharePointAppRoles", "cwSharePointDelegatedGrants"),
 }
+# The reads cover all seven apps only when every app's role feed is in the body (as data or a stepError marker).
+# A body from reads scoped to fewer apps cannot show the others absent, so absence and a clean indicator read
+# need this; a present app or an indicator found still counts without it.
+SCOPE_NOTE = ("the reads do not cover all seven ConnectWise apps (the per-app feeds of some are missing), so "
+              "their absence is not shown")
 WRAPPER_KEYS = ("apiResponse", "api_response", "response", "result", "Output")
-# Exact display names of the two apps (and their former SkyKick names), normalised by norm_name. App-initiated
+# Exact display names of the seven apps (and their former SkyKick names), normalised by norm_name. App-initiated
 # audit entries often carry a null appId, and a deleted app's service principal id is no longer in the presence
 # feed, so the name can be the only link. It is compared by equality, never as a substring: MSP tenants run other
 # ConnectWise and SkyKick apps (Automate, Manage, ScreenConnect, Control, SkyKick Migration) whose routine credential
@@ -105,11 +131,16 @@ WRAPPER_KEYS = ("apiResponse", "api_response", "response", "result", "Output")
 #     Backup" ("SkyKick Backup" in its IOC table) and "ConnectWise Cloud Management - MS Teams", formerly "SkyKick
 #     Cloud Manager - MS Teams";
 #   Coalition, 16 Oct 2026: shown in Entra as "SkyKick Backup" or "ConnectWise Cloud Backup", formerly "SkyKick Cloud
-#     Backup".
+#     Backup";
+#   Huntress and BleepingComputer: the five other "ConnectWise Cloud Management" names below, and "In older tenants the
+#     Cloud Management apps may appear as 'SkyKick Cloud Manager'" (no suffixed SkyKick name is published for them).
 # A match by name alone is still an indicator (fail closed), but it is tagged: it needs confirmation before action.
 CONNECTWISE_APP_NAMES = (
     "connectwise cloud backup", "skykick backup", "skykick cloud backup",
     "connectwise cloud management - ms teams", "skykick cloud manager - ms teams",
+    "connectwise cloud management", "connectwise cloud management - exchange online",
+    "connectwise cloud management - ms graph", "connectwise cloud management - partner center",
+    "connectwise cloud management - sharepoint online", "skykick cloud manager",
 )
 NAME_ONLY_PREFIX = "Name only, needs confirmation before any action: "
 
@@ -242,6 +273,11 @@ def assess(data):
         if isinstance(record.get("id"), str):
             sp_ids.append(lower(record.get("id")))
     enabled = [r for r in present if r.get("accountEnabled") is not False]
+    scope_ok = True
+    for app_id in APP_ROLE_FEEDS:
+        if APP_ROLE_FEEDS[app_id][0] not in data:
+            scope_ok = False
+    feeds["appScope"] = "ok" if scope_ok else "missing feeds for some of the seven apps"
 
     # Risk: app permissions, delegated grants and directory roles held by a present app.
     high = []
@@ -377,23 +413,24 @@ def assess(data):
     retention_ok = retention_covers_window()
     feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
     indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
-                       and audits_state == "ok" and retention_ok)
+                       and audits_state == "ok" and retention_ok and scope_ok)
 
     # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
     # its consent, grants and credentials, so the customer must remove it, not just leave it disabled.
+    absence_known = presence_known and scope_ok
     if indicators:
         verdict = "Indicators found"
-    elif not presence_known:
-        verdict = "Not evaluated"
-    elif present:
+    elif presence_known and present:
         verdict = "Exposed"
-    else:
+    elif absence_known:
         verdict = "Not exposed"
+    else:
+        verdict = "Not evaluated"
     if not enabled:
         if present:
             risk = "low"
         else:
-            risk = "none" if presence_known else "unknown"
+            risk = "none" if absence_known else "unknown"
     elif high:
         risk = "high"
     elif unknown_risk:
@@ -407,7 +444,7 @@ def assess(data):
             label = label + " (disabled)"
         names.append(label)
     return {
-        "presenceKnown": presence_known, "present": present, "enabled": enabled, "names": names,
+        "presenceKnown": presence_known, "absenceKnown": absence_known, "scopeOk": scope_ok, "present": present, "enabled": enabled, "names": names,
         "high": high, "risk": risk, "indicators": indicators, "indicatorsRead": indicators_read,
         "nameOnly": len(name_only),
         "alertsState": alerts_state, "verdict": verdict, "feeds": feeds,
@@ -449,6 +486,9 @@ def transform(input):
             return not_measured("The service-principal list could not be read whole ("
                                 + found["feeds"].get("servicePrincipals", "missing")
                                 + "); exposure is not evaluated. Grant Application.Read.All or Directory.Read.All.", found)
+        if not found["present"] and not found["absenceKnown"]:
+            return not_measured("No ConnectWise app was found, but " + SCOPE_NOTE + "; exposure is not evaluated.",
+                                found)
         result = {KEY: not found["present"]}
         result.update(summary_fields(found))
         summary = {"feeds": found["feeds"]}
@@ -464,7 +504,7 @@ def transform(input):
                        "A disabled app can be re-enabled and keeps its consent, grants and credentials. Remove it: "
                        "delete its service principal and revoke its consent; do not just leave it disabled."]
             return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
-        reasons = ["Neither ConnectWise app has a service principal in this tenant."]
+        reasons = ["None of the seven ConnectWise apps has a service principal in this tenant."]
         return create_response(result, pass_reasons=reasons, input_summary=summary, findings=findings)
     except Exception as e:
         return not_measured("The Microsoft Graph feeds could not be read; exposure is not evaluated.",

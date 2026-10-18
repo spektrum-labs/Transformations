@@ -4,7 +4,8 @@ Vendor: Microsoft Entra ID  |  Category: Identity and Access Management
 
 Threat: abuse of the ConnectWise Cloud Backup (506e08f9-6e9a-4da4-942b-a099a03644ae) and
 ConnectWise Cloud Management - MS Teams (24205314-2b89-4e07-a2a4-579e898a5640) multitenant OAuth
-apps, from 15 Oct 2026 (see isfreeofconnectwiseappexposure.py beside this file).
+apps, from 15 Oct 2026. Scope: 7 ConnectWise apps (J.J. 18 Oct 2026): these two and the five other
+Cloud Management apps listed in isfreeofconnectwiseappexposure.py beside this file.
 
 Criterion: True when the three sign-in feeds and the directory-audit feed were read whole, the
 window start is still inside Entra's 30-day log retention, and they show none of the published indicators since 2026-10-15T00:00:00Z. False when any
@@ -52,9 +53,17 @@ KEY = "isFreeOfConnectWiseCompromiseIndicators"
 TRANSFORMATION_ID = "isfreeofconnectwisecompromiseindicators"
 
 # ---- shared helper block: start (identical in both criterion files; a test pins it)
+# Scope: 7 ConnectWise apps (J.J. 18 Oct 2026). The two the advisories name as abused, then the five other Cloud
+# Management apps whose ids Huntress ("ConnectWise (SkyKick) Vendor Credentials Abused in M365 Attacks", 16-17 Oct)
+# and BleepingComputer (Oct 2026) publish, and which Huntress says to disable until they can be verified.
 CONNECTWISE_APPS = {
     "506e08f9-6e9a-4da4-942b-a099a03644ae": "ConnectWise Cloud Backup (formerly SkyKick Backup)",
     "24205314-2b89-4e07-a2a4-579e898a5640": "ConnectWise Cloud Management - MS Teams",
+    "2399d300-6fca-4e6a-a686-399fefe75b83": "ConnectWise Cloud Management",
+    "b78f6a77-d4e5-46fb-87e5-d1648bd02519": "ConnectWise Cloud Management - Exchange Online",
+    "0de14c77-b9b0-4137-9360-34878a929827": "ConnectWise Cloud Management - MS Graph",
+    "412dcf96-176d-4b3a-a1b0-4981ad66971e": "ConnectWise Cloud Management - Partner Center",
+    "b2b55f5b-7758-4719-8d8f-88ae172e6bdb": "ConnectWise Cloud Management - SharePoint Online",
 }
 # Published indicators (Microsoft Threat Intelligence and Huntress, 16-17 Oct 2026). Data, not logic.
 INDICATOR_IPS = ("144.172.64.128",)
@@ -101,9 +110,19 @@ GENERIC_ALERT_TITLES = ("suspicious sign-in",)
 APP_ROLE_FEEDS = {
     "506e08f9-6e9a-4da4-942b-a099a03644ae": ("cwBackupAppRoles", "cwBackupDelegatedGrants"),
     "24205314-2b89-4e07-a2a4-579e898a5640": ("cwTeamsAppRoles", "cwTeamsDelegatedGrants"),
+    "2399d300-6fca-4e6a-a686-399fefe75b83": ("cwMgmtAppRoles", "cwMgmtDelegatedGrants"),
+    "b78f6a77-d4e5-46fb-87e5-d1648bd02519": ("cwExchangeAppRoles", "cwExchangeDelegatedGrants"),
+    "0de14c77-b9b0-4137-9360-34878a929827": ("cwGraphAppRoles", "cwGraphDelegatedGrants"),
+    "412dcf96-176d-4b3a-a1b0-4981ad66971e": ("cwPartnerCenterAppRoles", "cwPartnerCenterDelegatedGrants"),
+    "b2b55f5b-7758-4719-8d8f-88ae172e6bdb": ("cwSharePointAppRoles", "cwSharePointDelegatedGrants"),
 }
+# The reads cover all seven apps only when every app's role feed is in the body (as data or a stepError marker).
+# A body from reads scoped to fewer apps cannot show the others absent, so absence and a clean indicator read
+# need this; a present app or an indicator found still counts without it.
+SCOPE_NOTE = ("the reads do not cover all seven ConnectWise apps (the per-app feeds of some are missing), so "
+              "their absence is not shown")
 WRAPPER_KEYS = ("apiResponse", "api_response", "response", "result", "Output")
-# Exact display names of the two apps (and their former SkyKick names), normalised by norm_name. App-initiated
+# Exact display names of the seven apps (and their former SkyKick names), normalised by norm_name. App-initiated
 # audit entries often carry a null appId, and a deleted app's service principal id is no longer in the presence
 # feed, so the name can be the only link. It is compared by equality, never as a substring: MSP tenants run other
 # ConnectWise and SkyKick apps (Automate, Manage, ScreenConnect, Control, SkyKick Migration) whose routine credential
@@ -114,11 +133,16 @@ WRAPPER_KEYS = ("apiResponse", "api_response", "response", "result", "Output")
 #     Backup" ("SkyKick Backup" in its IOC table) and "ConnectWise Cloud Management - MS Teams", formerly "SkyKick
 #     Cloud Manager - MS Teams";
 #   Coalition, 16 Oct 2026: shown in Entra as "SkyKick Backup" or "ConnectWise Cloud Backup", formerly "SkyKick Cloud
-#     Backup".
+#     Backup";
+#   Huntress and BleepingComputer: the five other "ConnectWise Cloud Management" names below, and "In older tenants the
+#     Cloud Management apps may appear as 'SkyKick Cloud Manager'" (no suffixed SkyKick name is published for them).
 # A match by name alone is still an indicator (fail closed), but it is tagged: it needs confirmation before action.
 CONNECTWISE_APP_NAMES = (
     "connectwise cloud backup", "skykick backup", "skykick cloud backup",
     "connectwise cloud management - ms teams", "skykick cloud manager - ms teams",
+    "connectwise cloud management", "connectwise cloud management - exchange online",
+    "connectwise cloud management - ms graph", "connectwise cloud management - partner center",
+    "connectwise cloud management - sharepoint online", "skykick cloud manager",
 )
 NAME_ONLY_PREFIX = "Name only, needs confirmation before any action: "
 
@@ -251,6 +275,11 @@ def assess(data):
         if isinstance(record.get("id"), str):
             sp_ids.append(lower(record.get("id")))
     enabled = [r for r in present if r.get("accountEnabled") is not False]
+    scope_ok = True
+    for app_id in APP_ROLE_FEEDS:
+        if APP_ROLE_FEEDS[app_id][0] not in data:
+            scope_ok = False
+    feeds["appScope"] = "ok" if scope_ok else "missing feeds for some of the seven apps"
 
     # Risk: app permissions, delegated grants and directory roles held by a present app.
     high = []
@@ -386,23 +415,24 @@ def assess(data):
     retention_ok = retention_covers_window()
     feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
     indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
-                       and audits_state == "ok" and retention_ok)
+                       and audits_state == "ok" and retention_ok and scope_ok)
 
     # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
     # its consent, grants and credentials, so the customer must remove it, not just leave it disabled.
+    absence_known = presence_known and scope_ok
     if indicators:
         verdict = "Indicators found"
-    elif not presence_known:
-        verdict = "Not evaluated"
-    elif present:
+    elif presence_known and present:
         verdict = "Exposed"
-    else:
+    elif absence_known:
         verdict = "Not exposed"
+    else:
+        verdict = "Not evaluated"
     if not enabled:
         if present:
             risk = "low"
         else:
-            risk = "none" if presence_known else "unknown"
+            risk = "none" if absence_known else "unknown"
     elif high:
         risk = "high"
     elif unknown_risk:
@@ -416,7 +446,7 @@ def assess(data):
             label = label + " (disabled)"
         names.append(label)
     return {
-        "presenceKnown": presence_known, "present": present, "enabled": enabled, "names": names,
+        "presenceKnown": presence_known, "absenceKnown": absence_known, "scopeOk": scope_ok, "present": present, "enabled": enabled, "names": names,
         "high": high, "risk": risk, "indicators": indicators, "indicatorsRead": indicators_read,
         "nameOnly": len(name_only),
         "alertsState": alerts_state, "verdict": verdict, "feeds": feeds,
@@ -468,6 +498,9 @@ def transform(input):
             return not_measured(("The indicator window (from 15 Oct 2026) is now older than Entra's "
                                  + str(LOG_RETENTION_DAYS) + "-day sign-in and audit log retention, so a clean "
                                  "read can no longer rule out early activity; indicators are not evaluated. "
+                                 + alerts_note).strip(), found)
+        if not found["scopeOk"]:
+            return not_measured(("No indicator was found, but " + SCOPE_NOTE + "; indicators are not evaluated. "
                                  + alerts_note).strip(), found)
         if not found["indicatorsRead"]:
             return not_measured(("A sign-in log read or the directory audit log could not be read "

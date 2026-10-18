@@ -86,6 +86,12 @@ def clean(**overrides):
         "servicePrincipals": graph(),
         "cwBackupAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
         "cwTeamsAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
+        # the five other Cloud Management apps (scope: 7 apps), absent: 404 as the reads report it
+        "cwMgmtAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
+        "cwExchangeAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
+        "cwGraphAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
+        "cwPartnerCenterAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
+        "cwSharePointAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
         "roleAssignments": graph(role_assignment(OTHER_SP, GLOBAL_ADMIN)),
         "spSignInsByApp": graph(),
         "spSignInsFromIndicatorIp": graph(),
@@ -625,3 +631,119 @@ def test_clean_and_not_evaluated_outcomes_report_zero_name_only_matches():
     for body in (clean(), {"servicePrincipals": STEP_403}, None):
         for out in run_both(body):
             assert value(out, "nameOnlyMatches") == 0
+
+
+# ---- scope: 7 ConnectWise apps (J.J. 18 Oct). App ids and names as published by Huntress and BleepingComputer.
+
+NEW_APPS = {
+    "2399d300-6fca-4e6a-a686-399fefe75b83": ("ConnectWise Cloud Management", "cwMgmtAppRoles", "cwMgmtDelegatedGrants"),
+    "b78f6a77-d4e5-46fb-87e5-d1648bd02519": ("ConnectWise Cloud Management - Exchange Online", "cwExchangeAppRoles",
+                                             "cwExchangeDelegatedGrants"),
+    "0de14c77-b9b0-4137-9360-34878a929827": ("ConnectWise Cloud Management - MS Graph", "cwGraphAppRoles",
+                                             "cwGraphDelegatedGrants"),
+    "412dcf96-176d-4b3a-a1b0-4981ad66971e": ("ConnectWise Cloud Management - Partner Center", "cwPartnerCenterAppRoles",
+                                             "cwPartnerCenterDelegatedGrants"),
+    "b2b55f5b-7758-4719-8d8f-88ae172e6bdb": ("ConnectWise Cloud Management - SharePoint Online", "cwSharePointAppRoles",
+                                             "cwSharePointDelegatedGrants"),
+}
+NEW_SP = "11111111-aaaa-4aaa-8aaa-000000000020"
+
+
+def new_app_body(app_id, enabled=True, roles=None, **overrides):
+    name, role_feed, grant_feed = NEW_APPS[app_id]
+    body = clean(servicePrincipals=graph(sp(app_id, NEW_SP, enabled=enabled, name=name)))
+    body[role_feed] = graph(*(roles or []))
+    body[grant_feed] = graph()
+    body.update(overrides)
+    return body
+
+
+@pytest.mark.parametrize("app_id", list(NEW_APPS))
+def test_each_new_app_present_is_exposed_at_standard_risk(app_id):
+    exposure, indicators = run_both(new_app_body(app_id))
+    assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    for out in (exposure, indicators):
+        assert value(out, "connectWiseVerdict") == "Exposed" and value(out, "connectWiseRiskLevel") == "standard"
+        assert value(out, "connectWiseAppsPresent") == [NEW_APPS[app_id][0]]
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
+
+
+@pytest.mark.parametrize("app_id", list(NEW_APPS))
+def test_each_new_app_disabled_is_exposed_at_low_risk(app_id):
+    exposure, _ = run_both(new_app_body(app_id, enabled=False))
+    assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    assert value(exposure, "connectWiseRiskLevel") == "low"
+    assert value(exposure, "connectWiseAppsPresent") == [NEW_APPS[app_id][0] + " (disabled)"]
+
+
+@pytest.mark.parametrize("app_id", list(NEW_APPS))
+def test_each_new_app_with_a_dangerous_permission_or_role_is_high_risk(app_id):
+    exposure, _ = run_both(new_app_body(app_id, roles=[app_role(DIRECTORY_READWRITE_ALL)]))
+    assert value(exposure, "connectWiseRiskLevel") == "high"
+    exposure, _ = run_both(new_app_body(app_id, roleAssignments=graph(role_assignment(NEW_SP, GLOBAL_ADMIN))))
+    assert value(exposure, "connectWiseRiskLevel") == "high"
+
+
+@pytest.mark.parametrize("app_id", list(NEW_APPS))
+def test_new_app_unreadable_grants_leave_risk_unknown(app_id):
+    body = new_app_body(app_id)
+    body[NEW_APPS[app_id][2]] = STEP_403
+    exposure, _ = run_both(body)
+    assert value(exposure, "connectWiseRiskLevel") == "unknown"
+
+
+@pytest.mark.parametrize("app_id", list(NEW_APPS))
+def test_indicators_by_app_id_for_each_new_app(app_id):
+    entry = audit("Add service principal credentials", OTHER_SP, by_app=app_id)
+    _, indicators = run_both(clean(directoryAudits=graph(entry)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert value(indicators, "nameOnlyMatches") == 0
+    hit = sign_in(app_id, "203.0.113.7", agent="python-requests/2.31.0", sp_id=NEW_SP)
+    _, indicators = run_both(clean(spSignInsByApp=graph(hit)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert NEW_APPS[app_id][0] in reasons(indicators)
+    # the app's own sign-ins teach its service principal id, so a later audit entry by that id matches
+    later = audit("Add member to role", OTHER_SP, by_sp=NEW_SP)
+    _, indicators = run_both(clean(spSignInsByApp=graph(sign_in(app_id, "203.0.113.7", sp_id=NEW_SP)),
+                                   directoryAudits=graph(later)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert value(indicators, "nameOnlyMatches") == 0
+
+
+@pytest.mark.parametrize("name", [v[0] for v in NEW_APPS.values()] + ["SkyKick Cloud Manager",
+                                                                     "connectwise cloud management – ms graph"])
+def test_name_only_for_each_new_app_is_tagged(name):
+    for entry in (by_named_app(name), on_named_app(name)):
+        _, indicators = run_both(clean(directoryAudits=graph(entry)))
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False, name
+        assert value(indicators, "nameOnlyMatches") == 1, name
+
+
+def test_reads_scoped_to_the_two_original_apps_never_read_as_clean():
+    # The Integration-Service #1798 workflow reads only the two original apps. A body without the five new
+    # apps' feeds cannot show those apps are absent, so it is Not evaluated, never Not exposed or clean.
+    body = clean()
+    for _, role_feed, _ in NEW_APPS.values():
+        del body[role_feed]
+    exposure, indicators = run_both(body)
+    assert_not_measured(exposure, "isFreeOfConnectWiseAppExposure")
+    assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+    assert "seven" in reasons(exposure) and value(exposure, "connectWiseVerdict") == "Not evaluated"
+    # a present app is still Exposed, and an indicator still counts
+    body["servicePrincipals"] = graph(sp(BACKUP_APP, BACKUP_SP))
+    body.update(cwBackupAppRoles=graph(), cwBackupDelegatedGrants=graph(),
+                spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)))
+    exposure, indicators = run_both(body)
+    assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+
+
+def test_seven_apps_are_covered_with_distinct_feeds():
+    for module in (EXPOSURE, INDICATORS):
+        assert set(module.CONNECTWISE_APPS) == {BACKUP_APP, TEAMS_APP} | set(NEW_APPS)
+        assert set(module.APP_ROLE_FEEDS) == set(module.CONNECTWISE_APPS)
+        feeds = [f for pair in module.APP_ROLE_FEEDS.values() for f in pair]
+        assert len(set(feeds)) == 14
+        for app_id, (name, role_feed, grant_feed) in NEW_APPS.items():
+            assert module.CONNECTWISE_APPS[app_id] == name
+            assert module.APP_ROLE_FEEDS[app_id] == (role_feed, grant_feed)
