@@ -903,6 +903,9 @@ def transform(input):
             grade = "" if builtin_mfa else strength_grade(grant_controls)
             if not builtin_mfa and grade not in ("mfa", "unknown"):
                 continue
+            if grade == "mfa" and not mfa_only_grant(policy):
+                # Under OR another control can satisfy the policy instead of the strength.
+                continue
 
             conditions = policy.get('conditions') or {}
             users = conditions.get('users') or {}
