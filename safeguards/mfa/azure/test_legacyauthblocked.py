@@ -164,10 +164,13 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         res = self.run_t(body(policy(), policy(state="disabled", exclude_users=[oid(5)])))
         self.assertNotIn(oid(5), self.reasons(res, "passReasons")[0])
 
-    def test_error_input_keeps_the_original_failure_shape(self):
+    def test_error_input_is_not_evaluated(self):
+        # Entra MFA review (decision 16 Oct 2026): a body that is not a policy list was read as Failed before; a read that
+        # failed is not evidence, so it is Not evaluated (test_legacyauthblocked_not_evaluated.py has the cases).
         res = self.run_t(["not", "a", "dict"])
-        self.assertIs(res["transformedResponse"][KEY], False)
-        self.assertEqual(self.reasons(res, "failReasons")[0], "legacyAuthBlocked check failed")
+        self.assertIsNone(res["transformedResponse"][KEY])
+        self.assertEqual(self.reasons(res, "failReasons"), [])
+        self.assertEqual(res["additionalInfo"]["dataCollection"]["status"], "error")
 
     def test_string_input_and_non_string_ids_are_tolerated(self):
         import json
