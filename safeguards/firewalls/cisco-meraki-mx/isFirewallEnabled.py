@@ -1,4 +1,4 @@
-"""Cisco Meraki MX - isFirewallEnabled (THL NW-03: Next-Generation Firewall).
+"""Cisco Meraki MX - isFirewallEnabled (NW-03: Next-Generation Firewall).
 
 Reads GET /organizations/{orgId}/appliance/security/intrusion.
 
