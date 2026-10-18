@@ -1,0 +1,46 @@
+{
+  "name": "edrWorkstationCoveragePercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Percentage of the workstations in the vendor's endpoint inventory whose protection agent counts as protected under the same EDR coverage transform's requiredCoveragePercentage rule.",
+  "valueType": "number",
+  "unit": "percent",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "workstations among the endpoints requiredCoveragePercentage divides by. Class rule per vendor: CrowdStrike product_type_desc Workstation (product_type 1 when the description is absent); SentinelOne machineType desktop or laptop; Defender osPlatform a Windows client version (Windows10, Windows11, ...) or macOS (ruling 2026-10-16). The denominator and the protected test are exactly the ones the same transform uses for requiredCoveragePercentage, so the split agrees with the blended figure.",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A complete read of the device inventory; 100 only when every workstation in it is protected. No workstation in the inventory is null (not measured), never 0. The value is floored to two decimals, never rounded up, so it is 100 only when every device in the class is protected.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Endpoint Security",
+    "MDR"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/crowdstrike-falcon/requiredCoveragePercentage.py (transform and its test_*_server_workstation_coverage.py)",
+    "safeguards/epp/sentinelone/requiredCoveragePercentage.py (transform and its test_*_server_workstation_coverage.py)",
+    "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/requiredcoveragepercentage.py and microsoft_endpoint_oneclick.py (test_defender_server_workstation_coverage.py)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered with the EDR server / workstation coverage split added to four EDR coverage transforms under edr* names (additive; no requirement reads it yet)."
+    }
+  ],
+  "notes": "Added for the EP-001 server / workstation split; the rule that would read it is a later Token-Service change behind a flag."
+}

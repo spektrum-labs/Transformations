@@ -11,19 +11,37 @@ for Gmail, at most 30 days apart).
 
 Rule (fail closed): true when the feed is a Gmail activity feed and returns at least one Gmail
 log event dated within RECENT_DAYS. That proves Gmail log events are being recorded for the
-tenant and are readable through the Reports API (the source a SIEM connector reads). An empty
-Gmail feed fails: either no mail flowed in the window or Gmail log events are not available for
-the tenant's edition; both mean logging is not proven.
+tenant and are readable through the Reports API (the source a SIEM connector reads). False when
+Gmail events were read and the newest is older than RECENT_DAYS: logging is not shown to be current.
 
-Admin audit events (applicationName=admin, what this key read before) never pass: they show
-the admin console is audited, not that email is logged. That payload is reported as not
-measured. A Google error, a missing scope or an unreadable body is also not measured.
+Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never
+Failed): an empty Gmail feed (either no mail flowed in the window or Gmail log events are not
+available for the tenant's edition, so it cannot tell a missing control from a read that returned
+nothing), Gmail events with no readable time, a Google error or refusal, a missing scope, a body
+that is not JSON or not a Reports feed, and this transform's own exception. Admin audit events
+(applicationName=admin, what this key read before) never pass: they show the admin console is
+audited, not that email is logged, so that payload is not measured either.
 
 Does not prove: that the logs are forwarded to a SIEM or retained beyond Google's defaults.
 """
 
 import json
 from datetime import datetime, timezone, timedelta
+
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isEmailLoggingEnabled',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 CRITERIA_KEY = "isEmailLoggingEnabled"
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/admin.reports.audit.readonly"
@@ -51,6 +69,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -169,7 +193,7 @@ def find_dict_with(data, key, depth=0):
 
 
 def not_measured(reason, validation, recommendation=None, result_extra=None):
-    result = {CRITERIA_KEY: False}
+    result = {CRITERIA_KEY: None}
     for k in (result_extra or {}):
         result[k] = result_extra[k]
     return create_response(
@@ -179,6 +203,14 @@ def not_measured(reason, validation, recommendation=None, result_extra=None):
         fail_reasons=["Not measured: " + reason],
         recommendations=[recommendation] if recommendation else []
     )
+
+
+def is_truncated(body):
+    """True when the feed still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    marker = body.get("paginationTruncated")
+    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
 
 
 def transform(input):
@@ -216,7 +248,14 @@ def transform(input):
             if when is not None and (newest is None or when > newest):
                 newest = when
         other = [a for a in apps if a != "gmail"]
-        summary = {"items": len(items), "applications": apps, "newestGmailEvent": newest.isoformat() if newest else None}
+        # A feed cut short holds only part of the events: the totals are None, never a partial count.
+        cut_short = is_truncated(data)
+        shown_events = None if cut_short else gmail_events
+        newest_text = newest.isoformat() if newest else None
+        if cut_short:
+            summary = {"truncated": True, "newestGmailEvent": newest_text}
+        else:
+            summary = {"items": len(items), "applications": apps, "newestGmailEvent": newest_text}
         if other and gmail_events == 0:
             return not_measured(
                 "the feed holds %s events, not Gmail log events; admin audit events do not prove email logging" % "/".join(sorted(other)),
@@ -225,22 +264,34 @@ def transform(input):
         cutoff = datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)
         result_value = newest is not None and newest >= cutoff
         if result_value:
-            return create_response(result={CRITERIA_KEY: True, "gmailEventsRead": gmail_events}, validation=validation,
-                                   pass_reasons=["Gmail log events are recorded and readable: %d events read, newest %s" % (gmail_events, newest.isoformat())],
+            if cut_short:
+                reads = "newest %s (the feed was cut short, so the count is not given)" % newest.isoformat()
+            else:
+                reads = "%d events read, newest %s" % (gmail_events, newest.isoformat())
+            return create_response(result={CRITERIA_KEY: True, "gmailEventsRead": shown_events}, validation=validation,
+                                   pass_reasons=["Gmail log events are recorded and readable: %s" % reads],
                                    input_summary=summary)
+        # An empty feed, or events with no readable time, prove nothing either way: no mail may have
+        # flowed in the window, or Gmail log events may not be offered for the edition. That is a read
+        # that could not answer, not a finding.
         if gmail_events == 0:
-            reason = "No Gmail log events were returned for the last 7 days"
-        elif newest is None:
-            reason = "Gmail log events carry no timestamps (%d read)" % gmail_events
-        else:
-            reason = "Newest Gmail log event is %s, older than %d days" % (newest.isoformat(), RECENT_DAYS)
-        return create_response(result={CRITERIA_KEY: False, "gmailEventsRead": gmail_events}, validation=validation,
+            return not_measured("no Gmail log events were returned for the last 7 days", validation,
+                                "Confirm Gmail log events are available for the tenant's Workspace edition and that mail is flowing")
+        if newest is None:
+            return not_measured("Gmail log events carry no readable timestamps (%d read)" % gmail_events, validation)
+        if cut_short:
+            # The pages not read could hold a recent event, so old events seen so far do not prove False.
+            return not_measured("the Gmail log feed was cut short and the events read were older than %d days; "
+                                "later pages could hold a recent one" % RECENT_DAYS, validation,
+                                "Re-run the check so the whole feed is read")
+        reason = "Newest Gmail log event is %s, older than %d days" % (newest.isoformat(), RECENT_DAYS)
+        return create_response(result={CRITERIA_KEY: False, "gmailEventsRead": shown_events}, validation=validation,
                                fail_reasons=[reason],
                                recommendations=["Confirm Gmail log events are available for the tenant's Workspace edition and that mail is flowing"],
                                input_summary=summary)
     except Exception as e:
         return create_response(
-            result={CRITERIA_KEY: False},
+            result={CRITERIA_KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: %s" % str(e)]

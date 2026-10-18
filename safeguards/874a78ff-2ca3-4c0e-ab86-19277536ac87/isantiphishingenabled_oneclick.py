@@ -3,8 +3,15 @@ Transformation: isAntiPhishingEnabled (Microsoft One-Click)
 Vendor: Microsoft
 Category: Email Security
 
-Evaluates whether anti-phishing policies are enabled and reports the optional
+Evaluates whether anti-phishing policies are enabled and reports the
 Exchange-access prerequisite precisely for the Microsoft One-Click flow.
+
+Not evaluated, never False, whenever nothing was read: an error from the Exchange
+read, input that failed validation, a policy list that is missing or cannot be read,
+or an exception. The check then carries no value and the data collection says why.
+An Exchange Online role refusal also carries errorCode "scope_not_granted" and the
+role to assign, so the platform and the CLI say "grant the role", not "fix the
+connection".
 """
 
 import json
@@ -39,7 +46,8 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
-                    transformation_errors=None, api_errors=None, additional_findings=None):
+                    transformation_errors=None, api_errors=None, additional_findings=None,
+                    error_code=None, required_scope=None):
     """Create a standardized transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
@@ -54,13 +62,19 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if metadata:
         response_metadata.update(metadata)
 
+    data_collection = {
+        "status": "error" if (api_errors or []) else "success",
+        "errors": api_errors or [],
+    }
+    if error_code:
+        data_collection["errorCode"] = error_code
+        if required_scope:
+            data_collection["requiredScope"] = required_scope
+
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or [],
-            },
+            "dataCollection": data_collection,
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -123,6 +137,11 @@ def is_exchange_access_required_error(raw_error):
     )
 
 
+EXCHANGE_ACCESS_ERROR = "Could not connect to Microsoft 365: Exchange access is not complete"
+SCOPE_NOT_GRANTED = "scope_not_granted"
+REQUIRED_EXCHANGE_ROLE = "Global Reader (Microsoft Entra directory role) assigned to the Spektrum application"
+
+
 def transform(input):
     """Evaluate whether anti-phishing policies are enabled in Microsoft 365."""
     criteria_key = "isAntiPhishingEnabled"
@@ -135,46 +154,69 @@ def transform(input):
 
         data, validation = extract_input(input)
 
-        if isinstance(data, dict) and "PSError" in data:
-            raw_error = data.get("PSError", "")
-            api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
-            fail_reason = "Could not retrieve data from Microsoft 365"
-
-            if is_exchange_access_required_error(raw_error):
-                fail_reason = "Exchange access is required for this check."
-                recommendation = (
-                    "Complete Exchange access in Microsoft One-Click, "
-                    "then re-evaluate this check."
-                )
-
-            return create_response(
-                result={criteria_key: False},
-                validation={"status": "unknown", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=[fail_reason],
-                recommendations=[recommendation],
-            )
-
         if validation.get("status") == "failed":
             return create_response(
-                result={criteria_key: False},
+                result={criteria_key: None},
                 validation=validation,
+                api_errors=["Could not read the response: input validation failed"],
                 fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))],
                 recommendations=["Verify the Microsoft integration is configured correctly"],
             )
 
-        policies = data.get("policies", [])
+        if isinstance(data, dict) and "PSError" in data:
+            raw_error = data.get("PSError", "")
+            if is_exchange_access_required_error(raw_error):
+                # The Spektrum app lacks the directory role Exchange Online needs. The vendor text names the
+                # application, so it is not echoed; the exact next step is.
+                return create_response(
+                    result={criteria_key: None},
+                    validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                    api_errors=[EXCHANGE_ACCESS_ERROR],
+                    fail_reasons=["Exchange access is required for this check."],
+                    recommendations=[
+                        "Complete Exchange access in Microsoft One-Click, "
+                        "then re-evaluate this check."
+                    ],
+                    error_code=SCOPE_NOT_GRANTED,
+                    required_scope=REQUIRED_EXCHANGE_ROLE,
+                )
+            api_error, recommendation = parse_api_error(raw_error, source="Microsoft 365")
+            return create_response(
+                result={criteria_key: None},
+                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_errors=[api_error],
+                fail_reasons=["Could not retrieve data from Microsoft 365"],
+                recommendations=[recommendation],
+            )
+
+        # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
+        # policies value proved nothing, so it is Not evaluated, never the stated-negative False.
+        policies = data.get("policies") if isinstance(data, dict) else None
         if isinstance(policies, dict):
             policies = [policies]
+        if not isinstance(policies, list):
+            return create_response(
+                result={criteria_key: None},
+                validation=validation,
+                api_errors=["Could not read anti-phishing policies"],
+                fail_reasons=["Anti-phishing policies were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"],
+            )
 
-        try:
-            enabled_policies = [
-                policy for policy in policies
-                if str(policy.get("Enabled", "false")).lower() == "true"
-                or str(policy.get("IsDefault", "false")).lower() == "true"
-            ]
-        except Exception:
-            enabled_policies = []
+        if any(not isinstance(policy, dict) for policy in policies):
+            return create_response(
+                result={criteria_key: None},
+                validation=validation,
+                api_errors=["Could not read anti-phishing policies"],
+                fail_reasons=["A policy in the response could not be read, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"],
+            )
+
+        enabled_policies = [
+            policy for policy in policies
+            if str(policy.get("Enabled", "false")).lower() == "true"
+            or str(policy.get("IsDefault", "false")).lower() == "true"
+        ]
 
         is_enabled = len(enabled_policies) > 0
         pass_reasons = []
@@ -209,14 +251,17 @@ def transform(input):
 
     except json.JSONDecodeError as error:
         return create_response(
-            result={criteria_key: False},
+            result={criteria_key: None},
             validation={"status": "unknown", "errors": [f"Invalid JSON: {str(error)}"], "warnings": []},
+            api_errors=["Could not read the response: invalid JSON"],
             fail_reasons=["Could not parse input as valid JSON"],
         )
     except Exception as error:
+        # The evaluator reads Not evaluated from the collection status, not from the transformation errors.
         return create_response(
-            result={criteria_key: False},
+            result={criteria_key: None},
             validation={"status": "unknown", "errors": [], "warnings": []},
             transformation_errors=[str(error)],
+            api_errors=["Could not evaluate the response"],
             fail_reasons=[f"Transformation error: {str(error)}"],
         )

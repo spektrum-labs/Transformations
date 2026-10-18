@@ -1,0 +1,38 @@
+{
+  "name": "isPatchManagementEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when operating system and software patches are applied within the organisation's policy window across the devices or servers in scope.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the devices or servers in scope; denominator = every device or server the read lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of every in-scope device or server showing patches applied within the policy window, or a passing test of the same fact over the full population.",
+  "evidenceClass": "unknown",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "Ensure that processes exist (integrationservice criteriakey-defaults.json)",
+    "safeguards/compliancemanagement/vanta/ and safeguards/compliancemanagement/drata/ ispatchmanagementenabled.py (third-party proof sources: the GRC platform's own test result, level 3 in the proof ladder)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the GRC-platform proof-source transforms can emit it. The meaning is the existing catalogue description made precise; the roughly twenty existing implementations in other categories were not reviewed, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Registered for the Vanta and Drata proof-source transforms. Those answer from a GRC platform's own test results (third-party proof, level 3), never from a read of the tool, so allowedCategories is empty (cross-category evidence). Whether the other implementations of this key measure the same thing is not ruled; that review is open and the owner is not yet named."
+}

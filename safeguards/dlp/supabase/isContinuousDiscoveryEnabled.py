@@ -3,7 +3,7 @@ Transformation: isContinuousDiscoveryEnabled
 Vendor: Supabase  |  Category: Data Security
 Source: GET https://api.supabase.com/v1/projects
 Pass: the project inventory is readable and returns at least one project, so the
-data estate under assessment is enumerable rather than assumed.
+data environment under assessment is enumerable rather than assumed.
 """
 import json
 from datetime import datetime
@@ -144,7 +144,7 @@ def evaluate(data):
             )
     else:
         fails.append(
-            "GET /v1/projects returned no projects, so no Supabase data estate can be "
+            "GET /v1/projects returned no projects, so no Supabase data environment can be "
             "enumerated for this organization."
         )
         recs.append("Confirm the access token has visibility of the organization's projects.")

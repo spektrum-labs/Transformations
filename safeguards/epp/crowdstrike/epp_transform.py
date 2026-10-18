@@ -118,7 +118,7 @@ def transform(endpoints_response, debug=False):
             devices = data
 
         # Fail closed (2026-10-02): a body that is not a device list proves nothing about the
-        # estate, so every key is None with a dataCollection error (Unevaluated), never False and
+        # environment, so every key is None with a dataCollection error (Unevaluated), never False and
         # never True. See no_device_evidence for the cases.
         problem = no_device_evidence(data, devices)
         if problem:
@@ -263,7 +263,7 @@ def transform(endpoints_response, debug=False):
         # every host): the share of hosts on which Falcon Complete / OverWatch can actually act --
         # a live sensor with the prevention AND remote-response policies applied -- against the
         # threshold. Unanswered (None) when nothing was measured: no device list, or a list
-        # shorter than meta.pagination.total (a sample is not the estate).
+        # shorter than meta.pagination.total (a sample is not the whole environment).
         reported_total = reported_device_total(data)
         if total_endpoints == 0 or (reported_total is not None and reported_total > total_endpoints):
             coverage_scores["mdrConfiguredPercentage"] = None
@@ -459,7 +459,7 @@ def vendor_error(data):
 
 
 def no_device_evidence(data, devices):
-    """Why this read proves nothing about the estate, or None when it is a usable device list."""
+    """Why this read proves nothing about the environment, or None when it is a usable device list."""
     if not isinstance(data, (dict, list)) or not data:
         return "CrowdStrike returned no body: nothing was measured"
     problem = vendor_error(data)

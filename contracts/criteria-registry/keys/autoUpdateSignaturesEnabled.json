@@ -1,0 +1,40 @@
+{
+  "name": "autoUpdateSignaturesEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The Applications-and-Threats content has a recurring update schedule whose action is download-and-install. Download-only is False: the content is fetched but never activated.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the update schedule of the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The update schedule showing a recurring Applications-and-Threats schedule whose action is download-and-install; an update-schedule that shows no threats element is Not evaluated, never False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/autoUpdateSignaturesEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "update-schedule/threats/recurring/<hourly|daily|weekly|every-30-mins>/action (download-only or download-and-install) from the CLI hierarchy; the exact XML spelling of 'none' is UNVERIFIED. An update-schedule with no threats element is Not evaluated, never False: the element name is unverified and schedules pushed by Panorama templates appear here only if the running configuration holds them. False needs a stated finding (recurrence none, or download-only)."
+}
