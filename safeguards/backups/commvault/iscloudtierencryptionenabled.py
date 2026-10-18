@@ -8,7 +8,7 @@
 # Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
 #         GetDiskStorageDetails / GetCloudStorageById: encryption.encrypt, encryption.cipher (BlowFish, AES, DES3,
 #         GOST, Serpent, Twofish), encryption.keyLength.
-# A pool list whose detail bodies are missing or a different count is refused (part of the estate unread).
+# A pool list whose detail bodies are missing or a different count is refused (part of the assets in scope unread).
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
