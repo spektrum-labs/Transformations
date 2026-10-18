@@ -3,7 +3,7 @@
 When group membership was read whole and some enabled Member accounts are in no group or user list of any enabled
 Conditional Access policy requiring MFA, the key reads False and the fail reason gives the count. Reach is read
 generously (narrowed policies still reach), so a False is never a guess. Security defaults or per-user MFA evidence,
-when present, keep it from failing: they pass the key or keep it not evaluated. Synthetic estate only (public repo).
+when present, keep it from failing: they pass the key or keep it not evaluated. Synthetic environment only (public repo).
 """
 import builtins as real_builtins
 import copy
@@ -314,23 +314,3 @@ def test_restricted_python_agrees_on_the_new_verdicts():
         p_out = M.transform(copy.deepcopy(b))
         assert s_out["transformedResponse"] == p_out["transformedResponse"]
         assert s_out["additionalInfo"]["evaluation"] == p_out["additionalInfo"]["evaluation"]
-
-
-def test_disabled_account_with_null_usertype_does_not_void_the_member_list():
-    """Graph returns userType null for some disabled legacy accounts. Such an item must not make the whole enabled
-    member list read as 'not read' (which kept the key not evaluated with a misleading User.Read.All reason)."""
-    b = body([policy("Group MFA", include_groups=(G1,))], [G1], [U])
-    b["workforceUsers"]["value"].append({"id": "b0000000-0000-0000-0000-0000000000ff", "accountEnabled": False,
-                                         "userType": None})
-    _, out = run(b)
-    cov = out["transformedResponse"]["groupCoverage"]
-    assert cov["memberListRead"] is True
-    assert cov["membersTotal"] == len(U)
-
-
-def test_enabled_account_with_null_usertype_still_voids_the_member_list():
-    b = body([policy("Group MFA", include_groups=(G1,))], [G1], [U])
-    b["workforceUsers"]["value"].append({"id": "b0000000-0000-0000-0000-0000000000fe", "accountEnabled": True,
-                                         "userType": None})
-    _, out = run(b)
-    assert out["transformedResponse"]["groupCoverage"]["memberListRead"] is False

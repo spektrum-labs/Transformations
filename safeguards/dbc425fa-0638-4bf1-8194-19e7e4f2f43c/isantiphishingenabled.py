@@ -6,38 +6,13 @@ Category: Email Security
 Evaluates Mail Policies to check for Anti-Phishing settings including
 domain spoofing and employee name spoofing detection.
 
-Measured: a policy list that was read. isEmailSecurityEnabled is true when it holds a policy;
-isAntiPhishingEnabled is true when a policy carries both spoofing settings and none is off, and
-false when a policy reports a spoofing setting off or a complete list carries no policy with the settings.
-A spoofing setting a policy does not report at all is not off, it is unknown (None).
-
-Not measured (both keys None and dataCollection error, so Token-Service shows Not evaluated, never
-Failed): a refusal or error body, a body that is not JSON or not a policy list, an empty policy
-list, a failed input validation, a policy that carries one spoofing setting but not the other (and none
-reports one off), a list still carrying nextPageToken (or paginationTruncated) in which no spoofing
-setting is off yet (more pages could hold one), and this transform's own exception.
-
-Counts: policyDetails is the list of spoofing settings read, a total for a complete list and None for a
-truncated one, because a list taken from part of the policies is not the whole. A False already proven by
-a setting seen stays.
+Google returns several gmail.spoofing_and_authentication policies for one org unit (SYSTEM defaults for
+unlicensed and licensed entities, and any ADMIN override) and applies the one with the greatest
+policyQuery.sortOrder; only that policy is judged per org unit or group.
 """
 
 import json
 from datetime import datetime
-
-#: The criteria this file answers. A None among them means "not measured", never "failed".
-NONE_MEANS_NOT_EVALUATED = ('isEmailSecurityEnabled', 'isAntiPhishingEnabled')
-
-
-def criteria_unmeasured(result):
-    """True when every criterion this file answers that the result carries is None.
-
-    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
-    is "error". The status is read per response, so it is set only when no criterion in the
-    result was measured; marking a partly measured result would hide the measured ones.
-    """
-    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
-    return len(present) > 0 and all(result[k] is None for k in present)
 
 
 def extract_input(input_data):
@@ -60,12 +35,6 @@ def extract_input(input_data):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
-    # A None criterion was not measured. Token-Service grades None as FAILED unless
-    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
-    # reason across when the caller did not.
-    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
-        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
-                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -102,52 +71,35 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def vendor_error(data):
-    """Google's own error message when the body is an error envelope, else None."""
-    if data is None:
-        return "No response body"
-    if isinstance(data, str) and data.strip() == "":
-        return "Empty response body"
-    if not isinstance(data, dict):
-        return None
-    value = data.get("error")
-    if value:
-        if isinstance(value, dict):
-            return str(value.get("message") or value.get("status") or value.get("code") or value)
-        return "%s %s" % (value, data.get("message") or data.get("error_description") or "")
-    code = data.get("statusCode", data.get("status_code"))
+def as_order(value):
+    """policyQuery.sortOrder as a number; None when unreadable. Integration-Service hands scalars over as strings."""
     try:
-        if code is not None and int(code) >= 400:
-            return "HTTP %s" % code
+        return float(str(value).strip())
     except (TypeError, ValueError):
-        pass
-    if str(data.get("status", "")).lower() == "error":
-        return str(data.get("message") or "Integration error")
-    return None
+        return None
 
 
-def is_truncated(body):
-    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
-    if not isinstance(body, dict):
-        return False
-    marker = body.get("paginationTruncated")
-    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
+def in_force(records):
+    """Split matching policy records into the ones Google applies and the ones they supersede.
 
-
-def is_true(value):
-    """Cloud Identity returns booleans as the strings "True"/"False"; bool("False") is True."""
-    return value is True or str(value).strip().lower() == "true"
-
-
-def unmeasured(reason, validation, summary=None):
-    """The read could not answer: every key None and a dataCollection error, so it shows as Not evaluated."""
-    return create_response(
-        result={"isEmailSecurityEnabled": None, "isAntiPhishingEnabled": None},
-        validation=validation,
-        api_errors=[reason],
-        fail_reasons=["Not measured: " + reason],
-        input_summary=summary
-    )
+    For one setting on one org unit (or group) Google returns several policies: the SYSTEM default for
+    entities without a Gmail licence, the SYSTEM default for licensed users, and any ADMIN override. It
+    resolves them by precedence: the policy with the greatest policyQuery.sortOrder is the one in force
+    (Policy API concepts, Max reducer), so only that one is judged. Equal sortOrders on one target, and a
+    sortOrder that cannot be read, are all judged (fail closed). Returns (judged, superseded).
+    """
+    top = {}
+    for rec in records:
+        if rec["order"] is not None and (rec["orgUnit"] not in top or rec["order"] > top[rec["orgUnit"]]):
+            top[rec["orgUnit"]] = rec["order"]
+    judged = []
+    superseded = []
+    for rec in records:
+        if rec["order"] is None or rec["orgUnit"] not in top or rec["order"] >= top[rec["orgUnit"]]:
+            judged.append(rec)
+        else:
+            superseded.append(rec)
+    return judged, superseded
 
 
 def transform(input):
@@ -160,13 +112,11 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return unmeasured("Input validation failed", validation)
-
-        error = vendor_error(data)
-        if error is None and not isinstance(data, dict):
-            error = "Response is not a policy list"
-        if error is not None:
-            return unmeasured(error, validation)
+            return create_response(
+                result={"isEmailSecurityEnabled": False, "isAntiPhishingEnabled": False},
+                validation=validation,
+                fail_reasons=["Input validation failed"]
+            )
 
         pass_reasons = []
         fail_reasons = []
@@ -174,16 +124,11 @@ def transform(input):
 
         filter_attributes = ["detectDomainNameSpoofing", "detectEmployeeNameSpoofing"]
 
-        policies = data.get("policies")
-        if not isinstance(policies, list):
-            return unmeasured("No policies list in the response: the mail policy read cannot be shown to have run",
-                              validation)
-        if not [p for p in policies if isinstance(p, dict)]:
-            return unmeasured("No mail policies were returned: an empty list cannot be told apart from a read "
-                              "that returned nothing", validation)
-        truncated = is_truncated(data)
+        policies = []
+        if isinstance(data, dict):
+            policies = data.get("policies", [])
 
-        matching_values = []
+        matching = []
         for policy in policies:
             if isinstance(policy, dict) and "setting" in policy:
                 setting = policy.get("setting", {})
@@ -191,73 +136,64 @@ def transform(input):
                 if isinstance(value, dict):
                     filtered = {key: value[key] for key in value if key in filter_attributes}
                     if filtered:
-                        matching_values.append(filtered)
+                        query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
+                        target = str(query.get("orgUnit") or "unknown")
+                        if query.get("group"):
+                            target = target + " " + str(query.get("group"))
+                        matching.append({"orgUnit": target, "value": filtered,
+                                         "order": as_order(query.get("sortOrder")),
+                                         "policyType": str(policy.get("type") or "")})
+        # Judge only the policy in force on each org unit or group; Google's own precedence decides which.
+        matching, superseded = in_force(matching)
+        matching_values = [rec["value"] for rec in matching]
 
         isAntiPhishingEnabled = False
         isEmailSecurityEnabled = False
 
         if len(policies) > 0:
             isEmailSecurityEnabled = True
-            if truncated:
-                pass_reasons.append("Email security policies configured (the list was cut short, so no total is given)")
-            else:
-                pass_reasons.append(f"Email security policies configured: {len(policies)} policies")
+            pass_reasons.append(f"Email security policies configured: {len(policies)} policies")
 
-        # A spoofing setting a policy reports as off is a finding. One it does not report at all (missing or
-        # null) leaves the policy unjudged, never off.
-        any_off = False
-        any_missing = False
-        for mv in matching_values:
-            for key in filter_attributes:
-                if mv.get(key) is None:
-                    any_missing = True
-                elif not is_true(mv.get(key)):
-                    any_off = True
-
-        if any_off:
-            # A setting that is off already decides False, whatever else is unread.
-            isAntiPhishingEnabled = False
-        elif truncated:
-            # More pages exist, and nothing read so far is off: a later page could hold a setting that is, or
-            # the only policy that carries the settings.
-            return unmeasured("The policy list was truncated (nextPageToken present) before every policy was "
-                              "read; anti-phishing not evaluated across all policies", validation,
-                              {"truncated": True})
-        elif len(matching_values) == 0:
-            # A complete list in which no policy carries the settings is a proven negative.
-            isAntiPhishingEnabled = False
-        elif any_missing:
-            return unmeasured("A policy carries a spoofing setting but not both domain and employee name spoofing "
-                              "detection, so anti-phishing cannot be judged", validation,
-                              {"totalPolicies": len(policies), "antiPhishingPolicies": len(matching_values)})
-        else:
+        # If any of the matching values are None or False, set isAntiPhishingEnabled to False
+        if len(matching_values) > 0:
             isAntiPhishingEnabled = True
+            for mv in matching_values:
+                for key, value in mv.items():
+                    if value is None or not bool(value):
+                        isAntiPhishingEnabled = False
+                        break
+                if not isAntiPhishingEnabled:
+                    break
 
         if isAntiPhishingEnabled:
             pass_reasons.append("Anti-phishing protection enabled (domain/employee spoofing detection)")
         else:
-            fail_reasons.append("Anti-phishing protection not fully enabled in policies")
+            if len(policies) > 0:
+                fail_reasons.append("Anti-phishing protection not fully enabled in policies")
+            else:
+                fail_reasons.append("No email security policies configured")
             recommendations.append("Enable domain name spoofing and employee name spoofing detection")
 
         return create_response(
             result={
                 "isEmailSecurityEnabled": isEmailSecurityEnabled,
                 "isAntiPhishingEnabled": isAntiPhishingEnabled,
-                "policyDetails": None if truncated else matching_values
+                "policyDetails": matching_values
             },
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"truncated": True} if truncated else {
+            input_summary={
                 "totalPolicies": len(policies),
-                "antiPhishingPolicies": len(matching_values)
+                "antiPhishingPolicies": len(matching_values),
+                "supersededPolicies": len(superseded)
             }
         )
 
     except Exception as e:
         return create_response(
-            result={"isEmailSecurityEnabled": None, "isAntiPhishingEnabled": None},
+            result={"isEmailSecurityEnabled": False, "isAntiPhishingEnabled": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

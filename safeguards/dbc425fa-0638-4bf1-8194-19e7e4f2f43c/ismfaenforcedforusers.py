@@ -25,7 +25,7 @@ transform's own exception.
 
 Previously: one enforced user passed the whole tenant, suspended users were counted, and a
 direct isMFAEnforcedForUsers flag in the payload was trusted. The every-active-user rule and
-the suspended-user exclusion follow Transformations PR #611 (Simon Mullaney); archived users
+the suspended-user exclusion follow Transformations PR #611; archived users
 and the truncation rule are added here.
 """
 

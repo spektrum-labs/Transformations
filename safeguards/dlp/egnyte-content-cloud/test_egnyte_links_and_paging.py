@@ -4,7 +4,7 @@ isSSOEnabled and isPublicSharingRestricted.
 GET /pubapi/v2/users returns at most 100 users per call (totalResults covers the domain);
 GET /pubapi/v2/links at most 500 (count is the rows in the response, no total). Until the
 collector reads every page, a verdict over the first page is a verdict over part of the
-estate, so a read that cannot show it is complete returns null, never a pass.
+environment, so a read that cannot show it is complete returns null, never a pass.
 Bodies follow Egnyte's documented shapes (developers.egnyte.com Links API v2, Users API v2).
 """
 import importlib.util

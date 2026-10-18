@@ -432,7 +432,7 @@ def transform(input):
                           validation, summary)
         capped = capped_note(data)
         if capped and count == 0:
-            return failed(capped + "; zero high-EPSS findings on a partial scan is not a clean estate", validation, summary)
+            return failed(capped + "; zero high-EPSS findings on a partial scan is not proof of no findings in scope", validation, summary)
         result = {CRITERIA_KEY: count, "severityScope": SCAN_SCOPE, "epssPercentileThreshold": EPSS_PERCENTILE_THRESHOLD,
                   "hostsScanned": to_int(data.get("domainsScanned"))}
         if count > 0:

@@ -236,3 +236,8 @@ def test_dark_fleet_of_stale_endpoints_still_reads_false():
     assert out["transformedResponse"]["isMDREnabled"] is False
     assert out["transformedResponse"]["staleEndpointCount"] == 1
     assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+    # A None criterion beside a success status is graded as a failure, so a measured negative carries no None:
+    # with no active endpoint there is no protected endpoint, so configured is False and misconfigured is True.
+    assert out["transformedResponse"]["isEPPConfigured"] is False
+    assert out["transformedResponse"]["isEPPMisconfigured"] is True
+    assert [key for key, value in out["transformedResponse"].items() if value is None] == []

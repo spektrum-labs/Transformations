@@ -8,7 +8,7 @@ critical or high severity findings are present for a scanned domain.
 
 A capped scan (more hosts discovered than scanned, the ASM host cap) that found no critical or high
 finding returns None for both keys with the coverage reason in dataCollection.errors: zero findings on a
-partial estate is not a clean estate, so Token-Service reads it as Unevaluated, never a pass. A capped scan
+partial estate is not proof of no findings in scope, so Token-Service reads it as Unevaluated, never a pass. A capped scan
 that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
 one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
 scan), so a response is only ever read for the key whose severity it scanned.
@@ -378,7 +378,7 @@ def transform(input):
 
         capped = capped_note(data)
         if capped and no_critical and no_high:
-            reason = capped + "; zero critical or high findings on a partial scan is not a clean estate"
+            reason = capped + "; zero critical or high findings on a partial scan is not proof of no findings in scope"
             return create_response(
                 result={"noCriticalFindings": None, "noHighFindings": None, "domain": domain},
                 validation=validation,

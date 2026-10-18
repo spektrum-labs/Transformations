@@ -146,8 +146,10 @@ def test_counts_need_a_finished_job():
 
 def test_job_log_fail_closed():
     t = load("isjobexecutionlogaccessible")
+    # Nothing here was read, so the check is not measured: None, never a graded False.
     for body in FAIL_CLOSED + [devices(4)]:
-        assert t(body)["isJobExecutionLogAccessible"] is False, body
+        assert t(body)["isJobExecutionLogAccessible"] is None, body
+    assert t({"devices": None, "deviceJobs": []})["isJobExecutionLogAccessible"] is None
 
 
 # ---- retention ---------------------------------------------------------------------------
@@ -183,13 +185,15 @@ def test_infinite_retention_and_flip():
                                       ("isinfinitecloudretentionenabled", "isInfiniteCloudRetentionEnabled")])
 def test_retention_fail_closed(name, key):
     t = load(name)
+    # An unread body, or a retention that cannot be read, is not measured: None, not False.
     for body in FAIL_CLOSED + [devices(4), resources(generic_snapshot_retention="P99Y")]:
-        assert t(body)[key] is False, body
+        assert t(body)[key] is None, body
     for odd in ["unlimited", "P0D", "365", "", "P", "PT"]:
-        assert t(retention_body(odd))[key] is False, odd
+        assert t(retention_body(odd))[key] is None, odd
     no_retention = devices(4)
     no_retention.update(resources(backup_interval="PT4H"))
-    assert t(no_retention)[key] is False
+    assert t(no_retention)[key] is None
+    # A readable account with no cloud connectors is a measured "no retention applies".
     assert t({"devices": None, "resources": None})[key] is False
 
 
@@ -204,9 +208,10 @@ def test_data_sovereignty_and_flip():
     flipped["resources"]["resource"][0]["limit"] = "true"
     assert t(flipped)["isDataSovereigntyRegionEnforced"] is False
     absent = {"resources": {"resource": {"name": "devices", "type": "integer", "limit": "10"}}}
-    assert t(absent)["isDataSovereigntyRegionEnforced"] is False
+    # multigeo absent from the configuration, or unreadable, is not measured: None.
+    assert t(absent)["isDataSovereigntyRegionEnforced"] is None
     for body in FAIL_CLOSED + [{"resources": None}]:
-        assert t(body)["isDataSovereigntyRegionEnforced"] is False, body
+        assert t(body)["isDataSovereigntyRegionEnforced"] is None, body
 
 
 # ---- schedule ----------------------------------------------------------------------------

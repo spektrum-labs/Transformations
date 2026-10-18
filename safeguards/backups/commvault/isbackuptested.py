@@ -13,6 +13,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isBackupTested = true when at least one restore job ended Completed (or with warnings) in the last 90 days:
@@ -129,11 +150,11 @@ def transform(input):
     try:
         rows, problem = read_jobs(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         c = classify(rows)
         ok = [s for s in c["success"] if "restore" in str(s.get("jobType") or "restore").lower()]
         if len(ok) == 0:
-            return {key: False, "reason": "No restore job completed in the last 90 days (" + str(len(rows)) + " finished restore jobs read)"}
-        return {key: True, "reason": str(len(ok)) + " restore jobs completed in the last 90 days", "latest": label(ok[0])}
+            return respond(key, False, "No restore job completed in the last 90 days (" + str(len(rows)) + " finished restore jobs read)")
+        return respond(key, True, str(len(ok)) + " restore jobs completed in the last 90 days", {"latest": label(ok[0])})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

@@ -118,13 +118,30 @@ def page_cursor(value):
 
 
 def page_int(value):
-    """An integer page field, or None. Stored replays stringify numbers."""
+    """A whole-number page field, or None. Stored replays stringify numbers: 4, 4.0, "4" and "4.0" are all 4."""
     if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return value
     try:
-        return int(str(value).strip())
+        number = float(str(value).strip())
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        whole = int(number)
+        if whole != number:
+            return None
+        return whole
     except Exception:
         return None
+
+
+def page_field_unreadable(value):
+    """True when a page total or item total is present but is not a whole number (null, an empty string and the stringified nulls are absent)."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "null"):
+        return False
+    return page_int(value) is None
 
 
 def marked_true(value):
@@ -136,34 +153,41 @@ def unread_pages(data, item_count):
 
     A next-page cursor still set, a truncation marker, more items than were returned, more pages
     than one page of endpoints, or a page that does not start at the beginning (fromKey set) all
-    mean part of the fleet was not read. A page total above the number of items returned, with no
-    page size to compare against, cannot be a whole read either. Anything computed from the part
+    mean part of the fleet was not read. More than one page (pages.total above 1) is partial unless
+    pages.items says how many items the whole list holds and that is exactly the number returned (a
+    body whose pages were joined): a page total says nothing about how many items a page holds, so it
+    cannot show the list is whole, with or without a page size. A page total or item total that is present
+    but not a whole number ("many", "4.5", a boolean) shows nothing either, so it is partial too; 4.0 and "4.0"
+    are read as 4. A pages field that is present but not an object, and a next key at the top of the body, are partial too. Anything computed from the part
     that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
     seen, so it is not reported. A full first page with no cursor is not treated as partial: a
     complete read of a large fleet looks the same.
     """
     if marked_true(data.get("truncated")):
         return PARTIAL_REASON
+    if page_cursor(data.get("nextKey")) is not None:
+        return PARTIAL_REASON
     pages = data.get("pages")
     if not isinstance(pages, dict):
-        return None
+        # An absent pages field (null, an empty string, a stringified null) says nothing and is complete; a pages
+        # field that is present but is not an object (text, a number, a list) cannot be read, so the list may be only part.
+        if page_cursor(pages) is None:
+            return None
+        return PARTIAL_REASON
     if marked_true(pages.get("truncated")):
         return PARTIAL_REASON
     if page_cursor(pages.get("nextKey")) is not None:
         return PARTIAL_REASON
     if page_cursor(pages.get("fromKey")) is not None:
         return PARTIAL_REASON
+    if page_field_unreadable(pages.get("items")) or page_field_unreadable(pages.get("total")):
+        return PARTIAL_REASON
     total_items = page_int(pages.get("items"))
     if total_items is not None and total_items > item_count:
         return PARTIAL_REASON
     total_pages = page_int(pages.get("total"))
-    size = page_int(pages.get("size"))
-    if total_pages is not None and total_pages > 1:
-        if size is None:
-            if total_pages > item_count:
-                return PARTIAL_REASON
-        elif item_count <= size:
-            return PARTIAL_REASON
+    if total_pages is not None and total_pages > 1 and total_items != item_count:
+        return PARTIAL_REASON
     return None
 
 

@@ -1,0 +1,40 @@
+{
+  "name": "isDosProtectionPolicyConfigured",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "An enabled DoS Protection rule with action protect and a bound aggregate or classified DoS profile applies to all traffic (every zone, source, destination, user and service is any), and no earlier all-traffic rule allows traffic without protection. A protect rule limited to some zones or addresses is Not evaluated (its scope cannot be judged).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "DoS protection rules of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A DoS rulebase read showing an enabled rule with action protect and a bound aggregate or classified DoS profile that applies to all traffic (every zone, source, destination, user and service is any), with no earlier all-traffic allow rule. A protect rule limited to some zones, sources, destinations, users or services is Not evaluated, because zone names are arbitrary and its scope cannot be judged.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isDosProtectionPolicyConfigured.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "rulebase/dos/rules/entry: action (deny, allow, protect), from, to, source, destination, source-user, service, negate-source/negate-destination and protection/(aggregate|classified)/profile names are from the CLI hierarchy. A rule counts as all-traffic only when from, to, source and destination are listed as any (and source-user and service are any or not listed) and is not negated. Three answers: True for an all-traffic protect rule with a bound profile and no all-traffic allow rule ahead of it; False when no enabled protect rule with a bound profile is among the rules read, or when an all-traffic allow rule comes before any protect rule; Not evaluated when the only protect rules are limited to some zones, sources, destinations, users or services, because PAN-OS zone names are arbitrary and the key cannot tell which zone faces the internet (never False for a scoped rule). A successful reply with no DoS rules, an empty result or an empty rules element is Not evaluated: it is also what a firewall managed from a central manager, another virtual system or a role without access returns. vsys1 only."
+}
