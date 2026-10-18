@@ -268,6 +268,23 @@ def test_role_added_by_connectwise_service_principal_is_an_indicator():
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
 
 
+def test_audit_by_a_removed_connectwise_app_named_only_by_display_name_is_an_indicator():
+    # App-initiated audit entries often carry initiatedBy.app.appId null and only the service principal id
+    # and display name. Once the customer deletes the app, that id is no longer in the presence feed.
+    removed_sp = "11111111-aaaa-4aaa-8aaa-000000000009"
+    entry = audit("Add service principal credentials", OTHER_SP, by_sp=removed_sp)
+    entry["initiatedBy"]["app"]["displayName"] = "ConnectWise Cloud Backup"
+    _, indicators = run_both(clean(directoryAudits=graph(entry)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+
+
+def test_audit_by_an_unrelated_app_with_a_similar_vendor_name_is_not_an_indicator():
+    entry = audit("Add service principal credentials", OTHER_SP, by_sp="11111111-aaaa-4aaa-8aaa-000000000009")
+    entry["initiatedBy"]["app"]["displayName"] = "ConnectWise Automate"
+    _, indicators = run_both(clean(directoryAudits=graph(entry)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
+
+
 def test_indicator_found_even_when_the_app_was_already_removed():
     body = clean(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)))
     exposure, indicators = run_both(body)

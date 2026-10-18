@@ -83,6 +83,9 @@ APP_ROLE_FEEDS = {
     "24205314-2b89-4e07-a2a4-579e898a5640": ("cwTeamsAppRoles", "cwTeamsDelegatedGrants"),
 }
 WRAPPER_KEYS = ("apiResponse", "api_response", "response", "result", "Output")
+# Display-name markers for the two apps. App-initiated audit entries often carry a null appId, and a deleted
+# app's service principal id is no longer in the presence feed, so the initiator's name is the remaining link.
+CONNECTWISE_NAME_MARKERS = ("connectwise cloud backup", "connectwise cloud management", "skykick")
 
 
 def create_response(result, pass_reasons=None, fail_reasons=None, input_summary=None, api_errors=None,
@@ -262,7 +265,11 @@ def assess(data):
         initiated = item.get("initiatedBy") if isinstance(item.get("initiatedBy"), dict) else {}
         app = initiated.get("app") if isinstance(initiated.get("app"), dict) else {}
         user = initiated.get("user") if isinstance(initiated.get("user"), dict) else {}
+        app_name = lower(app.get("displayName"))
         by_connectwise = lower(app.get("appId")) in CONNECTWISE_APPS or lower(app.get("servicePrincipalId")) in sp_ids
+        for marker in CONNECTWISE_NAME_MARKERS:
+            if marker in app_name:
+                by_connectwise = True
         from_ioc_ip = lower(user.get("ipAddress")) in INDICATOR_IPS
         on_connectwise = False
         for target in item.get("targetResources") or []:
