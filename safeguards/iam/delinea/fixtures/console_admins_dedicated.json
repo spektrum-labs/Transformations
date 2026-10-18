@@ -1,0 +1,111 @@
+{
+  "records": [
+    {
+      "id": 2,
+      "userName": "ssadmin",
+      "displayName": "ssadmin",
+      "domainId": -1,
+      "domainName": null,
+      "enabled": true,
+      "isApplicationAccount": false,
+      "isLockedOut": false,
+      "externalUserSource": "None",
+      "twoFactorMethod": "None"
+    },
+    {
+      "id": 10,
+      "userName": "jdoe-admin",
+      "displayName": "jdoe-admin",
+      "domainId": 3,
+      "domainName": "EXAMPLE",
+      "enabled": true,
+      "isApplicationAccount": false,
+      "isLockedOut": false,
+      "externalUserSource": "None",
+      "twoFactorMethod": "None"
+    },
+    {
+      "id": 11,
+      "userName": "jdoe",
+      "displayName": "jdoe",
+      "domainId": 3,
+      "domainName": "EXAMPLE",
+      "enabled": true,
+      "isApplicationAccount": false,
+      "isLockedOut": false,
+      "externalUserSource": "None",
+      "twoFactorMethod": "None"
+    },
+    {
+      "id": 12,
+      "userName": "svc-discovery",
+      "displayName": "svc-discovery",
+      "domainId": -1,
+      "domainName": null,
+      "enabled": true,
+      "isApplicationAccount": true,
+      "isLockedOut": false,
+      "externalUserSource": "None",
+      "twoFactorMethod": "None"
+    }
+  ],
+  "total": 4,
+  "hasNext": false,
+  "skip": 0,
+  "take": 1000,
+  "success": true,
+  "userRoles": [
+    {
+      "records": [
+        {
+          "roleId": 1,
+          "roleName": "Administrator",
+          "isDirectAssignment": true,
+          "groups": []
+        }
+      ],
+      "total": 1,
+      "hasNext": false,
+      "success": true
+    },
+    {
+      "records": [
+        {
+          "roleId": 1,
+          "roleName": "Administrator",
+          "isDirectAssignment": true,
+          "groups": []
+        }
+      ],
+      "total": 1,
+      "hasNext": false,
+      "success": true
+    },
+    {
+      "records": [
+        {
+          "roleId": 1,
+          "roleName": "User",
+          "isDirectAssignment": true,
+          "groups": []
+        }
+      ],
+      "total": 1,
+      "hasNext": false,
+      "success": true
+    },
+    {
+      "records": [
+        {
+          "roleId": 1,
+          "roleName": "Administrator",
+          "isDirectAssignment": true,
+          "groups": []
+        }
+      ],
+      "total": 1,
+      "hasNext": false,
+      "success": true
+    }
+  ]
+}

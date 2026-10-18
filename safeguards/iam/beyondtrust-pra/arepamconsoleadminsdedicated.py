@@ -1,0 +1,387 @@
+"""
+Transformation: arePAMConsoleAdminsDedicated
+Vendor: BeyondTrust Privileged Remote Access (also Remote Support: same Configuration API)
+Category: Identity and Access Management
+
+CLAIM. The privileged access management console is administered only by dedicated admin
+accounts, not by people's everyday SSO identities.
+
+SOURCE. Workflow getConsoleAdmins, legs under their own output keys:
+  users              <- getUsers             GET {serverUrl}/api/config/v1/user
+  securityProviders  <- getSecurityProviders GET {serverUrl}/api/config/v1/security-provider
+  groupPolicies      <- getGroupPolicies     GET {serverUrl}/api/config/v1/group-policy, each
+                        policy with its members (GET .../group-policy/{id}/member) attached as
+                        "members". Optional leg; see GROUP POLICIES below.
+  User: id, username, enabled, perm_admin (the "Administrator" permission, read-only),
+        security_provider_id (the provider through which the user authenticates).
+  SecurityProvider: id, name, type in local | ldap | radius | kerberos | saml | scim.
+  https://docs.beyondtrust.com/pra/reference/apiconfiguserindex
+  https://docs.beyondtrust.com/pra/reference/apiconfigsecurity-providerindex
+
+RULE. Console administrators are the enabled users with perm_admin true, plus the enabled
+users named as members of a group policy with perm_admin true. Each must be a
+dedicated admin account, which is either
+  (a) LOCAL: its security provider has type "local" (credentials held by the appliance, not
+      the directory or IdP), or
+  (b) SEPARATELY NAMED: it signs in through ldap/radius/kerberos/saml/scim, but its username's
+      first or last token is an admin marker (adm, admin, administrator, priv, tier0, t0),
+      e.g. adm-jdoe or jdoe.admin -- a distinct directory identity kept for admin work.
+True when every administrator is (a) or (b). False when any administrator signs in through a
+directory or SSO provider under an ordinary personal username: that is the person's everyday
+identity holding console admin.
+
+GROUP POLICIES. In PRA the Administrator permission can also be granted by a group policy
+mapped to an LDAP or SAML group, the usual setup for SSO users, and it is not confirmed that
+the user-level perm_admin reflects such a grant (no live appliance was available to check).
+So the check fails closed:
+  * groupPolicies present: every policy must carry perm_admin (true, false or null). For each
+    policy with perm_admin true, its members list must be present, and every member must name a
+    user (user_id) found in the users leg; that user counts as an administrator. A member that
+    is a directory group or a whole provider (no user_id) is not evaluated, because the people
+    it covers were not read.
+  * groupPolicies absent: a False from user-level admins stands (more admins cannot fix it). A
+    True is NOT returned; the result is not evaluated ("group-policy admin grants were not
+    read"), unless every administrator found is a local appliance account AND every security
+    provider listed has type "local" (no SAML, LDAP or other directory provider exists that a
+    group policy could map to).
+
+LIMITS. Stated so a reviewer can see them, not hidden.
+  * Whether perm_admin on /api/config/v1/user includes group-policy grants is unconfirmed;
+    the GROUP POLICIES rule above is the fail-closed answer to that.
+  * The groupPolicies leg and its member shape ({user_id} or a group/provider member) are the
+    contract this transform asks of the Integration-Service workflow; until that leg ships,
+    a deployment with any directory provider returns not evaluated rather than True.
+
+FAIL CLOSED (None, dataCollection "error", never a pass): either leg missing or an error body;
+no enabled administrator in the user list (an appliance always has one, so the read is
+partial); an administrator with no security_provider_id or one that names a provider the
+providers leg does not list; a users leg of exactly 100 records (the API's page size, so the
+list may be truncated) or carrying a next/paging marker (next, NextToken, hasNext,
+paginationTruncated, or the workflow's paginationStats.users); a securityProviders leg held to
+the same rule (the local-only exception below relies on it being complete); a groupPolicies leg that is an error or
+not a list, a policy without perm_admin, an admin-granting policy without a members list, a
+member with no user_id, or a member user_id not in the users leg; a groupPolicies list or an
+admin-granting policy's members list of exactly 100 rows (the API page size) or carrying a
+next/paging marker (next, NextToken, hasNext, paginationTruncated, or the workflow's
+paginationStats.groupPolicies), since it may be truncated; and group policies not read
+while a directory provider exists (see GROUP POLICIES).
+"""
+
+import json
+from datetime import datetime
+
+CRITERIA_KEY = "arePAMConsoleAdminsDedicated"
+#: An account name whose first or last token is one of these is a separately named admin
+#: identity (adm-jdoe, jdoe.admin, admin_jdoe, t0-jdoe). Tokens split on . _ - and space,
+#: after dropping any DOMAIN\\ prefix and @domain suffix. Matching is exact per token, so
+#: "admiral" or "badminton" never count.
+ADMIN_MARKERS = ("adm", "admin", "administrator", "priv", "tier0", "t0")
+WRAPPERS = ["api_response", "response", "result", "apiResponse", "Output"]
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
+                    recommendations=None, input_summary=None, transformation_errors=None,
+                    api_errors=None, additional_findings=None):
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    api_err_list = api_errors or []
+    transform_err_list = transformation_errors or []
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if api_err_list else "success", "errors": api_err_list},
+            "validation": {"status": validation.get("status", "unknown"),
+                           "errors": validation.get("errors", []),
+                           "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if transform_err_list else "success",
+                               "errors": transform_err_list, "inputSummary": input_summary or {}},
+            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
+                           "recommendations": recommendations or [],
+                           "additionalFindings": additional_findings or []},
+            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
+                         "transformationId": TRANSFORM_ID, "vendor": VENDOR,
+                         "category": "Identity and Access Management"},
+        },
+    }
+
+
+def not_evaluated(reason, summary=None):
+    return create_response(result={CRITERIA_KEY: None}, api_errors=[reason],
+                           fail_reasons=["Not evaluated: " + reason], input_summary=summary or {})
+
+
+def parse(value):
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.startswith("<"):
+            raise ValueError("HTML or XML body; expected JSON from the vendor API")
+        return json.loads(text)
+    return value
+
+
+def unwrap(data):
+    if isinstance(data, dict) and "data" in data and "validation" in data:
+        data = data["data"]
+    for depth in range(4):
+        if not isinstance(data, dict):
+            break
+        moved = False
+        for key in WRAPPERS:
+            if isinstance(data.get(key), (dict, list)):
+                data = data[key]
+                moved = True
+                break
+        if not moved:
+            break
+    return data
+
+
+def error_reason(data):
+    """A reason when the body is a vendor or Integration-Service error, else None."""
+    if not isinstance(data, dict):
+        return None
+    if data.get("error") is True:
+        return "Integration-Service returned an error: " + str(data.get("message") or "")[:200]
+    if data.get("success") is False:
+        return "vendor reported success=false: " + str(data.get("message") or data.get("Message") or "")[:200]
+    if data.get("errorCode") or data.get("ErrorCode"):
+        return "vendor error " + str(data.get("errorCode") or data.get("ErrorCode"))[:120]
+    if isinstance(data.get("error"), (dict, str)) and data.get("error"):
+        return "error body: " + json.dumps(data.get("error"))[:200]
+    for key in ("statusCode", "status_code", "httpStatus", "status"):
+        code = data.get(key)
+        if isinstance(code, int) and code >= 400:
+            return "HTTP " + str(code)
+    return None
+
+
+def admin_marker(name):
+    if not isinstance(name, str) or not name.strip():
+        return False
+    text = name.strip().lower()
+    if "\\" in text:
+        text = text.split("\\")[-1]
+    if "@" in text:
+        text = text.split("@")[0]
+    for sep in (".", "_", "-", " "):
+        text = text.replace(sep, "|")
+    tokens = [t for t in text.split("|") if t]
+    if not tokens:
+        return False
+    return tokens[0] in ADMIN_MARKERS or tokens[-1] in ADMIN_MARKERS
+
+
+def judge(admins, summary):
+    """admins: list of dicts {name, local, source}. Returns the response."""
+    dedicated = []
+    everyday = []
+    for a in admins:
+        if a["local"]:
+            dedicated.append(a["name"] + " (local " + VENDOR + " account)")
+        elif admin_marker(a["name"]):
+            dedicated.append(a["name"] + " (separately named admin account via " + a["source"] + ")")
+        else:
+            everyday.append(a["name"] + " (signs in via " + a["source"] + ")")
+    summary["consoleAdmins"] = len(admins)
+    summary["dedicatedAdmins"] = len(dedicated)
+    summary["everydayIdentityAdmins"] = len(everyday)
+    if everyday:
+        return create_response(
+            result={CRITERIA_KEY: False, "consoleAdmins": len(admins), "everydayIdentityAdmins": len(everyday)},
+            input_summary=summary,
+            fail_reasons=[str(len(everyday)) + " of " + str(len(admins)) + " " + VENDOR
+                          + " console administrator(s) sign in with a directory or SSO identity that is "
+                          "not a separately named admin account: " + ", ".join(everyday[:20])],
+            recommendations=["Give each " + VENDOR + " administrator a dedicated admin account (a local console "
+                             "account, or a separate directory account named for admin use such as adm-<name>) "
+                             "and remove administrator rights from everyday SSO identities"])
+    return create_response(
+        result={CRITERIA_KEY: True, "consoleAdmins": len(admins), "everydayIdentityAdmins": 0},
+        input_summary=summary,
+        pass_reasons=["All " + str(len(admins)) + " " + VENDOR + " console administrator(s) are dedicated "
+                      "admin accounts: " + ", ".join(dedicated[:20])])
+
+
+TRANSFORM_ID = "arepamconsoleadminsdedicated"
+VENDOR = "BeyondTrust PRA"
+PAGE_SIZE = 100
+
+
+def as_list(leg):
+    if isinstance(leg, list):
+        return leg
+    if isinstance(leg, dict):
+        for key in ("data", "items", "results", "records", "users", "securityProviders",
+                    "groupPolicies", "members"):
+            if isinstance(leg.get(key), list):
+                return leg[key]
+    return None
+
+
+PAGING_KEYS = ("next", "nextPage", "next_page", "nextLink", "nextUrl", "NextToken", "nextToken",
+               "next_cursor")
+PAGING_FLAGS = ("hasNext", "has_next", "hasMore", "has_more", "paginationTruncated")
+
+
+def paging_problem(leg, rows, what):
+    """A not-evaluated reason when a list from the paged Configuration API may be cut off:
+    exactly PAGE_SIZE rows, or a next/paging marker on the leg that carried them."""
+    if isinstance(rows, list) and len(rows) == PAGE_SIZE:
+        return ("exactly " + str(PAGE_SIZE) + " " + what + " returned, the API page size: the "
+                "list may be truncated")
+    if isinstance(leg, dict):
+        for key in PAGING_FLAGS:
+            flag = leg.get(key)
+            numeric = isinstance(flag, (int, float)) and not isinstance(flag, bool) and flag > 0
+            if flag is True or numeric or str(flag).strip().lower() == "true":
+                return what + " carry a paging marker (" + key + "): the list is partial"
+        for key in PAGING_KEYS:
+            value = leg.get(key)
+            if value is not None and value is not False and str(value).strip() not in ("", "0"):
+                return what + " carry a paging marker (" + key + "): the list is partial"
+    return None
+
+
+def group_policy_admins(leg, user_by_id, stats=None):
+    """(users granted Administrator by a group policy, problem). problem is a not-evaluated
+    reason, else None. stats is the workflow's paginationStats.groupPolicies, if any."""
+    leg_error = error_reason(leg)
+    if leg_error:
+        return [], "groupPolicies: " + leg_error
+    policies = as_list(leg)
+    if policies is None:
+        return [], "groupPolicies is not a list of group policies"
+    paged = paging_problem(leg, policies, "group policies") or paging_problem(stats, None, "group policies")
+    if paged:
+        return [], paged
+    granted = []
+    for p in policies:
+        if not isinstance(p, dict):
+            continue
+        label = str(p.get("name") or p.get("id"))
+        if "perm_admin" not in p:
+            return [], ("group policy " + label + " carries no perm_admin, so whether it grants "
+                        "Administrator is unknown")
+        if p.get("perm_admin") is not True:
+            continue
+        members = p.get("members")
+        members_leg = members
+        if isinstance(members, dict):
+            members_error = error_reason(members)
+            if members_error:
+                return [], "members of group policy " + label + ": " + members_error
+            members = as_list(members)
+        if not isinstance(members, list):
+            return [], ("group policy " + label + " grants Administrator but its members were not "
+                        "read")
+        paged = paging_problem(members_leg, members, "members of group policy " + label)
+        if paged:
+            return [], paged
+        for m in members:
+            if not isinstance(m, dict):
+                return [], "group policy " + label + " has a member that is not an object"
+            uid = m.get("user_id")
+            if uid is None:
+                uid = m.get("userId")
+            if uid is None:
+                return [], ("group policy " + label + " grants Administrator to a directory group or "
+                            "provider member, and the people it covers were not read")
+            user = user_by_id.get(str(uid))
+            if user is None:
+                return [], ("group policy " + label + " grants Administrator to user id "
+                            + str(uid)[:40] + ", which the users leg does not list")
+            if user not in granted:
+                granted.append(user)
+    return granted, None
+
+
+def transform(input):
+    try:
+        data = unwrap(parse(input))
+        if data is None or data == {} or data == []:
+            return not_evaluated("empty response: no users or security providers were read")
+        reason = error_reason(data)
+        if reason:
+            return not_evaluated(reason)
+        if not isinstance(data, dict) or "users" not in data or "securityProviders" not in data:
+            return not_evaluated("the users and securityProviders legs were not both returned")
+        for leg_name in ("users", "securityProviders"):
+            leg_error = error_reason(data.get(leg_name))
+            if leg_error:
+                return not_evaluated(leg_name + ": " + leg_error)
+        users = as_list(data.get("users"))
+        providers = as_list(data.get("securityProviders"))
+        if users is None or providers is None:
+            return not_evaluated("users or securityProviders is not a list")
+        stats = data.get("paginationStats") if isinstance(data.get("paginationStats"), dict) else {}
+        paged = (paging_problem(data.get("users"), users, "users")
+                 or paging_problem(stats.get("users"), None, "users")
+                 or paging_problem(data.get("securityProviders"), providers, "security providers")
+                 or paging_problem(stats.get("securityProviders"), None, "security providers"))
+        if paged:
+            return not_evaluated(paged)
+        provider_by_id = {}
+        for p in providers:
+            if isinstance(p, dict) and p.get("id") is not None:
+                provider_by_id[str(p.get("id"))] = p
+        user_by_id = {}
+        for u in users:
+            if isinstance(u, dict) and u.get("id") is not None:
+                user_by_id[str(u.get("id"))] = u
+        admin_users = []
+        for u in users:
+            if isinstance(u, dict) and u.get("perm_admin") is True:
+                admin_users.append(u)
+        policies_read = "groupPolicies" in data
+        policy_count = 0
+        if policies_read:
+            policies, problem = group_policy_admins(data.get("groupPolicies"), user_by_id,
+                                                    stats.get("groupPolicies"))
+            if problem:
+                return not_evaluated(problem)
+            policy_count = len(policies)
+            for u in policies:
+                if u not in admin_users:
+                    admin_users.append(u)
+        admins = []
+        for u in admin_users:
+            if u.get("enabled") is False:
+                continue
+            name = str(u.get("username") or u.get("public_display_name") or u.get("id"))
+            pid = u.get("security_provider_id")
+            if pid is None:
+                return not_evaluated("administrator " + name + " has no security_provider_id")
+            provider = provider_by_id.get(str(pid))
+            if provider is None:
+                return not_evaluated("administrator " + name + " uses security provider " + str(pid)
+                                     + ", which the securityProviders leg does not list")
+            ptype = str(provider.get("type") or "").strip().lower()
+            if not ptype:
+                return not_evaluated("security provider " + str(pid) + " has no type")
+            admins.append({"name": name, "local": ptype == "local",
+                           "source": ptype + " provider " + str(provider.get("name") or pid)})
+        summary = {"users": len(users), "securityProviders": len(providers),
+                   "groupPoliciesRead": policies_read,
+                   "adminGrantingGroupPolicyMembers": policy_count}
+        if not admins:
+            return not_evaluated("no enabled user with the Administrator permission (perm_admin) was "
+                                 "returned, so the administrator population was not read", summary)
+        if not policies_read:
+            everyday = [a for a in admins if not a["local"] and not admin_marker(a["name"])]
+            directory = [p for p in providers if isinstance(p, dict)
+                         and str(p.get("type") or "").strip().lower() != "local"]
+            if not everyday and (directory or len([a for a in admins if not a["local"]]) > 0):
+                return not_evaluated(
+                    "group-policy admin grants were not read: a group policy mapped to a "
+                    + "/".join(sorted(set([str(p.get("type") or "?").strip().lower() for p in directory])) or "directory")
+                    + " group can grant Administrator without showing in user-level perm_admin, so "
+                    "the administrator population may be incomplete", summary)
+        return judge(admins, summary)
+    except Exception as error:
+        return create_response(result={CRITERIA_KEY: None}, transformation_errors=[str(error)],
+                               api_errors=["transformation error: " + str(error)[:200]],
+                               fail_reasons=["Not evaluated: " + str(error)[:200]])

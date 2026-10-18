@@ -93,6 +93,16 @@ def transform(input):
         # criterion and no input could make it false. Resolved from the payload now.
         is_enabled = affirmative_signal(data)
 
+        if not is_enabled and is_factor_list(data):
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                fail_reasons=[FACTOR_LIST_REASON],
+                api_errors=[FACTOR_LIST_REASON],
+                input_summary={"lifecycleManagementConfigured": None, "readShape": "factor list",
+                               "factorCount": len(data)}
+            )
+
         if is_enabled:
             pass_reasons.append("Lifecycle management is enabled")
         else:
@@ -162,3 +172,22 @@ def affirmative_signal(data):
         if isinstance(value, dict) and value:
             return True
     return False
+
+
+FACTOR_LIST_REASON = ("Not evaluated: not measurable from this read (the bound read returns the org's "
+                      "authentication factor list, which says nothing about user provisioning or deprovisioning)")
+
+
+def is_factor_list(data):
+    """True when the input is an Okta factor list ([{factorType, provider, status, ...}, ...]).
+
+    The factor list is the wrong source for lifecycle management; judging it reported a failed
+    control that was never measured. Every element must look like a factor, so a genuine
+    lifecycle read is never mistaken for one.
+    """
+    if not isinstance(data, list) or not data:
+        return False
+    for item in data:
+        if not isinstance(item, dict) or "factorType" not in item or "provider" not in item:
+            return False
+    return True

@@ -91,6 +91,15 @@ def transform(input):
         # criterion and no input could make it false. Resolved from the payload now.
         default_value = affirmative_signal(data)
 
+        if not default_value and no_endpoints(data, ["isPatchManagementEnabled", "isPatchManagementValid"]):
+            return create_response(
+                result={"isPatchManagementEnabled": None, "isPatchManagementValid": None},
+                validation=validation,
+                fail_reasons=[NO_ENDPOINTS_REASON],
+                api_errors=[NO_ENDPOINTS_REASON],
+                input_summary={"patchManagementEnabled": None, "patchManagementValid": None, "endpointCount": 0}
+            )
+
         is_patch_management_enabled = False
         is_patch_management_valid = False
 
@@ -202,3 +211,23 @@ def affirmative_signal(data):
         if isinstance(value, dict) and value:
             return True
     return False
+
+
+NO_ENDPOINTS_REASON = "Not evaluated: no endpoints returned"
+
+
+def no_endpoints(data, keys):
+    """True when the read is an endpoint list with no endpoints in it and no explicit verdict key.
+
+    {"items": [], "pages": {...}} (or a bare []) says there is nothing to measure, not that the
+    control is off: per the answer model, no usable data is Not evaluated, never a fail.
+    """
+    if isinstance(data, list):
+        return len(data) == 0
+    if not isinstance(data, dict):
+        return False
+    for key in keys:
+        if key in data:
+            return False
+    items = data.get("items")
+    return isinstance(items, list) and len(items) == 0

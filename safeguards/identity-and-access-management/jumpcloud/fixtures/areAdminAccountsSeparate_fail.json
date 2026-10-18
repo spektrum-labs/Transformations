@@ -1,0 +1,70 @@
+{
+  "administrators": {
+    "results": [
+      {
+        "_id": "6501a0000000000000000001",
+        "email": "admin-jo@example.com",
+        "firstname": "Test",
+        "lastname": "Admin",
+        "roleName": "Administrator With Billing",
+        "enableMultiFactor": true,
+        "totpEnrolled": true,
+        "suspended": false,
+        "organization": "5f0c1b2a3d4e5f6a7b8c9d0e",
+        "registered": true
+      },
+      {
+        "_id": "6501a0000000000000000003",
+        "email": "kim@example.com",
+        "firstname": "Test",
+        "lastname": "Admin",
+        "roleName": "Administrator",
+        "enableMultiFactor": true,
+        "totpEnrolled": true,
+        "suspended": false,
+        "organization": "5f0c1b2a3d4e5f6a7b8c9d0e",
+        "registered": true
+      }
+    ],
+    "totalCount": 2
+  },
+  "systemUsers": {
+    "results": [
+      {
+        "_id": "6502b0000000000000000001",
+        "email": "jo@example.com",
+        "username": "jo",
+        "firstname": "Test",
+        "lastname": "User",
+        "activated": true,
+        "state": "ACTIVATED",
+        "suspended": false,
+        "mfa": {
+          "configured": true,
+          "exclusion": false
+        },
+        "totp_enabled": true,
+        "account_locked": false,
+        "created": "2024-01-15T10:00:00.000Z"
+      },
+      {
+        "_id": "6502b0000000000000000002",
+        "email": "kim@example.com",
+        "username": "kim",
+        "firstname": "Test",
+        "lastname": "User",
+        "activated": true,
+        "state": "ACTIVATED",
+        "suspended": false,
+        "mfa": {
+          "configured": true,
+          "exclusion": false
+        },
+        "totp_enabled": true,
+        "account_locked": false,
+        "created": "2024-01-15T10:00:00.000Z"
+      }
+    ],
+    "totalCount": 2
+  }
+}

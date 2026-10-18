@@ -5,7 +5,7 @@ Method: getEndpointSecurityEndpoints (GET {serverUrl}/v3.0/endpointSecurity/endp
 
 Evidence: the Endpoint Inventory list (response model: trendmicro/tm-v1-pytv1 EndpointSecurityEndpoint,
 EppAgent, EdrSensor; field values: trendmicro/vision-one-mcp-server FilterEndpoints table).
-Confirmed on a real Infraservices payload (417 endpoints, 2026-09-25).
+Confirmed on a real customer payload (2026-09-25).
 
 Verdict: true when every endpoint in the inventory reports a non-empty osName and osVersion.
 
@@ -120,7 +120,7 @@ def load_endpoints(criteria_key, input, fail_value):
                                            api_errors=[reason], fail_reasons=[reason],
                                            recommendations=["Raise maxPages on getEndpointSecurityEndpoints"])
     if len(items) == 0:
-        reason = "Trend Vision One returned no endpoints, so nothing about the estate is proven"
+        reason = "Trend Vision One returned no endpoints, so nothing about the environment is proven"
         return None, None, create_response(criteria_key, {criteria_key: fail_value}, validation=validation,
                                            fail_reasons=[reason],
                                            recommendations=["Confirm endpoints are managed in Trend Vision One Endpoint Inventory and that the API key's role can see them"])

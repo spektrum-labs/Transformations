@@ -18,8 +18,13 @@ response that still carries nextLink (pages left unread) all return false.
 
 Verdict: servers are taken as the critical systems (Vision One tags no criticality on
 this API). True when at least one endpoint has type "server" and every server has a
-protection agent whose status is "on". A server with no agent, or status "off" /
-"unknown", fails it. No servers in the inventory also fails: absence is not proof.
+protection agent whose status is "on". A server with no agent, or status "off", fails it.
+A server whose agent status is "unknown" is unmeasured (Vision One cannot see its state, for
+example a Worry-Free managed agent): with no measured failure and at least one unmeasured server
+the value is None (Not evaluated), never False. No servers in the inventory also fails: absence
+is not proof.
+The None verdict carries its reason in api_errors (dataCollection error), so Token-Service
+stores it as Unevaluated rather than as a failed comparison.
 
 What this proves: every server Vision One knows about has a connected Trend protection
 agent. What it does not prove: which individual protection features are enabled, or
@@ -30,6 +35,10 @@ from datetime import datetime
 
 
 VENDOR = "Trend Micro"
+#: dataCollection.errorCode for a value the vendor does not expose (Worry-Free managed agents report no
+#: policy, status, isolation or component version to Vision One). Set only when EVERY unmeasured endpoint is
+#: Worry-Free managed, never on an API error and never when another manager or no agent is the cause.
+VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
 CATEGORY = "Endpoint Security"
 
 
@@ -53,13 +62,16 @@ def extract_input(input_data):
 
 def create_response(criteria_key, result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None, additional_findings=None):
+                    api_errors=None, additional_findings=None, error_code=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    collection = {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []}
+    if error_code and api_errors:
+        collection["errorCode"] = error_code
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": collection,
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
@@ -130,7 +142,7 @@ def load_endpoints(criteria_key, input, fail_value):
                                            api_errors=[reason], fail_reasons=[reason],
                                            recommendations=["Raise maxPages on getEndpointSecurityEndpoints"])
     if len(items) == 0:
-        reason = "Trend Vision One returned no endpoints, so nothing about the estate is proven"
+        reason = "Trend Vision One returned no endpoints, so nothing about the environment is proven"
         return None, None, create_response(criteria_key, {criteria_key: fail_value}, validation=validation,
                                            fail_reasons=[reason],
                                            recommendations=["Confirm endpoints are managed in Trend Vision One Endpoint Inventory and that the API key's role can see them"])
@@ -143,6 +155,16 @@ def failure(criteria_key, fail_value, error):
                            transformation_errors=[str(error)], fail_reasons=["Transformation error: " + str(error)])
 
 
+def worry_free_managed(endpoint):
+    """True when the endpoint's protection agent is managed by Worry-Free Business Security, which sends no policy,
+    status, isolation or component version to Vision One. An endpoint with no agent block, a sensor-only placeholder
+    or another manager (Apex One, Server & Workload Protection) is not, so a hidden value there is another cause."""
+    agent = sub(endpoint, "eppAgent")
+    if agent is None:
+        return False
+    return "worry-free" in str(agent.get("protectionManager") or "").lower()
+
+
 def transform(input):
     criteriaKey = "isEPPEnabledForCriticalSystems"
     try:
@@ -151,14 +173,23 @@ def transform(input):
             return failed
         servers = [e for e in endpoints if str(e.get("type")) == "server"]
         unprotected = []
+        unknown = []
+        unknown_other = 0
         for e in servers:
             agent = sub(e, "eppAgent")
             status = str(agent.get("status")) if agent else "no agent"
-            if status != "on":
+            if status == "unknown":
+                unknown.append(endpoint_name(e))
+                if not worry_free_managed(e):
+                    unknown_other = unknown_other + 1
+            elif status != "on":
                 unprotected.append(endpoint_name(e) + " (" + status + ")")
         value = len(servers) > 0 and len(unprotected) == 0
+        if servers and not unprotected and unknown:
+            value = None
         summary = {"totalEndpoints": len(endpoints), "servers": len(servers),
-                   "serversWithoutActiveAgent": len(unprotected), "sampleServersWithoutActiveAgent": unprotected[:10]}
+                   "serversWithoutActiveAgent": len(unprotected), "sampleServersWithoutActiveAgent": unprotected[:10],
+                   "serversUnknownStatus": len(unknown)}
         pass_reasons = []
         fail_reasons = []
         recommendations = []
@@ -168,10 +199,17 @@ def transform(input):
         elif unprotected:
             fail_reasons.append("%d of %d servers have no active Trend protection agent: %s" % (len(unprotected), len(servers), ", ".join(unprotected[:10])))
             recommendations.append("Restore agent connectivity or deploy the protection agent on the listed servers")
+        elif unknown:
+            fail_reasons.append("%d of %d servers report protection agent status unknown (not visible to Vision One, "
+                                "e.g. Worry-Free managed), so protection of critical systems cannot be read here: %s"
+                                % (len(unknown), len(servers), ", ".join(unknown[:10])))
+            recommendations.append("Check these servers in the protection manager console, or attach evidence")
         else:
             pass_reasons.append("All %d servers have an active Trend protection agent" % len(servers))
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
-                               recommendations=recommendations, input_summary=summary)
+                               recommendations=recommendations, input_summary=summary,
+                               api_errors=(fail_reasons if value is None else None),
+                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0 and unknown_other == 0) else None))
     except Exception as e:
         return failure(criteriaKey, False, e)

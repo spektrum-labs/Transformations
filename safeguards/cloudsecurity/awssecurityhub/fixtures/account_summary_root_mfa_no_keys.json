@@ -1,0 +1,29 @@
+{
+  "GetAccountSummaryResponse": {
+    "GetAccountSummaryResult": {
+      "SummaryMap": {
+        "entry": [
+          {
+            "key": "Users",
+            "value": "4"
+          },
+          {
+            "key": "AccountMFAEnabled",
+            "value": "1"
+          },
+          {
+            "key": "AccountAccessKeysPresent",
+            "value": "0"
+          },
+          {
+            "key": "AccountSigningCertificatesPresent",
+            "value": "0"
+          }
+        ]
+      }
+    },
+    "ResponseMetadata": {
+      "RequestId": "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}

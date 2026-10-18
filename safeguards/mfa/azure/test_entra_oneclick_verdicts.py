@@ -35,8 +35,8 @@ def test_strong_method_enabled_passes():
 
 
 def test_microsoft_authenticator_alone_is_not_phishing_resistant():
-    # J.J. 2 Oct 2026 02:35 ET: push / phone sign-in is phishable. Crown, Flagstone Foods, Marcal, Packaging
-    # Exchange, Thunder Bay, Trebron and US Farathane passed on Authenticator alone.
+    # Push / phone sign-in is phishable, so Authenticator alone is not phishing resistant. Several live
+    # tenants had passed on it alone.
     assert strong(methods(["MicrosoftAuthenticator", "Sms"])) is False
     out = STRONG.transform(methods(["MicrosoftAuthenticator", "Email", "Sms", "Voice"]))
     assert out["transformedResponse"]["enabledStrongMethods"] == []
@@ -46,26 +46,30 @@ def test_microsoft_authenticator_alone_is_not_phishing_resistant():
 
 
 def test_fido2_alongside_phishable_methods_still_passes():
-    # The 14 tenants with FIDO2 enabled (e.g. Infraservices: Fido2, MicrosoftAuthenticator, TemporaryAccessPass).
+    # Several tenants have FIDO2 enabled (e.g. one with Fido2, MicrosoftAuthenticator, TemporaryAccessPass).
     tap = {"id": "TemporaryAccessPass", "state": "enabled"}
     out = STRONG.transform(methods(["Fido2", "MicrosoftAuthenticator"], extra=[tap]))
     assert out["transformedResponse"]["isStrongAuthRequired"] is True
     assert out["transformedResponse"]["enabledStrongMethods"] == ["FIDO2 security key"]
 
 
-def test_authenticator_only_during_migration_is_not_evaluated():
-    assert strong(methods(["MicrosoftAuthenticator"], "preMigration")) is None
+def test_authenticator_only_during_migration_fails():
+    # 4 Oct 2026: FIDO2, TAP and CBA are not available in the legacy MFA/SSPR policies (Microsoft), so a
+    # policy with neither strong method enabled has none, whatever the migration state.
+    assert strong(methods(["MicrosoftAuthenticator"], "preMigration")) is False
 
 
 def test_no_strong_method_after_migration_fails():
     assert strong(methods(["Sms", "Email"])) is False
 
 
-def test_no_strong_method_during_migration_or_with_external_method_is_not_evaluated():
-    assert strong(methods(["Email"], "migrationInProgress")) is None
+def test_no_strong_method_with_external_method_is_not_evaluated():
+    assert strong(methods(["Email"], "migrationInProgress")) is False
     duo = {"@odata.type": "#microsoft.graph.externalAuthenticationMethodConfiguration", "id": "bfa47a53",
            "displayName": "Cisco Duo", "state": "enabled"}
     assert strong(methods([], extra=[duo])) is None
+    assert strong(methods([], "migrationInProgress", extra=[duo])) is None
+    assert strong(methods(["Sms"], "preMigration", extra=[duo])) is None
 
 
 def test_strong_auth_without_the_policy_is_not_evaluated():

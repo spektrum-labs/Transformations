@@ -9,6 +9,34 @@
 import json
 from datetime import datetime, timezone
 
+VENDOR = "Cohesity"
+PRODUCT = "DataProtect"
+METHOD = "getMfaPreferences"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -74,20 +102,24 @@ def transform(input):
     try:
         body, problem = body_with(input, ["deploymentType"])
         if body is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         kind = body.get("deploymentType")
         if kind == "HeliosSaas":
             cfg = body.get("heliosSaasConfig")
             status = cfg.get("mfaStatus") if isinstance(cfg, dict) else None
             if status == "OptIn":
-                return {key: True, "reason": "Helios SaaS account MFA status is OptIn"}
-            return {key: False, "reason": "Helios SaaS account MFA status is " + str(status)}
+                return respond(key, True, "Helios SaaS account MFA status is OptIn")
+            if isinstance(status, str) and status:
+                return respond(key, False, "Helios SaaS account MFA status is " + str(status))
+            return respond(key, None, "Helios SaaS account MFA status is " + str(status))
         if kind == "HeliosOnPrem":
             cfg = body.get("heliosOnPremConfig")
             on = cfg.get("mfa") if isinstance(cfg, dict) else None
             if on is True:
-                return {key: True, "reason": "Helios on-prem MFA is enabled"}
-            return {key: False, "reason": "Helios on-prem MFA is " + str(on)}
-        return {key: False, "reason": "Unrecognised deploymentType " + str(kind)}
+                return respond(key, True, "Helios on-prem MFA is enabled")
+            if on is False:
+                return respond(key, False, "Helios on-prem MFA is " + str(on))
+            return respond(key, None, "Helios on-prem MFA is " + str(on))
+        return respond(key, None, "Unrecognised deploymentType " + str(kind))
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})

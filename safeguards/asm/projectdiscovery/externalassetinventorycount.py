@@ -12,6 +12,20 @@ None with the reason in dataCollection.errors.
 import json
 from datetime import datetime
 
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('externalAssetInventoryCount',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -34,6 +48,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -74,6 +94,19 @@ def to_int(value):
         return None
 
 
+def scan_reason_suffix(data):
+    """The reason Integration-Service gave for a scan that has no result (asm_scan_in_progress,
+    asm_scan_retry_backoff, ...) as " (reason: ...)", or "" when it gave none. Only a short
+    lower-case token is passed on, so a body cannot put free text into the stream."""
+    reason = str(data.get("reason") or "").strip().lower() if isinstance(data, dict) else ""
+    if not reason or len(reason) > 60:
+        return ""
+    for ch in reason:
+        if ch not in "abcdefghijklmnopqrstuvwxyz0123456789_":
+            return ""
+    return " (reason: " + reason + ")"
+
+
 def scan_problem(data):
     """None when the scan completed across at least one host with no failed host and no error; else the reason."""
     if not isinstance(data, dict):
@@ -81,7 +114,7 @@ def scan_problem(data):
     domain = data.get("primaryDomain") or data.get("domain") or "unknown"
     status = data.get("status", "unknown")
     if status != "success":
-        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+        return "Nuclei scan status: " + str(status) + " for " + str(domain) + scan_reason_suffix(data)
     scanned = to_int(data.get("domainsScanned"))
     if scanned is None or scanned <= 0:
         return "Nuclei scanned zero hosts for " + str(domain)

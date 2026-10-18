@@ -1,0 +1,36 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "admin",
+      "public_display_name": "admin",
+      "email_address": "admin@example.com",
+      "enabled": true,
+      "perm_admin": true,
+      "security_provider_id": 1,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    },
+    {
+      "id": 5,
+      "username": "pra-backup",
+      "public_display_name": "pra-backup",
+      "email_address": "pra-backup@example.com",
+      "enabled": true,
+      "perm_admin": true,
+      "security_provider_id": 1,
+      "failed_logins": 0,
+      "last_authentication": "2026-10-01T12:00:00+00:00"
+    }
+  ],
+  "securityProviders": [
+    {
+      "id": 1,
+      "name": "Local",
+      "type": "local",
+      "enabled": true,
+      "user_authentication": true,
+      "group_lookup": false
+    }
+  ]
+}

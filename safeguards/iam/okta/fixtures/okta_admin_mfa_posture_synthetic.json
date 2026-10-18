@@ -1,0 +1,148 @@
+{
+ "_note": "synthetic: invented ids and domains; shape of IS workflow getAdminMfaPosture output",
+ "roleAssignees": {
+  "value": [
+   {
+    "id": "00uSYNADM1",
+    "orn": "orn:okta:idp:00oSYNORG:users:00uSYNADM1",
+    "_links": {
+     "self": {
+      "href": "https://synthetic.okta.example/api/v1/users/00uSYNADM1"
+     }
+    }
+   },
+   {
+    "id": "00uSYNADM2",
+    "orn": "orn:okta:idp:00oSYNORG:users:00uSYNADM2",
+    "_links": {
+     "self": {
+      "href": "https://synthetic.okta.example/api/v1/users/00uSYNADM2"
+     }
+    }
+   },
+   {
+    "id": "00uSYNADM3",
+    "orn": "orn:okta:idp:00oSYNORG:users:00uSYNADM3",
+    "_links": {
+     "self": {
+      "href": "https://synthetic.okta.example/api/v1/users/00uSYNADM3"
+     }
+    }
+   },
+   {
+    "id": "00uSYNADM4",
+    "orn": "orn:okta:idp:00oSYNORG:users:00uSYNADM4",
+    "_links": {
+     "self": {
+      "href": "https://synthetic.okta.example/api/v1/users/00uSYNADM4"
+     }
+    }
+   }
+  ],
+  "_links": {
+   "next": {
+    "href": null
+   }
+  }
+ },
+ "assigneeRoles": [
+  [
+   {
+    "id": "raSUPER_ADMIN",
+    "label": "Super_Admin",
+    "type": "SUPER_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "USER"
+   }
+  ],
+  [
+   {
+    "id": "raSUPER_ADMIN",
+    "label": "Super_Admin",
+    "type": "SUPER_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "USER"
+   }
+  ],
+  [
+   {
+    "id": "raORG_ADMIN",
+    "label": "Org_Admin",
+    "type": "ORG_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "USER"
+   }
+  ],
+  [
+   {
+    "id": "raSUPER_ADMIN",
+    "label": "Super_Admin",
+    "type": "SUPER_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "GROUP"
+   },
+   {
+    "id": "raREAD_ONLY_ADMIN",
+    "label": "Read_Only_Admin",
+    "type": "READ_ONLY_ADMIN",
+    "status": "ACTIVE",
+    "assignmentType": "USER"
+   }
+  ]
+ ],
+ "assigneeFactors": [
+  [
+   {
+    "id": "fsynwebauthnACT",
+    "factorType": "webauthn",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {}
+   }
+  ],
+  [
+   {
+    "id": "fsynsmsACT",
+    "factorType": "sms",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {}
+   }
+  ],
+  [],
+  [
+   {
+    "id": "fsynpushACT",
+    "factorType": "push",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "platform": "ANDROID"
+    }
+   }
+  ]
+ ],
+ "paginationStats": {
+  "roleAssignees": {
+   "paginationTruncated": false
+  }
+ },
+ "iterateStats": {
+  "assigneeRoles": {
+   "itemsTotal": 4,
+   "itemsProcessed": 4,
+   "itemErrors": 0,
+   "iterateTruncated": false
+  },
+  "assigneeFactors": {
+   "itemsTotal": 4,
+   "itemsProcessed": 4,
+   "itemErrors": 0,
+   "iterateTruncated": false
+  }
+ },
+ "itemErrors": 0
+}

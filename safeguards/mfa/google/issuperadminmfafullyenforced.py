@@ -120,9 +120,34 @@ def active_users(input):
             and not is_true(u.get("archived"))], None
 
 
-def names(users, limit=10):
-    shown = [str(u.get("primaryEmail") or u.get("id") or "unknown") for u in users]
-    return ", ".join(shown[:limit]) + (" (and more)" if len(shown) > limit else "")
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_names(users):
+    return [str(u.get("primaryEmail") or u.get("id") or "unknown").strip()[:100] for u in users]
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Google Workspace (<scope>): N of M <what>: a, b and K more'."""
+    return "Google Workspace (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
 
 
 def transform(input):
@@ -142,12 +167,15 @@ def evaluate(users):
         return create_response(result={CRITERIA_KEY: False}, api_errors=["No active super admin was returned"],
                                fail_reasons=["Not measured: no active super admin was returned"])
     missing = [u for u in admins if not is_true(u.get("isEnforcedIn2Sv"))]
+    affected = account_names(missing)
     if not missing:
         return create_response(result={CRITERIA_KEY: True},
                                pass_reasons=["2-Step Verification is enforced for all %d active super admins" % len(admins)],
-                               input_summary={"superAdmins": len(admins)})
+                               input_summary=with_affected({"superAdmins": len(admins)}, affected))
     return create_response(result={CRITERIA_KEY: False},
-                           fail_reasons=["2-Step Verification is not enforced for %d of %d active super admins: %s" % (
-                               len(missing), len(admins), names(missing))],
+                           fail_reasons=["2-Step Verification is not enforced for %d of %d active super admins; %s" % (
+                               len(missing), len(admins),
+                               affected_line("active super admins", affected, len(admins),
+                                             "super admins have no 2-Step Verification enforced"))],
                            recommendations=["Enforce 2-Step Verification for every super admin (Security > Authentication > 2-Step Verification)"],
-                           input_summary={"superAdmins": len(admins), "withoutEnforcement": len(missing)})
+                           input_summary=with_affected({"superAdmins": len(admins), "withoutEnforcement": len(missing)}, affected))

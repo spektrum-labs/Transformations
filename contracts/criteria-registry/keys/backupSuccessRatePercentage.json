@@ -1,0 +1,44 @@
+{
+  "name": "backupSuccessRatePercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The share of attempted device backups that completed, as a percentage: devices in backup_applied_on divided by devices in backup_applied_on plus backup_failed_on, across the backup plans the tool reads. No completed attempt, an error, refusal, empty read, or any plan without both lists is Not evaluated, never 0.",
+  "valueType": "number",
+  "unit": "percent",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "the backup plans the credential's company returns; denominator = device entries in backup_applied_on plus backup_failed_on across every plan read; pending devices are excluded",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A read of the backup plans in which every plan carries backup_applied_on and backup_failed_on lists and at least one device appears in either. An error, refusal, empty or partial read, or a read with no attempts, is Not evaluated.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/backupSuccessRatePercentage.py",
+    "safeguards/backups/idrive/test_not_measured_backups_idrive.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real IDrive body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Rounded to two decimals. With no attempted backups there is nothing to divide by, so the rate is null (Not evaluated), not 0 and not 100. Devices in backup_pending_on are reported but not in the rate."
+}

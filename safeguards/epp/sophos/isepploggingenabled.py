@@ -10,7 +10,7 @@ The verdict is driven by whether Sophos returned any security events. Retrieved
 events ARE log records, so their presence is direct evidence that logging is
 working, rather than an inference from the API call succeeding. The feed carries
 routine operational traffic (UpdateSuccess, MacHealth, UpdateRebootRequired)
-that any live estate emits continuously - measured live at 200 events in 12
+that any live environment emits continuously - measured live at 200 events in 12
 minutes on a 50-endpoint tenant - so an empty events feed for a tenant whose
 endpoints are reporting is abnormal, not merely quiet.
 
@@ -107,7 +107,7 @@ def evaluate(data):
         # succeeding. An empty feed is a real answer from Sophos ("no events"),
         # not a collection failure, and for a tenant with endpoints reporting in
         # it is abnormal: the feed carries routine operational traffic
-        # (UpdateSuccess, MacHealth) that any live estate emits continuously.
+        # (UpdateSuccess, MacHealth) that any live environment emits continuously.
         # A tenant with no endpoints at all fails isEPPEnabled first, so this
         # criterion is not the only signal in that case.
         return {

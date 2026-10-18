@@ -111,7 +111,17 @@ T_GOOD = targets([job("A", repo="r-hard"), job("B", repo="r-s3"), job("C", repo=
 T_MUTABLE = targets([job("A", repo="r-hard"), job("B", repo="r-win")])
 
 # key -> (passing body, expected, failing body, expected)
+def principal(name, ptype="InternalUser", role="Veeam Backup Administrator", service=False):
+    return {"id": name, "name": name, "type": ptype, "isServiceAccount": service,
+            "roles": [{"id": "r-" + role, "name": role, "description": "Built-in role"}]}
+
+
+ADMINS = coll([principal("BUILTIN\\Administrators", "InternalGroup"), principal("CORP\\adm-jdoe"),
+               principal("CORP\\jdoe", role="Veeam Restore Operator")])
+ADMINS_BAD = coll([principal("BUILTIN\\Administrators", "InternalGroup"), principal("CORP\\Domain Users", "InternalGroup")])
+
 CASES = {
+    "areBackupConsoleAdminsDedicated": (ADMINS, True, ADMINS_BAD, False),
     "failedBackupJobsCount": (BACKUP_CLEAN, 0, BACKUP, 1),
     "backupSuccessRatePercentage": (BACKUP_CLEAN, 100.0, BACKUP, 50.0),
     "areBackupsTested": (SURE, "Success", SURE_BAD, "Failed"),
@@ -135,7 +145,7 @@ CASES = {
     "isCloudTierEncryptionEnabled": (T_GOOD, True, targets([job("C", repo="sobr1", enc=False)]), False),
 }
 
-FALLBACK_NONE = {"failedBackupJobsCount", "backupSuccessRatePercentage", "areBackupsTested",
+FALLBACK_NONE = {"areBackupConsoleAdminsDedicated", "failedBackupJobsCount", "backupSuccessRatePercentage", "areBackupsTested",
                  "clientAESEncryptionCoveragePercentage", "staleProtectionJobsCount", "localStorageUtilizationPercentage"}
 
 NOTHING = [{}, None, "{}", "", "not json", [], {"statusCode": 401, "error": "Unauthorized"},

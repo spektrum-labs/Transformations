@@ -1,0 +1,172 @@
+{
+ "_note": "synthetic: invented ids, logins and domains; shape of IS workflow getUserMfaPosture output",
+ "users": [
+  {
+   "id": "00uSYNUSR1",
+   "status": "ACTIVE",
+   "created": "2025-01-01T00:00:00.000Z",
+   "profile": {
+    "login": "user1@synthetic.example",
+    "email": "user1@synthetic.example"
+   },
+   "_links": {
+    "self": {
+     "href": "https://synthetic.okta.example/api/v1/users/00uSYNUSR1"
+    }
+   }
+  },
+  {
+   "id": "00uSYNUSR2",
+   "status": "ACTIVE",
+   "created": "2025-01-02T00:00:00.000Z",
+   "profile": {
+    "login": "user2@synthetic.example",
+    "email": "user2@synthetic.example"
+   },
+   "_links": {
+    "self": {
+     "href": "https://synthetic.okta.example/api/v1/users/00uSYNUSR2"
+    }
+   }
+  },
+  {
+   "id": "00uSYNUSR3",
+   "status": "ACTIVE",
+   "created": "2025-01-03T00:00:00.000Z",
+   "profile": {
+    "login": "user3@synthetic.example",
+    "email": "user3@synthetic.example"
+   },
+   "_links": {
+    "self": {
+     "href": "https://synthetic.okta.example/api/v1/users/00uSYNUSR3"
+    }
+   }
+  },
+  {
+   "id": "00uSYNUSR4",
+   "status": "ACTIVE",
+   "created": "2025-01-04T00:00:00.000Z",
+   "profile": {
+    "login": "user4@synthetic.example",
+    "email": "user4@synthetic.example"
+   },
+   "_links": {
+    "self": {
+     "href": "https://synthetic.okta.example/api/v1/users/00uSYNUSR4"
+    }
+   }
+  },
+  {
+   "id": "00uSYNUSR5",
+   "status": "ACTIVE",
+   "created": "2025-01-05T00:00:00.000Z",
+   "profile": {
+    "login": "user5@synthetic.example",
+    "email": "user5@synthetic.example"
+   },
+   "_links": {
+    "self": {
+     "href": "https://synthetic.okta.example/api/v1/users/00uSYNUSR5"
+    }
+   }
+  }
+ ],
+ "userFactors": [
+  [
+   {
+    "id": "fsynwebauthnACT",
+    "factorType": "webauthn",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "credentialId": "syn-cred-1",
+     "authenticatorName": "Security key"
+    }
+   },
+   {
+    "id": "fsynsigned_nonceACT",
+    "factorType": "signed_nonce",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "platform": "MACOS",
+     "name": "synthetic-mac"
+    }
+   }
+  ],
+  [
+   {
+    "id": "fsynsmsACT",
+    "factorType": "sms",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "phoneNumber": "+15555550102"
+    }
+   }
+  ],
+  [
+   {
+    "id": "fsynemailACT",
+    "factorType": "email",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "email": "user3@synthetic.example"
+    }
+   },
+   {
+    "id": "fsynquestionACT",
+    "factorType": "question",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "question": "disliked_food"
+    }
+   }
+  ],
+  [
+   {
+    "id": "fsynpushPEN",
+    "factorType": "push",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "PENDING_ACTIVATION",
+    "profile": {
+     "platform": "IOS"
+    }
+   },
+   {
+    "id": "fsyntokensoftwaretotpACT",
+    "factorType": "token:software:totp",
+    "provider": "OKTA",
+    "vendorName": "OKTA",
+    "status": "ACTIVE",
+    "profile": {
+     "credentialId": "user4@synthetic.example"
+    }
+   }
+  ],
+  []
+ ],
+ "paginationStats": {
+  "users": {
+   "paginationTruncated": false
+  }
+ },
+ "iterateStats": {
+  "userFactors": {
+   "itemsTotal": 5,
+   "itemsProcessed": 5,
+   "itemErrors": 0,
+   "iterateTruncated": false
+  }
+ },
+ "itemErrors": 0
+}

@@ -1,0 +1,91 @@
+{
+  "adminAssignees": {
+    "value": [
+      {
+        "id": "00u1adm0000000000001",
+        "orn": "orn:okta:00o5rb5mt2H3d1TJd0h7:users:00u1adm0000000000001",
+        "_links": {
+          "self": {
+            "href": "https://example.okta.com/api/v1/users/00u1adm0000000000001"
+          },
+          "roles": {
+            "href": "https://example.okta.com/api/v1/users/00u1adm0000000000001/roles"
+          }
+        }
+      },
+      {
+        "id": "00u1adm0000000000002",
+        "orn": "orn:okta:00o5rb5mt2H3d1TJd0h7:users:00u1adm0000000000002",
+        "_links": {
+          "self": {
+            "href": "https://example.okta.com/api/v1/users/00u1adm0000000000002"
+          },
+          "roles": {
+            "href": "https://example.okta.com/api/v1/users/00u1adm0000000000002/roles"
+          }
+        }
+      }
+    ],
+    "_links": {}
+  },
+  "adminAppLinks": [
+    [
+      {
+        "id": "00u1adm0000000000001",
+        "label": "Okta Dashboard",
+        "linkUrl": "https://example.okta.com/home/okta_enduser/0oa1dash000000000001/50",
+        "logoUrl": "https://example.okta.com/img/logos/okta_enduser.png",
+        "appName": "okta_enduser",
+        "appInstanceId": "0oa1dash000000000001",
+        "appAssignmentId": "0ua1a00000000000001",
+        "credentialsSetup": false,
+        "hidden": false,
+        "sortOrder": 0
+      }
+    ],
+    [
+      {
+        "id": "00u1adm0000000000002",
+        "label": "Salesforce.com",
+        "linkUrl": "https://example.okta.com/home/salesforce/0oa12ecnxtBQMKOXJSMF/50",
+        "logoUrl": "https://example.okta.com/img/logos/salesforce.png",
+        "appName": "salesforce",
+        "appInstanceId": "0oa12ecnxtBQMKOXJSMF",
+        "appAssignmentId": "0ua173qgj5VAVOBQMCVB",
+        "credentialsSetup": false,
+        "hidden": false,
+        "sortOrder": 0
+      }
+    ]
+  ],
+  "paginationStats": {
+    "adminAssignees": {
+      "paginationTruncated": false,
+      "pagesFetched": 1
+    }
+  },
+  "iterateStats": {
+    "adminAppLinks": {
+      "itemsTotal": 2,
+      "itemsSucceeded": 2,
+      "itemsFailed": 0,
+      "iterateTruncated": false
+    }
+  },
+  "orgApps": [
+    {
+      "id": "0oa1o365000000000001",
+      "name": "office365",
+      "label": "Microsoft Office 365",
+      "status": "ACTIVE",
+      "signOnMode": "WS_FEDERATION"
+    },
+    {
+      "id": "0oa12ecnxtBQMKOXJSMF",
+      "name": "salesforce",
+      "label": "Salesforce.com",
+      "status": "ACTIVE",
+      "signOnMode": "SAML_2_0"
+    }
+  ]
+}

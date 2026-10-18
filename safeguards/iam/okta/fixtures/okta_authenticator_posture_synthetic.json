@@ -1,0 +1,142 @@
+{
+  "authenticators": [
+    {
+      "id": "autokta_eEXAMPLE1",
+      "key": "okta_email",
+      "type": "email",
+      "name": "Email",
+      "status": "ACTIVE",
+      "created": "2025-01-10T10:00:00.000Z",
+      "lastUpdated": "2026-10-05T06:00:00.000Z",
+      "_links": {
+        "self": {
+          "href": "https://example.okta.com/api/v1/authenticators/aut1"
+        }
+      }
+    },
+    {
+      "id": "autokta_pEXAMPLE2",
+      "key": "okta_password",
+      "type": "password",
+      "name": "Password",
+      "status": "ACTIVE",
+      "created": "2025-01-10T10:00:00.000Z",
+      "lastUpdated": "2026-10-05T06:00:00.000Z",
+      "_links": {
+        "self": {
+          "href": "https://example.okta.com/api/v1/authenticators/aut2"
+        }
+      }
+    },
+    {
+      "id": "autokta_vEXAMPLE3",
+      "key": "okta_verify",
+      "type": "app",
+      "name": "Okta Verify",
+      "status": "ACTIVE",
+      "created": "2025-01-10T10:00:00.000Z",
+      "lastUpdated": "2026-10-05T06:00:00.000Z",
+      "_links": {
+        "self": {
+          "href": "https://example.okta.com/api/v1/authenticators/aut3"
+        }
+      }
+    },
+    {
+      "id": "autphone_EXAMPLE4",
+      "key": "phone_number",
+      "type": "phone",
+      "name": "Phone",
+      "status": "INACTIVE",
+      "created": "2025-01-10T10:00:00.000Z",
+      "lastUpdated": "2026-10-05T06:00:00.000Z",
+      "_links": {
+        "self": {
+          "href": "https://example.okta.com/api/v1/authenticators/aut4"
+        }
+      }
+    },
+    {
+      "id": "autwebautEXAMPLE5",
+      "key": "webauthn",
+      "type": "security_key",
+      "name": "Security Key or Biometric",
+      "status": "ACTIVE",
+      "created": "2025-01-10T10:00:00.000Z",
+      "lastUpdated": "2026-10-05T06:00:00.000Z",
+      "_links": {
+        "self": {
+          "href": "https://example.okta.com/api/v1/authenticators/aut5"
+        }
+      }
+    }
+  ],
+  "authenticatorMethods": [
+    [
+      {
+        "type": "email",
+        "status": "ACTIVE"
+      }
+    ],
+    [
+      {
+        "type": "password",
+        "status": "ACTIVE"
+      }
+    ],
+    [
+      {
+        "type": "push",
+        "status": "ACTIVE",
+        "settings": {
+          "algorithms": [
+            "RS256",
+            "ES256"
+          ],
+          "keyProtection": "ANY"
+        }
+      },
+      {
+        "type": "signed_nonce",
+        "status": "ACTIVE",
+        "settings": {
+          "algorithms": [
+            "RS256",
+            "ES256"
+          ],
+          "keyProtection": "ANY"
+        }
+      },
+      {
+        "type": "totp",
+        "status": "ACTIVE",
+        "settings": {
+          "timeIntervalInSeconds": 30,
+          "encoding": "base32",
+          "algorithm": "HMACSHA1",
+          "passCodeLength": 6
+        }
+      }
+    ],
+    [
+      {
+        "type": "sms",
+        "status": "INACTIVE"
+      },
+      {
+        "type": "voice",
+        "status": "INACTIVE"
+      }
+    ],
+    [
+      {
+        "type": "webauthn",
+        "status": "ACTIVE",
+        "settings": {
+          "userVerification": "DISCOURAGED",
+          "attachment": "ANY"
+        }
+      }
+    ]
+  ]
+}

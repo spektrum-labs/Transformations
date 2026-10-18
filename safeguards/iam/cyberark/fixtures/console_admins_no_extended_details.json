@@ -1,0 +1,11 @@
+{
+  "Users": [
+    {
+      "id": 2,
+      "username": "Administrator",
+      "source": "CyberArk",
+      "userType": "Built-InAdmins"
+    }
+  ],
+  "Total": 1
+}

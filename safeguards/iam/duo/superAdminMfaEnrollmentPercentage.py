@@ -158,6 +158,40 @@ def is_admin_object(a):
     return isinstance(a, dict) and any(a.get(f) not in (None, "") for f in ("admin_id", "role", "role_id"))
 
 
+# #101: findings name the affected accounts (same shape as mfa/azure/legacyauthblocked.py). The first
+# reason names at most MAX_NAMED, then "and N more"; inputSummary.affectedAccounts carries at most
+# MAX_AFFECTED, with the full count in affectedAccountCount. The verdict never reads them.
+MAX_NAMED = 20
+MAX_AFFECTED = 50
+
+
+def account_name(obj, fields):
+    for field in fields:
+        value = obj.get(field)
+        if value not in (None, ""):
+            return str(value).strip()[:100]
+    return "unknown"
+
+
+def name_list(items):
+    """At most MAX_NAMED identifiers, then 'and N more'."""
+    shown = ", ".join(items[:MAX_NAMED])
+    if len(items) > MAX_NAMED:
+        shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
+    return shown
+
+
+def affected_line(scope, affected, total, what):
+    """One line naming the tool and its scope: 'Duo (<scope>): N of M <what>: a, b and K more'."""
+    return "Duo (%s): %d of %d %s: %s" % (scope, len(affected), total, what, name_list(affected))
+
+
+def with_affected(summary, affected):
+    summary["affectedAccounts"] = affected[:MAX_AFFECTED]
+    summary["affectedAccountCount"] = len(affected)
+    return summary
+
+
 def transform(input):
     try:
         refusal = refusal_envelope(input)
@@ -230,7 +264,7 @@ def measure(input):
 
     enrolled_names = [a.get("name") or a.get("email") or a.get("admin_id") for a in enrolled_super_admins]
     not_enrolled_names = [
-        (a.get("name") or a.get("email") or a.get("admin_id"))
+        account_name(a, ("email", "name", "admin_id"))
         for a in super_admins if a not in enrolled_super_admins
     ]
 
@@ -251,8 +285,9 @@ def measure(input):
             f"{enrolled_count} of {total_super} super admin accounts have an enrolled MFA device."
         )
         fail_reasons.append(
-            f"{total_super - enrolled_count} of {total_super} super admin accounts lack an enrolled MFA device: "
-            f"{', '.join([str(n) for n in not_enrolled_names])}."
+            f"{total_super - enrolled_count} of {total_super} super admin accounts lack an enrolled MFA device; "
+            + affected_line("Owner and Administrator roles", not_enrolled_names, total_super,
+                            "super admins have no MFA device enrolled")
         )
         recommendations.append(
             "Enroll an MFA device (Duo Mobile push, phone callback, or WebAuthn security key) for each super admin account listed above."
@@ -264,11 +299,11 @@ def measure(input):
         "enrolledSuperAdmins": enrolled_count,
     }
 
-    input_summary = {
+    input_summary = with_affected({
         "totalAdmins": len(admins),
         "totalSuperAdmins": total_super,
         "enrolledSuperAdmins": enrolled_count,
-    }
+    }, not_enrolled_names)
 
     return create_response(
         result=result,

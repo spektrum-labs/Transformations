@@ -1,8 +1,14 @@
 """Microsoft one-click Endpoint evaluation from MDE machine inventory.
 
 This stays separate from the legacy transforms so existing Endpoint customers
-keep their current verdicts. Valid empty Microsoft responses evaluate to false/0;
-API and validation errors remain collection errors instead of false positives.
+keep their current verdicts. A readable inventory with no eligible machine is Not evaluated (None,
+"Defender has no onboarded devices"), never a fail; API and validation errors remain collection errors
+instead of false positives.
+
+Reasons: every result leads with what the inventory shows (onboarded / eligible machines, sensors
+reporting, servers). Eligible machines with none onboarded is a finding for this tool (false / 0).
+No eligible machine at all is an empty result and proves nothing, so it is None; the onboard-or-disconnect
+hint is guidance only.
 """
 
 import json
@@ -36,7 +42,7 @@ def extract_input(value):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def create_response(result, validation, *, errors=(), summary=None):
+def create_response(result, validation, *, errors=(), summary=None, readings=(), recommendations=()):
     passed = [key for key, value in result.items() if isinstance(value, bool) and value]
     failed = [key for key, value in result.items() if isinstance(value, bool) and not value]
     return {
@@ -50,9 +56,9 @@ def create_response(result, validation, *, errors=(), summary=None):
             },
             "transformation": {"status": "success", "errors": [], "inputSummary": summary or {}},
             "evaluation": {
-                "passReasons": [key + " passed" for key in passed],
-                "failReasons": [key + " failed" for key in failed] + list(errors),
-                "recommendations": [],
+                "passReasons": (list(readings) if passed else []) + [key + " passed" for key in passed],
+                "failReasons": (list(readings) if failed else []) + [key + " failed" for key in failed] + list(errors),
+                "recommendations": list(recommendations),
                 "additionalFindings": [],
             },
             "metadata": {
@@ -85,7 +91,20 @@ def evaluate_machines(data):
     ]
     servers = [machine for machine in eligible if "server" in str(machine.get("osPlatform") or "").lower()]
     protected_servers = [machine for machine in servers if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
-    coverage = round(100 * len(onboarded) / len(eligible)) if eligible else 0
+    if not eligible:
+        return {
+            "isEPPEnabled": None,
+            "isEPPConfigured": None,
+            "isEPPLoggingEnabled": None,
+            "requiredCoveragePercentage": None,
+            "serverCoveragePercentage": None,
+            "totalEndpointCount": 0,
+            "totalServerCount": 0,
+            "eligibleDevices": 0,
+            "protectedDevices": 0,
+            "reportingDevices": 0,
+        }
+    coverage = round(100 * len(onboarded) / len(eligible))
     server_coverage = round(100 * len(protected_servers) / len(servers)) if servers else 0
     return {
         "isEPPEnabled": bool(onboarded),
@@ -101,6 +120,35 @@ def evaluate_machines(data):
     }
 
 
+def seen_in_inventory(count):
+    if count:
+        return " (" + str(count) + " eligible machines in its inventory, none onboarded)"
+    return " (its machine inventory is empty)"
+
+
+def describe(result):
+    """Human-readable readings of the inventory; values are never changed here."""
+    eligible = result["eligibleDevices"]
+    onboarded = result["protectedDevices"]
+    if onboarded == 0:
+        return (
+            ["Defender for Endpoint is connected and has 0 onboarded devices" + seen_in_inventory(eligible)
+             + ", so it protects no endpoint or server"],
+            ["Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, "
+             "Settings > Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint tool protects them"],
+        )
+    return (
+        [
+            str(onboarded) + " of " + str(eligible) + " eligible machines are onboarded to Defender for Endpoint ("
+            + str(result["requiredCoveragePercentage"]) + "%)",
+            str(result["reportingDevices"]) + " of " + str(onboarded) + " onboarded machines report an active sensor",
+            str(result["totalServerCount"]) + " eligible servers in the inventory ("
+            + str(result["serverCoveragePercentage"]) + "% onboarded)",
+        ],
+        [],
+    )
+
+
 def transform(input):
     try:
         data, validation = extract_input(input)
@@ -113,7 +161,12 @@ def transform(input):
             result = evaluate_machines(data)
         else:
             raise ValueError("Unrecognized Microsoft Endpoint response shape")
-        return create_response(result, validation, summary={"returnedKeys": sorted(result)})
+        if result["eligibleDevices"] == 0:
+            return create_response(result, validation, errors=["Defender has no onboarded devices"],
+                                   summary={"returnedKeys": sorted(result)}, recommendations=describe(result)[1])
+        readings, recommendations = describe(result)
+        return create_response(result, validation, summary={"returnedKeys": sorted(result)},
+                               readings=readings, recommendations=recommendations)
     except Exception as error:
         return create_response(
             {},

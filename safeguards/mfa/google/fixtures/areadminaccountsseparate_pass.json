@@ -1,0 +1,134 @@
+{
+  "kind": "admin#directory#users",
+  "etag": "\"list\"",
+  "users": [
+    {
+      "kind": "admin#directory#user",
+      "id": "100000000000000000001",
+      "etag": "\"e100000000000000000001\"",
+      "primaryEmail": "admin-sam@example.com",
+      "name": {
+        "givenName": "Test",
+        "familyName": "User",
+        "fullName": "Test User"
+      },
+      "isAdmin": true,
+      "isDelegatedAdmin": false,
+      "lastLoginTime": "2026-10-01T14:02:11.000Z",
+      "creationTime": "2024-02-11T09:00:00.000Z",
+      "agreedToTerms": true,
+      "suspended": false,
+      "archived": false,
+      "changePasswordAtNextLogin": false,
+      "ipWhitelisted": false,
+      "emails": [
+        {
+          "address": "admin-sam@example.com",
+          "primary": true
+        }
+      ],
+      "customerId": "C0abc1234",
+      "orgUnitPath": "/Admins",
+      "isMailboxSetup": false,
+      "isEnrolledIn2Sv": true,
+      "isEnforcedIn2Sv": true,
+      "includeInGlobalAddressList": true
+    },
+    {
+      "kind": "admin#directory#user",
+      "id": "100000000000000000002",
+      "etag": "\"e100000000000000000002\"",
+      "primaryEmail": "helpdesk-admin@example.com",
+      "name": {
+        "givenName": "Test",
+        "familyName": "User",
+        "fullName": "Test User"
+      },
+      "isAdmin": false,
+      "isDelegatedAdmin": true,
+      "lastLoginTime": "2026-10-01T14:02:11.000Z",
+      "creationTime": "2024-02-11T09:00:00.000Z",
+      "agreedToTerms": true,
+      "suspended": false,
+      "archived": false,
+      "changePasswordAtNextLogin": false,
+      "ipWhitelisted": false,
+      "emails": [
+        {
+          "address": "helpdesk-admin@example.com",
+          "primary": true
+        }
+      ],
+      "customerId": "C0abc1234",
+      "orgUnitPath": "/Admins",
+      "isMailboxSetup": false,
+      "isEnrolledIn2Sv": true,
+      "isEnforcedIn2Sv": true,
+      "includeInGlobalAddressList": true
+    },
+    {
+      "kind": "admin#directory#user",
+      "id": "100000000000000000003",
+      "etag": "\"e100000000000000000003\"",
+      "primaryEmail": "sam@example.com",
+      "name": {
+        "givenName": "Test",
+        "familyName": "User",
+        "fullName": "Test User"
+      },
+      "isAdmin": false,
+      "isDelegatedAdmin": false,
+      "lastLoginTime": "2026-10-01T14:02:11.000Z",
+      "creationTime": "2024-02-11T09:00:00.000Z",
+      "agreedToTerms": true,
+      "suspended": false,
+      "archived": false,
+      "changePasswordAtNextLogin": false,
+      "ipWhitelisted": false,
+      "emails": [
+        {
+          "address": "sam@example.com",
+          "primary": true
+        }
+      ],
+      "customerId": "C0abc1234",
+      "orgUnitPath": "/",
+      "isMailboxSetup": true,
+      "isEnrolledIn2Sv": true,
+      "isEnforcedIn2Sv": true,
+      "includeInGlobalAddressList": true
+    },
+    {
+      "kind": "admin#directory#user",
+      "id": "100000000000000000004",
+      "etag": "\"e100000000000000000004\"",
+      "primaryEmail": "old-admin@example.com",
+      "name": {
+        "givenName": "Test",
+        "familyName": "User",
+        "fullName": "Test User"
+      },
+      "isAdmin": true,
+      "isDelegatedAdmin": false,
+      "lastLoginTime": "2026-10-01T14:02:11.000Z",
+      "creationTime": "2024-02-11T09:00:00.000Z",
+      "agreedToTerms": true,
+      "suspended": true,
+      "archived": false,
+      "changePasswordAtNextLogin": false,
+      "ipWhitelisted": false,
+      "emails": [
+        {
+          "address": "old-admin@example.com",
+          "primary": true
+        }
+      ],
+      "customerId": "C0abc1234",
+      "orgUnitPath": "/Admins",
+      "isMailboxSetup": true,
+      "isEnrolledIn2Sv": true,
+      "isEnforcedIn2Sv": true,
+      "includeInGlobalAddressList": true
+    }
+  ]
+}

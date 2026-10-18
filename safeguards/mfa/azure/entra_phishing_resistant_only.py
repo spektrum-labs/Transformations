@@ -1,5 +1,5 @@
 """isPhishingResistantOnlyEnabled for Microsoft Entra ID (Azure AD and Azure AD One-Click), from the authentication
-methods policy: GET /v1.0/policies/authenticationMethodsPolicy. That is the One-Click method getEstateMFAStatus and
+methods policy: GET /v1.0/policies/authenticationMethodsPolicy. That is the One-Click MFA status method and
 the Azure AD method getAuthenticationMethodsPolicy. Both read the same Graph body, which needs Policy.Read.All
 (already granted for isStrongAuthRequired and authTypesAllowed), so no new permission is involved.
 
@@ -19,7 +19,10 @@ Value:
   lifetime, certificate-based authentication in single-factor mode (default mode or any rule), or any method id
   this file does not know.
   - Email OTP counts even when it targets nobody but guests (includeTargets []). J.J., 3 Oct 2026 00:55 ET:
-    guest-only email OTP FAILS (same rule as authtypesallowed.py, TX #833).
+    guest-only email OTP FAILS. This is NO LONGER the rule in authtypesallowed.py: the 5 Oct 2026 decision
+    (TX #995) that an enabled method with no targets is not counted was taken for authTypesAllowed ("no weak
+    factors") only. This stricter key keeps the 3 Oct rule on purpose until a separate decision changes it, so a
+    tenant with strong methods plus zero-target Email can pass authTypesAllowed and fail this key.
 - None (not evaluated, dataCollection.status "error"):
   - an error, empty, partial or unrecognised body (no non-empty authenticationMethodConfigurations array, or a
     configuration without an id or a recognised state);

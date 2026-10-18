@@ -1,9 +1,9 @@
-"""Cisco Meraki MX - isFirewallLoggingEnabled (THL NW-01: Config and Change Monitoring).
+"""Cisco Meraki MX - isFirewallLoggingEnabled (NW-01: Config and Change Monitoring).
 
 Reads GET /networks/{networkId}/syslogServers, iterated across the organisation's
 appliance networks, so the input is normally a list of per-network responses.
 
-Passes when at least one syslog server is configured anywhere in the estate. The
+Passes when at least one syslog server is configured anywhere in the environment. The
 roles seen ('Flows', 'URLs', 'Security events', 'Appliance event log') are reported
 rather than required: NW-01 asks that monitoring exists, not which feeds are on.
 """
@@ -77,6 +77,24 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def not_measured(criteria_key, problem, validation=None):
+    """Nothing usable was read: the criterion is None with a dataCollection error, never a fail."""
+    return create_response(
+        result={criteria_key: None},
+        validation=validation,
+        fail_reasons=[problem],
+        recommendations=[
+            "Verify the Meraki syslog settings are readable with this key on every appliance network."
+        ],
+        api_errors=[problem],
+        metadata={
+            "transformationId": criteria_key,
+            "vendor": "Cisco Meraki MX",
+            "category": "firewalls",
+        },
+    )
+
+
 def transform(input):
     criteriaKey = "isFirewallLoggingEnabled"
     try:
@@ -88,10 +106,8 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+            return not_measured(
+                criteriaKey, "The Meraki response failed input validation; nothing to measure.", validation
             )
 
         def is_server_obj(candidate):
@@ -104,7 +120,7 @@ def transform(input):
         # `output.key`. The wrapped form nests one level deeper -- the value is
         # a list of {"servers": [...]} dicts, not of server objects -- so this
         # recurses rather than filtering, which silently returned "no logging
-        # anywhere" for an estate that had it.
+        # anywhere" for an environment that had it.
         WRAPPERS = ("servers", "syslogServers", "items", "value")
 
         def servers_from_payload(payload, depth=0):
@@ -138,6 +154,27 @@ def transform(input):
                 return found
             return []
 
+        def payload_readable(payload, depth=0):
+            # True when the payload is a syslog answer: a server object or a servers list (an empty
+            # list is a real "no syslog server"). An error body, an empty body or anything else
+            # proves nothing about the network.
+            if depth > 4:
+                return False
+            if isinstance(payload, dict):
+                if is_server_obj(payload):
+                    return True
+                for key in WRAPPERS:
+                    inner = payload.get(key)
+                    if isinstance(inner, list) or is_server_obj(inner):
+                        return True
+                return False
+            if isinstance(payload, list):
+                for entry in payload:
+                    if is_server_obj(entry) or payload_readable(entry, depth + 1):
+                        return True
+                return False
+            return False
+
         if isinstance(data, list) and data and all(is_server_obj(item) for item in data):
             network_payloads = [data]
         elif isinstance(data, list):
@@ -149,7 +186,10 @@ def transform(input):
         networks_with_servers = 0
         roles_seen = set()
 
-        for payload in network_payloads:
+        readable_payloads = [item for item in network_payloads if payload_readable(item)]
+        unreadable_count = len(network_payloads) - len(readable_payloads)
+
+        for payload in readable_payloads:
             servers = servers_from_payload(payload)
 
             if servers:
@@ -166,10 +206,24 @@ def transform(input):
 
         server_count = len(all_servers)
         roles_seen_list = sorted(roles_seen)
-        networks_evaluated = len(network_payloads)
+        networks_evaluated = len(readable_payloads)
+        if networks_evaluated == 0:
+            return not_measured(
+                criteriaKey,
+                "No Meraki MX network returned syslog server settings; nothing to measure.",
+                validation,
+            )
         # Every network must forward to syslog. One logging network out of four
         # is a coverage gap, not an enabled control.
         enabled = server_count > 0 and networks_with_servers == networks_evaluated
+        if enabled and unreadable_count > 0:
+            # Every network that was read forwards, but an unread one may not: a pass cannot be proven.
+            return not_measured(
+                criteriaKey,
+                "%d network(s) could not be read, so syslog forwarding cannot be confirmed on "
+                "every network." % unreadable_count,
+                validation,
+            )
         coverage = (
             round(networks_with_servers / networks_evaluated * 100, 2)
             if networks_evaluated else None
@@ -227,10 +281,10 @@ def transform(input):
             },
         )
 
-    except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+    except Exception:
+        # The exception text stays out of the response: it can carry fragments of the vendor body.
+        return not_measured(
+            criteriaKey,
+            "The Meraki response could not be read; nothing to measure.",
+            {"status": "error", "errors": [], "warnings": []},
         )

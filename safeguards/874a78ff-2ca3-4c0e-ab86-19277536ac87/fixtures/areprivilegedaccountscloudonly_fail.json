@@ -1,0 +1,46 @@
+{
+  "roleAssignments": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#roleManagement/directory/roleAssignments(principal(id))",
+    "value": [
+      {
+        "id": "lAPpYvVpN0KRkAEhdxReE00000162e9",
+        "principalId": "3f7a1c2e-0000-4000-8000-000000000001",
+        "roleDefinitionId": "62e90394-69f5-4237-9190-012177145e10",
+        "directoryScopeId": "/",
+        "principal": {
+          "@odata.type": "#microsoft.graph.user",
+          "id": "3f7a1c2e-0000-4000-8000-000000000001"
+        }
+      },
+      {
+        "id": "lAPpYvVpN0KRkAEhdxReE000003194a",
+        "principalId": "3f7a1c2e-0000-4000-8000-000000000003",
+        "roleDefinitionId": "194ae4cb-b126-40b2-bd5b-6091b380977d",
+        "directoryScopeId": "/",
+        "principal": {
+          "@odata.type": "#microsoft.graph.user",
+          "id": "3f7a1c2e-0000-4000-8000-000000000003"
+        }
+      }
+    ]
+  },
+  "users": {
+    "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,userPrincipalName,accountEnabled,onPremisesSyncEnabled,onPremisesImmutableId)",
+    "value": [
+      {
+        "id": "3f7a1c2e-0000-4000-8000-000000000001",
+        "userPrincipalName": "admin-adele@contoso.onmicrosoft.com",
+        "accountEnabled": true,
+        "onPremisesSyncEnabled": null,
+        "onPremisesImmutableId": null
+      },
+      {
+        "id": "3f7a1c2e-0000-4000-8000-000000000003",
+        "userPrincipalName": "alex@contoso.com",
+        "accountEnabled": true,
+        "onPremisesSyncEnabled": true,
+        "onPremisesImmutableId": "bGl0ZXJhbGx5IGFuIGlk"
+      }
+    ]
+  }
+}

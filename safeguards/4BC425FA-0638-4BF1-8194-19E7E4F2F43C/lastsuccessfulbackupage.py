@@ -46,12 +46,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),

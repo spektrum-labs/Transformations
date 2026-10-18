@@ -1,0 +1,99 @@
+{
+  "adminAssignees": {
+    "value": [
+      {
+        "id": "00u1adm0000000000001",
+        "orn": "orn:okta:00o5rb5mt2H3d1TJd0h7:users:00u1adm0000000000001",
+        "_links": {
+          "self": {
+            "href": "https://example.okta.com/api/v1/users/00u1adm0000000000001"
+          },
+          "roles": {
+            "href": "https://example.okta.com/api/v1/users/00u1adm0000000000001/roles"
+          }
+        }
+      },
+      {
+        "id": "00u1usr0000000000003",
+        "orn": "orn:okta:00o5rb5mt2H3d1TJd0h7:users:00u1usr0000000000003",
+        "_links": {
+          "self": {
+            "href": "https://example.okta.com/api/v1/users/00u1usr0000000000003"
+          },
+          "roles": {
+            "href": "https://example.okta.com/api/v1/users/00u1usr0000000000003/roles"
+          }
+        }
+      }
+    ],
+    "_links": {}
+  },
+  "adminAppLinks": [
+    [
+      {
+        "id": "00u1adm0000000000001",
+        "label": "Okta Dashboard",
+        "linkUrl": "https://example.okta.com/home/okta_enduser/0oa1dash000000000001/50",
+        "logoUrl": "https://example.okta.com/img/logos/okta_enduser.png",
+        "appName": "okta_enduser",
+        "appInstanceId": "0oa1dash000000000001",
+        "appAssignmentId": "0ua1a00000000000001",
+        "credentialsSetup": false,
+        "hidden": false,
+        "sortOrder": 0
+      }
+    ],
+    [
+      {
+        "id": "00u1usr0000000000003",
+        "label": "Google Apps Mail",
+        "linkUrl": "https://example.okta.com/home/google/0oa3omz2i9XRNSRIHBZO/50",
+        "logoUrl": "https://example.okta.com/img/logos/google.png",
+        "appName": "google",
+        "appInstanceId": "0oa3omz2i9XRNSRIHBZO",
+        "appAssignmentId": "0ua3omz7weMMMQJERBKY",
+        "credentialsSetup": false,
+        "hidden": false,
+        "sortOrder": 0
+      },
+      {
+        "id": "00u1usr0000000000003",
+        "label": "Microsoft Office 365",
+        "linkUrl": "https://example.okta.com/home/office365/0oa1o365000000000001/50",
+        "logoUrl": "https://example.okta.com/img/logos/office365.png",
+        "appName": "office365",
+        "appInstanceId": "0oa1o365000000000001",
+        "appAssignmentId": "0ua1o365000000000001",
+        "credentialsSetup": false,
+        "hidden": false,
+        "sortOrder": 1
+      },
+      {
+        "id": "00u1usr0000000000003",
+        "label": "Box",
+        "linkUrl": "https://example.okta.com/home/boxnet/0oa3ompioiQCSTOYXVBK/50",
+        "logoUrl": "https://example.okta.com/img/logos/boxnet.png",
+        "appName": "boxnet",
+        "appInstanceId": "0oa3ompioiQCSTOYXVBK",
+        "appAssignmentId": "0ua3omx46lYEZLPPRWBO",
+        "credentialsSetup": false,
+        "hidden": false,
+        "sortOrder": 2
+      }
+    ]
+  ],
+  "paginationStats": {
+    "adminAssignees": {
+      "paginationTruncated": false,
+      "pagesFetched": 1
+    }
+  },
+  "iterateStats": {
+    "adminAppLinks": {
+      "itemsTotal": 2,
+      "itemsSucceeded": 2,
+      "itemsFailed": 0,
+      "iterateTruncated": false
+    }
+  }
+}

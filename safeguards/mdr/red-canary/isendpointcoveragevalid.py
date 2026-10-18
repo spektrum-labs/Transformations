@@ -4,7 +4,17 @@ Vendor: Red Canary
 Category: Cloud Security / Endpoint Coverage
 
 Validates that endpoint coverage meets the required threshold.
-Checks the endpoints endpoint for monitored endpoints and their status.
+
+    coverage = live endpoints Red Canary reports as monitored / live endpoints * 100
+    isEndpointCoverageValid = coverage >= COVERAGE_VALID_THRESHOLD (95)
+
+Live means not decommissioned. A live endpoint with no readable monitoring status counts as not
+covered, so it lowers coverage and never raises it.
+
+2026-10-05: the check used to pass when ANY endpoint was monitored (one monitored endpoint in
+dozens read "coverage valid"). A tool speaks only for what it protects, so partial coverage now fails. The threshold
+matches the MDR requiredCoveragePercentage criterion (greaterThan 95, inclusive) and
+isMDRConfigured (>= 95). A census with no live endpoint is Unevaluated, not a finding.
 """
 
 import json
@@ -83,6 +93,10 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 #: the integration reads at most 100 pages of Red Canary's 50-endpoint pages; a census this long may
 #: have stopped at that cap rather than at the last endpoint
 ENDPOINT_READ_CAP = 5000
+
+#: the share of live endpoints (percent) Red Canary must report as monitored for coverage to be
+#: valid; compared exactly (monitored * 100 >= threshold * live), never on a rounded figure
+COVERAGE_VALID_THRESHOLD = 95
 
 #: attributes a Red Canary v3 endpoint record carries; one of them marks a record as an endpoint
 ENDPOINT_FIELDS = ("monitoring_status", "endpoint_status", "is_decommissioned", "hostname",
@@ -240,56 +254,60 @@ def transform(input):
         total_endpoints = 0
         monitored_endpoints = 0
         unmonitored_endpoints = 0
+        unknown_endpoints = 0
+        decommissioned_endpoints = 0
 
         # endpoint_census has already refused an empty, error, unrecognised or cut-short read, so
         # this is the whole census and meta.total_items (when present) is not larger than it
-        endpoints = census
-        total_endpoints = len(endpoints)
+        for endpoint in census:
+            if not isinstance(endpoint, dict):
+                continue
+            # Red Canary v3 nests fields under "attributes": monitoring_status is
+            # "monitored"/"unmonitored". Flat shapes are still read.
+            attrs = endpoint.get('attributes') if isinstance(endpoint.get('attributes'), dict) else endpoint
+            if str(attrs.get('is_decommissioned')).strip().lower() == 'true':
+                decommissioned_endpoints += 1
+                continue
+            total_endpoints += 1
+            is_monitored = attrs.get('is_monitored', attrs.get('monitored',
+                           attrs.get('sensor_installed', None)))
+            status = str(attrs.get('monitoring_status') or attrs.get('status') or attrs.get('state') or '').lower()
 
-        if endpoints:
-            total_endpoints = max(total_endpoints, len(endpoints))
-
-            for endpoint in endpoints:
-                if isinstance(endpoint, dict):
-                    # Red Canary v3 nests fields under "attributes": monitoring_status is
-                    # "monitored"/"unmonitored". Flat shapes are still read.
-                    attrs = endpoint.get('attributes') if isinstance(endpoint.get('attributes'), dict) else endpoint
-                    is_monitored = attrs.get('is_monitored', attrs.get('monitored',
-                                   attrs.get('sensor_installed', None)))
-                    status = str(attrs.get('monitoring_status') or attrs.get('status') or attrs.get('state') or '').lower()
-
-                    if is_monitored is True or status in ('active', 'monitored', 'online', 'healthy'):
-                        monitored_endpoints += 1
-                    elif is_monitored is False or status in ('inactive', 'unmonitored', 'offline', 'unhealthy'):
-                        unmonitored_endpoints += 1
-                    # No readable status: NOT counted as monitored. The old branch assumed
-                    # monitored, so every Red Canary v3 endpoint (status lives under
-                    # attributes.monitoring_status) read as covered, suspended ones included.
-
-        if total_endpoints > 0:
-            coverage_percentage = round((monitored_endpoints / total_endpoints) * 100, 1)
-
-            # Coverage is valid if endpoints are being monitored
-            if monitored_endpoints > 0:
-                coverage_valid = True
-                pass_reasons.append(
-                    f"Endpoint coverage is valid ({monitored_endpoints} of {total_endpoints} "
-                    f"endpoints monitored, {coverage_percentage}% coverage)"
-                )
+            if is_monitored is True or status in ('active', 'monitored', 'online', 'healthy'):
+                monitored_endpoints += 1
+            elif is_monitored is False or status in ('inactive', 'unmonitored', 'offline', 'unhealthy'):
+                unmonitored_endpoints += 1
             else:
-                fail_reasons.append(
-                    f"No monitored endpoints found out of {total_endpoints} total endpoints"
-                )
-                recommendations.append("Ensure Red Canary sensors are deployed and active on endpoints")
+                # No readable status: NOT counted as monitored, so it can only lower coverage.
+                unknown_endpoints += 1
 
-            if unmonitored_endpoints > 0:
-                additional_findings.append(
-                    f"{unmonitored_endpoints} endpoint(s) are not currently monitored"
-                )
+        if total_endpoints == 0:
+            return unevaluated(
+                [criteriaKey],
+                "Every endpoint Red Canary returned (" + str(decommissioned_endpoints) + ") is "
+                "decommissioned: there is no live endpoint to measure coverage over",
+                validation,
+                input_summary={"totalEndpoints": 0, "decommissionedEndpoints": decommissioned_endpoints})
+
+        coverage_percentage = round((monitored_endpoints / total_endpoints) * 100, 1)
+        coverage_valid = monitored_endpoints * 100 >= COVERAGE_VALID_THRESHOLD * total_endpoints
+        summary = (f"{monitored_endpoints} of {total_endpoints} live endpoints monitored "
+                   f"({coverage_percentage}% coverage; {COVERAGE_VALID_THRESHOLD}% required)")
+
+        if coverage_valid:
+            pass_reasons.append("Endpoint coverage is valid: " + summary)
         else:
-            coverage_percentage = 0
-            fail_reasons.append("No endpoints found in Red Canary")
-            recommendations.append("Deploy Red Canary sensors to endpoints to enable monitoring coverage")
+            fail_reasons.append("Endpoint coverage is below the required threshold: " + summary)
+            recommendations.append(
+                "Return the unmonitored endpoints to monitoring in the Red Canary portal (Endpoints, "
+                "filter monitoring status: unmonitored), or decommission those no longer in service")
+
+        not_covered = unmonitored_endpoints + unknown_endpoints
+        if not_covered > 0:
+            additional_findings.append(
+                f"{not_covered} live endpoint(s) are not currently monitored"
+                + (f" ({unknown_endpoints} report no readable monitoring status)" if unknown_endpoints else "")
+            )
 
         return create_response(
             result={
@@ -297,7 +315,10 @@ def transform(input):
                 "totalEndpoints": total_endpoints,
                 "monitoredEndpoints": monitored_endpoints,
                 "unmonitoredEndpoints": unmonitored_endpoints,
-                "coveragePercentage": coverage_percentage if total_endpoints > 0 else 0
+                "unknownStatusEndpoints": unknown_endpoints,
+                "decommissionedEndpoints": decommissioned_endpoints,
+                "coveragePercentage": coverage_percentage,
+                "coverageThreshold": COVERAGE_VALID_THRESHOLD
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -308,7 +329,8 @@ def transform(input):
                 "totalEndpoints": total_endpoints,
                 "monitoredEndpoints": monitored_endpoints,
                 "unmonitoredEndpoints": unmonitored_endpoints,
-                "coveragePercentage": coverage_percentage if total_endpoints > 0 else 0
+                "decommissionedEndpoints": decommissioned_endpoints,
+                "coveragePercentage": coverage_percentage
             }
         )
 

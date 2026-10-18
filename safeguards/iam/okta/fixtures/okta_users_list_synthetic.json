@@ -1,0 +1,436 @@
+[
+  {
+    "id": "00uEXAMPLE0001",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User1",
+      "login": "admin@example.com",
+      "email": "admin@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0001"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0002",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User2",
+      "login": "person2@example.com",
+      "email": "person2@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0002"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0003",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User3",
+      "login": "person3@example.com",
+      "email": "person3@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0003"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0004",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User4",
+      "login": "person4@example.com",
+      "email": "person4@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0004"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0005",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User5",
+      "login": "person5@example.com",
+      "email": "person5@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0005"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0006",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User6",
+      "login": "person6@example.com",
+      "email": "person6@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0006"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0007",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User7",
+      "login": "person7@example.com",
+      "email": "person7@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0007"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0008",
+    "status": "ACTIVE",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User8",
+      "login": "person8@example.com",
+      "email": "person8@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0008"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0009",
+    "status": "LOCKED_OUT",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User9",
+      "login": "locked1@example.com",
+      "email": "locked1@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0009"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0010",
+    "status": "LOCKED_OUT",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User10",
+      "login": "locked2@example.com",
+      "email": "locked2@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0010"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0011",
+    "status": "SUSPENDED",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User11",
+      "login": "suspended1@example.com",
+      "email": "suspended1@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0011"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0012",
+    "status": "PASSWORD_EXPIRED",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User12",
+      "login": "expired@example.com",
+      "email": "expired@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0012"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0013",
+    "status": "PROVISIONED",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User13",
+      "login": "new@example.com",
+      "email": "new@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0013"
+      }
+    }
+  },
+  {
+    "id": "00uEXAMPLE0014",
+    "status": "STAGED",
+    "created": "2025-03-01T12:00:00.000Z",
+    "activated": "2025-03-01T12:05:00.000Z",
+    "statusChanged": "2026-09-30T08:00:00.000Z",
+    "lastLogin": "2026-10-01T14:00:00.000Z",
+    "lastUpdated": "2026-09-30T08:00:00.000Z",
+    "passwordChanged": "2025-03-01T12:10:00.000Z",
+    "type": {
+      "id": "otyEXAMPLE"
+    },
+    "profile": {
+      "firstName": "Test",
+      "lastName": "User14",
+      "login": "staged@example.com",
+      "email": "staged@example.com"
+    },
+    "credentials": {
+      "password": {},
+      "provider": {
+        "type": "OKTA",
+        "name": "OKTA"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://example.okta.com/api/v1/users/00uEXAMPLE0014"
+      }
+    }
+  }
+]

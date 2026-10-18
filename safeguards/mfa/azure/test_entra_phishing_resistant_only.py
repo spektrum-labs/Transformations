@@ -1,7 +1,7 @@
 """isPhishingResistantOnlyEnabled (entra_phishing_resistant_only.py) on GET /v1.0/policies/authenticationMethodsPolicy.
 
 REAL mirrors the shape of a customer tenant read stored 2026-10-03 02:23 ET (Azure AD One-Click,
-getEstateMFAStatus): Microsoft Authenticator (all users) and Software OATH (one group) enabled, every other method
+MFA status method): Microsoft Authenticator (all users) and Software OATH (one group) enabled, every other method
 disabled, policyMigrationState migrationComplete. Group ids are replaced. It passed CSP-001 through
 authTypesAllowed; here it must read False. Each case runs as plain Python and in the Token-Service sandbox replica.
 """
@@ -154,7 +154,8 @@ class EntraPhishResistantOnlyTests(unittest.TestCase):
         self.assertIs(self.value(body), False)
 
     def test_guest_only_email_otp_fails(self):
-        # J.J. 3 Oct 2026 00:55 ET: guest-only email OTP FAILS.
+        # J.J. 3 Oct 2026 00:55 ET: guest-only email OTP FAILS. Kept here on purpose: the 5 Oct 2026
+        # zero-target decision (TX #995) changed authtypesallowed.py only.
         res = self.run_t(policy(*(FIDO_ONLY + [("Email", {"state": "enabled"})])))
         self.assertIs(res["transformedResponse"][KEY], False)
         self.assertIs(res["transformedResponse"]["guestOnlyEmailOtp"], True)

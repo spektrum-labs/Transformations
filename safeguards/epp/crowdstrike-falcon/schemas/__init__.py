@@ -2,6 +2,7 @@
 
 from .isBehavioralMonitoringValid import IsBehavioralMonitoringValidInput
 from .isEDRDeployed import IsEDRDeployedInput
+from .isEDREnabled import IsEDREnabledInput
 from .isEPPConfigured import IsEPPConfiguredInput
 from .isEPPDeployed import IsEPPDeployedInput
 from .isEPPEnabled import IsEPPEnabledInput
@@ -15,6 +16,7 @@ from .requiredCoveragePercentage import RequiredCoveragePercentageInput
 __all__ = [
     "IsBehavioralMonitoringValidInput",
     "IsEDRDeployedInput",
+    "IsEDREnabledInput",
     "IsEPPConfiguredInput",
     "IsEPPDeployedInput",
     "IsEPPEnabledForCriticalSystemsInput",

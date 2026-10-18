@@ -1,0 +1,62 @@
+{
+  "count": 3,
+  "page": 0,
+  "size": 100,
+  "data": [
+    {
+      "userId": "u001",
+      "name": "breakglass-admin",
+      "username": "breakglass-admin",
+      "email": "breakglass-admin@example.com",
+      "status": "active",
+      "type": "User",
+      "rootUser": true,
+      "adminRoles": [
+        {
+          "name": "TenantAdmin",
+          "description": "TenantAdmin"
+        }
+      ],
+      "identityProvider": {
+        "id": "idp-default",
+        "name": "Britive",
+        "type": "DEFAULT"
+      }
+    },
+    {
+      "userId": "u002",
+      "name": "jdoe@example.com",
+      "username": "jdoe@example.com",
+      "email": "jdoe@example.com",
+      "status": "active",
+      "type": "User",
+      "rootUser": false,
+      "adminRoles": [
+        {
+          "name": "TenantAdmin",
+          "description": "TenantAdmin"
+        }
+      ],
+      "identityProvider": {
+        "id": "idp-saml",
+        "name": "Corporate IdP",
+        "type": "SAML"
+      }
+    },
+    {
+      "userId": "u003",
+      "name": "asmith@example.com",
+      "username": "asmith@example.com",
+      "email": "asmith@example.com",
+      "status": "active",
+      "type": "User",
+      "rootUser": false,
+      "adminRoles": [],
+      "identityProvider": {
+        "id": "idp-saml",
+        "name": "Corporate IdP",
+        "type": "SAML"
+      }
+    }
+  ]
+}
