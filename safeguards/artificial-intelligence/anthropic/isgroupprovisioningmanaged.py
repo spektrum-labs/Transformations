@@ -4,6 +4,11 @@ Vendor: Anthropic  |  Category: Artificial Intelligence
 Product: Claude
 Evaluates: Ensures access groups are provisioned from the identity provider through SCIM rather than maintained by hand inside Claude.
 API Source: listComplianceGroups
+Not evaluated, never False on a read that proves nothing: a refused call (401/403/404/429),
+an empty or unrecognised body, a page that says more groups exist while every group seen is
+SCIM, a group whose source_type is missing or unknown, and an exception inside this file all
+answer None with dataCollection.status "error", which Token-Service records as not evaluated.
+False only when a readable group carries source_type "direct".
 """
 import json
 from datetime import datetime
@@ -135,9 +140,8 @@ def detect_refusal(data):
     why, fix = REFUSAL_REASONS.get(status, (
         "the vendor call did not succeed",
         "Inspect the integration method response for the underlying error."))
-    detail = data.get("message") or data.get("errorMessage") or ""
-    if detail:
-        why = why + " (" + str(detail) + ")"
+    # The vendor's own message is not copied into the reason: it is free text from the
+    # vendor and can echo request details. The HTTP status carries the diagnosis.
     return status, why, fix
 
 
@@ -174,6 +178,49 @@ def settings_map(data):
     return out
 
 
+def not_measured(validation, reason, recommendation, extra=None, input_summary=None,
+                 transformation_errors=None):
+    """No verdict: the key is None and dataCollection.status is "error", so the evaluator
+    shows Not evaluated instead of a failed check. extra carries facts really read."""
+    result = {"isGroupProvisioningManaged": None}
+    if extra:
+        result.update(extra)
+    return create_response(
+        result=result,
+        validation=validation,
+        fail_reasons=[reason],
+        recommendations=[recommendation] if recommendation else [],
+        input_summary=input_summary or {},
+        metadata=METADATA,
+        api_errors=[reason],
+        transformation_errors=transformation_errors,
+    )
+
+
+def group_list(data):
+    """(groups, truncated) from a bare list or a {data|groups: [...], has_more, next_page} page.
+
+    groups is None when no list is recognised. truncated is True when the page says more
+    groups exist (has_more true or a next_page token), so an all-SCIM page cannot prove all.
+    """
+    items = None
+    truncated = False
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("data")
+        if not isinstance(items, list):
+            items = data.get("groups")
+        truncated = data.get("has_more") is True or bool(data.get("next_page"))
+    if not isinstance(items, list):
+        return None, False
+    return [g for g in items if isinstance(g, dict)], truncated
+
+
+def group_label(g):
+    return str(g.get("name") or g.get("id") or "unnamed")
+
+
 def evaluate(input):
     data, validation = extract_input(input)
     # Token-Service navigates into the response's "data" key (codeexecutor
@@ -183,54 +230,65 @@ def evaluate(input):
     refusal = detect_refusal(data)
     if refusal:
         refusal_status, refusal_why, refusal_fix = refusal
-        return create_response(
-            result={"isGroupProvisioningManaged": False, "endpointReachable": False, "httpStatus": refusal_status},
-            validation=validation,
-            fail_reasons=[
-                "The vendor call did not return data because " + refusal_why +
-                ". This is a connectivity or credential-scope result, not a finding about "
-                "the organization's configuration - the control's real state is unknown."
-            ],
-            recommendations=[refusal_fix],
+        return not_measured(
+            validation,
+            "The vendor call did not return data because " + refusal_why +
+            ". This is a connectivity or credential-scope result, not a finding about "
+            "the organization's configuration - the control's real state is unknown.",
+            refusal_fix,
+            extra={"endpointReachable": False, "httpStatus": refusal_status},
             input_summary={"endpointReachable": False, "httpStatus": refusal_status},
-            metadata=METADATA,
         )
 
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        items = data.get("data")
-        if not isinstance(items, list):
-            items = data.get("groups")
-    else:
-        items = None
-    if not isinstance(items, list):
-        items = []
-
-    groups = [g for g in items if isinstance(g, dict)]
+    groups, truncated = group_list(data)
+    if groups is None:
+        return not_measured(
+            validation,
+            "The GET /v1/compliance/groups response was not recognised - no groups list in the "
+            "payload - so identity-provider group provisioning was not evaluated.",
+            "Inspect the raw integration response.",
+        )
 
     if not groups:
-        return create_response(
-            result={"isGroupProvisioningManaged": False, "groupCount": 0,
-                    "scimGroupCount": 0, "directGroups": []},
-            validation=validation,
-            fail_reasons=[
-                "GET /v1/compliance/groups returned no groups, so identity-provider group "
-                "provisioning could not be assessed. An organization with no groups has no "
-                "group-based access model to evidence."
-            ],
-            recommendations=[
-                "Confirm the key carries read:compliance_org_data or read:org_audit, and that the "
-                "organization uses groups for access control."
-            ],
+        # An empty list proves nothing about how groups would be provisioned: a key without
+        # the right scope, an organization not using groups yet and an empty page all look
+        # the same. No verdict.
+        return not_measured(
+            validation,
+            "GET /v1/compliance/groups returned no groups, so identity-provider group "
+            "provisioning could not be assessed.",
+            "Confirm the key carries read:compliance_org_data, and that the organization uses "
+            "groups for access control.",
+            extra={"groupCount": 0, "scimGroupCount": 0, "directGroups": []},
             input_summary={"groupCount": 0},
-            metadata=METADATA,
         )
 
-    scim = [str(g.get("name") or g.get("id") or "unnamed") for g in groups
-            if str(g.get("source_type", "")).lower() == "scim"]
-    direct = [str(g.get("name") or g.get("id") or "unnamed") for g in groups
-              if str(g.get("source_type", "")).lower() != "scim"]
+    # Anthropic documents two source_type values, "scim" and "direct". Anything else is
+    # unreadable, not direct: it cannot make the answer False on its own.
+    scim = [group_label(g) for g in groups if str(g.get("source_type", "")).lower() == "scim"]
+    direct = [group_label(g) for g in groups if str(g.get("source_type", "")).lower() == "direct"]
+    unknown = [group_label(g) for g in groups
+               if str(g.get("source_type", "")).lower() not in ("scim", "direct")]
+
+    if not direct and (unknown or truncated):
+        if unknown:
+            why = (str(len(unknown)) + " of " + str(len(groups)) + " group(s) carry no recognised "
+                   "source_type, so whether they are provisioned through SCIM was not read.")
+        else:
+            why = ("The groups response says more groups exist beyond this page, and every group "
+                   "on it is SCIM-provisioned; the unread groups could be maintained by hand.")
+        return not_measured(
+            validation,
+            why + " Identity-provider group provisioning was not evaluated.",
+            "Re-run the evaluation so every page of GET /v1/compliance/groups is read.",
+            # A page count is not the population when more pages exist, so counts are only
+            # reported as results when the list is complete.
+            extra=({"directGroups": []} if truncated else
+                   {"groupCount": len(groups), "scimGroupCount": len(scim), "directGroups": []}),
+            input_summary={"groupCount": len(groups), "scimGroupCount": len(scim),
+                           "unreadGroupCount": len(unknown), "truncated": truncated},
+        )
+
     result = not direct
 
     if result:
@@ -273,11 +331,10 @@ def transform(input):
     try:
         return evaluate(input)
     except Exception as exc:  # never raise into the pipeline
-        return create_response(
-            result={"isGroupProvisioningManaged": False},
-            validation={"status": "error", "errors": [], "warnings": []},
+        return not_measured(
+            {"status": "error", "errors": [], "warnings": []},
+            "The groups response could not be read, so the "
+            "control's state is unknown.",
+            "Report this to the Spektrum integrations team with the raw API response.",
             transformation_errors=[str(exc)],
-            fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
-            recommendations=["Report this to the Spektrum integrations team with the raw API response."],
-            metadata=METADATA,
         )
