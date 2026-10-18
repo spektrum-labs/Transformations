@@ -1,7 +1,7 @@
 """The boolean NetBackup checks return the full envelope, with "not measured" read from the value.
 
 These transforms used to return a bare {key: False, "reason": ...} with no additionalInfo, so Token-Service graded
-every unreadable body as a FAIL. Each body in UNMEASURED proves nothing about the estate: the criterion must be None
+every unreadable body as a FAIL. Each body in UNMEASURED proves nothing about the environment: the criterion must be None
 AND dataCollection.status "error". A well-formed body that says off stays False with status "success", and a passing
 body stays True. Synthetic data only.
 """

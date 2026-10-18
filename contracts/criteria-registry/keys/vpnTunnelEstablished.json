@@ -1,0 +1,40 @@
+{
+  "name": "vpnTunnelEstablished",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every IPSec tunnel the firewall lists is in state active.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "IPSec tunnels listed by the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The VPN flow listing at least one IPSec tunnel with every listed tunnel in state active.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/vpnTunnelEstablished.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "result/IPSec/entry/state (active or init) is from vendor examples, UNVERIFIED on a real device. A firewall with no tunnel configured has nothing to judge and answers Not evaluated."
+}

@@ -98,7 +98,7 @@ sequenceDiagram
 | 2026-04-14→22 | main | Staging promotion train PRs #287–#417 — **last develop→main promotion** | `b64f0781`…`752762a1` |
 | 2026-04-22 | both | Merge-base `aa9c82a5`; never reconciled after | `git merge-base` |
 | 2026-04-23→29 | develop | Add pipeline starts; SentinelOne added/reverted ×6 | `895d05f7`…`3559dbc5` |
-| 2026-05-07/08 | both | AWS `isBackupTested` fix dual-lands as twin patches | main `fe661ddd` ≡ dev `9ae4378e` |
+| 2026-05-07/08 | both | AWS `isBackupTested` fix dual-lands as paired patches | main `fe661ddd` ≡ dev `9ae4378e` |
 | 2026-06-01→12 | both | Netskope dual-lands (dev 06-01, main 06-12) | main `1a0e1bb6` ≡ dev `fc0fda7b` |
 | 2026-07-07 | main only | Qualys `knownExploitedVulnCount` zero-pass fix — never back-ported | `93a929fd` |
 | 2026-07-14 | main only | Britive IAM fixes ×3 — never back-ported (8 files differ at tips) | `3d5dccb5`, `b36ba755`, `b1e359f4` |
@@ -110,7 +110,7 @@ sequenceDiagram
 | 2026-09-04 | main only | Lookout fleet-count hotfix (#548) — develop's staged copies never updated | `382dc385` |
 | 2026-09-09 | develop | Horizon3 NodeZero count-verdict fix (#550) | `0e010c36` |
 | 2026-09-10 | main only | ENG-560: Okta `86ded564-…/auth_types_allowed.py` fail-closed rewrite (#551) — develop's copy still equals the merge-base | `354d3f90` |
-| 2026-09-14 | both | ENG-576 GitHub DevSecOps twin PRs (#555 develop, #556 main) — `devsecops/github/` lands on main byte-identical to develop; the twin-PR discipline held | `7bf85804` ≡ `8dba7745` |
+| 2026-09-14 | both | ENG-576 GitHub DevSecOps paired PRs (#555 develop, #556 main) — `devsecops/github/` lands on main byte-identical to develop; the paired-PR discipline held | `7bf85804` ≡ `8dba7745` |
 | 2026-09-15 | develop | Rapid7 vendor `make-live:` direct push — `threat-vulnerability-management/rapid7/`, develop-only | `d3bece29` |
 | 2026-09-16 | main only | Tenable ASM PRs #558–#560 — 26 transforms + README, all sandbox-fatal (underscore helpers); the first reviewed PRs in the sample | `03d5ebde`, `ece3b6ac`, `6c0e6e63` |
 
@@ -126,7 +126,7 @@ sequenceDiagram
 1. A transform misbehaves in production. Someone cuts a branch **against main** — conventionally named for it: `fix/ninjaone-em-disk-encryption-main` (PR #544), `hotfix/qualys-vuln-count` (PR #469), `ENG-NNN-*`.
 2. Testing = `local_tester.py` against a saved API response — full CPython, no sandbox, so RestrictedPython violations pass silently ([12-local-development.md](12-local-development.md)).
 3. The PR self-merges with 0 reviews → **the fix is live at the next Token-Service fetch**.
-4. *Sometimes* a twin PR lands the same content on develop as a separate patch (the `…-main` / `…-develop` branch-suffix convention). This hand discipline is what keeps 61 of the 70 both-sides-touched files byte-identical (most recently the 11 `devsecops/github/` files, ENG-576, PRs #555/#556).
+4. *Sometimes* a paired PR lands the same content on develop as a separate patch (the `…-main` / `…-develop` branch-suffix convention). This hand discipline is what keeps 61 of the 70 both-sides-touched files byte-identical (most recently the 11 `devsecops/github/` files, ENG-576, PRs #555/#556).
 5. *Sometimes it doesn't* — and nothing detects the gap (see [Who back-merges hotfixes?](#who-back-merges-hotfixes-nobody-discoverably)).
 
 ### Lane 2: the vendor pipeline into develop (never deploys)
@@ -136,7 +136,7 @@ sequenceDiagram
 3. **None of it deploys.** The vendor exists only on develop; a production evaluation minting `refs/heads/main/safeguards/<srn>/<method>.py` for it gets a 404 → `isEvaluated: False`.
 
 > [!IMPORTANT]
-> **"Merged" usually means develop, and develop is not production.** Thirteen vendor directories exist only on develop today (okta, crowdstrike-falcon, sentinelone, red-canary, sonicwall, rapid7, horizon3-nodezero, and six more — [04-catalog.md](04-catalog.md); github left this list on 2026-09-14 when ENG-576 twin-landed it on main) and are invisible to every minted default URL. The one caveat: 16 Integration-Service reference configs pin `refs/heads/develop`, four of them naming develop-only dirs — wherever live DB rows match those copies, a develop push is already production ([04-catalog.md](04-catalog.md)). The reverse also holds: seven vendor dirs (anthropic, redcanary, proofpoint-threat-protection, sophos ×3, and since 2026-09-16 `asm/tenable`) exist only on main, so develop-based work cannot even see them.
+> **"Merged" usually means develop, and develop is not production.** Thirteen vendor directories exist only on develop today (okta, crowdstrike-falcon, sentinelone, red-canary, sonicwall, rapid7, horizon3-nodezero, and six more — [04-catalog.md](04-catalog.md); github left this list on 2026-09-14 when ENG-576 landed it on main as a paired PR) and are invisible to every minted default URL. The one caveat: 16 Integration-Service reference configs pin `refs/heads/develop`, four of them naming develop-only dirs — wherever live DB rows match those copies, a develop push is already production ([04-catalog.md](04-catalog.md)). The reverse also holds: seven vendor dirs (anthropic, redcanary, proofpoint-threat-protection, sophos ×3, and since 2026-09-16 `asm/tenable`) exist only on main, so develop-based work cannot even see them.
 
 > [!NOTE]
 > The pipeline's merge-then-revert churn has never endangered production through minted URLs — but only because the promotion flow is frozen, and only for vendors with no develop-pinned DB URL. That safety is an accident of the stopped flow, not a designed gate.
@@ -185,7 +185,6 @@ Develop's tip stringifies the `bitLockerStatus` **object** and compares it to st
 
 - **3 sandbox-fatal transforms**: `develop:safeguards/mfa/azure/{areadminaccountsseparate,isadminmfaphishingresistant,ismfaenforced}.py` define top-level underscore-prefixed helpers (`def _as_list` at `develop:safeguards/mfa/azure/ismfaenforced.py:69`, and at `areadminaccountsseparate.py:102`, `isadminmfaphishingresistant.py:117`) — the exact pattern three separate fix cycles — two of them production hotfixes (ENG-463 anthropic, BeyondTrust PRA) — already removed because RestrictedPython rejects underscore-leading names ([03-writing-a-transform.md](03-writing-a-transform.md)). Main's safeguards tree had **zero** such defs until 2026-09-16, when Tenable ASM PRs #558–#560 shipped 26 `asm/tenable/` transforms built entirely on them (`def _parse` at `main:safeguards/asm/tenable/nocriticalfindings.py:19`, `_run` at `:120`) — so the pattern is now broken in production on both branches ([14-known-issues.md](14-known-issues.md)). These three would deploy as permanent `isEvaluated: False`.
 - **10 colocated pytest files** (9 `test_*.py` + 1 `conftest.py`, mostly under `firewall/sonicwall/`): harmless unless a URL is ever minted to them (they fail the sandbox's AST validation), but they ship into production paths and no CI ever runs them.
-- **`customer_requirements_ef1397e7.json`** (root, develop-only): an orphaned, self-inconsistent snapshot nothing reads — it would land on main as noise.
 
 ### What breaks silently: the redcanary rename
 
@@ -209,9 +208,9 @@ That blob was authored in `7b8962e9` (2026-01-26), survived a conflict-resolutio
 
 <details><summary><b>Deep dive:</b> the full collision analysis (70 both-sides files)</summary>
 
-Files changed on BOTH branches since the merge-base — the honest superset test — number exactly 70 (the 9 `mobile-security/lookout/` files joined the set on 2026-09-04, and the 11 `devsecops/github/` files on 2026-09-14 when ENG-576 twin-landed on both branches):
+Files changed on BOTH branches since the merge-base — the honest superset test — number exactly 70 (the 9 `mobile-security/lookout/` files joined the set on 2026-09-04, and the 11 `devsecops/github/` files on 2026-09-14 when ENG-576 landed as a pair on both branches):
 
-- **61 are byte-identical at the two tips** (including all 11 github files, and 3 of the 9 lookout files — `deviceManagementState.py` and the 2 schemas): the same fix landed on both branches as separate patches (the twin-PR pattern). 7 pairs are patch-equivalent by `git log --cherry-mark`: Cisco Umbrella, Qualys counts-as-numbers, Sophos epp/mdr, NinjaOne epp feat, NinjaOne patch fix, Netskope, AWS `isBackupTested`.
+- **61 are byte-identical at the two tips** (including all 11 github files, and 3 of the 9 lookout files — `deviceManagementState.py` and the 2 schemas): the same fix landed on both branches as separate patches (the paired-PR pattern). 7 pairs are patch-equivalent by `git log --cherry-mark`: Cisco Umbrella, Qualys counts-as-numbers, Sophos epp/mdr, NinjaOne epp feat, NinjaOne patch fix, Netskope, AWS `isBackupTested`.
 - **1 file is one fix behind on develop**: `safeguards/asm/qualys/knownexploitedvulncount.py`. Both branches got the counts-as-numbers fix (2026-07-07), but only main got the same-day follow-up `93a929fd`:
 
   > `# Zero-tolerance count metric: 0 known-exploited vulns is the PASS state.`
@@ -230,24 +229,35 @@ Separately, develop's 5 stale `iam/beyondtrust-pra` copies still carry the under
 This is a stated open question, not a finding with an owner. What the history shows:
 
 - **Zero back-merges** of main into develop exist anywhere after the 2026-04-22 base; 86 of main's 93 commits have no develop equivalent by patch-id.
-- **The twin-PR discipline is best-effort and already slipping**: the develop twin of PR #544 (`fix/ninjaone-em-disk-encryption`, without the `-main` suffix) exists as a branch but was never merged to develop.
-- **The gap is invisible from inside either branch.** Fix branches carry the target in the name (`…-main`, `…-develop`), so a *missing* twin leaves no trace in either branch's own log — the 100 main-side files develop lacks only show up by diffing tips.
-- Eight never-ported changes are known concretely: Qualys zero-pass (`93a929fd`), Britive ×3, Azure restore-history (`e7be0780`), BeyondTrust PRA (`b2e6e623`), NinjaOne-EM (`5ae4693a`), Lookout fleet-count (`382dc385`), Okta `auth_types_allowed` (`354d3f90`, ENG-560), and the entire Tenable ASM vendor (`6c0e6e63`, PRs #558–#560). The one recent counter-example is ENG-576 (GitHub), which did land as twins (#555/#556).
+- **The paired-PR discipline is best-effort and already slipping**: the develop pair of PR #544 (`fix/ninjaone-em-disk-encryption`, without the `-main` suffix) exists as a branch but was never merged to develop.
+- **The gap is invisible from inside either branch.** Fix branches carry the target in the name (`…-main`, `…-develop`), so a *missing* paired PR leaves no trace in either branch's own log — the 100 main-side files develop lacks only show up by diffing tips.
+- Eight never-ported changes are known concretely: Qualys zero-pass (`93a929fd`), Britive ×3, Azure restore-history (`e7be0780`), BeyondTrust PRA (`b2e6e623`), NinjaOne-EM (`5ae4693a`), Lookout fleet-count (`382dc385`), Okta `auth_types_allowed` (`354d3f90`, ENG-560), and the entire Tenable ASM vendor (`6c0e6e63`, PRs #558–#560). The one recent counter-example is ENG-576 (GitHub), which did land as a pair (#555/#556).
 
 No document in the repo assigns this responsibility (`CONTRIBUTING.md` describes no branch, merge, or deploy process at all), and no in-repo evidence identifies who, if anyone, owns it.
+
+## Promotion and release PRs use merge commits, never squash
+
+**Ruled 2026-09-29 by J.J.:** every `develop → staging` promotion and every `staging → main` release PR in this repo merges with **Create a merge commit** (`gh pr merge <number> --merge`). Squash and rebase are for single-change PRs only.
+
+**Why.** A squash writes the promoted tree as one new commit with a single parent, so the two branches keep no shared history past their old merge-base. Every later promotion is computed against that stale base, and git can silently keep the target's copy of a file the source already fixed:
+
+- #665 (`develop → staging`, 2026-09-28) was squashed, so staging shared no history with develop. The next develop PRs had to be cherry-picked across (#673).
+- #674 (`staging → main`, 2026-09-28 16:07 ET) was squashed. Staging had restored NinjaOne `isEDRDeployed` / `isEPPDeployed` one minute earlier (#675), but main and staging still met only at `2002dfe7`, where those files already held the good versions. Relative to that base staging had "not changed" them, so `git merge-tree origin/main origin/staging` returned main's own tree and dropped the fix. It reached production only through a hotfix straight to main (#677).
+
+**Before merging a release PR**, run `git merge-tree --write-tree origin/main <head>` and confirm it is the tree the release checks ran on. If a squash has already happened, back-merge the target into the source branch before the next promotion, so the merge-base moves forward.
 
 ## What a safe develop→main promotion would require
 
 Derived directly from the simulation and the failure modes above — this is the checklist, in order:
 
-1. **Back-merge main into develop first.** Close the 100-file gap so the promotion diff is honest and the twin-PR debt is settled before anything moves toward production. This also converts the 8 add/add conflicts into a develop-side decision made *off* the production branch.
+1. **Back-merge main into develop first.** Close the 100-file gap so the promotion diff is honest and the paired-PR debt is settled before anything moves toward production. This also converts the 8 add/add conflicts into a develop-side decision made *off* the production branch.
 2. **Resolve all 8 add/add conflicts toward main.** `safeguards/epp/ninjaone-endpoint-management/{isBitLockerRecoveryKeyEscrowed,isEncryptionEnabled}.py` (main's versions are the ones verified against the live NinjaOne API, PR #544) and the 6 divergent `safeguards/mobile-security/lookout/` transforms (main's versions carry the fleet-count fix, PR #548). Delete or rewrite develop's copies.
 3. **Run a sandbox compile scan over the candidate merged tree.** Replicate Token-Service's pipeline — the AST validation plus a real `compile_restricted` — over every non-schema `.py` file. Today that scan flags develop's 3 `mfa/azure` transforms and the 10 pytest files — and, run over main itself, all 26 `asm/tenable/` transforms; it also catches the underscore-helper pattern generally ([12-local-development.md](12-local-development.md) explains why `local_tester.py` cannot do this).
 4. **Audit filename and directory casing.** Minted default URLs lowercase both path segments while raw GitHub is case-sensitive; develop adds ~113 new mixed-case filenames (172 vs main's 59). Any new mixed-case file for a minted-default vendor is born unreachable ([02-execution-contract.md](02-execution-contract.md), [04-catalog.md](04-catalog.md)).
 5. **Review the collision set explicitly.** Diff the 70 both-sides files at the two tips; confirm the 61 byte-identical, and confirm the qualys file resolves to main's version.
 6. **Trace the 9 retired paths before merging.** Check whether any live tenant config references SRN `cloudsecurity/redcanary` (an Integration-Service/tenant-data question — not answerable from this repo). If yes, the rename is a silent outage; keep the old paths or migrate the configs first.
 7. **Decide the anthropic duplication.** Post-merge, both anthropic directories exist; pick one SRN story before tenants can be configured against either.
-8. **Strip the non-transform files.** The 10 pytest files, the fixtures, and `customer_requirements_ef1397e7.json` don't belong on the branch that is production.
+8. **Strip the non-transform files.** The 10 pytest files and the fixtures don't belong on the branch that is production.
 9. **Plan the timing like a deploy, because it is one.** ~300 files go live within ≤300 s + ≤1 h of the merge; the 20 modified files change the behavior of currently-executing production transforms (Microsoft 365 anti-phishing, Cloudflare DNS, ThreatDown ×4, Huntress ×8, Tenable ×2, Darktrace, DNSFilter schema). Rollback is another merge with the same latency.
 
 > [!TIP]
@@ -265,7 +275,7 @@ Derived directly from the simulation and the failure modes above — this is the
 > **"I merged it, why is it still failing"** has a boring answer: the per-worker 3600 s code cache. A fix (or a revert) can lag up to an hour per warm worker on top of the ≤300 s CDN window.
 
 > [!WARNING]
-> **A missing twin PR is undetectable from either branch alone.** The `…-main`/`…-develop` naming convention means each branch's history looks complete on its own; the 100-file back-port debt accumulated precisely because only a tip-to-tip diff reveals it. If you fix something on main, port it to develop in the same sitting or file the debt somewhere visible.
+> **A missing paired PR is undetectable from either branch alone.** The `…-main`/`…-develop` naming convention means each branch's history looks complete on its own; the 100-file back-port debt accumulated precisely because only a tip-to-tip diff reveals it. If you fix something on main, port it to develop in the same sitting or file the debt somewhere visible.
 
 > [!WARNING]
 > **Develop-based edits can start from broken code.** Develop still carries pre-fix copies of files production has since fixed (beyondtrust-pra's 5 underscore-helper files, qualys' zero-pass reasons, NinjaOne's rewritten pair, lookout's 6 page-length copies). Branching from develop to "improve" one of these re-introduces the bug your diff won't show — diff against `origin/main` before touching any file that exists on both branches.

@@ -357,7 +357,9 @@ def read_ids(body):
 
 def read_workforce(body):
     """Lower-case ids of the enabled Member accounts, read whole; None otherwise. Disabled or guest items are left
-    out whatever the filter did; an item that does not say both is not read."""
+    out whatever the filter did. A disabled item need not carry a userType (Graph returns null for some legacy
+    accounts); an enabled item that does not say its userType, or any item that does not say accountEnabled, is not
+    read."""
     pages = list_pages(body)
     if pages is None:
         return None
@@ -367,10 +369,14 @@ def read_workforce(body):
             if not isinstance(item, dict) or not str(item.get("id") or "").strip():
                 return None
             enabled = item.get("accountEnabled")
-            kind = item.get("userType")
-            if not isinstance(enabled, bool) or not isinstance(kind, str):
+            if not isinstance(enabled, bool):
                 return None
-            if enabled and kind.strip().lower() == "member":
+            if not enabled:
+                continue  # a disabled account is outside the workforce whatever its userType (Graph returns null for some)
+            kind = item.get("userType")
+            if not isinstance(kind, str):
+                return None
+            if kind.strip().lower() == "member":
                 ids.add(str(item["id"]).strip().lower())
     return ids
 
@@ -730,6 +736,24 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         input_summary=input_summary)
 
 
+def migration_pending(policy):
+    """The policy's policyMigrationState (cut to 40 characters) when it is anything but migrationComplete, else "".
+
+    Until the migration to the authentication methods policy is complete, the legacy per-user MFA and SSPR
+    policies still decide which methods members can use and cannot be read here. A policy with no state reads
+    as before."""
+    state = str(policy.get('policyMigrationState') or '').strip() if isinstance(policy, dict) else ''
+    if state and state.lower() != 'migrationcomplete':
+        return state[:40]
+    return ''
+
+
+def migration_reason(state, what):
+    return ("The authentication methods policy lists no " + what + " (policyMigrationState: " + state + "): the legacy "
+            "per-user MFA and SSPR policies still apply and cannot be read here, so the policy alone does not "
+            "show that MFA is unavailable")
+
+
 def transform(input):
     criteriaKey = "isMFAEnforcedForUsers"
 
@@ -881,7 +905,20 @@ def transform(input):
                 + ", so the authentication methods policy does not show whether MFA is enforced for users",
                 validation, input_summary=input_summary, extra=details)
 
+        # 3c. Methods are listed but none of them counts as MFA while the policy is still migrating: the legacy
+        # per-user MFA and SSPR policies may enable Microsoft Authenticator or OATH codes, so the new policy
+        # alone is not evidence that no MFA method is available (not a FAIL).
+        # Only when the method list is the sole failing input: an all-users MFA policy, or a policy whose scope is
+        # unknown (a risk-only policy is never all-user enforcement, so it keeps its False).
         scope_unknown = [(name, why) for name, why in set_aside if why != RISK_REASON]
+        pending = migration_pending(auth_methods)
+        if pending and not methods_available and (
+                mfa_enforced_for_users or (ALL_USERS_TARGET_MODE == "unevaluated" and scope_unknown)):
+            return not_evaluated(
+                criteriaKey,
+                migration_reason(pending, "Microsoft Authenticator, FIDO2, OATH or Temporary Access Pass method"),
+                validation, input_summary=input_summary, extra=details)
+
         membership_note = ""
         if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
                 and scope_unknown and any(k in data for k in MEMBERSHIP_KEYS)):

@@ -3,7 +3,7 @@ Transformation: isContinuousDiscoveryEnabled
 Vendor: Cisco Meraki MX  |  Category: firewalls
 Source: GET /organizations/{organizationId}/devices
 Pass: the organization's device inventory is readable and returns at least one device, so
-the estate under assessment is enumerated rather than assumed.
+the environment under assessment is enumerated rather than assumed.
 """
 import json
 from datetime import datetime
@@ -134,32 +134,30 @@ def evaluate(data):
         kind = str(device.get("productType") or "unknown")
         by_type[kind] = by_type.get(kind, 0) + 1
     result = {
-        "isContinuousDiscoveryEnabled": reached and len(devices) > 0,
+        "isContinuousDiscoveryEnabled": True if devices else None,
         "deviceCount": len(devices),
         "applianceCount": by_type.get("appliance", 0),
         "productTypeBreakdown": by_type,
         "endpointReached": reached,
     }
-    passes, fails, recs = [], [], []
+    passes, fails, recs, api_errors = [], [], [], []
     if not reached:
-        fails.append(
-            "The response carries no device list, so it is indistinguishable from an "
-            "authentication failure. Not measured."
-        )
+        api_errors.append("The Meraki response carries no device list; nothing to measure.")
     elif devices:
         passes.append(
             "Device inventory is readable: %d device(s), %d of them MX appliances."
             % (len(devices), by_type.get("appliance", 0))
         )
     else:
-        fails.append("The organization returned an empty device inventory.")
-    return result, passes, fails, recs, {"deviceCount": len(devices)}
+        api_errors.append("The Meraki organization returned no devices; nothing to measure.")
+    fails = list(api_errors)
+    return result, passes, fails, recs, api_errors, {"deviceCount": len(devices)}
 
 
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
-    result, pass_reasons, fail_reasons, recommendations, input_summary = evaluate(data)
+    result, pass_reasons, fail_reasons, recommendations, api_errors, input_summary = evaluate(data)
     return create_response(
         result=result,
         validation=validation,
@@ -167,6 +165,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "isContinuousDiscoveryEnabled",
             "vendor": "Cisco Meraki MX",

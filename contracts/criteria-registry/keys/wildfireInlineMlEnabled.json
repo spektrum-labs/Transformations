@@ -1,0 +1,40 @@
+{
+  "name": "wildfireInlineMlEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every enabled allow rule carries an Antivirus profile (directly or through a profile group) in which every listed file-based ML engine model, and at least the core models, is set to enable (not alert-only or disable).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled allow rules in the rulebase of the vsys read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the security rulebase, profile groups and Antivirus profiles showing every enabled allow rule carrying an Antivirus profile in which every listed file-based ML engine model, and at least the core models, is set to enable. A profile that shows no ML engine setting is Not evaluated, never False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/wildfireInlineMlEnabled.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Antivirus profile element names (profiles/virus/entry/mlav-engine-filebased-enabled/entry/mlav-policy-action with enable, alert-only or disable) and the core model names (Windows Executables, PowerShell Script 1, PowerShell Script 2) are from the CLI hierarchy and public documents and UNVERIFIED on a real device. A listed model set to alert-only or disable gives False, and so does an allow rule that carries no Antivirus profile at all. Everything else that cannot be read is unknown, so the key is Not evaluated: a profile that shows no ML engine entries (the element name is unverified, so absent is never read as off), an entry with no or an unrecognised action, a profile that lists only enabled models but not every core model, a profile name that is not in the profile reads (for example a predefined one) and an unresolved group. A virtual system profile or group wins over a shared one with the same name. Cloud-delivered inline analysis settings are not read. vsys1 only."
+}
