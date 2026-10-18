@@ -1,0 +1,52 @@
+# After a push to main (live on merge), tell Token-Service to drop its cached copies of the files that
+# changed, so the merged code is live on every worker within about ten seconds instead of up to an hour.
+#
+# SETUP (one-time, repo admin): two Actions secrets. The repository is public, so neither the URL nor the
+# credential may appear in this file.
+#   TOKEN_SERVICE_RESET_URL    the production Token-Service base URL
+#   TOKEN_SERVICE_RESET_TOKEN  Token-Service's reset-only token (its TRANSFORM_CACHE_RESET_TOKEN): a random value
+#                              that can reset this cache and nothing else. Never a service credential.
+# Without them the job reports that nothing was sent and passes; the merge still goes live when the cache
+# expires.
+name: token-service-cache-reset
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: token-service-cache-reset
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Tool self-test
+        run: python tools/reset_token_service_cache.py --self-test
+
+      - name: Reset the changed files in Token-Service's cache
+        env:
+          TOKEN_SERVICE_RESET_URL: ${{ secrets.TOKEN_SERVICE_RESET_URL }}
+          TOKEN_SERVICE_RESET_TOKEN: ${{ secrets.TOKEN_SERVICE_RESET_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # A new branch, or a before-commit this clone does not have (a force-push): reset everything.
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            python tools/reset_token_service_cache.py --all
+          else
+            git diff --name-only "$BEFORE" "$AFTER" | python tools/reset_token_service_cache.py
+          fi

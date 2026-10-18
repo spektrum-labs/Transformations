@@ -13,17 +13,37 @@ Evidence (either shape; the definition decides which it sends):
 
 Rule (fail closed):
   * Licensing shape: true when at least one assignment has productId "Google-Apps" (Google
-    Workspace). An empty list fails. SKU names and counts are reported; user identities never are.
+    Workspace). False when assignments were read and none is a Workspace licence. SKU names and
+    counts are reported; user identities never are.
   * Policy shape (PROXY, weaker): true only when a returned policy's policyQuery names a
     Google Workspace licence ('/product/Google-Apps/sku/...'), i.e. Google scopes a Gmail
     setting to a Workspace SKU the tenant holds. "Some Gmail policy exists" no longer passes.
-  * A Google error, a missing scope ("scope not granted") or an unreadable body is a
-    data-collection error (unevaluated), never a pass.
+    False when policies were read and none names a Workspace licence.
+  * Not measured (key None and dataCollection error, so Token-Service shows Not evaluated, never
+    Failed): a Google error or refusal, a missing scope ("scope not granted"), a body that is not
+    JSON or neither shape, an empty licence or policy list (it cannot be told apart from a read
+    that returned nothing), a list still carrying nextPageToken in which no Workspace licence was
+    found yet (more pages could hold one), and this transform's own exception.
 """
 
 import json
 import re
 from datetime import datetime, timezone
+
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('confirmedLicensePurchased',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 CRITERIA_KEY = "confirmedLicensePurchased"
 REQUIRED_SCOPE = "https://www.googleapis.com/auth/apps.licensing"
@@ -59,6 +79,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -177,7 +203,7 @@ def find_dict_with(data, key, depth=0):
 
 
 def not_measured(reason, validation, recommendation=None, result_extra=None):
-    result = {CRITERIA_KEY: False}
+    result = {CRITERIA_KEY: None}
     for k in (result_extra or {}):
         result[k] = result_extra[k]
     return create_response(
@@ -189,10 +215,21 @@ def not_measured(reason, validation, recommendation=None, result_extra=None):
     )
 
 
+def is_truncated(body):
+    """True when the list still carries nextPageToken or the paginator marked the read as cut short."""
+    if not isinstance(body, dict):
+        return False
+    marker = body.get("paginationTruncated")
+    return bool(str(body.get("nextPageToken") or "").strip()) or marker is True or str(marker).strip().lower() == "true"
+
+
 def evaluate_licensing(body, validation):
     items = body.get("items") or []
     if not isinstance(items, list):
         return not_measured("licence assignment list could not be read", validation)
+    if not [i for i in items if isinstance(i, dict)]:
+        return not_measured("no licence assignments were returned: an empty list cannot be told apart from a "
+                            "read that returned nothing", validation)
     counts = {}
     for item in items:
         if not isinstance(item, dict) or item.get("productId") != WORKSPACE_PRODUCT:
@@ -201,12 +238,22 @@ def evaluate_licensing(body, validation):
         name = str(item.get("skuName") or SKU_NAMES.get(sku) or sku or "unknown SKU")
         counts[name] = counts.get(name, 0) + 1
     total = sum(counts.values())
-    summary = {"workspaceAssignments": total, "skus": counts, "morePages": bool(body.get("nextPageToken"))}
+    more_pages = is_truncated(body)
+    # A list cut short holds only part of the assignments, so any total taken from it is None: a count
+    # from some pages must not read as the whole.
+    shown_total = None if more_pages else total
+    summary = {"workspaceAssignments": shown_total, "skus": None if more_pages else counts, "morePages": more_pages}
     if total > 0:
-        listed = ", ".join("%s x%d%s" % (k, counts[k], "+" if summary["morePages"] else "") for k in sorted(counts))
-        return create_response(result={CRITERIA_KEY: True, "workspaceAssignments": total}, validation=validation,
+        if more_pages:
+            listed = ", ".join(sorted(counts)) + " (more pages were not read)"
+        else:
+            listed = ", ".join("%s x%d" % (k, counts[k]) for k in sorted(counts))
+        return create_response(result={CRITERIA_KEY: True, "workspaceAssignments": shown_total}, validation=validation,
                                pass_reasons=["Google Workspace licences are assigned: %s" % listed],
                                input_summary=summary)
+    if more_pages:
+        return not_measured("licence assignment list was truncated (nextPageToken present) before a Google "
+                            "Workspace assignment was found", validation)
     return create_response(result={CRITERIA_KEY: False, "workspaceAssignments": 0}, validation=validation,
                            fail_reasons=["No Google Workspace (Google-Apps) licence assignments were returned"],
                            recommendations=["Confirm the tenant holds a Google Workspace subscription and licences are assigned"],
@@ -224,6 +271,9 @@ def evaluate_policy_proxy(data, validation):
         policies = policies_body
     else:
         return not_measured("policy list was not returned", validation)
+    if not isinstance(policies, list) or not [p for p in policies if isinstance(p, dict)]:
+        return not_measured("no policies were returned: an empty list cannot be told apart from a read that "
+                            "returned nothing", validation)
     skus = {}
     for policy in policies:
         if not isinstance(policy, dict):
@@ -237,6 +287,9 @@ def evaluate_policy_proxy(data, validation):
                                pass_reasons=["PROXY: Gmail policies are scoped to Google Workspace licence(s) %s held by the tenant" % ", ".join(sorted(skus.values()))],
                                recommendations=["Grant apps.licensing so the licence is read from the Licensing API directly"],
                                input_summary=summary)
+    if is_truncated(policies_body):
+        return not_measured("policy list was truncated (nextPageToken present) before a policy naming a Google "
+                            "Workspace licence was found", validation)
     return create_response(result={CRITERIA_KEY: False}, validation=validation,
                            fail_reasons=["PROXY: no returned Gmail policy names a Google Workspace licence (%d policies)" % len(policies)],
                            recommendations=["Grant apps.licensing so the licence is read from the Licensing API directly"],
@@ -270,7 +323,7 @@ def transform(input):
         return not_measured("response is neither a Licensing API list nor the policy proxy", validation)
     except Exception as e:
         return create_response(
-            result={CRITERIA_KEY: False},
+            result={CRITERIA_KEY: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=["Transformation error: %s" % str(e)]

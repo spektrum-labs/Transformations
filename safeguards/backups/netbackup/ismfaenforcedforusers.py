@@ -9,6 +9,34 @@
 import json
 from datetime import datetime, timezone, timedelta
 
+VENDOR = "NetBackup"
+PRODUCT = "NetBackup"
+METHOD = "getSecurityStatus"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -51,17 +79,19 @@ def transform(input):
     try:
         doc, problem = jsonapi(input, False)
         if doc is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         detail = doc["data"]["attributes"].get("securitySettingsDetail")
         if not isinstance(detail, dict):
-            return {key: False, "reason": "securitySettingsDetail is missing"}
+            return respond(key, None, "securitySettingsDetail is missing")
         setting = detail.get(SETTING)
         if not isinstance(setting, dict) or "currentConfigState" not in setting:
-            return {key: False, "reason": SETTING + " is not reported by this NetBackup version"}
+            return respond(key, None, SETTING + " is not reported by this NetBackup version")
         state = setting.get("currentConfigState")
 
         if state is True:
-            return {key: True, "reason": "NetBackup MFA is enforced for users"}
-        return {key: False, "reason": "NetBackup MFA enforcement is " + str(state)}
+            return respond(key, True, "NetBackup MFA is enforced for users")
+        if state is False:
+            return respond(key, False, "NetBackup MFA enforcement is " + str(state))
+        return respond(key, None, "NetBackup MFA enforcement is " + str(state))
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})

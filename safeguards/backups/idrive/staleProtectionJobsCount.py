@@ -3,6 +3,24 @@ import json
 from datetime import datetime
 
 
+CRITERIA_KEY = "staleProtectionJobsCount"
+
+
+def error_reason(body):
+    """A reason string when the body is an API error or refusal (any 4xx/5xx), else None."""
+    if not isinstance(body, dict):
+        return None
+    for key in ("error", "Error", "errors"):
+        err = body.get(key)
+        if err:
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
+    for key in ("statusCode", "status_code", "status", "httpStatus"):
+        code = body.get(key)
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "IDrive API returned HTTP " + str(code) + "; " + CRITERIA_KEY + " was not measured."
+    return None
+
+
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -33,9 +51,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    api_err_list = api_errors or []
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    api_err_list = [] if measured else (api_errors or transformation_errors or fail_reasons
+                                        or [CRITERIA_KEY + " could not be measured from the response"])
     transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
+    data_collection_status = "success" if measured else "error"
     transformation_status = "error" if transform_err_list else "success"
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
@@ -91,7 +114,7 @@ def parse_date(s):
         return None
 
 
-def transform(input):
+def evaluate(input):
     data, validation = extract_input(input)
 
     if isinstance(data, list):
@@ -103,22 +126,39 @@ def transform(input):
     else:
         devices = []
 
+    api_error = error_reason(input) or error_reason(data)
+    if not api_error:
+        for body in (input, data):
+            if isinstance(body, dict) and (body.get("paginationTruncated") or body.get("iterateTruncated") or body.get("itemErrors")):
+                api_error = "The device summary read was cut short; " + CRITERIA_KEY + " was not measured."
+    if api_error:
+        devices = []
+
     now = datetime.utcnow()
-    bad_statuses = ["Failed", "Offline", "Blocked", "Cancelled", "Suspended"]
+    # Compared lower-case. The IDrive API returns "Failure" for a failed last backup (its docs also
+    # list "Failed"), and "Not protected" for a device no backup plan protects: neither is healthy.
+    bad_statuses = ["failed", "failure", "not protected", "offline", "blocked", "cancelled", "suspended"]
 
     stale_devices = []
     total_devices = len(devices)
+    unreadable_devices = 0
 
     for dev in devices:
         if not isinstance(dev, dict):
+            unreadable_devices = unreadable_devices + 1
             continue
         status = dev.get("backup_status") or ""
         next_backup_raw = dev.get("next_backup")
         last_backup_raw = dev.get("last_backup")
+        if not status and not last_backup_raw and not next_backup_raw:
+            # No backup_status, last_backup or next_backup at all: this record says nothing about
+            # whether the device's protection job is stale, so it cannot be counted either way.
+            unreadable_devices = unreadable_devices + 1
+            continue
         next_backup_dt = parse_date(next_backup_raw)
         is_stale = False
         reason = ""
-        if status in bad_statuses:
+        if isinstance(status, str) and status.strip().lower() in bad_statuses:
             is_stale = True
             reason = f"backup_status={status}"
         elif next_backup_dt is not None and next_backup_dt < now:
@@ -139,11 +179,25 @@ def transform(input):
             })
 
     stale_count = len(stale_devices)
+    result_count = stale_count
 
-    if total_devices == 0:
-        pass_reasons = ["No devices were returned by getDeviceSummary; 0 stale protection jobs counted out of 0 total monitored devices."]
-        fail_reasons = []
-        recommendations = []
+    if api_error:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = [api_error]
+        recommendations = ["Check the IDrive API credentials and permissions for getDeviceSummary, then re-run the check."]
+    elif total_devices == 0:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = ["No devices were returned by getDeviceSummary; the stale protection job count cannot be determined, so it is not evaluated."]
+        recommendations = ["Verify the company has devices registered in IDrive 360 and that getDeviceSummary returns them."]
+    elif unreadable_devices > 0:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = [
+            f"{unreadable_devices} of {total_devices} device record(s) carry no backup_status, last_backup or next_backup; the stale protection job count cannot be determined, so it is not evaluated."
+        ]
+        recommendations = ["Confirm getDeviceSummary returns backup_status and backup timestamps for every device."]
     elif stale_count == 0:
         pass_reasons = [
             f"All {total_devices} devices report a healthy backup_status and an up-to-date next_backup schedule; 0 stale protection jobs detected."
@@ -162,13 +216,14 @@ def transform(input):
         ]
 
     result = {
-        "staleProtectionJobsCount": stale_count,
+        "staleProtectionJobsCount": result_count,
         "totalDevices": total_devices,
     }
 
     input_summary = {
         "totalDevices": total_devices,
-        "staleDevices": stale_count,
+        # Not measured: the stale count was never read, so it is not 0.
+        "staleDevices": stale_count if result_count is not None else None,
     }
 
     return create_response(
@@ -183,4 +238,17 @@ def transform(input):
             "vendor": "IDrive",
             "category": "backup",
         },
+        api_errors=[api_error] if api_error else None,
     )
+
+
+def transform(input):
+    try:
+        return evaluate(input)
+    except Exception as e:
+        return create_response(
+            result={CRITERIA_KEY: None},
+            fail_reasons=["Transformation error: " + str(e)],
+            transformation_errors=["Transformation error: " + str(e)],
+            metadata={"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup"},
+        )

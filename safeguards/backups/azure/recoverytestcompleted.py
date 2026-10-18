@@ -40,12 +40,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
 
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("recoveryTestCompleted") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["recoveryTestCompleted could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -77,7 +82,13 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 def evaluate(data):
     """Core evaluation logic."""
     try:
-        jobs = data.get('value', [])
+        if not isinstance(data, dict):
+            return {"recoveryTestCompleted": None, "error": "Response is not an object; no backup jobs to evaluate"}
+        jobs = data.get('value')
+        if not isinstance(jobs, list):
+            # No job list at all (empty body, refusal, status stub): nothing was measured.
+            # A present, empty 'value' list is a measured "no jobs" and stays False below.
+            return {"recoveryTestCompleted": None, "error": "No backup job list ('value') in the response"}
         restore_jobs = [
             j for j in jobs
             if j.get('properties', {}).get('operation') == 'Restore'
@@ -97,7 +108,7 @@ def evaluate(data):
 
         return {"recoveryTestCompleted": recent, "restoreJobCount": len(restore_jobs)}
     except Exception as e:
-        return {"recoveryTestCompleted": False, "error": str(e)}
+        return {"recoveryTestCompleted": None, "error": str(e)}
 
 
 def transform(input):
@@ -113,20 +124,22 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
 
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
+        result_value = eval_result.get(criteriaKey)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        if result_value:
+        if result_value is None:
+            fail_reasons.append(f"{criteriaKey} not evaluated: {eval_result.get('error', 'no backup job data')}")
+        elif result_value:
             pass_reasons.append(f"{criteriaKey} check passed")
             for k, v in extra_fields.items():
                 pass_reasons.append(f"{k}: {v}")
@@ -146,7 +159,7 @@ def transform(input):
         )
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

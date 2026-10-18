@@ -1,0 +1,43 @@
+{
+  "name": "unprotectedResourcesCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of distinct devices a backup plan has not yet been applied to (the union of each plan's backup_pending_on list) across the backup plans the tool reads. An error, refusal, empty read, or any plan without a backup_pending_on list is Not evaluated, never 0.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the backup plans the credential's company returns; numerator = distinct device ids in backup_pending_on across every plan read",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A read of the backup plans in which every plan carries a backup_pending_on list; 0 only when every list is present and empty. An error, refusal, empty or partial read is Not evaluated.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/unprotectedResourcesCount.py",
+    "safeguards/backups/idrive/test_not_measured_backups_idrive.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real IDrive body replayed yet, so V0)."
+    }
+  ],
+  "notes": "Only devices already assigned to a plan and pending are counted; devices with no plan at all are not visible in getBackupPlan and are not counted. A missing, null or string backup_pending_on is not read as zero."
+}
