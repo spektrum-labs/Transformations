@@ -1,0 +1,40 @@
+{
+  "name": "expiredPackageLicensesCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of installed application package licences in the connected org whose status is Expired.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the PackageLicense records of the connected Salesforce org",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete query result of the org's PackageLicense records (done, every record read); the count of Expired is then exact, and an org with no package licence reads 0. An error or refused answer, a partial read, or any missing status is not measured (a count beside one is only a lower bound).",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "compliant",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/partner/salesforce/expiredPackageLicensesCount.py (Salesforce REST query on PackageLicense.Status: https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_packagelicense.htm)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-18",
+      "change": "Registered so the Salesforce transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}

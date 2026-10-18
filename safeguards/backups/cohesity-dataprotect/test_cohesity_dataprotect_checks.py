@@ -82,7 +82,8 @@ def test_groups():
     assert run("isBackupEnabled", {"response": json.loads(json.dumps(GROUPS))}) is True
     assert run("failedBackupJobsCount", GROUPS) == 1
     assert run("failedBackupJobsCount", {"protectionGroups": [group(0), group(1)]}) == 0
-    assert run("failedBackupJobsCount", {"protectionGroups": [group(0), {"name": "x", "isActive": True}]}) is None
+    # a group that has not run yet has no failed run: it is reported, not counted, beside groups that report runs
+    assert run("failedBackupJobsCount", {"protectionGroups": [group(0), {"name": "x", "isActive": True}]}) == 0
     assert run("failedBackupJobsCount", dict(GROUPS, paginationCookie="abc")) is None
     assert run("failedBackupJobsCount", {"protectionGroups": []}) is None
     assert run("backupSuccessRatePercentage", GROUPS) == round(200 / 3.0, 2)
@@ -165,9 +166,10 @@ def test_partial_run_info_keeps_its_old_answers_and_carries_no_code():
     assert run("isBackupEnabled", mixed) is True
     assert run("staleProtectionJobsCount", mixed) == 1  # a group that never ran, beside groups that report runs
     out = full("failedBackupJobsCount", mixed)
-    assert out.get("transformedResponse", out)["failedBackupJobsCount"] is None
+    inner = out.get("transformedResponse", out)
+    assert inner["failedBackupJobsCount"] == 0 and inner["groupsNotRunYet"] == ["pg1"]
     dc = out["additionalInfo"]["dataCollection"]
-    assert dc["status"] == "error" and "errorCode" not in dc
+    assert dc["status"] == "success" and "errorCode" not in dc
 
 
 def test_measured_answers_carry_no_code_and_no_marker():
