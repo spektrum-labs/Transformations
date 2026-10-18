@@ -1,0 +1,40 @@
+{
+  "name": "overdueOffboardingCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "How many people Vanta shows as overdue on their offboarding tasks (status OFFBOARDING_OVERDUE).",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "every person in Vanta's people list; the count is of those overdue on offboarding",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete paged read of Vanta's people list, every entry readable with a known status and at least one person read. 0 is the secure state; an unreadable or partial read is Not evaluated, never 0.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Compliance Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/compliancemanagement/vanta/overdueoffboardingcount.py",
+    "safeguards/compliancemanagement/vanta/test_vanta_criteria.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-15",
+      "change": "Registered with its first implementation, a Vanta third-party-proof (level 3) transform. Synthetic-fixture tests only; no real Vanta body with values was replayed, so V0."
+    }
+  ],
+  "notes": "Reported with peopleRead so a real 0 is told apart from a parse that found nothing."
+}

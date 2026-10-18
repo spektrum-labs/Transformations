@@ -233,6 +233,38 @@ class MS365AdminSeparationTests(unittest.TestCase):
         bare = {"id": "u-admin", "userPrincipalName": "admin@contoso.onmicrosoft.com", "mail": None}
         self.assert_unevaluated(merged([assignment("u-admin")], [bare]))
 
+    def test_admin_with_missing_or_null_licences_is_incomplete(self):
+        # One user carries assignedLicenses, so the feed as a whole has the field; an administrator whose own
+        # row has no list (missing or null) was never checked for a licence and must not read as clean.
+        for mail in (None, "second@contoso.com"):
+            for licences in ("missing", None):
+                with self.subTest(mail=mail, licences=licences):
+                    second = {"id": "u-second", "userPrincipalName": "second@contoso.com", "mail": mail,
+                              "accountEnabled": True}
+                    if licences != "missing":
+                        second["assignedLicenses"] = licences
+                    body = merged([assignment("u-admin"), assignment("u-second")], [DEDICATED_ADMIN, second])
+                    info = self.assert_unevaluated(body)
+                    self.assertTrue(any("assignedLicenses" in e and "second@contoso.com" in e
+                                        for e in info["dataCollection"]["errors"]), info)
+                    self.assertEqual(info["evaluation"]["passReasons"], [])
+
+    def test_proven_violation_still_fails_when_another_admin_has_no_licence_list(self):
+        second = {"id": "u-second", "userPrincipalName": "second@contoso.com", "mail": None, "accountEnabled": True}
+        body = merged([assignment("u-alice"), assignment("u-second")], [EVERYDAY_USER, second])
+        out, result, info = self.run_t(body)
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success", info)
+        self.assertIn("also unresolved", info["evaluation"]["failReasons"][0])
+        self.assertIn("second@contoso.com", info["evaluation"]["failReasons"][0])
+
+    def test_disabled_admin_with_no_licence_list_is_not_judged(self):
+        disabled = {"id": "u-old", "userPrincipalName": "old@contoso.com", "mail": None, "accountEnabled": False}
+        body = merged([assignment("u-admin"), assignment("u-old")], [DEDICATED_ADMIN, disabled])
+        out, result, info = self.run_t(body)
+        self.assertTrue(result[KEY], info)
+        self.assertEqual(info["dataCollection"]["status"], "success")
+
     def test_users_only_is_incomplete(self):
         self.assert_unevaluated({"users": graph_list("users", [DEDICATED_ADMIN])})
 
@@ -257,6 +289,73 @@ class MS365AdminSeparationTests(unittest.TestCase):
         out, result, info = self.run_t("{not json")
         self.assertFalse(result[KEY])
         self.assertEqual(info["transformation"]["status"], "error")
+
+    # --- a body that could not be read is not evidence about admins -----------
+    def test_malformed_json_is_unevaluated_not_a_measured_fail(self):
+        for body in ["{not json", b"\xff\xfe\x00", b"{not json"]:
+            info = self.assert_unevaluated(body)
+            self.assertEqual(info["transformation"]["status"], "error")
+            self.assertIn("Transformation error", info["dataCollection"]["errors"][0])
+
+    def test_exception_message_is_bounded_in_every_field(self):
+        def boom(_):
+            raise ValueError("x" * 1000)
+
+        original = self.t.extract_input
+        self.t.extract_input = boom
+        try:
+            info = self.assert_unevaluated({"value": []})
+        finally:
+            self.t.extract_input = original
+        self.assertEqual(info["transformation"]["status"], "error")
+        for text in (info["dataCollection"]["errors"][0], info["transformation"]["errors"][0],
+                     info["evaluation"]["failReasons"][0]):
+            self.assertLess(len(text), 400)
+
+    def test_failed_validation_is_unevaluated_not_a_measured_fail(self):
+        # The same body would be a measured fail (a Global Administrator with a mailbox and a licence) if it
+        # had passed validation; once validation failed it is not a measurement of the tenant at all.
+        data = merged([assignment("u-admin")], [user("u-admin", "admin@contoso.com", mail="admin@contoso.com", skus=[SPE_E3])])
+        self.assertFalse(self.run_t(data)[1][KEY])
+        self.assertEqual(self.run_t(data)[2]["dataCollection"]["status"], "success")
+        info = self.assert_unevaluated(
+            {"data": data, "validation": {"status": "failed", "errors": ["body is not a Graph list"], "warnings": []}})
+        self.assertIn("Input validation failed", info["dataCollection"]["errors"][0])
+        self.assertIn("body is not a Graph list", info["dataCollection"]["errors"][0])
+        self.assertEqual(info["validation"]["status"], "failed")
+        self.assertEqual(info["evaluation"]["passReasons"], [])
+
+    def test_failed_validation_never_passes_and_bounds_vendor_text(self):
+        clean = merged([assignment("u-admin")], [DEDICATED_ADMIN, EVERYDAY_USER])
+        self.assertTrue(self.run_t(clean)[1][KEY])
+        for errors in (None, [], ["y" * 1000], [{"code": "x"}, 7, None]):
+            info = self.assert_unevaluated({"data": clean, "validation": {"status": "failed", "errors": errors}})
+            self.assertLess(len(info["dataCollection"]["errors"][0]), 400)
+            self.assertLess(len(info["evaluation"]["failReasons"][0]), 400)
+
+    def test_validation_echo_is_bounded_whatever_the_status(self):
+        clean = merged([assignment("u-admin")], [DEDICATED_ADMIN, EVERYDAY_USER])
+        big = {"status": "passed", "errors": ["e" * 1000] * 100, "warnings": ["w" * 1000] * 100}
+        for status in ("passed", "failed", "unknown"):
+            with self.subTest(status=status):
+                out, result, info = self.run_t({"data": clean, "validation": dict(big, status=status)})
+                if status != "failed":
+                    self.assertTrue(result[KEY], info)
+                for field in ("errors", "warnings"):
+                    echoed = info["validation"][field]
+                    self.assertLessEqual(len(echoed), 20)
+                    for item in echoed:
+                        self.assertIsInstance(item, str)
+                        self.assertLess(len(item), 400)
+        for odd in ("one long string " * 200, {"code": "x" * 1000}, 7, [{"code": "x" * 1000}, 7, None]):
+            with self.subTest(odd=type(odd).__name__):
+                out, result, info = self.run_t({"data": clean, "validation": {"status": "passed", "errors": odd,
+                                                                               "warnings": odd}})
+                self.assertTrue(result[KEY], info)
+                self.assertLessEqual(len(info["validation"]["errors"]), 20)
+                for item in info["validation"]["errors"] + info["validation"]["warnings"]:
+                    self.assertIsInstance(item, str)
+                    self.assertLess(len(item), 400)
 
     def test_tenant_supplied_names_are_bounded(self):
         long_upn = "x" * 500 + "@contoso.com"

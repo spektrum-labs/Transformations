@@ -71,7 +71,13 @@ EXTRA_UNMEASURED = {
     # arg_rows_empty: zero Resource Graph rows is RBAC-ambiguous and is not measured.
     # See CONTRIBUTING.md, "Azure Resource Graph: zero rows is not a proven empty set".
     "isbackupenabled": [("data_without_rows", lambda: {"data": {"columns": []}}),
-                        ("arg_rows_empty", lambda: {"data": {"rows": []}})],
+                        ("arg_rows_empty", lambda: {"data": {"rows": []}}),
+                        # Vault rows prove a vault exists, not that anything is backed up.
+                        ("vault_rows_only", lambda: {"data": {"rows": [["vault-1"]]}}),
+                        ("vault_rows_with_diagnostic_settings",
+                         lambda: {"data": {"rows": [{"vaultType": "RecoveryServicesVault", "name": "vault-1",
+                                                     "diagnosticSettings": {"hasDiagnosticSettings": True}}]}}),
+                        ("no_vault_pages", lambda: {"protectedItems": []})],
     "is_backup_types_scheduled": [("data_without_rows", lambda: {"data": {"columns": []}}),
                                   ("arg_rows_empty", lambda: {"data": {"rows": []}})],
     "is_backup_tested": [("arg_rows_empty", lambda: {"data": {"columns": [{"name": "name"}], "rows": []}})],
@@ -95,7 +101,12 @@ def restore(status):
 
 MEASURED = {
     "isbackupenabled": [
-        ("rows_present", lambda: {"data": {"rows": [["vault-1"]]}}, True),
+        # Backup is enabled only when a protected item is actively protected.
+        ("active_protected_item", lambda: {"protectedItems": [{"value": [
+            {"name": "vm-1", "properties": {"protectionStatus": "Healthy"}}]}]}, True),
+        ("vault_read_with_no_active_item", lambda: {"protectedItems": [{"value": [
+            {"name": "vm-1", "properties": {"protectionState": "ProtectionStopped"}}]}]}, False),
+        ("vault_read_with_no_items", lambda: {"value": []}, False),
     ],
     "is_backup_enabled_for_critical_systems": [
         ("no_automated_backups", lambda: auto_backups({}), False),
@@ -159,20 +170,21 @@ AZURE = os.path.join(SAFEGUARDS, "backups", "azure")
 # Every Azure Resource Graph reader in the tree, both the 729 set and its drifted copies
 # under backups/azure. The census is asserted complete by
 # test_no_resource_graph_reader_is_missing_from_this_list below, so a new one cannot be
-# added outside the rule without this file failing.
+# added outside the rule without this file failing. The two isbackupenabled files are not listed
+# any more: they no longer read the Resource Graph vault table (rows of vaults prove nothing about
+# backup); they read protected items, and their zero-rows and vault-rows bodies are covered by
+# EXTRA_UNMEASURED above and by backups/azure/test_false_pass_azure_backup.py.
 ARG_ROWS_READERS = [
     ("729/confirmedlicensepurchased", "confirmedLicensePurchased", os.path.join(HERE, "confirmedlicensepurchased.py")),
     ("729/is_backup_encrypted", "isBackupEncrypted", os.path.join(HERE, "is_backup_encrypted.py")),
     ("729/is_backup_immutable", "isBackupImmutable", os.path.join(HERE, "is_backup_immutable.py")),
     ("729/is_backup_tested", "isBackupTested", os.path.join(HERE, "is_backup_tested.py")),
     ("729/is_backup_types_scheduled", "isBackupTypesScheduled", os.path.join(HERE, "is_backup_types_scheduled.py")),
-    ("729/isbackupenabled", "isBackupEnabled", os.path.join(HERE, "isbackupenabled.py")),
     ("azure/backupfrequency", "backupFrequency", os.path.join(AZURE, "backupfrequency.py")),
     ("azure/is_backup_encrypted", "isBackupEncrypted", os.path.join(AZURE, "is_backup_encrypted.py")),
     ("azure/is_backup_immutable", "isBackupImmutable", os.path.join(AZURE, "is_backup_immutable.py")),
     ("azure/is_backup_tested", "isBackupTested", os.path.join(AZURE, "is_backup_tested.py")),
     ("azure/is_backup_types_scheduled", "isBackupTypesScheduled", os.path.join(AZURE, "is_backup_types_scheduled.py")),
-    ("azure/isbackupenabled", "isBackupEnabled", os.path.join(AZURE, "isbackupenabled.py")),
 ]
 
 

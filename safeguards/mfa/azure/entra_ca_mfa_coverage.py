@@ -428,10 +428,14 @@ def read_workforce(body):
             if not isinstance(item, dict) or not str(item.get("id") or "").strip():
                 return None
             enabled = item.get("accountEnabled")
-            kind = item.get("userType")
-            if not isinstance(enabled, bool) or not isinstance(kind, str):
+            if not isinstance(enabled, bool):
                 return None
-            if enabled and kind.strip().lower() == "member":
+            if not enabled:
+                continue  # a disabled account is outside the workforce whatever its userType (Graph returns null for some)
+            kind = item.get("userType")
+            if not isinstance(kind, str):
+                return None
+            if kind.strip().lower() == "member":
                 ids.add(str(item["id"]).strip().lower())
     return ids
 

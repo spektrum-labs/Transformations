@@ -126,12 +126,17 @@ def evaluate(data):
     passing, failing, unreadable = [], [], []
     modes = {}
     for name, response in pairs:
-        if isinstance(response, dict) and isinstance(response.get("vendorErrorAsResponse"), dict):
-            # The definition hands over exactly one refusal as data: 400 "Intrusion detection is
-            # not supported by this network". A network that cannot run the intrusion engine is
-            # unprotected, not unmeasured.
-            modes["not supported"] = modes.get("not supported", 0) + 1
-            failing.append({"network": name, "mode": "not supported"})
+        refusal = response.get("vendorErrorAsResponse") if isinstance(response, dict) else None
+        if isinstance(refusal, dict):
+            # The definition hands over one refusal as data: 400 "Intrusion detection is not
+            # supported by this network". A network that cannot run the intrusion engine is
+            # unprotected, not unmeasured. Any other refusal (401, 403, 429, 5xx) says nothing
+            # about the network: that read failed, so the network is not measured.
+            if refusal.get("status") in (400, "400"):
+                modes["not supported"] = modes.get("not supported", 0) + 1
+                failing.append({"network": name, "mode": "not supported"})
+            else:
+                unreadable.append(name)
             continue
         mode = response.get("mode") if isinstance(response, dict) else None
         if mode is None:
@@ -144,8 +149,16 @@ def evaluate(data):
         else:
             failing.append({"network": name, "mode": mode})
     measured = len(passing) + len(failing)
+    if not reached or measured == 0:
+        verdict = None
+    elif failing:
+        verdict = False
+    elif unreadable:
+        verdict = None
+    else:
+        verdict = True
     result = {
-        "isIDSEnabled": reached and measured > 0 and not failing and not unreadable,
+        "isIDSEnabled": verdict,
         "idsCoveragePercentage": pct(len(passing), measured),
         "networksEvaluated": measured,
         "networksFailing": failing[:25],
@@ -153,25 +166,15 @@ def evaluate(data):
         "modeBreakdown": modes,
         "endpointReached": reached,
     }
-    passes, fails, recs = [], [], []
+    passes, fails, recs, api_errors = [], [], [], []
     if not reached:
-
-        fails.append(
-            "The response carries no appliance network list and no per-network results, "
-            "so it is indistinguishable from an authentication failure. Not measured."
+        api_errors.append(
+            "The Meraki response carries no appliance network list and no per-network results; "
+            "nothing to measure."
         )
-
     elif measured == 0:
-        fails.append(
-            "No appliance network returned intrusion settings. There is no MX intrusion "
-            "engine to evidence intrusion detection on."
-        )
-    elif not failing and not unreadable:
-        passes.append(
-            "All %d appliance network(s) run the MX intrusion engine in %s mode."
-            % (measured, " or ".join(sorted({'prevention', 'detection'})))
-        )
-    else:
+        api_errors.append("No appliance network returned intrusion settings; nothing to measure.")
+    elif failing:
         fails.append(
             "%d of %d appliance network(s) do not meet intrusion detection: %s."
             % (len(failing), measured, ", ".join(f["network"] + "=" + f["mode"] for f in failing[:10]))
@@ -180,13 +183,27 @@ def evaluate(data):
             "Set Security & SD-WAN > Threat protection > Intrusion detection and prevention "
             "to Prevention on each network listed."
         )
-    return result, passes, fails, recs, {"networksEvaluated": measured}
+    elif unreadable:
+        api_errors.append(
+            "%d of %d appliance network(s) could not be read (%s), so intrusion detection cannot be confirmed on every network."
+            % (len(unreadable), len(unreadable) + measured, ", ".join(unreadable[:10]))
+        )
+    else:
+        passes.append(
+            "All %d appliance network(s) run the MX intrusion engine in %s mode."
+            % (measured, " or ".join(sorted({'prevention', 'detection'})))
+        )
+    if api_errors:
+        fails = list(api_errors)
+    elif unreadable:
+        fails.append("%d more network(s) could not be read and were not counted: %s." % (len(unreadable), ", ".join(unreadable[:10])))
+    return result, passes, fails, recs, api_errors, {"networksEvaluated": measured}
 
 
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
-    result, pass_reasons, fail_reasons, recommendations, input_summary = evaluate(data)
+    result, pass_reasons, fail_reasons, recommendations, api_errors, input_summary = evaluate(data)
     return create_response(
         result=result,
         validation=validation,
@@ -194,6 +211,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "isIDSEnabled",
             "vendor": "Cisco Meraki MX",

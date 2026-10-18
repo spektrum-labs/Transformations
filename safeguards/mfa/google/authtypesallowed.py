@@ -19,8 +19,12 @@ voice codes (anything but ALL), and no enrollment policy forbids 2-Step Verifica
 fails.
 
 Not measured (key false, dataCollection error): a Google error or missing scope, a body that is
-not a policy list, a list that still carries nextPageToken, or a list with no 2-Step Verification
-factor policy.
+not a policy list, a list that still carries nextPageToken with no weak policy in the pages read,
+or a list with no 2-Step Verification factor policy.
+
+A weak factor policy or a disabled enrollment already read settles the answer even when the list is
+truncated: the rule needs EVERY policy to pass, so an unread page cannot undo it. That case is a
+measured false, and the reason says the list was incomplete. True always needs the whole list.
 
 Does not prove: that 2-Step Verification is enforced (security.two_step_verification_enforcement;
 that is isMFAEnforcedForUsers), or which factors users actually enrolled.
@@ -140,13 +144,12 @@ def transform(input):
             return not_measured(error[:300], validation)
         if not isinstance(data, dict) or not isinstance(data.get("policies"), list):
             return not_measured("response is not a Cloud Identity policy list", validation)
-        if data.get("nextPageToken"):
-            return not_measured("policy list was truncated (nextPageToken present); an unread page may allow SMS or "
-                                "voice codes", validation, {"policiesRead": len(data["policies"])})
+        truncated = bool(data.get("nextPageToken"))
 
         factor_sets = []
         weak = []
         no_enrollment = []
+        admin_problems = 0  # problems in policies an administrator set; Google's SYSTEM default is overridden by them
         for policy in data["policies"]:
             if not isinstance(policy, dict):
                 continue
@@ -159,18 +162,26 @@ def transform(input):
                 factor_sets.append({"scope": scope, "allowedSignInFactorSet": factor_set or None})
                 if factor_set not in STRONG_SETS:
                     weak.append("%s: allowedSignInFactorSet=%s" % (scope, factor_set or "missing"))
+                    if str(policy.get("type") or "").upper() != "SYSTEM":
+                        admin_problems += 1
             elif kind.endswith(ENROLL_SETTING):
                 if "allowEnrollment" in value and not is_true(value.get("allowEnrollment")):
                     no_enrollment.append("%s: allowEnrollment=false" % scope)
+                    if str(policy.get("type") or "").upper() != "SYSTEM":
+                        admin_problems += 1
 
         summary = {"policiesRead": len(data["policies"]), "factorPolicies": len(factor_sets),
-                   "weakFactorPolicies": len(weak), "enrollmentDisabled": len(no_enrollment)}
-        if not factor_sets:
-            return not_measured("no %s policy was returned" % FACTOR_SETTING, validation, summary)
+                   "weakFactorPolicies": len(weak), "enrollmentDisabled": len(no_enrollment), "truncated": truncated}
         problems = weak + no_enrollment
+        if truncated and not admin_problems:
+            return not_measured("policy list was truncated (nextPageToken present); an unread page may allow SMS or "
+                                "voice codes", validation, summary)
+        if not factor_sets and not truncated:
+            return not_measured("no %s policy was returned" % FACTOR_SETTING, validation, summary)
         if problems:
+            note = " (the policy list was truncated; a weak policy already read settles this)" if truncated else ""
             return create_response(result={CRITERIA_KEY: False, "factorPolicies": factor_sets}, validation=validation,
-                                   fail_reasons=["Weak or password-only sign-in is allowed: %s" % "; ".join(problems[:10])],
+                                   fail_reasons=["Weak or password-only sign-in is allowed%s: %s" % (note, "; ".join(problems[:10]))],
                                    recommendations=["In the Google Admin console (Security > 2-Step Verification) allow 2-Step "
                                                     "Verification everywhere and set Methods to exclude text message and "
                                                     "phone call codes (for example passkeys only) for every organizational unit"],
