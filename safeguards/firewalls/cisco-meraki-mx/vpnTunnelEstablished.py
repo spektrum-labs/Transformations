@@ -131,7 +131,7 @@ def transform(input):
         meraki_peers, meraki_ok = peer_list(net.get("merakiVpnPeers"))
         third_peers, third_ok = peer_list(net.get("thirdPartyVpnPeers"))
         if not (meraki_ok and third_ok):
-            unreadable.append(network_name)
+            unreadable.append(str(network_name))
         peers = list(meraki_peers) + list(third_peers)
         if peers:
             networks_with_peers = networks_with_peers + 1

@@ -129,6 +129,18 @@ def test_a_reachable_peer_elsewhere_still_proves_the_tunnel():
     assert value(PERCENT.transform(nets), "vpnPeerReachablePercentage") is None
 
 
+@pytest.mark.parametrize("net", [
+    {"networkId": 123, "merakiVpnPeers": 5},
+    dict(network(5, None), networkId=123, networkName=None),
+])
+def test_a_numeric_network_id_next_to_an_unreadable_list_is_not_evaluated_and_never_raises(net):
+    for mod, key in ((PERCENT, "vpnPeerReachablePercentage"), (TUNNEL, "vpnTunnelEstablished")):
+        for body in ([net], {"data": [net]}):
+            out = mod.transform(body)
+            assert value(out, key) is None
+            assert collection(out)["status"] == "error" and collection(out)["errors"]
+
+
 def test_the_unreadable_peer_list_reason_is_fixed_text():
     secret = "SECRET-VENDOR-VALUE-123"
     net = network(secret, None)

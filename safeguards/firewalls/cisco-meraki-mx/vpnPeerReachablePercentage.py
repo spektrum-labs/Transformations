@@ -129,7 +129,7 @@ def transform(input):
         meraki_peers, meraki_ok = peer_list(net.get("merakiVpnPeers"))
         third_party_peers, third_ok = peer_list(net.get("thirdPartyVpnPeers"))
         if not (meraki_ok and third_ok):
-            unreadable.append(net_name)
+            unreadable.append(str(net_name))
         all_peers = list(meraki_peers) + list(third_party_peers)
         for peer in all_peers:
             if not isinstance(peer, dict):
