@@ -76,6 +76,17 @@ def test_a_migrating_policy_does_not_hide_a_missing_mfa_conditional_access_polic
     assert value(out, key) is False
 
 
+@pytest.mark.parametrize("state", LEGACY_STATES)
+def test_a_migrating_policy_does_not_hide_a_risk_only_mfa_policy(state):
+    # MFA is required only on sign-in risk: never all-user enforcement, so isMFAEnforcedForUsers keeps its False
+    # whatever the (migrating) method list says.
+    risk_only = copy.deepcopy(ALL_USERS_MFA)
+    risk_only["displayName"] = "MFA on risky sign-in"
+    risk_only["conditions"]["signInRiskLevels"] = ["high", "medium"]
+    out = run(USERS, graph_input(["Sms", "Voice"], state, ca=(risk_only,)))
+    assert value(out, "isMFAEnforcedForUsers") is False
+
+
 @pytest.mark.parametrize("module,key", GRAPH_CASES)
 @pytest.mark.parametrize("state", LEGACY_STATES)
 def test_only_weak_methods_in_a_migrating_policy_is_not_evaluated(module, key, state):
