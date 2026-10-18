@@ -82,10 +82,10 @@ class AuditLoggingTests(Base):
         self.assertIs(self.value([activity(0)]), True)
         self.assertIs(self.value({"data": [activity(6)], "has_more": True}), True)
 
-    def test_stale_record_fails(self):
-        out = self.run_t([activity(30)])
-        self.assertIs(out["transformedResponse"][self.KEY], False)
-        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+    def test_stale_record_is_not_evaluated(self):
+        # A 200 shows the Compliance API is on; an old newest record shows only low
+        # activity, not that recording stopped. The 400 "not enabled" is the only False.
+        self.assert_not_evaluated([activity(30)])
 
     def test_newest_record_wins_regardless_of_order(self):
         self.assertIs(self.value([activity(40), activity(1)]), True)
@@ -166,6 +166,23 @@ class KeyScopeSeparationTests(Base):
 
     def test_combined_key_fails_even_with_another_unreadable(self):
         keys = [key("odd", None), key("both", ["read:compliance_org_data", "delete:compliance_user_data"])]
+        self.assertIs(self.value(keys), False)
+
+    def test_key_without_boolean_is_active_blocks_a_pass(self):
+        both = ["read:compliance_user_data", "delete:compliance_user_data"]
+        missing = {"name": "x", "scopes": both}
+        for odd in (missing, dict(missing, is_active="true"), dict(missing, is_active=1),
+                    dict(missing, status="active"), "apikey_x"):
+            self.assert_not_evaluated([key("siem", ["read:compliance_activities"]), odd])
+
+    def test_non_string_scopes_are_not_evaluated(self):
+        keys = [key("siem", ["read:compliance_activities"]),
+                key("obj", [{"name": "read:compliance_user_data"}, {"name": "delete:compliance_user_data"}])]
+        self.assert_not_evaluated(keys)
+        self.assert_not_evaluated([key("mixed", ["read:compliance_user_data", {"scope": "delete:compliance_user_data"}])])
+
+    def test_combined_key_fails_even_with_non_string_scope_elsewhere(self):
+        keys = [key("obj", [{"name": "x"}]), key("both", ["read:compliance_org_data", "delete:compliance_user_data", 7])]
         self.assertIs(self.value(keys), False)
 
     def test_no_active_key_is_not_evaluated(self):

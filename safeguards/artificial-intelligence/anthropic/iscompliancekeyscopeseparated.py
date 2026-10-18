@@ -247,13 +247,17 @@ def evaluate(input):
 
     active = [k for k in keys if isinstance(k, dict) and k.get("is_active") is True]
     inactive_count = len([k for k in keys if isinstance(k, dict) and k.get("is_active") is False])
+    # An entry that is not a dict, or whose is_active is not a boolean (missing, "true",
+    # 1, a status field instead), cannot be classed as active or inactive. It is never
+    # dropped silently: any such entry blocks a pass below.
+    unclassified = len(keys) - len(active) - inactive_count
     if not active:
         return unknown_response(
             validation,
             "No key in the list is marked active, yet the key Spektrum used to read it must be "
             "active, so the key inventory is not trusted.",
             "Report this to the Spektrum integrations team with the raw API response.",
-            {"keysReported": len(keys), "activeKeys": 0},
+            {"keysReported": len(keys), "activeKeys": 0, "keysWithUnreadableState": unclassified},
         )
 
     combined = []
@@ -264,14 +268,19 @@ def evaluate(input):
         if not isinstance(scopes, list):
             unreadable = unreadable + 1
             continue
-        scope_set = [str(s) for s in scopes]
+        scope_set = [s for s in scopes if isinstance(s, str)]
         if CONTENT_READ_SCOPE in scope_set:
             content_readers = content_readers + 1
         reads = [s for s in scope_set if s.startswith("read:")]
         if DELETE_SCOPE in scope_set and reads:
             combined.append(str(k.get("name") or k.get("id") or "unnamed key"))
+        elif len(scope_set) != len(scopes):
+            # A scope entry that is not a string (e.g. {"name": "delete:..."}) could hold
+            # either scope, so this key's separation is not proven.
+            unreadable = unreadable + 1
 
     summary = {"keysReported": len(keys), "activeKeys": len(active), "inactiveKeys": inactive_count,
+               "keysWithUnreadableState": unclassified,
                "keysReadingAndDeleting": len(combined), "keysWithUnreadableScopes": unreadable,
                "keysReadingUserContent": content_readers}
     findings = []
@@ -305,6 +314,14 @@ def evaluate(input):
             validation,
             str(unreadable) + " active key(s) had no readable scope list, so read/delete "
             "separation is not proven.",
+            "Report this to the Spektrum integrations team with the raw API response.",
+            summary,
+        )
+    if unclassified:
+        return unknown_response(
+            validation,
+            str(unclassified) + " key entr(ies) could not be read as active or inactive, so "
+            "read/delete separation is not proven for every key.",
             "Report this to the Spektrum integrations team with the raw API response.",
             summary,
         )

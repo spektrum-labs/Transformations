@@ -224,10 +224,11 @@ def activity_items(data):
     return None
 
 
-# Every Compliance API call is itself recorded (activity type compliance_api_accessed),
-# so an organization whose recording is on always has a record at least as recent as
-# Spektrum's previous evaluation. A newest record older than this window means recording
-# stopped (the Compliance API toggle was turned off) or nothing has read the feed since.
+# A newest record within this window shows recording is on now. An older newest record
+# does not show recording is off: the feed answered 200, and Anthropic answers 400 on
+# every endpoint while the Compliance API is off. A quiet organization, or a feed nothing
+# has read for a while, looks the same. So a stale feed is not evaluated, and the 400 is
+# the only False.
 RECENT_DAYS = 7
 
 
@@ -328,23 +329,16 @@ def evaluate(input):
             additional_findings=findings,
             metadata=METADATA,
         )
-    return create_response(
-        result={"isAuditLoggingEnabled": False, "evaluable": True,
-                "newestActivityAt": newest_iso, "newestActivityAgeDays": age_days},
-        validation=validation,
-        fail_reasons=[
-            "The newest Activity Feed record is " + str(age_days) + " days old (" + newest_iso +
-            "). Every Compliance API call is itself recorded, so a feed this stale means "
-            "recording has stopped. Activity is not recorded while the Compliance API is off "
-            "and cannot be recovered later."
-        ],
-        recommendations=[
-            "Ask the primary owner to confirm the Compliance API is turned on at claude.ai > "
-            "Organization settings > API."
-        ],
-        input_summary=summary,
-        additional_findings=findings,
-        metadata=METADATA,
+    return unknown_response(
+        validation,
+        "The newest Activity Feed record is " + str(age_days) + " days old (" + newest_iso +
+        "), older than the " + str(RECENT_DAYS) + "-day window. The feed answered, so the "
+        "Compliance API is on, but a stale feed does not show whether activity is being "
+        "recorded now, so audit logging is not evaluated.",
+        "Re-run the evaluation after recent Claude activity in the organization. If the feed "
+        "stays stale, ask the primary owner to confirm the Compliance API is turned on at "
+        "claude.ai > Organization settings > API.",
+        summary,
     )
 
 
