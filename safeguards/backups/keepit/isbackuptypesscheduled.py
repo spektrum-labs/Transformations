@@ -14,19 +14,25 @@
 
 import json
 import re
+from datetime import datetime, timezone
+
+KEY = "isBackupTypesScheduled"
+METHOD = "getScheduleConfig"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when every cloud connector runs on Keepit's automatic schedule: no
     disable_auto_backup flag is set on it, and it has a positive backup interval (its own
     backup_interval attribute, else the product's backup-interval resource).
 
     Proves: each connector is on a recurring schedule rather than manual runs only.
-    Does not prove: that the scheduled runs succeed (see backupSuccessRatePercentage). A
-    disable_auto_backup value that is not a recognisable true/false, a missing or
-    unparseable interval, a connector whose attributes were not read, or an unreadable body
-    answers false.
+    Does not prove: that the scheduled runs succeed (see backupSuccessRatePercentage). False
+    only when a connector states disable_auto_backup true. A disable_auto_backup value that is
+    not a recognisable true/false, or a missing or unparseable interval on a connector, proves
+    nothing about its schedule: with no connector stated off, the answer is None (not
+    measured). A connector whose attributes were not read, a missing /resources or
+    /attributes step, or an unreadable body also answers None.
     """
     key = "isBackupTypesScheduled"
 
@@ -95,30 +101,31 @@ def transform(input):
     try:
         data = unwrap(parse_input(input), "devices")
         if not isinstance(data, dict):
-            return {key: False, "reason": "Response is not an object"}
+            return {key: None, "reason": "Response is not an object"}
         if data.get("error") is True:
-            return {key: False, "reason": "Integration-Service returned an error envelope"}
+            return {key: None, "reason": "Integration-Service returned an error envelope"}
         if "devices" not in data:
-            return {key: False, "reason": "Response has no <devices> element, so no connector could be read"}
+            return {key: None, "reason": "Response has no <devices> element, so no connector could be read"}
         if "deviceAttributes" not in data:
-            return {key: False, "reason": "Response has no deviceAttributes (the per-connector /attributes step did not run)"}
+            return {key: None, "reason": "Response has no deviceAttributes (the per-connector /attributes step did not run)"}
         resources, problem = read_resources(data)
         if resources is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         devices = data.get("devices")
         if devices is None or devices == "":
             devices = {}
         if not isinstance(devices, dict):
-            return {key: False, "reason": "<devices> element has an unexpected shape"}
+            return {key: None, "reason": "<devices> element has an unexpected shape"}
         clouds = [c for c in listify(devices.get("cloud")) if isinstance(c, dict)]
         bodies = listify(data.get("deviceAttributes"))
         if len(clouds) == 0:
             return {key: False, "reason": "The account has no cloud connectors, so nothing is scheduled"}
         if len(bodies) != len(clouds):
-            return {key: False, "reason": "Read /attributes for " + str(len(bodies)) + " connectors but listDevices returned " + str(len(clouds))}
+            return {key: None, "reason": "Read /attributes for " + str(len(bodies)) + " connectors but listDevices returned " + str(len(clouds))}
         product_interval = resources.get("backup-interval")
         scheduled = []
         not_scheduled = []
+        unreadable = []
         for i in range(len(clouds)):
             c = clouds[i]
             kind = str(c.get("type") or "")
@@ -126,19 +133,19 @@ def transform(input):
             label = name + " (" + kind + ")" if kind else name
             body = unwrap(bodies[i], "attributes")
             if not isinstance(body, dict) or "attributes" not in body or body.get("error") is True:
-                return {key: False, "reason": "Connector " + label + ": /attributes body has no <attributes> element"}
+                return {key: None, "reason": "Connector " + label + ": /attributes body has no <attributes> element"}
             attrs_el = body.get("attributes")
             if attrs_el is None or attrs_el == "":
                 attrs_el = {}
             if not isinstance(attrs_el, dict):
-                return {key: False, "reason": "Connector " + label + ": <attributes> has an unexpected shape"}
+                return {key: None, "reason": "Connector " + label + ": <attributes> has an unexpected shape"}
             attrs = {}
             for a in listify(attrs_el.get("attribute")):
                 if isinstance(a, dict) and a.get("name"):
                     attrs[str(a.get("name")).strip()] = a.get("value")
             flag = str(attrs.get("disable_auto_backup") if attrs.get("disable_auto_backup") is not None else "").strip().lower()
             if "disable_auto_backup" in attrs and flag not in ["false", "0", "no", "true", "1", "yes"]:
-                not_scheduled.append({"connector": label, "why": "disable_auto_backup has an unrecognised value"})
+                unreadable.append({"connector": label, "why": "disable_auto_backup has an unrecognised value"})
                 continue
             if flag in ["true", "1", "yes"]:
                 not_scheduled.append({"connector": label, "why": "disable_auto_backup is set"})
@@ -149,14 +156,49 @@ def transform(input):
                 interval, source = product_interval, "product backup-interval"
             days = duration_days(interval)
             if days is None:
-                not_scheduled.append({"connector": label, "why": "no readable backup interval (" + source + ": " + str(interval) + ")"})
+                unreadable.append({"connector": label, "why": "no readable backup interval (" + source + ": " + str(interval) + ")"})
                 continue
             scheduled.append({"connector": label, "interval": interval, "source": source})
-        result = len(not_scheduled) == 0
-        if result:
-            reason = "All " + str(len(clouds)) + " cloud connectors run on an automatic backup interval"
+        if len(not_scheduled) > 0:
+            result = False
+            reason = str(len(not_scheduled)) + " of " + str(len(clouds)) + " cloud connectors have automatic backups switched off"
+        elif len(unreadable) > 0:
+            result = None
+            reason = str(len(unreadable)) + " of " + str(len(clouds)) + " cloud connectors have no readable automatic schedule and none is stated off, so this is not measured"
         else:
-            reason = str(len(not_scheduled)) + " of " + str(len(clouds)) + " cloud connectors are not on a readable automatic schedule"
-        return {key: result, "reason": reason, "scheduledConnectors": scheduled, "unscheduledConnectors": not_scheduled}
+            result = True
+            reason = "All " + str(len(clouds)) + " cloud connectors run on an automatic backup interval"
+        return {key: result, "reason": reason, "scheduledConnectors": scheduled, "unscheduledConnectors": not_scheduled,
+                "unreadableConnectors": unreadable}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

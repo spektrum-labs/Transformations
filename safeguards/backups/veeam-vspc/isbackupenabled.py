@@ -1,5 +1,11 @@
 """Transformation: isBackupEnabled - Veeam Service Provider Console REST API v3.
-Source: GET /api/v3/infrastructure/backupServers/jobs (all pages)
+Source: workflow getCompanyJobs: company + GET /api/v3/infrastructure/backupServers/jobs filtered by
+organizationUid (jobs, all pages).
+One company only: the "company" part (GET /api/v3/organizations/companies filtered by the connection's
+Company UID) must name exactly one company, and it must equal the Company UID Integration-Service echoes
+under "configuredSettings"; otherwise (no Company UID, a mismatch) the check is None, never a verdict
+over the whole console. Only jobs whose organizationUid is the company count (a safety net:
+the VSPC filter is unproven against a real console); none of them is None.
 True when at least one backup job (VM, agent, file, object storage or cloud backup) on the managed
 Veeam Backup & Replication servers has its schedule enabled (isEnabled). False when the complete job
 list has none.
@@ -9,7 +15,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 KEY = "isBackupEnabled"
-METHOD = "listBackupServerJobs"
+METHOD = "getCompanyJobs"
 
 VENDOR = "Veeam"
 PRODUCT = "Veeam Service Provider Console (REST API v3)"
@@ -35,21 +41,18 @@ def envelope_error(obj):
     """A short reason when obj is an IS or VSPC error envelope, else None."""
     if not isinstance(obj, dict):
         return None
+    # Fixed reasons: the vendor's own error text is never echoed into the result.
     errs = obj.get("errors")
     if isinstance(errs, list) and len(errs) > 0:
-        first = errs[0] if isinstance(errs[0], dict) else {}
-        return "VSPC returned an error: " + str(first.get("message") or first.get("type") or errs[0])[:300]
+        return "VSPC returned an error"
     err = obj.get("error")
     if err is True or isinstance(err, (str, dict)):
-        detail = obj.get("message") or err
-        if isinstance(detail, dict):
-            detail = detail.get("message") or json.dumps(detail)[:200]
-        return "The VSPC call did not return data: " + str(detail)[:300]
+        return "The VSPC call did not return data"
     code = obj.get("status_code") or obj.get("statusCode") or obj.get("status")
     if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
         return "The VSPC call returned HTTP " + str(code)
     if obj.get("status") == "Error":
-        return "The VSPC call did not return data: " + str(obj.get("message") or "error")[:300]
+        return "The VSPC call did not return data"
     return None
 
 
@@ -100,7 +103,8 @@ def complete_items(raw, what):
     if isinstance(total, bool) or not isinstance(total, int):
         return None, what + ": no meta.pagingInfo.total, so a complete read cannot be shown"
     if len(items) < total:
-        return None, what + ": read " + str(len(items)) + " of " + str(total) + "; the remaining pages were not read"
+        # No numbers: the total can be the whole console's count, across companies.
+        return None, what + ": only part of the list was read; the remaining pages were not read"
     for it in items:
         if not isinstance(it, dict):
             return None, what + ": an entry is not an object"
@@ -127,6 +131,113 @@ def workflow_part(raw, key):
             return None
         cur = nxt
     return None
+
+
+HEX = "0123456789abcdef"
+
+
+def is_uid(value):
+    """True for a VSPC UID: 36 characters, hex in 8-4-4-4-12 groups."""
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    low = value.lower()
+    for i in range(36):
+        if i in (8, 13, 18, 23):
+            if low[i] != "-":
+                return False
+        elif low[i] not in HEX:
+            return False
+    return True
+
+
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
+
+
+def lower_text(value):
+    return value.lower() if isinstance(value, str) else None
+
+
+def part_error(raw):
+    """An error envelope at the top of the body (Integration-Service stopped the workflow), else None."""
+    cur = to_obj(raw)
+    for depth in range(8):
+        if not isinstance(cur, dict):
+            return None
+        problem = envelope_error(cur)
+        if problem is not None:
+            return problem
+        nxt = None
+        if "validation" in cur and "data" in cur:
+            nxt = to_obj(cur.get("data"))
+        else:
+            for w in WRAPPERS:
+                if isinstance(cur.get(w), (dict, str)):
+                    nxt = to_obj(cur.get(w))
+                    break
+        if nxt is None:
+            return None
+        cur = nxt
+    return None
+
+
+def configured_company(raw):
+    """(company UID, None) from the workflow's "company" part, else (None, reason).
+    The part is GET /organizations/companies filtered by the connection's Company UID: exactly one
+    company with a UID, read completely. Anything else (no Company UID, so no company read; no match;
+    several companies because the filter was not applied; an error) is not evaluated."""
+    part = workflow_part(raw, "company")
+    if part is None:
+        problem = part_error(raw)
+        if problem is not None:
+            return None, problem
+        return None, ("No company read in the response. The connection needs its Company UID (VSPC portal: "
+                      "Companies > the company > UID) so only that company is evaluated, never the whole console")
+    items, why = complete_items(part, "company")
+    if why:
+        return None, why
+    if len(items) != 1:
+        return None, ("The Company UID did not match exactly one company on the console, so no single "
+                      "company can be evaluated")
+    uid = items[0].get("instanceUid")
+    if not is_uid(uid):
+        return None, "The company read carries no valid instanceUid"
+    # The company VSPC returned must be the one the connection names (Integration-Service echoes the
+    # Company UID under configuredSettings). A console that ignores the filter and holds one company
+    # would otherwise answer with it whatever UID was asked for.
+    asked = configured_uid(raw)
+    if asked is None:
+        return None, ("No configured Company UID in the response, so the company VSPC returned cannot be "
+                      "shown to be the one this connection names")
+    if uid.lower() != asked:
+        return None, "The company VSPC returned does not match the connection's Company UID"
+    return uid.lower(), None
+
+
+def configured_uid(raw):
+    """The connection's Company UID as Integration-Service echoed it (output.echoSettings), or None."""
+    conf = workflow_part(raw, "configuredSettings")
+    if not isinstance(conf, dict):
+        return None
+    uid = conf.get("companyUid")
+    if not is_uid(uid):
+        return None
+    return uid.lower()
+
+
+def company_jobs(jobs, company):
+    """(the jobs the company owns, whether any job has no readable owner). A job without an
+    organizationUid may be anyone's, so a check must not judge the attributable rest without it."""
+    own = []
+    unattributed = False
+    for j in jobs:
+        org = lower_text(j.get("organizationUid"))
+        if not org:
+            unattributed = True
+        elif org == company:
+            own.append(j)
+    return own, unattributed
 
 
 def parse_time(value):
@@ -192,19 +303,34 @@ BACKUP_TYPES = ["BackupVm", "AgentBackupJob", "AgentPolicy", "BackupFile", "Azur
 SCHEDULED = ["Daily", "Monthly", "Periodically", "Continuously", "BackupWindow", "Chained"]
 
 def evaluate(input):
-    jobs, why = complete_items(input, "backup server jobs")
+    company, why = configured_company(input)
     if why:
         return respond(KEY, METHOD, None, why)
+    jobs, why = complete_items(workflow_part(input, "jobs"), "backup server jobs")
+    if why:
+        return respond(KEY, METHOD, None, why)
+    jobs, unattributed = company_jobs(jobs, company)
+    if unattributed:
+        return respond(KEY, METHOD, None, "Some jobs on the console carry no organizationUid, so the company's "
+                       "own jobs cannot be shown completely")
+    if len(jobs) == 0:
+        return respond(KEY, METHOD, None, "VSPC lists no job of the company; nothing to evaluate")
     backup = [j for j in jobs if j.get("type") in BACKUP_TYPES]
     enabled = [j for j in backup if j.get("isEnabled") is True]
+    # A job whose type or (for a backup job) isEnabled cannot be read is not a readable "no".
+    unread = [j for j in jobs if not is_text(j.get("type"))] + \
+        [j for j in backup if not isinstance(j.get("isEnabled"), bool)]
     extra = {"backupJobCount": len(backup), "enabledBackupJobCount": len(enabled), "totalJobCount": len(jobs)}
     if len(enabled) > 0:
         return respond(KEY, METHOD, True, str(len(enabled)) + " of " + str(len(backup)) +
-                       " backup jobs are enabled", extra)
+                       " backup jobs of the company are enabled", extra)
+    if unread:
+        return respond(KEY, METHOD, None, "Some jobs of the company report no type or isEnabled, so whether a "
+                       "backup job is enabled cannot be shown")
     if len(backup) == 0:
-        return respond(KEY, METHOD, False, "No backup job is configured on any Veeam Backup & Replication "
-                       "server reported to VSPC (" + str(len(jobs)) + " jobs of other types)", extra)
-    return respond(KEY, METHOD, False, "All " + str(len(backup)) + " backup jobs are disabled", extra)
+        return respond(KEY, METHOD, False, "No backup job is configured on the company's Veeam Backup & "
+                       "Replication servers (" + str(len(jobs)) + " jobs of other types)", extra)
+    return respond(KEY, METHOD, False, "All " + str(len(backup)) + " backup jobs of the company are disabled", extra)
 
 
 def transform(input):

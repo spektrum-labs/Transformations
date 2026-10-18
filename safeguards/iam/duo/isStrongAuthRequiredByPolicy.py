@@ -246,8 +246,120 @@ def classify(policy, glob):
     return "strong", "allows only phishing-resistant methods: " + ", ".join(permitted)
 
 
+# Integration-Service hands a vendor refusal over as data when the method opts in (vendorErrorAsResponse):
+# {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <vendor body>}}, as the whole input or as
+# one of the workflow outputs merged into it. Duo answers a missing Admin API permission with HTTP 403
+# {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}. That says nothing about the tenant's posture, so the
+# result stays None (Unevaluated) and the error names the refused call. A permission is named only where Duo's
+# documentation states it; otherwise the error says the documentation does not name it. Any other handed-over
+# refusal is Unevaluated with errorCode "vendor_refusal" and names no permission.
+REFUSAL_FORBIDDEN_CODE = 40301
+PERMISSION_NOT_GRANTED = "permission_not_granted"
+VENDOR_REFUSAL = "vendor_refusal"
+REFUSAL_ENDPOINTS = {"policies": "GET /admin/v2/policies", "summary": "GET /admin/v2/policies/summary"}
+REFUSAL_PERMISSIONS = {}
+
+
+def refusal_decoded(body):
+    """A vendor body or workflow output as an object: dicts as they are, JSON object text or bytes parsed, else None."""
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8")
+        except Exception:
+            return None
+    if isinstance(body, str):
+        if not body.strip().startswith("{"):
+            return None
+        try:
+            return json.loads(body)
+        except Exception:
+            return None
+    return body
+
+
+def refusal_find(value, path, depth):
+    """[(path, marker)] for every vendorErrorAsResponse in the input: top level, under an output key, or nested."""
+    value = refusal_decoded(value)
+    if isinstance(value, list):
+        found = []
+        if depth < 3:
+            for item in value:
+                found.extend(refusal_find(item, path, depth + 1))
+        return found
+    if not isinstance(value, dict):
+        return []
+    if "vendorErrorAsResponse" in value:
+        return [(path, value["vendorErrorAsResponse"])]
+    found = []
+    if depth < 3:
+        for k in value:
+            found.extend(refusal_find(value[k], path + [str(k)], depth + 1))
+    return found
+
+
+def refusal_unevaluated(found):
+    problems = []
+    recommendations = []
+    seen = []
+    forbidden_any = False
+    permission = None
+    for path, marker in found:
+        which = None
+        for part in path:
+            if part in REFUSAL_ENDPOINTS:
+                which = part
+                break
+        if which in seen:
+            continue
+        seen.append(which)
+        status = marker.get("status") if isinstance(marker, dict) else None
+        body = refusal_decoded(marker.get("body")) if isinstance(marker, dict) else None
+        forbidden = (status == 403 and isinstance(body, dict)
+                     and body.get("code") == REFUSAL_FORBIDDEN_CODE and body.get("message") == "Access forbidden")
+        if which is None:
+            target = "a call in this check's workflow (" + " or ".join(list(REFUSAL_ENDPOINTS.values())) + ")"
+        else:
+            target = REFUSAL_ENDPOINTS[which]
+        if not forbidden:
+            problems.append("Duo refused " + target + " (HTTP " + str(status)[:10] + "); nothing was measured.")
+            recommendations.append("Confirm the Duo Admin API credentials are valid and the Admin API application is enabled.")
+            continue
+        forbidden_any = True
+        head = "PERMISSION-NOT-GRANTED: Duo refused the call to " + target + " with HTTP 403 code 40301 (Access forbidden)"
+        if which in REFUSAL_PERMISSIONS:
+            permission = REFUSAL_PERMISSIONS[which]
+            problems.append(head + ": the Admin API application lacks the \"" + permission
+                            + "\" permission. Nothing was measured; this is not a posture result.")
+            recommendations.append("In the Duo Admin Panel, open the Admin API application used for Spektrum and enable the \""
+                                   + permission + "\" permission; the integration key and secret do not change.")
+        elif which is None:
+            problems.append(head + ": the Admin API application lacks a permission one of these endpoints needs, and the "
+                            "refused call is not identified. Duo's documentation does not name the permission for every "
+                            "endpoint, so check the application's permission grants. Nothing was measured; this is not a "
+                            "posture result.")
+            recommendations.append("In the Duo Admin Panel, check the permission grants of the Admin API application used for Spektrum.")
+        else:
+            problems.append(head + ": the Admin API application lacks a permission this endpoint needs; Duo's "
+                            "documentation does not name it, so check the application's permission grants. Nothing was "
+                            "measured; this is not a posture result.")
+            recommendations.append("In the Duo Admin Panel, check the permission grants of the Admin API application used for Spektrum.")
+    out = create_response({CRITERIA_KEY: None}, None, fail_reasons=problems, api_errors=problems,
+                          recommendations=recommendations)
+    collection = out["additionalInfo"]["dataCollection"]
+    if forbidden_any:
+        collection["errorCode"] = PERMISSION_NOT_GRANTED
+        if permission is not None:
+            collection["requiredPermission"] = permission
+    else:
+        collection["errorCode"] = VENDOR_REFUSAL
+    return out
+
+
 def transform(input):
     try:
+        found = refusal_find(input, [], 0)
+        if found:
+            return refusal_unevaluated(found)
         body = unwrap(decode(input))
         text = error_text(body)
         if text:

@@ -1,5 +1,11 @@
 """Transformation: confirmedLicensePurchased - Veeam Service Provider Console REST API v3.
-Source: GET /api/v3/licensing/backupServers (all pages)
+Source: workflow getCompanyLicenses: company + GET /api/v3/infrastructure/backupServers filtered by
+organizationUid (backupServers) + GET /api/v3/licensing/backupServers (licenses, all pages).
+One company only: the "company" part (GET /api/v3/organizations/companies filtered by the connection's
+Company UID) must name exactly one company, and it must equal the Company UID Integration-Service echoes
+under "configuredSettings"; otherwise (no Company UID, a mismatch) the check is None, never a verdict
+over the whole console. Only licenses whose backupServerUid is one of the
+company's own backup servers count; no such server or license is None.
 True when every Veeam Backup & Replication license reported to VSPC is a paid type (Rental,
 Subscription or Perpetual) with status Valid or Warning (Warning = valid, expiring soon). False when
 any is Evaluation, NFR, Community, not installed, expired, in error or unlicensed. None when VSPC
@@ -10,7 +16,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 KEY = "confirmedLicensePurchased"
-METHOD = "listBackupServerLicenses"
+METHOD = "getCompanyLicenses"
 
 VENDOR = "Veeam"
 PRODUCT = "Veeam Service Provider Console (REST API v3)"
@@ -36,21 +42,18 @@ def envelope_error(obj):
     """A short reason when obj is an IS or VSPC error envelope, else None."""
     if not isinstance(obj, dict):
         return None
+    # Fixed reasons: the vendor's own error text is never echoed into the result.
     errs = obj.get("errors")
     if isinstance(errs, list) and len(errs) > 0:
-        first = errs[0] if isinstance(errs[0], dict) else {}
-        return "VSPC returned an error: " + str(first.get("message") or first.get("type") or errs[0])[:300]
+        return "VSPC returned an error"
     err = obj.get("error")
     if err is True or isinstance(err, (str, dict)):
-        detail = obj.get("message") or err
-        if isinstance(detail, dict):
-            detail = detail.get("message") or json.dumps(detail)[:200]
-        return "The VSPC call did not return data: " + str(detail)[:300]
+        return "The VSPC call did not return data"
     code = obj.get("status_code") or obj.get("statusCode") or obj.get("status")
     if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
         return "The VSPC call returned HTTP " + str(code)
     if obj.get("status") == "Error":
-        return "The VSPC call did not return data: " + str(obj.get("message") or "error")[:300]
+        return "The VSPC call did not return data"
     return None
 
 
@@ -101,7 +104,8 @@ def complete_items(raw, what):
     if isinstance(total, bool) or not isinstance(total, int):
         return None, what + ": no meta.pagingInfo.total, so a complete read cannot be shown"
     if len(items) < total:
-        return None, what + ": read " + str(len(items)) + " of " + str(total) + "; the remaining pages were not read"
+        # No numbers: the total can be the whole console's count, across companies.
+        return None, what + ": only part of the list was read; the remaining pages were not read"
     for it in items:
         if not isinstance(it, dict):
             return None, what + ": an entry is not an object"
@@ -128,6 +132,141 @@ def workflow_part(raw, key):
             return None
         cur = nxt
     return None
+
+
+HEX = "0123456789abcdef"
+
+
+def is_uid(value):
+    """True for a VSPC UID: 36 characters, hex in 8-4-4-4-12 groups."""
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    low = value.lower()
+    for i in range(36):
+        if i in (8, 13, 18, 23):
+            if low[i] != "-":
+                return False
+        elif low[i] not in HEX:
+            return False
+    return True
+
+
+def is_text(value):
+    """A readable, non-blank string field."""
+    return isinstance(value, str) and value.strip() != ""
+
+
+def lower_text(value):
+    return value.lower() if isinstance(value, str) else None
+
+
+def part_error(raw):
+    """An error envelope at the top of the body (Integration-Service stopped the workflow), else None."""
+    cur = to_obj(raw)
+    for depth in range(8):
+        if not isinstance(cur, dict):
+            return None
+        problem = envelope_error(cur)
+        if problem is not None:
+            return problem
+        nxt = None
+        if "validation" in cur and "data" in cur:
+            nxt = to_obj(cur.get("data"))
+        else:
+            for w in WRAPPERS:
+                if isinstance(cur.get(w), (dict, str)):
+                    nxt = to_obj(cur.get(w))
+                    break
+        if nxt is None:
+            return None
+        cur = nxt
+    return None
+
+
+def configured_company(raw):
+    """(company UID, None) from the workflow's "company" part, else (None, reason).
+    The part is GET /organizations/companies filtered by the connection's Company UID: exactly one
+    company with a UID, read completely. Anything else (no Company UID, so no company read; no match;
+    several companies because the filter was not applied; an error) is not evaluated."""
+    part = workflow_part(raw, "company")
+    if part is None:
+        problem = part_error(raw)
+        if problem is not None:
+            return None, problem
+        return None, ("No company read in the response. The connection needs its Company UID (VSPC portal: "
+                      "Companies > the company > UID) so only that company is evaluated, never the whole console")
+    items, why = complete_items(part, "company")
+    if why:
+        return None, why
+    if len(items) != 1:
+        return None, ("The Company UID did not match exactly one company on the console, so no single "
+                      "company can be evaluated")
+    uid = items[0].get("instanceUid")
+    if not is_uid(uid):
+        return None, "The company read carries no valid instanceUid"
+    # The company VSPC returned must be the one the connection names (Integration-Service echoes the
+    # Company UID under configuredSettings). A console that ignores the filter and holds one company
+    # would otherwise answer with it whatever UID was asked for.
+    asked = configured_uid(raw)
+    if asked is None:
+        return None, ("No configured Company UID in the response, so the company VSPC returned cannot be "
+                      "shown to be the one this connection names")
+    if uid.lower() != asked:
+        return None, "The company VSPC returned does not match the connection's Company UID"
+    return uid.lower(), None
+
+
+def configured_uid(raw):
+    """The connection's Company UID as Integration-Service echoed it (output.echoSettings), or None."""
+    conf = workflow_part(raw, "configuredSettings")
+    if not isinstance(conf, dict):
+        return None
+    uid = conf.get("companyUid")
+    if not is_uid(uid):
+        return None
+    return uid.lower()
+
+
+def company_servers(raw, company):
+    """({backup server UID: True}, None) for the company's own Veeam Backup & Replication servers, else
+    (None, reason). Only servers whose organizationUid is the company count, whatever else is listed."""
+    part = workflow_part(raw, "backupServers")
+    if part is None:
+        return None, "No backup server read for the company; repositories and licenses cannot be scoped to it"
+    items, why = complete_items(part, "company backup servers")
+    if why:
+        return None, why
+    owned = {}
+    for s in items:
+        uid = lower_text(s.get("instanceUid"))
+        org = lower_text(s.get("organizationUid"))
+        if not org:
+            # No owner (an unassigned or provider-owned server): not the company's by VSPC's own account.
+            # Skipped here; a check that finds the company's own job on it reads Not evaluated.
+            continue
+        if org == company:
+            if not uid:
+                # The company's server, but its UID cannot be read: its licenses or repositories would hide.
+                return None, ("A backup server of the company carries no instanceUid, so the company's own "
+                              "servers cannot be shown completely")
+            owned[uid] = True
+    if len(owned) == 0:
+        return None, "The company has no Veeam Backup & Replication server on this console; nothing to evaluate"
+    return owned, None
+
+
+def company_jobs(jobs, company):
+    """(the jobs the company owns, whether any job has no readable owner). A job without an
+    organizationUid may be anyone's, so a check must not judge the attributable rest without it."""
+    own = []
+    unattributed = False
+    for j in jobs:
+        org = lower_text(j.get("organizationUid"))
+        if not org:
+            unattributed = True
+        elif org == company:
+            own.append(j)
+    return own, unattributed
 
 
 def parse_time(value):
@@ -197,23 +336,47 @@ OK_STATUS = ["Valid", "Warning"]
 
 
 def evaluate(input):
-    lics, why = complete_items(input, "backup server licenses")
+    company, why = configured_company(input)
     if why:
         return respond(KEY, METHOD, None, why)
+    servers, why = company_servers(input, company)
+    if why:
+        return respond(KEY, METHOD, None, why)
+    all_lics, why = complete_items(workflow_part(input, "licenses"), "backup server licenses")
+    if why:
+        return respond(KEY, METHOD, None, why)
+    for x in all_lics:
+        if not lower_text(x.get("backupServerUid")):
+            # Its server cannot be read. Only an owner field naming someone else rules it out; the VSPC v3
+            # licence model has none, so in practice such a licence could be the company's unpaid one.
+            owner = lower_text(x.get("organizationUid"))
+            if owner and owner != company:
+                continue
+            return respond(KEY, METHOD, None, "Some licenses carry no backupServerUid and no other owner, so the "
+                           "company's own licenses cannot be shown completely")
+    lics = [x for x in all_lics if servers.get(lower_text(x.get("backupServerUid")) or "") is True]
     if len(lics) == 0:
-        return respond(KEY, METHOD, None, "VSPC reports no Veeam Backup & Replication server license; "
-                       "nothing to evaluate")
+        return respond(KEY, METHOD, None, "VSPC reports no license on the company's Veeam Backup & Replication "
+                       "servers; nothing to evaluate")
     bad = []
+    unread = 0
     for lic in lics:
+        if not is_text(lic.get("type")) or not is_text(lic.get("status")):
+            unread = unread + 1
+            continue
         if lic.get("type") not in PAID or lic.get("status") not in OK_STATUS:
             bad.append(str(lic.get("backupServerUid") or "?") + ": " + str(lic.get("type")) + "/" + str(lic.get("status")))
     extra = {"licenseCount": len(lics), "types": sorted(set([str(x.get("type")) for x in lics])),
-             "statuses": sorted(set([str(x.get("status")) for x in lics]))}
+             "statuses": sorted(set([str(x.get("status")) for x in lics])), "backupServerCount": len(servers)}
     if bad:
         extra["unpaidOrInvalid"] = bad[:25]
         return respond(KEY, METHOD, False, str(len(bad)) + " of " + str(len(lics)) +
-                       " backup server licenses are not a valid paid license", extra)
-    return respond(KEY, METHOD, True, "All " + str(len(lics)) + " backup server licenses are valid paid licenses", extra)
+                       " licenses on the company's backup servers are not a valid paid license", extra)
+    if unread:
+        return respond(KEY, METHOD, None, "Some licenses on the company's backup servers report no type or status, "
+                       "so whether they are valid paid licenses cannot be shown")
+    return respond(KEY, METHOD, True, "All " + str(len(lics)) + " licenses on the company's backup servers are "
+                   "valid paid licenses", extra)
 
 
 def transform(input):

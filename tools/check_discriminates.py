@@ -16,11 +16,17 @@ on.
 
 WHAT IS NOT A FINDING, and why the exemptions are a list rather than an inference:
 
-  * A control the vendor's product does not let anyone disable is legitimately always
-    true, and saying so is correct rather than lazy. CrashPlan and Datto encryption are
-    argued on exactly these grounds. Such a criterion belongs in the allowlist with a
-    reason, adjudicated by someone who owns the vendor relationship -- NOT by this
-    checker, which cannot read a product manual.
+  * A control the vendor's product does not let anyone disable may be argued to be
+    always true. Such a criterion belongs in the allowlist with a reason, adjudicated by
+    someone who owns the vendor relationship -- NOT by this checker, which cannot read a
+    product manual. The allowlist is EMPTY: no such exemption is in force. CrashPlan and
+    Datto encryption were once argued on these grounds and no longer need it, because both
+    can now reach `false`. Datto measures each active asset. CrashPlan reads the tenant's
+    `encryptionEnabled` override and refuses an empty or error body, BUT it still falls
+    back to the vendor default (`true`) when a readable settings body omits the override --
+    so it discriminates without yet being the pattern to copy. The pattern is: measure the
+    setting the API exposes, and where it exposes none, report the criterion as not
+    measured rather than assert the product fact as a measurement.
   * A criterion whose `true` denotes the INSECURE condition is handled by the shared
     INVERTED set in check_fail_closed.py; `true` everywhere is a different (and also
     wrong) shape there, but it is not THIS contract's business.
@@ -67,7 +73,7 @@ except ImportError:  # pragma: no cover - only when run from an odd cwd
     SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
     INVERTED = frozenset()
 
-#: bodies describing an estate that is PLAINLY NON-COMPLIANT. A working criterion must say
+#: bodies describing an environment that is PLAINLY NON-COMPLIANT. A working criterion must say
 #: no to at least one of these. They are varied in shape because transforms disagree about
 #: what a response looks like, and a transform that understands none of them must not be
 #: mistaken for one that understands them and approves.
@@ -83,7 +89,7 @@ BAD_POSTURE = [
      "isEnabled": False, "installed": False},
 ]
 
-#: a body describing a plainly COMPLIANT estate -- used only to establish that the
+#: a body describing a plainly COMPLIANT environment -- used only to establish that the
 #: transform reacts to input at all
 GOOD_POSTURE = {
     "enabled": True, "status": "active", "count": 5, "totalRecords": 7,

@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the environment, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -33,7 +33,18 @@ class Poisoned(dict):
         return 1
 
 
+AWS_DENIED = {"__type": "AccessDeniedException", "message": "User is not authorized to perform: sso:ListInstances"}
+
 CASES = [
+    ('isssoenabled', ('isSSOEnabled',), 'empty_dict', lambda: {}),
+    ('isssoenabled', ('isSSOEnabled',), 'aws_denied', lambda: dict(AWS_DENIED)),
+    ('isssoenabled', ('isSSOEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isrbacimplemented', ('isRBACImplemented',), 'empty_dict', lambda: {}),
+    ('isrbacimplemented', ('isRBACImplemented',), 'aws_denied', lambda: dict(AWS_DENIED)),
+    ('isrbacimplemented', ('isRBACImplemented',), 'poisoned', lambda: Poisoned()),
+    ('istrustedapplicationprotectionenabled', ('isTrustedApplicationProtectionEnabled',), 'empty_dict', lambda: {}),
+    ('istrustedapplicationprotectionenabled', ('isTrustedApplicationProtectionEnabled',), 'aws_denied', lambda: dict(AWS_DENIED)),
+    ('istrustedapplicationprotectionenabled', ('isTrustedApplicationProtectionEnabled',), 'poisoned', lambda: Poisoned()),
     ('authtypesallowed', ('authTypesAllowed',), 'empty_dict', lambda: {}),
     ('authtypesallowed', ('authTypesAllowed',), 'poisoned', lambda: Poisoned()),
     ('unprovisionedpermissionsetscount', ('unprovisionedPermissionSetsCount',), 'empty_dict', lambda: {}),

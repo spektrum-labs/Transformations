@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the environment, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -33,8 +33,17 @@ class Poisoned(dict):
         return 1
 
 
+ERROR_BODY = {"error": True, "message": "Integration execution error: HTTP 500"}
+
 CASES = [
     ('isAntiPhishingEnabled', ('isAntiPhishingEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isImposterEmailDetectionEnabled', ('isImposterEmailDetectionEnabled',), 'error body', lambda: dict(ERROR_BODY)),
+    ('isImposterEmailDetectionEnabled', ('isImposterEmailDetectionEnabled',), 'empty body', lambda: {}),
+    ('isThreatCampaignCorrelationEnabled', ('isThreatCampaignCorrelationEnabled',), 'error body', lambda: dict(ERROR_BODY)),
+    ('isThreatCampaignCorrelationEnabled', ('isThreatCampaignCorrelationEnabled',), 'empty body', lambda: {}),
+    ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'error body', lambda: dict(ERROR_BODY)),
+    ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'empty body', lambda: {}),
+    ('isVendorEmailCompromiseDetectionEnabled', ('isVendorEmailCompromiseDetectionEnabled',), 'zero cases', lambda: {'vendorCases': []}),
 ]
 
 

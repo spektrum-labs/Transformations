@@ -1,0 +1,40 @@
+{
+  "name": "isManagementInterfaceHttpsOnly",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Plain HTTP and Telnet administration are both disabled on the management interface.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the management interface services of the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The management service settings showing both disable-http and disable-telnet set to yes.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/isManagementInterfaceHttpsOnly.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "deviceconfig/system/service/disable-http and disable-telnet (yes or no) from the CLI hierarchy. Elements that are absent are unknown, not enabled. Interface management profiles on data-plane interfaces are not read."
+}
