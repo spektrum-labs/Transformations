@@ -5,7 +5,8 @@ Evaluates: Every active cloud archival target reports an encryption type.
 API Source: listArchivalTargets (POST https://<account>.my.rubrik.com/api/graphql, read-only GraphQL query)
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
         https://developer.rubrik.com/Rubrik-Security-Cloud-API/API-Reference/queries/targets/
-Note: RCS/Azure/Glacier targets expose no encryptionType in the RSC schema, so they fail as not evidenced (not as unencrypted).
+Note: RCS/Azure/Glacier targets expose no encryptionType in the RSC schema, so for them the encryption cannot be read. That is
+Not evaluated (None), never a gap: a reported encryption type outside the AES-256 set is still False, and False wins when both occur.
 Fails closed: a refused call, a GraphQL error on the field this check reads, an incomplete page or an
 unrecognised body is None with dataCollection status "error", so Token-Service records it as not
 evaluated rather than as a gap. Never True from missing data.
@@ -229,14 +230,18 @@ def active_targets(input):
 
 
 def encryption_gaps(targets, allowed):
+    """(gaps, unread). gaps are targets whose reported encryptionType is not an allowed one; unread are targets whose type RSC
+    does not report at all, which says nothing about encryption either way."""
     gaps = []
+    unread = []
     for t in targets:
         enc = t.get("encryptionType")
         if enc is None:
-            gaps.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): RSC does not report an encryption type for this target type")
+            unread.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): RSC does not report an encryption type for this target type")
         elif enc not in allowed:
             gaps.append(str(t.get("name")) + " (" + str(t.get("targetType")) + "): encryptionType " + str(enc))
-    return gaps
+    return gaps, unread
+
 
 def evaluate(input):
     targets, validation, failure = active_targets(input)
@@ -246,8 +251,11 @@ def evaluate(input):
     summary = {"activeCloudTargets": len(cloud)}
     if not cloud:
         return fail(validation, "No active cloud archival location exists.", None, summary, value=False)
-    gaps = encryption_gaps(cloud, AES256_TYPES)
+    gaps, unread = encryption_gaps(cloud, AES256_TYPES)
     summary["gaps"] = gaps
+    summary["unread"] = unread
     if gaps:
         return fail(validation, "Encryption is not evidenced for every active cloud archival location: " + "; ".join(gaps) + ".", None, summary, value=False)
+    if unread:
+        return fail(validation, "Encryption could not be read for: " + "; ".join(unread) + ". The control's state is unknown, so this is Not evaluated, not a gap.", None, summary)
     return ok(validation, True, "All " + str(len(cloud)) + " active cloud archival locations report an encryption type.", summary)

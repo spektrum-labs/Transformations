@@ -179,7 +179,7 @@ def transform(input):
                 "without traversing Umbrella's inspection path.")
             recommendations.append(
                 "Configure at least one encrypted network tunnel from a branch site to "
-                "Umbrella under Deployments > Network Tunnels, or confirm this estate is "
+                "Umbrella under Deployments > Network Tunnels, or confirm this environment is "
                 "covered by roaming clients instead of site tunnels.")
         elif configured:
             names = [t.get("name") or t.get("id") for t in (usable + unknown_state)[:5]]

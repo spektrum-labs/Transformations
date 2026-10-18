@@ -122,20 +122,20 @@ class Measured(unittest.TestCase):
 
 class CriticalCountCappedScan(unittest.TestCase):
     """criticalVulnerabilityCount on a partial (capped) scan, 2 Oct 2026: the same guard noCriticalFindings got
-    in TX #786/#788. Shapes follow the recorded inputSummary of the live Carlex and See to Solve scans."""
+    in TX #786/#788. Shapes follow the recorded inputSummary of two live scans."""
 
     def full(self, payload):
         return load("criticalvulnerabilitycount").transform(payload)
 
     def test_capped_clean_scan_is_unevaluated(self):
-        # Carlex 2 Oct 01:04 ET: 25 of 45 discovered hosts scanned, 0 findings. Read 0 (a pass) before this fix.
-        out = self.full(scan(primaryDomain="carlex.com", domainsScanned="25", totalDiscovered="45", domainsCapped="True",
+        # A live scan, 2 Oct 01:04 ET: 25 of 45 discovered hosts scanned, 0 findings. Read 0 (a pass) before this fix.
+        out = self.full(scan(primaryDomain="example.com", domainsScanned="25", totalDiscovered="45", domainsCapped="True",
                              templatesScanned="1675", domainResults=[]))
         tr, info = out["transformedResponse"], out["additionalInfo"]
         self.assertIsNone(tr["criticalVulnerabilityCount"])
         self.assertEqual(info["dataCollection"]["status"], "error")
-        self.assertIn("Only 25 of 45 discovered host(s) of carlex.com were scanned", info["dataCollection"]["errors"][0])
-        self.assertIn("not a clean estate", info["dataCollection"]["errors"][0])
+        self.assertIn("Only 25 of 45 discovered host(s) of example.com were scanned", info["dataCollection"]["errors"][0])
+        self.assertIn("not proof of no findings in scope", info["dataCollection"]["errors"][0])
 
     def test_numeric_short_without_flag_is_unevaluated(self):
         out = self.full(scan(domainsScanned="25", totalDiscovered="70", domainResults=[]))
@@ -146,8 +146,8 @@ class CriticalCountCappedScan(unittest.TestCase):
         self.assertIsNone(value("criticalvulnerabilitycount", scan(totalDiscovered="2", domainsCapped=True)))
 
     def test_full_clean_scan_still_measures_zero(self):
-        # See to Solve 2 Oct 01:04 ET: 20 of 20 hosts, 0 findings: a real zero.
-        out = self.full(scan(primaryDomain="seetosolve.com", domainsScanned="20", totalDiscovered="20",
+        # A live scan, 2 Oct 01:04 ET: 20 of 20 hosts, 0 findings: a real zero.
+        out = self.full(scan(primaryDomain="example.net", domainsScanned="20", totalDiscovered="20",
                              domainsCapped="False", domainResults=[]))
         self.assertEqual(out["transformedResponse"]["criticalVulnerabilityCount"], 0)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")

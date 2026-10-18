@@ -159,7 +159,7 @@ def run_sd(policies, sd):
 
 
 class SecurityDefaults(unittest.TestCase):
-    """No Conditional Access policy enabled (an estate with no enabled policy): read security defaults."""
+    """No Conditional Access policy enabled (an environment with no enabled policy): read security defaults."""
 
     def test_real_shape_security_defaults_on_never_passes_and_names_the_next_step(self):
         res, info = run_sd(ca(), security_defaults(True))
@@ -262,7 +262,7 @@ class SecurityDefaults(unittest.TestCase):
 # Group membership read (3 Oct 2026). Shapes follow GET /v1.0/users?$select=id,accountEnabled,userType&$filter=
 # accountEnabled eq true and userType eq 'Member'&$count=true (ConsistencyLevel: eventual) and GET /v1.0/groups/{id}/
 # transitiveMembers/microsoft.graph.user?$select=id&$count=true, as the Integration-Service workflow merges them.
-# Estate A is synthetic: four enabled member accounts, a guest and a disabled account.
+# Tenant A is synthetic: four enabled member accounts, a guest and a disabled account.
 U1 = "a0000000-0000-0000-0000-000000000001"
 U2 = "a0000000-0000-0000-0000-000000000002"
 U3 = "a0000000-0000-0000-0000-000000000003"
@@ -577,7 +577,7 @@ class GroupMembership(unittest.TestCase):
 
 # Exclusion bar (master review, 3 Oct 2026; the same bar as #850): at most 2 accounts excluded by name across the
 # covering policies, named in the pass reason; any excluded group, role, guests/external users or more than 2
-# accounts reads not evaluated. Estate A is synthetic.
+# accounts reads not evaluated. Tenant A is synthetic.
 ROLE_REPORTS_READER = "4a5d8f65-41da-4de4-8968-e035b65339cf"
 GUEST_EXCLUSION = {"guestOrExternalUserTypes": "b2bCollaborationGuest,b2bCollaborationMember",
                    "externalTenants": {"@odata.type": "#microsoft.graph.conditionalAccessAllExternalTenants",

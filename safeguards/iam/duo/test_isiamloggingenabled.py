@@ -3,8 +3,9 @@
 v1 getAuthenticationLogs hands over {"stat": "OK", "response": [...]} with "username" on each event;
 v2 getAuthLogs hands over {"authlogs": [...], "metadata": {...}} with the user under user.name. Both
 must read the same way, and the evidence must name the endpoint the events came from and the real time
-span of the events read. 403 / 40301 stays a measured False; any other error or an empty body is a
-data-collection error, never judged. Synthetic data only.
+span of the events read. 403 / 40301 is Not evaluated (every value None, a data-collection error naming
+"Grant read log"), never a measured False; any other handed-over error and an empty or unreadable body
+are Not evaluated too. False only when events came back and none can be attributed. Synthetic data only.
 """
 import importlib.util
 import json
@@ -94,26 +95,61 @@ class DuoIAMLoggingShapesTests(unittest.TestCase):
         self.assertIs(response["transformedResponse"][KEY], False)
         self.assertIn("/admin/v2/logs/authentication", self.evaluation(response)["failReasons"][0])
 
-    def test_empty_bodies_are_data_collection_errors_not_judged(self):
-        for payload in ({"authlogs": [], "metadata": {}}, {"stat": "OK", "response": []}, {}, None, "not json"):
+    def assert_all_none(self, response):
+        result = response["transformedResponse"]
+        self.assertIn(KEY, result)
+        for k in result:
+            self.assertIsNone(result[k], k)
+        self.assertEqual(self.evaluation(response)["passReasons"], [])
+
+    def test_empty_bodies_are_not_evaluated(self):
+        # an empty list is what a failed read defaults to, and a quiet tenant looks the same:
+        # nothing is judged, never a False
+        for payload in ({"authlogs": [], "metadata": {}}, {"stat": "OK", "response": []}, {}, None, "not json",
+                        b"not json", [], {"response": []}):
             with self.subTest(payload=payload):
                 response = self.t.transform(payload)
-                self.assertIs(response["transformedResponse"][KEY], False)
+                self.assert_all_none(response)
                 self.assertEqual(self.collection(response)["status"], "error")
-                self.assertEqual(self.evaluation(response)["failReasons"], [])
+                self.assertTrue(self.collection(response)["errors"])
 
-    def test_access_forbidden_is_a_measured_false(self):
-        response = self.t.transform(FORBIDDEN_MARKED)
+    def test_events_present_but_none_attributable_is_still_a_measured_false(self):
+        no_user = [{"txid": "c1", "timestamp": 1790000000, "result": "success"}]
+        response = self.t.transform({"stat": "OK", "response": no_user})
         self.assertIs(response["transformedResponse"][KEY], False)
         self.assertEqual(self.collection(response)["status"], "success")
-        self.assertIn("40301", self.evaluation(response)["failReasons"][0])
 
-    def test_other_vendor_error_is_a_data_collection_error(self):
+    def assert_forbidden_unevaluated(self, response):
+        self.assert_all_none(response)
+        collection = self.collection(response)
+        self.assertEqual(collection["status"], "error")
+        self.assertEqual(collection["errorCode"], "permission_not_granted")
+        self.assertEqual(collection["requiredPermission"], "Grant read log")
+        text = " ".join(collection["errors"])
+        self.assertIn("40301", text)
+        self.assertIn('"Grant read log"', text)
+        self.assertIn("Grant read log", self.evaluation(response)["recommendations"][0])
+
+    def test_access_forbidden_is_not_evaluated(self):
+        text = json.dumps(FORBIDDEN_MARKED)
+        for payload in (FORBIDDEN_MARKED, text, text.encode("utf-8"), {"apiResponse": FORBIDDEN_MARKED},
+                        {"data": FORBIDDEN_MARKED, "validation": {"status": "valid", "errors": [], "warnings": []}},
+                        {"vendorErrorAsResponse": dict(FORBIDDEN_MARKED["vendorErrorAsResponse"],
+                                                       body=json.dumps(FORBIDDEN_BODY))}):
+            with self.subTest(payload=str(payload)[:40]):
+                self.assert_forbidden_unevaluated(self.t.transform(payload))
+
+    def test_other_vendor_error_is_not_evaluated_without_a_permission(self):
         other = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Access forbidden",
                                            "body": {"code": 40300, "message": "Access forbidden"}}}
-        response = self.t.transform(other)
-        self.assertEqual(self.collection(response)["status"], "error")
-        self.assertEqual(self.evaluation(response)["failReasons"], [])
+        for payload in (other, {"vendorErrorAsResponse": {"status": 500, "body": "oops"}},
+                        {"vendorErrorAsResponse": "boom"}):
+            with self.subTest(payload=str(payload)[:40]):
+                response = self.t.transform(payload)
+                self.assert_all_none(response)
+                self.assertEqual(self.collection(response)["status"], "error")
+                self.assertEqual(self.collection(response)["errorCode"], "vendor_refusal")
+                self.assertNotIn("Grant ", " ".join(self.collection(response)["errors"]))
 
 
 if __name__ == "__main__":

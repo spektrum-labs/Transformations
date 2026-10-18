@@ -73,7 +73,7 @@ except ImportError:  # pragma: no cover - only when run from an odd cwd
     SATISFACTION = re.compile(r"^(confirmed|is|are|has)[A-Z]")
     INVERTED = frozenset()
 
-#: bodies describing an estate that is PLAINLY NON-COMPLIANT. A working criterion must say
+#: bodies describing an environment that is PLAINLY NON-COMPLIANT. A working criterion must say
 #: no to at least one of these. They are varied in shape because transforms disagree about
 #: what a response looks like, and a transform that understands none of them must not be
 #: mistaken for one that understands them and approves.
@@ -89,7 +89,7 @@ BAD_POSTURE = [
      "isEnabled": False, "installed": False},
 ]
 
-#: a body describing a plainly COMPLIANT estate -- used only to establish that the
+#: a body describing a plainly COMPLIANT environment -- used only to establish that the
 #: transform reacts to input at all
 GOOD_POSTURE = {
     "enabled": True, "status": "active", "count": 5, "totalRecords": 7,

@@ -20,12 +20,21 @@ Fields read, per the Cloudflare API reference:
 isFirewallEnabled: at least one custom firewall rule is active (not paused, not disabled) with an enforcing action
 (block, challenge, js_challenge, managed_challenge). Rules present with none active and enforcing -- every rule
 paused, or only allow, log, bypass or skip -- is False.
+paused and enabled are booleans, and a stored replay can carry them as text: "true" and "false" (any case, any spacing)
+read as the booleans, and null, an empty string and "None"/"null" read as absent (not paused, enabled). Any other
+value (a number, "maybe", a list) cannot be read. A rule that could enforce and carries a flag that cannot be read is
+not counted as active; when no other rule is active and enforcing the answer is None, never False.
 Scope: the zone's custom firewall rules only. Managed rulesets (http_request_firewall_managed) are a separate phase and
 are not read, so the reason names the scope.
 
 Not evaluated (None with a dataCollection error): an empty, error or unrecognised body; success false; no rules at
-all, because the deprecated endpoint and a zone that relies on managed rules alone both read as an empty list; or a
-partial page that shows no active enforcing rule.
+all, because the deprecated endpoint and a zone that relies on managed rules alone both read as an empty list; a
+partial page that shows no active enforcing rule; or a rule that could enforce whose paused or enabled flag cannot be
+read, with no other rule active and enforcing. A page is partial when result_info says more rules exist (total_count
+above the rules read, total_pages above one unless total_count equals the rules read, a page that does not start at
+the beginning, a cursor still set), when result_info or the paging block is present but is not an object, or when a
+paging block carries pages above one or a next link. An active enforcing rule
+that was read still proves True on a partial page.
 
 isFirewallLoggingEnabled is not answered here. Neither API carries a field that evidences firewall event logging
 (the Rulesets logging object configures skip rules only), so that criterion is document-only; see the C1a validation
@@ -117,6 +126,128 @@ def as_int(value):
     return None
 
 
+def page_int(value):
+    """A whole-number page field, or None. Stored replays stringify numbers: 4, 4.0, "4" and "4.0" are all 4."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(str(value).strip())
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        whole = int(number)
+        if whole != number:
+            return None
+        return whole
+    except Exception:
+        return None
+
+
+def page_field_unreadable(value):
+    """True when a page field is present but is not a whole number (null, an empty string and the stringified nulls are absent)."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "null"):
+        return False
+    return page_int(value) is None
+
+
+def page_cursor(value):
+    """A pagination cursor, or None. Stored replays stringify null as "None" or "null"."""
+    if value is None or value is False:
+        return None
+    text = str(value).strip()
+    if text.lower() in ("", "none", "null", "false"):
+        return None
+    return text
+
+
+def marker_set(value):
+    """True when a next-page marker (a cursor, a link or a list of links) is set."""
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    return page_cursor(value) is not None
+
+
+def flag_kind(value):
+    """"true" or "false" for a boolean or its text, "absent" for null, an empty string and the stringified nulls, else
+    "unknown" (a number, a list, any other text)."""
+    if value is None:
+        return "absent"
+    if isinstance(value, bool):
+        if value:
+            return "true"
+        return "false"
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "true":
+            return "true"
+        if text == "false":
+            return "false"
+        if text in ("", "none", "null"):
+            return "absent"
+    return "unknown"
+
+
+def rule_state(rule):
+    """"inactive" when the rule is paused or disabled, "unreadable" when a flag it carries cannot be read and nothing
+    else shows it inactive, else "active". An absent flag is the default: not paused, enabled."""
+    flt = rule.get("filter")
+    paused = [flag_kind(rule.get("paused"))]
+    if isinstance(flt, dict):
+        paused.append(flag_kind(flt.get("paused")))
+    enabled = flag_kind(rule.get("enabled"))
+    if "true" in paused or enabled == "false":
+        return "inactive"
+    if "unknown" in paused or enabled == "unknown":
+        return "unreadable"
+    return "active"
+
+
+def more_rules_exist(body, rules_read):
+    """True when the body shows rules beyond the ones it carries (a partial page)."""
+    info = body.get("result_info")
+    if not isinstance(info, dict):
+        if page_cursor(info) is not None:
+            return True  # present but not an object (text, a number, a list): it cannot be read, so it is partial
+        info = {}
+    paging = body.get("paging")
+    if paging is not None and not isinstance(paging, dict):
+        if page_cursor(paging) is not None:
+            return True
+        paging = {}
+    if paging is None:
+        paging = {}
+    total_raw = info.get("total_count")
+    if page_field_unreadable(total_raw):
+        return True
+    total = page_int(total_raw)
+    if total is not None and total > rules_read:
+        return True
+    for pages_raw in (info.get("total_pages"), paging.get("pages")):
+        if page_field_unreadable(pages_raw):
+            return True
+        pages = page_int(pages_raw)
+        if pages is not None and pages > 1 and total != rules_read:
+            return True
+    page_raw = info.get("page")
+    if page_field_unreadable(page_raw):
+        return True
+    page = page_int(page_raw)
+    if page is not None and page > 1:
+        return True
+    cursors = info.get("cursors")
+    if isinstance(cursors, dict):
+        if marker_set(cursors.get("after")):
+            return True
+    elif marker_set(cursors):
+        return True
+    if marker_set(info.get("cursor")) or marker_set(paging.get("next")):
+        return True
+    return False
+
+
 def envelope_error(obj):
     """A short reason when obj is an error envelope rather than a Cloudflare body, else None."""
     if not isinstance(obj, dict):
@@ -203,18 +334,12 @@ def transform(input):
             return not_measured(validation, "Cloudflare firewall rules read: " + why + ".")
 
         result = body.get("result")
-        partial = False
         if isinstance(result, dict) and isinstance(result.get("rules"), list):
             source = "WAF custom rules (" + str(result.get("phase") or "entry point ruleset") + ")"
             rules = result.get("rules")
         elif isinstance(result, list):
             source = "Firewall Rules API"
             rules = result
-            info = body.get("result_info")
-            if isinstance(info, dict):
-                total = as_int(info.get("total_count"))
-                if total is not None and total > len(rules):
-                    partial = True
         elif isinstance(result, dict) and "phase" in result:
             source = "WAF custom rules (" + str(result.get("phase")) + ")"
             rules = []
@@ -232,16 +357,26 @@ def transform(input):
                                 "alone both return, so it shows nothing either way.",
                                 {"source": source, "rulesRead": 0})
 
+        partial = more_rules_exist(body, len(rules))
+
         enforcing = []
         inactive = []
         non_enforcing = []
+        unreadable = []
+        unreadable_rules = 0
         for rule in rules:
-            flt = rule.get("filter")
-            paused = rule.get("paused") is True or (isinstance(flt, dict) and flt.get("paused") is True)
-            if paused or rule.get("enabled") is False:
+            state = rule_state(rule)
+            if state == "inactive":
                 inactive.append(rule_label(rule))
                 continue
             action = str(rule.get("action") or "").strip().lower()
+            if state == "unreadable":
+                unreadable_rules = unreadable_rules + 1
+                if action in ENFORCING_ACTIONS:
+                    unreadable.append(rule_label(rule) + " (" + action + ")")
+                else:
+                    non_enforcing.append(rule_label(rule) + " (" + (action or "no action") + ")")
+                continue
             if action in ENFORCING_ACTIONS:
                 enforcing.append(rule_label(rule) + " (" + action + ")")
             else:
@@ -249,7 +384,7 @@ def transform(input):
 
         summary = {"source": source, "rulesRead": len(rules), "activeEnforcingRules": len(enforcing),
                    "pausedOrDisabledRules": len(inactive), "activeNonEnforcingRules": len(non_enforcing),
-                   "partialRead": partial}
+                   "rulesWithUnreadableFlags": unreadable_rules, "partialRead": partial}
         scope = " Scope: custom firewall rules only; managed rulesets are not read."
 
         if enforcing:
@@ -261,6 +396,10 @@ def transform(input):
         if partial:
             return not_measured(validation, "Cloudflare (" + source + "): the first page of " + str(len(rules)) +
                                 " rules has no active enforcing rule, and more rules exist than were read.", summary)
+        if unreadable:
+            return not_measured(validation, "Cloudflare (" + source + "): " + str(len(unreadable)) + " rule(s) that "
+                                "could enforce carry a paused or enabled flag that cannot be read, and no other rule "
+                                "is active and enforcing: " + name_list(unreadable) + ".", summary)
         return create_response(
             {KEY: False}, validation,
             fail_reasons=["Cloudflare (" + source + "): none of " + str(len(rules)) + " custom firewall rules is "

@@ -32,7 +32,9 @@ FAIL_CLOSED = [{}, None, "{}", "", {"error": True, "statusCode": 401, "message":
 @pytest.mark.parametrize("body", FAIL_CLOSED)
 def test_fail_closed(body):
     assert load("averageuserriskscore")(body)["averageUserRiskScore"] is None
-    assert load("isattacksimulationtrainingenabled")(body)["isAttackSimulationTrainingEnabled"] is False
+    out = load("isattacksimulationtrainingenabled")(body)  # not a test list: Not evaluated, never False
+    assert out["isAttackSimulationTrainingEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert load("phishingsimulationclickrate")(body)["phishingSimulationClickRate"] is None
     assert load("trainingcompletionrate")(body)["trainingCompletionRate"] is None
 
@@ -50,6 +52,52 @@ def test_simulation_enabled_needs_a_recent_test():
     assert t([pst(400), pst(30, status="Active")])["isAttackSimulationTrainingEnabled"] is True
     assert t([pst(400), pst(120)])["isAttackSimulationTrainingEnabled"] is False
     assert t([])["isAttackSimulationTrainingEnabled"] is False
+
+
+UNUSABLE_LISTS = {
+    "items that are not objects": ["x", 1, None],
+    "objects with no started_at": [{"pst_id": 1}, {"pst_id": 2, "started_at": None}],
+    "blank started_at": [{"pst_id": 1, "started_at": ""}, {"pst_id": 2, "started_at": "   "}],
+    "started_at that is not a date": [{"pst_id": 1, "started_at": "not a date"}],
+    "started_at that is not text": [{"pst_id": 1, "started_at": 12345}, {"pst_id": 2, "started_at": True}],
+}
+
+
+@pytest.mark.parametrize("name", sorted(UNUSABLE_LISTS))
+def test_simulation_list_with_no_usable_started_at_is_not_evaluated(name):
+    """A list that cannot say when any test started proves nothing about whether simulations run."""
+    out = load("isattacksimulationtrainingenabled")(UNUSABLE_LISTS[name])
+    assert out["isAttackSimulationTrainingEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert out["additionalInfo"]["dataCollection"]["errors"]
+
+
+def test_simulation_old_tests_next_to_unreadable_ones_are_not_a_fail():
+    """The unreadable test could be the recent one, so no recent test cannot be proven."""
+    t = load("isattacksimulationtrainingenabled")
+    out = t([pst(400), {"pst_id": 9, "started_at": "not a date"}])
+    assert out["isAttackSimulationTrainingEnabled"] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    assert t([pst(400), "x"])["isAttackSimulationTrainingEnabled"] is None
+
+
+def test_simulation_recent_test_wins_next_to_unreadable_ones():
+    t = load("isattacksimulationtrainingenabled")
+    assert t([pst(30), {"pst_id": 9, "started_at": "not a date"}, "x"])["isAttackSimulationTrainingEnabled"] is True
+
+
+def test_simulation_reason_never_repeats_exception_or_vendor_text():
+    t = load("isattacksimulationtrainingenabled")
+    secret = "SECRET-VENDOR-VALUE-123"
+    out = t([{"pst_id": 1, "started_at": secret}])
+    text = repr(out)
+    assert secret not in text
+    assert "Invalid isoformat" not in text
+    assert out["isAttackSimulationTrainingEnabled"] is None
+    bad = t("{not json " + secret)
+    assert bad["isAttackSimulationTrainingEnabled"] is None
+    assert secret not in repr(bad)
+    assert "Expecting" not in repr(bad)
 
 
 def test_click_rate_is_latest_closed_test():

@@ -1,0 +1,40 @@
+{
+  "name": "restApiLoopbackRestricted",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The management interface permitted-IP list names specific sources and does not include an any-source or very wide entry. A reply without the permitted-ip list is Not evaluated.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the management interface permitted-IP list of the one firewall the credential reaches",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "The management permitted-IP list showing at least one named entry and no any-source or very wide entry; an absent or empty list is Not evaluated.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/firewalls/palo-alto-pa-series/restApiLoopbackRestricted.py",
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real device body replayed yet, so V0)."
+    }
+  ],
+  "notes": "deviceconfig/system/permitted-ip/entry (the MGT permitted IP list) from the CLI hierarchy. PAN-OS allows any source when the list is empty, but an absent or empty permitted-ip element in a success reply is also what a role without access or a centrally managed setting returns, so it is Not evaluated, never False. Entries without a name are an unrecognised shape (Not evaluated). An IPv4 prefix shorter than /8 (IPv6 shorter than /16) counts as open; other wide unions of ranges are not detected. Interface management profiles on data-plane interfaces are not read."
+}

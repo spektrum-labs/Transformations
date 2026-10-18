@@ -72,15 +72,18 @@ def transform(input):
     data = data if isinstance(data, dict) else {}
 
     enabled_raw = data.get("enabled")
-    sso_enabled = bool(enabled_raw) if enabled_raw is not None else False
+    api_errors = []
+    sso_enabled = enabled_raw if isinstance(enabled_raw, bool) else None
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if enabled_raw is None:
-        fail_reasons.append(
-            "Response from getOrganizationSaml did not include an 'enabled' field; "
+    if sso_enabled is None:
+        # No usable 'enabled' value (empty body, vendor error body, field absent): nothing was
+        # measured, so the criterion is None with a dataCollection error, never a fail.
+        api_errors.append(
+            "Response from getOrganizationSaml did not include a boolean 'enabled' field; "
             "unable to confirm SAML SSO configuration."
         )
         recommendations.append(
@@ -118,6 +121,6 @@ def transform(input):
             "vendor": "Cisco Meraki MX",
             "category": "firewalls",
         },
-        api_errors=[],
+        api_errors=api_errors,
         transformation_errors=[],
     )

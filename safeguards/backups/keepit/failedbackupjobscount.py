@@ -114,7 +114,7 @@ def transform_unmarked(input):
 
         Returns (rows, None) or (None, reason). The workflow calls /jobs once per connector in
         the order listDevices returned them, so the two lists must be the same length; any
-        mismatch means part of the estate was not read, and nothing is claimed.
+        mismatch means part of the assets in scope was not read, and nothing is claimed.
         """
         data = unwrap(parse_input(input), "devices")
         if not isinstance(data, dict):

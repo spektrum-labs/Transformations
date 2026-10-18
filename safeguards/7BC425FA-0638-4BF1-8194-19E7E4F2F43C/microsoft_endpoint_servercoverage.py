@@ -3,7 +3,7 @@
 
 Why a separate file: microsoft_endpoint_oneclick.py (pinned for its other keys) returns 0 when the
 inventory holds no server at all, so a tenant whose MDE sees only workstations or phones failed
-"servers covered" with nothing to measure (Infraservices, Orion Steel, ReSRG on 2026-09-29).
+"servers covered" with nothing to measure (three live connections on 2026-09-29).
 
 Eligibility matches microsoft_endpoint_oneclick.py: not excluded, onboardingStatus not Unsupported or
 InsufficientInfo. A server is an eligible machine whose osPlatform names a server.
