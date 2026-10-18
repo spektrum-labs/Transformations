@@ -82,10 +82,15 @@ def is_rfm(value):
 
 
 # A host counts as reporting only when its last_seen is within this many days of the response's
-# clock. The same window, clock and rule are written identically in isEPPConfiguredFromHosts.py, so
-# a host this check counts as not reporting is the host that check leaves out, and the reverse.
-# It matches the 15-day endpoint rule the Sophos and NinjaOne checks already apply.
-ACTIVE_WINDOW_DAYS = 15
+# clock. The clock and rule are written identically in isEPPConfiguredFromHosts.py; the window is
+# not. 45 days is CrowdStrike's own line: Falcon keeps a silent host in Host Management for 45 days
+# before hiding it, so a host inside this window is one Falcon itself still reports as managed.
+# isEPPDeployed shares this 45-day window. The configuration and patch checks keep 15 days, so a
+# host 15 to 45 days quiet counts as covered here but is left out of those checks as unreadable.
+ACTIVE_WINDOW_DAYS = 45
+# The clock follows the data (reference_clock) but is never set more than this many days before now, so
+# a fleet whose newest check-in is itself weeks old cannot stretch the window past the wall clock.
+CACHE_GRACE_DAYS = 3
 
 
 def parse_time(value):
@@ -176,7 +181,7 @@ def transform(input):
         )
 
     total = len(resources)
-    clock = reference_clock(resources)
+    clock = max(reference_clock(resources), datetime.utcnow() - timedelta(days=CACHE_GRACE_DAYS))
     active = 0
     not_reporting = 0
     not_normal = 0

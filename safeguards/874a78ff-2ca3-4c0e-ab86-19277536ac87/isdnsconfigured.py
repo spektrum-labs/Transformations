@@ -9,8 +9,9 @@ Not evaluated (every key None, with a collection error) whenever the body does n
 error marker, a body that carries no SPF, DKIM or DMARC answer (an outage or error body from the DNS lookup, an
 empty response), a body that answers only some of the three, malformed or unreadable input, and failed input
 validation. The lookup always answers all three keys, with a true/false flag or that protocol's record text (SPF
-starts with v=spf1, DMARC with v=DMARC1, DKIM contains v=DKIM1 or starts with p=), so a key that is absent, null or
-anything else (the text "false" or "error", the record of another protocol, a number, blank text, a list, an
+starts with v=spf1, DMARC with v=DMARC1, DKIM is a tag list that carries a p tag, with or without the optional v=DKIM1
+and in any tag order, as in "k=rsa; t=s; p=..."; a DKIM record whose p tag is empty is a revoked key and reads False),
+so a key that is absent, null or anything else (the text "false" or "error", the record of another protocol, a number, blank text, a list, an
 object) means the body is not that answer. A lookup that answered all three and found a record absent (an explicit
 false) is a real False.
 """
@@ -129,6 +130,26 @@ def get_protocol(data, name):
     return lowered.get(name.lower())
 
 
+def dkim_tags(text):
+    """The tag=value pairs of a DKIM key record as a dict (tag names in lower case), or None when the text is not a
+    tag list (a segment without an equals sign, or a tag name that is not a plain word).
+
+    A DKIM key record is a list of tags separated by semicolons (RFC 6376 section 3.6.1). Only p (the public key) is
+    required; v is optional and k, t, s, h, n, g may come in any order, so a real record can read "k=rsa; t=s; p=...".
+    """
+    tags = {}
+    for segment in text.split(";"):
+        segment = segment.strip()
+        if not segment:
+            continue
+        name, separator, value = segment.partition("=")
+        name = name.strip()
+        if not separator or not name or not name.replace("_", "").isalnum():
+            return None
+        tags[name.lower()] = value.strip()
+    return tags
+
+
 def is_record_text(name, text):
     """True only when the text is the record form of the protocol it sits under (compared in lower case)."""
     if name == "SPF":
@@ -136,6 +157,12 @@ def is_record_text(name, text):
     if name == "DMARC":
         return text.startswith("v=dmarc1")
     if name == "DKIM":
+        # A key record: the p tag is required, the v tag is optional (and names DKIM1 when present), and the tags
+        # come in any order ("k=rsa; t=s; p=..."). A v tag that names another protocol (DMARC or SPF text) is not a
+        # DKIM record, and a tag list with no p tag publishes no key.
+        tags = dkim_tags(text)
+        if tags is not None:
+            return "p" in tags and tags.get("v", "dkim1") == "dkim1"
         return "v=dkim1" in text or text.startswith("p=")
     return False
 
@@ -149,6 +176,10 @@ def read_answer(name, value):
     if isinstance(value, bool):
         return value
     if isinstance(value, str) and is_record_text(name, value.strip().lower()):
+        if name == "DKIM":
+            tags = dkim_tags(value.strip().lower())
+            if tags is not None and "p" in tags and not tags["p"].replace(" ", ""):
+                return False  # an empty p tag is a revoked key (RFC 6376): the record is there, no key is usable
         return True
     return None
 

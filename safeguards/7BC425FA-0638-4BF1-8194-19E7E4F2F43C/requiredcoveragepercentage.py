@@ -66,6 +66,21 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def not_evaluated(validation, reason, recommendations=None, input_summary=None):
+    """Not evaluated: the criterion is None and dataCollection carries the reason."""
+    return create_response(
+        result={
+            "requiredCoveragePercentage": None,
+            "allDevicesPercentageofCoverage": None,
+            "eligibleDevicesPercentageofCoverage": None,
+        },
+        validation=validation,
+        recommendations=recommendations,
+        input_summary=input_summary,
+        api_errors=[reason]
+    )
+
+
 def transform(input):
     criteriaKey = "requiredCoveragePercentage"
 
@@ -79,21 +94,32 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["Input validation failed"]
             )
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        # Get machine data from value array
-        machine_data = []
-        if isinstance(data, dict) and 'value' in data:
+        # Get machine data from value array. A body with no machine list at all (an API error
+        # envelope, an empty object) read nothing, so it is Not evaluated rather than "no devices".
+        machine_data = None
+        if isinstance(data, dict) and isinstance(data.get('value'), list):
             machine_data = data['value']
         elif isinstance(data, list):
             machine_data = data
+
+        if machine_data is None:
+            return not_evaluated(validation, "Defender returned no machine inventory to read")
+
+        # A page that still has a next link is a partial read: its percentage is not the fleet's.
+        next_link = data.get("@odata.nextLink") if isinstance(data, dict) else None
+        if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
+            return not_evaluated(
+                validation,
+                "The machine inventory has more pages than were read (@odata.nextLink still present)")
 
         # Exclude devices marked as excluded
         non_excluded = [m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true"]
@@ -112,17 +138,21 @@ def transform(input):
         allDevicesPercentage = round((protectedDevices / allDevices) * 100) if allDevices > 0 else 0
         eligibleDevicesPercentage = round((protectedDevices / eligibleDevices) * 100) if eligibleDevices > 0 else 0
 
-        criteriaValue = eligibleDevicesPercentage if eligibleDevices > 0 else 100
+        # No eligible device is an empty read, not full coverage: 0 of 0 proves nothing, so the
+        # criterion is Not evaluated (None plus a dataCollection error), never 100.
+        if eligibleDevices == 0:
+            return not_evaluated(
+                validation, "Defender has no onboarded devices",
+                recommendations=["Ensure devices are properly enrolled and not excluded"],
+                input_summary={"allDevices": allDevices, "eligibleDevices": 0, "protectedDevices": 0})
+
+        criteriaValue = eligibleDevicesPercentage
 
         if criteriaValue >= 100:
             pass_reasons.append(f"All eligible devices are protected: {protectedDevices}/{eligibleDevices} (100%)")
         else:
             fail_reasons.append(f"Not all eligible devices are protected: {protectedDevices}/{eligibleDevices} ({eligibleDevicesPercentage}%)")
             recommendations.append("Onboard remaining eligible devices to endpoint protection")
-
-        if eligibleDevices == 0:
-            fail_reasons.append("No eligible devices found")
-            recommendations.append("Ensure devices are properly enrolled and not excluded")
 
         pass_reasons.append(f"Overall coverage: {protectedDevices}/{allDevices} total devices ({allDevicesPercentage}%)")
         if allDevices != eligibleDevices:
@@ -150,9 +180,10 @@ def transform(input):
         )
 
     except Exception as e:
+        # An error is Not evaluated, never a fail: None plus a dataCollection error.
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            api_errors=[f"Transformation error: {str(e)}"]
         )
