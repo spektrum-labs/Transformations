@@ -58,7 +58,10 @@ def stringify(x):
     return "None" if x is None else str(x)
 
 
-def methods_policy(enabled=(), extra=(), email_external="default", email_targets="members"):
+# migrationComplete: the methods policy alone decides, so a weak-only list is a real False. While the policy is
+# still migrating the same list reads not evaluated (test_entra_mfa_migration_state.py in safeguards/mfa/azure).
+def methods_policy(enabled=(), extra=(), email_external="default", email_targets="members",
+                   state="migrationComplete"):
     configs = []
     for i in IDS:
         c = {"id": i, "state": "enabled" if i in enabled else "disabled"}
@@ -72,7 +75,7 @@ def methods_policy(enabled=(), extra=(), email_external="default", email_targets
     return {
         "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#authenticationMethodsPolicy",
         "id": "authenticationMethodsPolicy",
-        "policyMigrationState": "migrationInProgress",
+        "policyMigrationState": state,
         "authenticationMethodConfigurations": configs + [copy.deepcopy(e) for e in extra],
     }
 
