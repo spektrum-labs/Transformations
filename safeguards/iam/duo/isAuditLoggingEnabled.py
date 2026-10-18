@@ -1,35 +1,60 @@
 """
 Transformation: isAuditLoggingEnabled
 Vendor: Duo  |  Category: iam
-Evaluates: Confirms that audit logging is ACTIVE: the newest administrator log event returned by
-/admin/v1/logs/administrator (getAdminLogs, mintime=1, limit=1000) is recent.
+Evaluates: Duo's administrator audit log can be read through the Admin API.
 
-Rules (newest = the MAXIMUM timestamp over every entry, never the first one; `timestamp` epoch
-seconds, else `isotimestamp`; entries with no valid timestamp, or more than 1 day in the future,
-are ignored). Ages are measured against now_utc(), which tests replace.
+Source: GET /admin/v1/logs/administrator (method getAdminLogs). The method sends
+mintime = now - 30 days, in epoch seconds ({$utcNowS-30d}), so Duo returns administrator
+events from the last 30 days only. Duo v1 returns this log OLDEST first, at most 1000 events
+per call, and pages it by mintime rather than by an offset. A read that comes back with 1000
+events therefore holds the earliest 1000 events of the window, and newer events may exist that
+were not read.
 
-  newest age <= 30 days                          -> True   (exactly 30 days is a PASS)
-  30 < age <= 90 days                            -> Unevaluated (exactly 90 days is Unevaluated)
-  age > 90 days, read complete (< 1000 entries)  -> False  ("no event in the last 90 days")
-  age > 90 days, read at the 1000 limit          -> Unevaluated (newer events may be unread)
-  empty list                                     -> Unevaluated (getAdminLogs' returnSpec defaults a
-                                                    body it cannot read to [], so an empty list cannot
-                                                    be told apart from a failed read; a Duo account
-                                                    always logs its own administrator activity)
-  error body, vendorErrorAsResponse, None, non-list, no usable timestamp, any exception
-                                                 -> Unevaluated (value None), NEVER False
+Pass only on a recent log. The check passes only when the newest administrator event is no more
+than maxEventAgeDays old (default 3). Duo records administrator actions for every account and gives
+no setting to turn that off, so a quiet log does not show logging stopped, but it is also not proof
+that logging works today: we have no recent event to point to. An old newest event is therefore Not
+evaluated (value None), never a pass and never False. An empty window has no newest event, so it is
+Not evaluated too.
+
+maxEventAgeDays is read only from the evaluator envelope ({"data": ..., "validation": ...}, next to
+"data"), never from the Duo response body, which is vendor data: on the legacy path the input IS the
+vendor body, so there the default of 3 always applies. It is used only when it is a positive number no
+larger than the 30-day window read; anything else (zero, negative, a string, a bool, NaN, infinity, or more than the window,
+which would accept any log) falls back to the default of 3, so a bad parameter can never switch the rule
+off. The age is measured to the second: exactly 3 days passes, 3 days and one minute is Not evaluated.
+
+Rules:
+  newest event read is no more than maxEventAgeDays old        -> True
+  newest event read is older than maxEventAgeDays              -> Not evaluated (value None)
+  empty list (no event, so no newest event)                    -> Not evaluated (value None)
+  read at the 1000-event limit and the newest event read is older than maxEventAgeDays
+  (Duo returns the log oldest first, so newer events may exist that were not read)
+                                                               -> Not evaluated (value None)
+  read at the 1000-event limit and the newest event read is within maxEventAgeDays
+  (a newer event can only make the log fresher)                -> True, flagged readMayBeTruncated
+  Duo error body, vendorErrorAsResponse marker, an Integration-Service error envelope,
+  a body with no log list, a non-empty list in which no event carries a usable timestamp
+  or no entry has the administrator log fields (action, username, timestamp),
+  None, non-JSON, any exception                                -> Not evaluated (value None)
+  never False.
+
+Evidence: maxEventAgeDays, the window read (last 30 days), the number of events read, the oldest and
+newest event times read, newestEventAgeDays, and readMayBeTruncated.
 """
 import json
 from datetime import datetime, timedelta, timezone
 
 CRITERIA_KEY = "isAuditLoggingEnabled"
-REQUEST_LIMIT = 1000  # getAdminLogs sends limit=1000: a list this long may be a cut window
-FRESH_DAYS = 30
-STALE_DAYS = 90
-FUTURE_SLACK_SECONDS = 86400
+REQUEST_LIMIT = 1000  # Duo v1 returns at most the earliest 1000 events from mintime
+WINDOW_DAYS = 30  # getAdminLogs sends mintime = now - 30 days
+DEFAULT_MAX_EVENT_AGE_DAYS = 3  # the newest event must be no older than this to pass
+FUTURE_SLACK_SECONDS = 300  # clock skew allowed; a later timestamp is never evidence of a recent event
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+ENDPOINT = "/admin/v1/logs/administrator"
 RESULT_KEYS = ["totalLogCount", "wellFormedLogCount", "logsPresent", "mostRecentTimestamp",
-               "newestEventAgeDays"]
+               "oldestTimestamp", "newestEventAgeDays", "maxEventAgeDays", "windowDays",
+               "readMayBeTruncated"]
 
 
 def now_utc():
@@ -130,7 +155,9 @@ def error_reason(data):
             return "Duo returned an error instead of administrator log data: " + str(
                 data.get("vendorErrorAsResponse"))[:300]
         stat = data.get("stat")
-        if (isinstance(stat, str) and stat.upper() == "FAIL") or "error" in data or (
+        status = data.get("status")
+        if (isinstance(stat, str) and stat.upper() == "FAIL") or data.get("error") not in (None, False) or (
+                "errorMessage" in data) or (isinstance(status, str) and status.lower() == "error") or (
                 "code" in data and "message" in data):
             return "Duo returned an error body instead of administrator log data: " + str(data)[:300]
     return None
@@ -148,8 +175,47 @@ def find_entries(data):
     return None
 
 
-def evaluate(data, now=None):
-    """Returns {"state": "pass"|"fail"|"unevaluated", "reason": str, ...summary fields}."""
+def age_text(days):
+    """'3 days' / '1 day' / '0.5 days' for the reason text."""
+    shown = int(days) if float(days) == int(days) else days
+    return str(shown) + (" day" if shown == 1 else " days")
+
+
+def duration_text(seconds):
+    """'3 days 1 minute' / '5 hours' / 'less than a minute': an exact age for the stale reasons."""
+    total = int(seconds) if seconds > 0 else 0
+    days, rest = divmod(total, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    parts = []
+    for count, unit in ((days, "day"), (hours, "hour"), (minutes, "minute")):
+        if count:
+            parts.append(str(count) + " " + unit + ("" if count == 1 else "s"))
+    return " ".join(parts) if parts else "less than a minute"
+
+
+def iso_of(epoch_seconds):
+    return (EPOCH + timedelta(seconds=epoch_seconds)).isoformat()
+
+
+def resolve_max_event_age_days(*sources):
+    """maxEventAgeDays from the first source dict that carries a usable value, else the default.
+
+    Usable means a positive finite number no larger than WINDOW_DAYS (a bool, zero, a negative, a string,
+    NaN, infinity or a value past the window is ignored, so a bad parameter can never switch the recency
+    rule off). Callers pass only the evaluator's input, never the vendor response body.
+    """
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        value = source.get("maxEventAgeDays")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value <= WINDOW_DAYS:
+            return value
+    return DEFAULT_MAX_EVENT_AGE_DAYS
+
+
+def evaluate(data, now=None, max_event_age_days=DEFAULT_MAX_EVENT_AGE_DAYS):
+    """Returns {"state": "pass"|"unevaluated", "reason": str, ...summary fields}. Never "fail"."""
     reason = error_reason(data)
     if reason is not None:
         return {"state": "unevaluated", "reason": reason, "readError": True}
@@ -157,61 +223,97 @@ def evaluate(data, now=None):
     if entries is None:
         return {"state": "unevaluated", "readError": True,
                 "reason": "The response holds no administrator log list (expected a list from "
-                          "/admin/v1/logs/administrator)"}
+                          + ENDPOINT + ")"}
     if now is None:
         now = now_utc()
     now_epoch = (now - EPOCH).total_seconds()
+    window_start = now - timedelta(days=WINDOW_DAYS)
 
     total = len(entries)
     well_formed = 0
     newest = None
+    oldest = None
+    any_timestamp = False
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        if has_required_fields(entry):
+        is_well_formed = has_required_fields(entry)
+        if is_well_formed:
             well_formed = well_formed + 1
         ts = entry_epoch(entry)
         if ts is None or ts > now_epoch + FUTURE_SLACK_SECONDS:
-            continue  # no valid timestamp, or implausibly in the future: never evidence
+            continue  # no valid timestamp, or in the future: never evidence
+        any_timestamp = True
+        if not is_well_formed:
+            continue  # recency is shown only by an entry that is an administrator log entry
         if newest is None or ts > newest:
             newest = ts
+        if oldest is None or ts < oldest:
+            oldest = ts
 
     truncated = total >= REQUEST_LIMIT
+    window_text = ("the last " + str(WINDOW_DAYS) + " days (events since about "
+                   + window_start.date().isoformat() + ")")
     summary = {"totalLogCount": total, "wellFormedLogCount": well_formed,
-               "logsPresent": total > 0, "mostRecentTimestamp": None, "newestEventAgeDays": None,
-               "readMayBeTruncated": truncated}
+               "logsPresent": total > 0, "mostRecentTimestamp": None, "oldestTimestamp": None,
+               "newestEventAgeDays": None, "maxEventAgeDays": max_event_age_days,
+               "windowDays": WINDOW_DAYS,
+               "readMayBeTruncated": truncated, "window": window_text}
     if total == 0:
         return dict(summary, state="unevaluated",
-                    reason="The administrator log list is empty. An empty list cannot be told apart "
-                           "from a read that returned nothing usable, so audit logging cannot be judged")
+                    reason="Duo returned the administrator log (" + ENDPOINT + ") for " + window_text
+                           + " and it holds no events, so there is no recent administrator event to show "
+                           "that audit logging is working (the newest event must be no more than "
+                           + age_text(max_event_age_days) + " old). Not evaluated, not a failure: Duo "
+                           "records administrator actions for every account and has no setting to turn "
+                           "this off")
     if newest is None:
-        return dict(summary, state="unevaluated",
-                    reason="None of the " + str(total) + " administrator log entries carries a usable "
-                           "timestamp, so recency cannot be judged")
-    newest_dt = EPOCH + timedelta(seconds=newest)
+        if any_timestamp and well_formed == 0:
+            reason_text = ("None of the " + str(total) + " entries has the administrator log fields "
+                           "(action, username, timestamp), so the response cannot be read as an "
+                           "administrator log")
+        elif not any_timestamp:
+            reason_text = ("None of the " + str(total) + " administrator log entries carries a usable "
+                           "timestamp, so the response cannot be read as an administrator log")
+        else:
+            reason_text = ("None of the " + str(total) + " entries has both the administrator log fields "
+                           "(action, username, timestamp) and a usable timestamp, so there is no event "
+                           "to measure recency from")
+        return dict(summary, state="unevaluated", readError=True, reason=reason_text)
     age_seconds = now_epoch - newest
     age_days = int(age_seconds // 86400) if age_seconds > 0 else 0
-    summary["mostRecentTimestamp"] = newest_dt.isoformat()
+    summary["mostRecentTimestamp"] = iso_of(newest)
+    summary["oldestTimestamp"] = iso_of(oldest)
     summary["newestEventAgeDays"] = age_days
 
-    # Boundaries: exactly 30 days old is still fresh (PASS); exactly 90 days old is still
-    # inside the "couldn't tell" band (Unevaluated), so only strictly older than 90 is a FAIL.
-    if age_seconds <= FRESH_DAYS * 86400:
-        return dict(summary, state="pass",
-                    reason="Newest administrator log event is " + str(age_days) + " days old (within "
-                           + str(FRESH_DAYS) + " days)")
+    stale = age_seconds > max_event_age_days * 86400
     if truncated:
+        read_note = ("Duo returned " + str(total) + " administrator log events (" + ENDPOINT + ") for "
+                     + window_text + ", from " + summary["oldestTimestamp"] + " to "
+                     + summary["mostRecentTimestamp"] + ". That is Duo's per-call limit, and Duo returns "
+                     "this log oldest first, so these are the earliest " + str(total) + " events of the "
+                     "window and newer events may exist that were not read")
+        if stale:
+            return dict(summary, state="unevaluated",
+                        reason=read_note + ". The newest event read is " + duration_text(age_seconds) + " old, "
+                               "more than " + age_text(max_event_age_days) + ", and the read does not show "
+                               "whether a newer event exists, so recency cannot be shown")
+        return dict(summary, state="pass",
+                    reason=read_note + ". The newest event read is " + str(age_days) + " days old, within "
+                           + age_text(max_event_age_days) + ", and a newer event could only make it fresher")
+    if stale:
         return dict(summary, state="unevaluated",
-                    reason="Newest administrator log event read is " + str(age_days) + " days old, but the "
-                           "read returned " + str(total) + " entries (the request limit), so newer "
-                           "events may not have been read")
-    if age_seconds <= STALE_DAYS * 86400:
-        return dict(summary, state="unevaluated",
-                    reason="newest administrator log event is " + str(age_days) + " days old (more than "
-                           + str(FRESH_DAYS) + ")")
-    return dict(summary, state="fail",
-                reason="no administrator log events in the last 90 days; newest is "
-                       + str(age_days) + " days old")
+                    reason="Duo returned " + str(total) + " administrator log events (" + ENDPOINT + ") for "
+                           + window_text + ". The latest administrator event is " + summary["mostRecentTimestamp"]
+                           + " (" + duration_text(age_seconds) + " ago), older than the " + age_text(max_event_age_days)
+                           + " allowed, so there is no recent event to show that audit logging is working. "
+                           "Not evaluated, not a failure")
+    return dict(summary, state="pass",
+                reason="Duo returned " + str(total) + " administrator log events (" + ENDPOINT + ") for "
+                       + window_text + ", from " + summary["oldestTimestamp"] + " to "
+                       + summary["mostRecentTimestamp"] + ". The latest administrator event is "
+                       + summary["mostRecentTimestamp"] + " (" + str(age_days) + " days ago), within "
+                       + age_text(max_event_age_days))
 
 
 def transform(input):
@@ -224,32 +326,32 @@ def transform(input):
         if validation.get("status") == "failed":
             return unevaluated_response("Input validation failed; the log list is not evidence",
                                         validation=validation, read_error=True)
-        outcome = evaluate(data, now_utc())
-        state = outcome["state"]
-        if state == "unevaluated":
+        # The parameter comes only from the evaluator envelope. On the legacy path the input IS the
+        # vendor body, which is never a source of parameters, so the default applies.
+        envelope = isinstance(input, dict) and "data" in input and "validation" in input
+        max_age = resolve_max_event_age_days(input) if envelope else DEFAULT_MAX_EVENT_AGE_DAYS
+        outcome = evaluate(data, now_utc(), max_age)
+        if outcome["state"] != "pass":
             return unevaluated_response(outcome["reason"], validation=validation,
                                         read_error=outcome.get("readError", False), summary=outcome)
-        value = state == "pass"
-        result = {CRITERIA_KEY: value}
-        summary = {CRITERIA_KEY: value}
+        result = {CRITERIA_KEY: True}
+        summary = {CRITERIA_KEY: True}
         for k in RESULT_KEYS:
             result[k] = outcome.get(k)
             summary[k] = outcome.get(k)
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-        findings = []
-        if value:
-            pass_reasons.append(outcome["reason"] + " -- " + str(outcome["totalLogCount"]) + " log entries read")
+        pass_reasons = [outcome["reason"]]
+        findings = ["Window read: " + outcome["window"]]
+        if outcome["totalLogCount"] > 0:
             pass_reasons.append(str(outcome["wellFormedLogCount"]) + " of " + str(outcome["totalLogCount"])
-                                + " entries contain required fields (action, timestamp, username)")
-            findings.append("Most recent log timestamp: " + str(outcome["mostRecentTimestamp"]))
-        else:
-            fail_reasons.append(outcome["reason"])
-            recommendations.append("Verify that the Duo Admin API application has 'Grant read log' permission "
-                                   "and that administrators are active in the Duo Admin Panel")
+                                + " entries contain the administrator log fields (action, timestamp, username)")
+            findings.append("Newest event must be no more than " + age_text(outcome["maxEventAgeDays"]) + " old")
+            if outcome["readMayBeTruncated"]:
+                findings.append("Newest event read: " + str(outcome["mostRecentTimestamp"])
+                                + " (may not be the newest in the window: the read stopped at Duo's "
+                                + str(REQUEST_LIMIT) + "-event limit)")
+            else:
+                findings.append("Latest administrator event: " + str(outcome["mostRecentTimestamp"]))
         return create_response(result=result, validation=validation, pass_reasons=pass_reasons,
-                               fail_reasons=fail_reasons, recommendations=recommendations,
                                input_summary=summary, additional_findings=findings)
     except Exception as e:
         return unevaluated_response("Transformation error: " + str(e), transformation_errors=[str(e)])
@@ -264,8 +366,11 @@ def unevaluated_response(reason, validation=None, read_error=False, summary=None
         result=result,
         validation=validation if validation is not None else {"status": "unknown", "errors": [], "warnings": []},
         fail_reasons=[reason],
-        recommendations=["Re-run once Duo returns the administrator log list; confirm the Admin API "
-                         "application has 'Grant read log' permission"],
+        recommendations=(["Re-run once Duo shows an administrator event within the allowed age "
+                          "(maxEventAgeDays); no change to Duo logging is needed, it cannot be switched off"]
+                         if (summary and not read_error) else
+                         ["Re-run once Duo returns the administrator log list; confirm the Admin API "
+                          "application has 'Grant read log' permission"]),
         input_summary={k: (summary or {}).get(k) for k in RESULT_KEYS} if summary else {},
         api_errors=[reason],
         transformation_errors=transformation_errors,

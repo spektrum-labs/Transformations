@@ -1,0 +1,317 @@
+{
+  "name": "requiredCoveragePercentage",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- the name says a percentage and most implementations return one, but two verified integrations return a boolean and the populations differ (protected endpoints, MDR-licensed endpoints, privileged credentials, assets). See conflict.positions.",
+  "valueType": "unresolved",
+  "unit": "unknown",
+  "domain": {
+    "min": 0,
+    "max": 100
+  },
+  "population": "unknown -- endpoints with active protection at most vendors; endpoints carrying the MDR product code at Sophos; privileged credentials under Vault management at BeyondTrust; assets at Axonius",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "unknown until the population is ruled; for the endpoint reading, a complete (every page) read of the vendor's device inventory with a stated staleness window",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": [
+    "Endpoint Security",
+    "MDR"
+  ],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {
+      "srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+      "name": "Windows Defender"
+    },
+    {
+      "srn": "02e2e8f9-8579-407f-910d-280db2ed6831",
+      "name": "Windows Defender (One-Click)"
+    },
+    {
+      "srn": "2bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+      "name": "SentinelOne"
+    },
+    {
+      "srn": "d61a39d7-f00a-4963-bc9c-38164918e883",
+      "name": "CrowdStrike Falcon-Endpoint Security"
+    },
+    {
+      "srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e",
+      "name": "Crowdstrike - XDR Falcon"
+    },
+    {
+      "srn": "dc607d10-7b24-4310-93aa-369cdf407240",
+      "name": "Crowdstrike - MDR"
+    },
+    {
+      "srn": "12a5e56f-963c-4af3-8d8d-8f95d832e61a",
+      "name": "Red Canary - MDR"
+    },
+    {
+      "srn": "f1b50389-d056-4834-b5d5-5117172c42f1",
+      "name": "Palo Alto Networks Cortex XDR-Endpoint Security"
+    },
+    {
+      "srn": "a43b5841-639c-4db4-8e42-df7828d55ec2",
+      "name": "ManageEngine - Endpoint Security"
+    },
+    {
+      "srn": "cac4b80f-a930-415e-b1e3-de285fe78452",
+      "name": "NinjaOne - Endpoint Security"
+    },
+    {
+      "srn": "7d6d3084-1be1-4fcc-9350-979b97cf92f7",
+      "name": "Datto RMM - MSP partner account"
+    },
+    {
+      "srn": "f9522162-b193-44de-8a1f-9a03f36794b9",
+      "name": "Threatdown - Endpoint Security"
+    },
+    {
+      "srn": "69b438a1-cb1f-4103-a1fa-83123787bb21",
+      "name": "ThreatLocker-Endpoint Security"
+    },
+    {
+      "srn": "c8efefeb-71e7-4f17-ae9b-ea6ff715bd56",
+      "name": "Symantec (Broadcom) Endpoint Protection SEP-Endpoint Security"
+    },
+    {
+      "srn": "31aad50f-61d3-49f3-a8dd-559ad2f16ba1",
+      "name": "BeyondTrust - IAM"
+    },
+    {
+      "srn": "93a0e8d1-eed1-47be-8f93-eabf80dbf9b3",
+      "name": "DopeSecurity - Firewalls"
+    },
+    {
+      "srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+      "name": "Sophos - MDR"
+    },
+    {
+      "srn": "1a13bab7-9377-428a-b595-ba0843ec3366",
+      "name": "Sophos - EDR Endpoint Security"
+    },
+    {
+      "srn": "84d54986-1f6b-4eeb-83dd-5636ed82e99e",
+      "name": "Sophos - Email Security"
+    },
+    {
+      "srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51",
+      "name": "Sophos - Firewall"
+    },
+    {
+      "srn": "7bd7d5af-4536-434c-a69c-221913444fc1",
+      "name": "Axonius - Asset Mgmt"
+    }
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "conflict": {
+    "summary": "41 requirements compare this key numerically: 18 isEquals \"100\", 9 greaterThanOrEqual \"90\", 6 greaterThan \"95\", 5 greaterThan \"90\", 3 at 98/95. A boolean can satisfy none of them (_coerce_numeric_for_compare excludes booleans for isEquals; int(float(True)) is 1 for the ordered comparators), so every BeyondTrust - IAM or DopeSecurity customer fails all 41 regardless of posture. Separately, the integrations that DO return a number do not agree on what they divide by. On no-evidence bodies, main today emits an integer at 14 files (a 0 sentinel), a boolean at 6 and null at 9.",
+    "positions": [
+      {
+        "meaning": "Percentage of the vendor's known endpoints with active endpoint protection (definitions vary on staleness window and on what 'active' requires).",
+        "valueType": "number",
+        "population": "endpoints in the vendor inventory",
+        "integrations": [
+          {
+            "srn": "7bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+            "name": "Windows Defender"
+          },
+          {
+            "srn": "02e2e8f9-8579-407f-910d-280db2ed6831",
+            "name": "Windows Defender (One-Click)"
+          },
+          {
+            "srn": "2bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+            "name": "SentinelOne"
+          },
+          {
+            "srn": "d61a39d7-f00a-4963-bc9c-38164918e883",
+            "name": "CrowdStrike Falcon-Endpoint Security"
+          },
+          {
+            "srn": "765f3eb2-73f6-486f-b16e-5996d69f6b8e",
+            "name": "Crowdstrike - XDR Falcon"
+          },
+          {
+            "srn": "dc607d10-7b24-4310-93aa-369cdf407240",
+            "name": "Crowdstrike - MDR"
+          },
+          {
+            "srn": "12a5e56f-963c-4af3-8d8d-8f95d832e61a",
+            "name": "Red Canary - MDR"
+          },
+          {
+            "srn": "f1b50389-d056-4834-b5d5-5117172c42f1",
+            "name": "Palo Alto Networks Cortex XDR-Endpoint Security"
+          },
+          {
+            "srn": "a43b5841-639c-4db4-8e42-df7828d55ec2",
+            "name": "ManageEngine - Endpoint Security"
+          },
+          {
+            "srn": "cac4b80f-a930-415e-b1e3-de285fe78452",
+            "name": "NinjaOne - Endpoint Security"
+          },
+          {
+            "srn": "7d6d3084-1be1-4fcc-9350-979b97cf92f7",
+            "name": "Datto RMM - MSP partner account"
+          },
+          {
+            "srn": "f9522162-b193-44de-8a1f-9a03f36794b9",
+            "name": "Threatdown - Endpoint Security"
+          },
+          {
+            "srn": "69b438a1-cb1f-4103-a1fa-83123787bb21",
+            "name": "ThreatLocker-Endpoint Security",
+            "note": "pinned URL 404s"
+          },
+          {
+            "srn": "c8efefeb-71e7-4f17-ae9b-ea6ff715bd56",
+            "name": "Symantec (Broadcom) Endpoint Protection SEP-Endpoint Security",
+            "note": "RTA description measures check-in recency ('checked in within 15 days'), not protection -- unverified against code"
+          }
+        ],
+        "source": "key-registry.md F-KEY-05 and the cross-vendor table; RTA descriptions in defs snapshot. The QC's recommended denominator is Microsoft's eligible devices (microsoft_endpoint_iseppconfigured.py)."
+      },
+      {
+        "meaning": "A boolean: coverage is at or above a threshold hard-coded in the transform (80% at BeyondTrust, 95% at DopeSecurity).",
+        "valueType": "boolean",
+        "population": "BeyondTrust: privileged credentials under Vault management (plus Jump Group coverage). DopeSecurity: healthy and enabled endpoint agents.",
+        "integrations": [
+          {
+            "srn": "31aad50f-61d3-49f3-a8dd-559ad2f16ba1",
+            "name": "BeyondTrust - IAM"
+          },
+          {
+            "srn": "93a0e8d1-eed1-47be-8f93-eabf80dbf9b3",
+            "name": "DopeSecurity - Firewalls"
+          }
+        ],
+        "files": [
+          "safeguards/iam/beyondtrust-pra/requiredcoveragepercentage.py:11,:86",
+          "safeguards/firewall/dope-security/requiredcoveragepercentage.py:8,:96"
+        ],
+        "source": "key-registry.md F-KEY-05 (confirmed). The threshold lives in the transform, so the requirement's bar is never applied."
+      },
+      {
+        "meaning": "Percentage of endpoints assigned the Sophos MDR product code -- MDR enrolment, not protection.",
+        "valueType": "integer",
+        "population": "Sophos Central endpoints",
+        "integrations": [
+          {
+            "srn": "1bc425fa-0638-4bf1-8194-19e7e4f2f43c",
+            "name": "Sophos - MDR"
+          },
+          {
+            "srn": "1a13bab7-9377-428a-b595-ba0843ec3366",
+            "name": "Sophos - EDR Endpoint Security"
+          },
+          {
+            "srn": "84d54986-1f6b-4eeb-83dd-5636ed82e99e",
+            "name": "Sophos - Email Security"
+          },
+          {
+            "srn": "d84436b1-4f1c-4df3-a0fd-8fd946425a51",
+            "name": "Sophos - Firewall"
+          }
+        ],
+        "files": [
+          "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/epp_transform.py",
+          "safeguards/1BC425FA-0638-4BF1-8194-19E7E4F2F43C/mdr_transform.py"
+        ],
+        "source": "RTA description (defs snapshot), identical on all four rows; code not re-read for this entry -- V0. Tx #1067 (C3) changes this lineage."
+      },
+      {
+        "meaning": "Asset inventory coverage.",
+        "valueType": "unknown",
+        "population": "assets",
+        "integrations": [
+          {
+            "srn": "7bd7d5af-4536-434c-a69c-221913444fc1",
+            "name": "Axonius - Asset Mgmt"
+          }
+        ],
+        "files": [
+          "safeguards/assetmgmt/axonius/isassetcoveragecomplete.py"
+        ],
+        "source": "Plan B2b: a population error, not a naming one; the row is to be deleted and the measure, if wanted, registered as assetInventoryCoveragePercentage -- which two MDR files already emit."
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Keep requiredCoveragePercentage as a number in percent over eligible endpoints (the QC's ruling in F-KEY-05, on the 10-to-2 split and the name), give the other populations their own keys, and pin a 0-sentinel ban: not measured is null, never 0. This is a proposal; the population and staleness window are the decision.",
+      "splitKeys": [
+        {
+          "name": "requiredCoveragePercentage",
+          "definition": "Percentage of eligible endpoints in the vendor inventory whose protection agent is installed and actively reporting within the stated window.",
+          "valueType": "number",
+          "unit": "percent",
+          "existing": true,
+          "wouldTake": [
+            "the 14 endpoint integrations in position 1"
+          ]
+        },
+        {
+          "name": "privilegedCredentialVaultCoveragePercentage",
+          "definition": "Percentage of privileged credentials under vault management.",
+          "valueType": "number",
+          "unit": "percent",
+          "existing": false,
+          "wouldTake": [
+            "BeyondTrust - IAM"
+          ]
+        },
+        {
+          "name": "mdrEnrollmentCoveragePercentage",
+          "definition": "Percentage of endpoints enrolled in the vendor's managed detection and response service.",
+          "valueType": "number",
+          "unit": "percent",
+          "existing": false,
+          "wouldTake": [
+            "the four Sophos integrations, if their number is MDR enrolment"
+          ]
+        },
+        {
+          "name": "assetInventoryCoveragePercentage",
+          "definition": "Percentage of known assets covered by the asset inventory.",
+          "valueType": "number",
+          "unit": "percent",
+          "existing": true,
+          "wouldTake": [
+            "Axonius - Asset Mgmt"
+          ]
+        }
+      ]
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Is requiredCoveragePercentage endpoint-protection coverage over eligible endpoints (and if so, which staleness window and which devices are eligible), and do DopeSecurity's endpoint agents count as the same population? D0b says this needs a decision now because it is live."
+    }
+  },
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-registry.md F-KEY-05 and the cross-vendor table",
+    "spektrum-labs-cli docs/integration-qc-2026-10-06-remediation-plan.md D0b and B2b (Axonius)",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-census.csv: 22 integrations, 17 files, asked by 41 requirements, contract verdicts TRUNCATED=24 UNSATISFIABLE=21",
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json and defs/<srn>.json: RTA rows and descriptions",
+    "tools/check_criteria_registry.py census 2026-10-07: 29 files on main emit this key; on no-evidence bodies 14 emit an integer, 6 a boolean, 9 null"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-07",
+      "change": "Seeded as contested from the 2026-10-06 integration QC. Type left unresolved; the QC's percentage ruling recorded as a proposal."
+    }
+  ],
+  "notes": "validation.implementations is empty on purpose: no implementation of this key has a validation record the QC can cite, so the key is V0 in public. Red Canary, CrowdStrike and ManageEngine have the most explicit descriptions and are the cheapest V3 candidates."
+}

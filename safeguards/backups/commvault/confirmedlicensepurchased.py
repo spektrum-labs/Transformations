@@ -11,6 +11,27 @@ import datetime
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     confirmedLicensePurchased = true when licenseMode is PRODUCTION or DR_PRODUCTION and expiryDate, when
@@ -76,16 +97,16 @@ def transform(input):
         data = unwrap(parse_input(input), "licenseMode")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         mode = str(data.get("licenseMode") or "").upper()
         if not mode:
-            return {key: False, "reason": "Response has no licenseMode"}
+            return respond(key, None, "Response has no licenseMode")
         if mode not in ("PRODUCTION", "DR_PRODUCTION"):
-            return {key: False, "reason": "License mode is " + mode}
+            return respond(key, False, "License mode is " + mode)
         exp = as_int(data.get("expiryDate"))
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
         if exp is not None and exp > 0 and exp <= now:
-            return {key: False, "reason": "The " + mode + " license expired (expiryDate " + str(exp) + ")"}
-        return {key: True, "reason": mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), "edition": data.get("edition")}
+            return respond(key, False, "The " + mode + " license expired (expiryDate " + str(exp) + ")")
+        return respond(key, True, mode + " license" + (" valid until epoch " + str(exp) if exp else " with no expiry date"), {"edition": data.get("edition")})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

@@ -119,7 +119,7 @@ def test_narrowed_profiles_are_not_estate_wide():
     got, out = value(graph([general("short", 5, [ALL_DEVICES]), general("Kiosks", 60, [group("g1")])]))
     assert got == 60
     assert "Kiosks [assigned to groups only] (60 min)" in out["additionalInfo"]["evaluation"]["failReasons"][0]
-    # a shorter narrower limit does not lower the estate-wide one
+    # a shorter narrower limit does not lower the tenant-wide one
     assert value(graph([general("base", 12, [ALL_DEVICES]), general("Finance", 5, [group("g1")])]))[0] == 12
     # an unassigned profile is named as such
     got, out = value(graph([general("base", 12, [ALL_DEVICES]), general("draft", 90, [])]))
@@ -228,7 +228,7 @@ def test_a_password_required_estate_wide_makes_another_profiles_limit_apply():
     kiosk["passwordRequired"] = False
     got, out = value(graph([general("base", 10, [ALL_DEVICES]), kiosk]))
     assert got == 60
-    # with no profile requiring a password estate-wide, the gated limit still does not count
+    # with no profile requiring a password tenant-wide, the gated limit still does not count
     base = general("base", 10, [ALL_DEVICES])
     base["passwordRequired"] = False
     assert value(graph([base, kiosk, protection("EP", 12, [ALL_DEVICES])]))[0] == 12

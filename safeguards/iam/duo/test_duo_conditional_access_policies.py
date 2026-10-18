@@ -1,7 +1,7 @@
 """Duo isConditionalAccessEnabled, graded per application (workflow getApplicationPolicyCoverage).
 
 Inputs: GET /admin/v2/policies, GET /admin/v2/policies/summary and GET /admin/v3/integrations, merged under
-"policies", "summary" and "integrations". Synthetic bodies for "estate A" in the documented shapes (Duo Admin
+"policies", "summary" and "integrations". Synthetic bodies for "environment A" in the documented shapes (Duo Admin
 API "Retrieve Policies", "Summarize Policies", "Policy Section Data" and "Retrieve Integrations"). Policy keys,
 application names and integration keys are invented. No customer data.
 """
@@ -15,12 +15,15 @@ KEY = "isConditionalAccessEnabled"
 PCT = "conditionalAccessAppPercentage"
 HERE = Path(__file__).parent
 ROOT = HERE.parents[2]
-GLOBAL_KEY = "POGLOBALESTATEA00001"
-VPN_KEY = "POVPNESTATEA00000001"
-SPARE_KEY = "POSPAREESTATEA000001"
-GROUP_KEY = "POGROUPESTATEA000001"
-PORTAL = "DIESTATEAPORTAL00001"
-VPN_APP = "DIESTATEAVPN00000001"
+GLOBAL_KEY = "POGLOBALTENANTA00001"
+VPN_KEY = "POVPNTENANTA00000001"
+SPARE_KEY = "POSPARETENANTA000001"
+GROUP_KEY = "POGROUPTENANTA000001"
+GROUP_KEY_2 = "POGROUPTENANTA000002"
+GROUP_ID = "DGXXXXXXXXXXXXXXXXXX"
+RDP_APP = "DITENANTARDP00000001"
+PORTAL = "DITENANTAPORTAL00001"
+VPN_APP = "DITENANTAVPN00000001"
 
 # Sections a Premier global policy returns with Duo's documented defaults: none is an access condition.
 DEFAULTS = {
@@ -80,9 +83,9 @@ def bodies(global_sections, customs=(), applied=(), truncated=False, count=None,
     for key, name, sections in customs:
         pols.append(policy(key, name, copy.deepcopy(sections)))
     if apps is None:
-        apps = [(PORTAL, "Estate A Portal", None)]
+        apps = [(PORTAL, "Tenant A Portal", None)]
         for i, key in enumerate(applied):
-            apps.append(("DIESTATEAAPP%08d" % i, "Estate A App %d" % i, key))
+            apps.append(("DITENANTAAPP%08d" % i, "Tenant A App %d" % i, key))
     integrations = []
     for ikey, name, pkey in apps:
         app = {"integration_key": ikey, "name": name, "type": "sso-generic"}
@@ -93,8 +96,10 @@ def bodies(global_sections, customs=(), applied=(), truncated=False, count=None,
     for p in pols:
         applies = [{"app_integration_key": ikey, "app_name": name, "apply_type": "app"}
                    for ikey, name, pkey in apps if pkey == p["policy_key"]]
-        applies.extend({"app_integration_key": ikey, "app_name": "group binding", "apply_type": "group_app",
-                        "group_name": "Estate A Group"} for gkey, ikey in groups if gkey == p["policy_key"])
+        applies.extend({"app_integration_key": ikey, "app_name": "RDP Application", "apply_type": "group_app",
+                        "group_position": 1,
+                        "groups": [{"group_id": GROUP_ID, "group_name": "Example Group"}]}
+                       for gkey, ikey in groups if gkey == p["policy_key"])
         summary.append({"policy_key": p["policy_key"], "policy_name": p["policy_name"], "policy_applies_to": applies})
     return {"policies": {"response": pols},
             "summary": {"response": {"policies": summary, "policy_count": len(pols) if count is None else count,
@@ -189,7 +194,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
 
     def test_every_app_with_own_condition_is_true(self):
         customs = [(VPN_KEY, "VPN trusted only", {"trusted_endpoints": {"trusted_endpoint_checking": "require-trusted"}})]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY)]
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY)]
         self.assertIs(self.value(bodies(DEFAULTS, customs, apps=apps))[0], True)
 
     def test_string_booleans_and_comma_lists(self):
@@ -219,18 +224,18 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
         self.assertTrue(out["additionalInfo"]["evaluation"]["recommendations"])
-        self.assertIn("Estate A Portal", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
+        self.assertIn("Tenant A Portal", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
 
     def test_global_with_no_sections_is_false(self):
         self.assertIs(self.value(bodies({}))[0], False)
 
     def test_twenty_five_apps_one_covered_is_4_0(self):
         customs = [(VPN_KEY, "Desktop required", DESKTOP_WINDOWS)]
-        customs += [("POCUSTOMESTATEA%05d" % i, "Custom %d" % i, {"trusted_endpoints":
+        customs += [("POCUSTOMTENANTA%05d" % i, "Custom %d" % i, {"trusted_endpoints":
                                                                   {"trusted_endpoint_checking": "allow-all"}})
                     for i in range(19)]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY)]
-        apps += [("DIESTATEAAPP%08d" % i, "Estate A App %02d" % i, "POCUSTOMESTATEA%05d" % (i % 19))
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY)]
+        apps += [("DITENANTAAPP%08d" % i, "Tenant A App %02d" % i, "POCUSTOMTENANTA%05d" % (i % 19))
                  for i in range(24)]
         value, out = self.value(bodies(ESSENTIALS, customs, apps=apps))
         result = out["transformedResponse"]
@@ -240,7 +245,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
         reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
         self.assertIn("24 of 25", reasons)
         self.assertIn("and 14 more", reasons)
-        self.assertNotIn("Estate A VPN", reasons)
+        self.assertNotIn("Tenant A VPN", reasons)
 
     def test_partial_names_uncovered_and_percentage(self):
         customs = [(VPN_KEY, "VPN geo block", GEO_BLOCK)]
@@ -248,21 +253,21 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertIs(value, False)
         self.assertEqual(out["transformedResponse"][PCT], 50.0)
         reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
-        self.assertIn("Estate A Portal", reasons)
-        self.assertNotIn("Estate A App 0", reasons)
+        self.assertIn("Tenant A Portal", reasons)
+        self.assertNotIn("Tenant A App 0", reasons)
 
     def test_relaxing_app_value_overrides_global_in_same_section(self):
         customs = [(VPN_KEY, "VPN location ignored",
                     {"user_location": {"default_action": "ignore-location", "deny_access_countries_list": []}})]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY)]
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY)]
         value, out = self.value(bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, apps=apps))
         self.assertIs(value, False)
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
 
     def test_percentage_one_decimal(self):
         customs = [(VPN_KEY, "VPN geo block", GEO_BLOCK)]
-        apps = [(VPN_APP, "Estate A VPN", VPN_KEY), (PORTAL, "Estate A Portal", None),
-                ("DIESTATEAMAIL0000001", "Estate A Mail", None)]
+        apps = [(VPN_APP, "Tenant A VPN", VPN_KEY), (PORTAL, "Tenant A Portal", None),
+                ("DITENANTAMAIL0000001", "Tenant A Mail", None)]
         self.assertEqual(self.value(bodies(DEFAULTS, customs, apps=apps))[1]["transformedResponse"][PCT], 33.3)
 
     def test_require_mfa_settings_are_not_conditions(self):
@@ -332,46 +337,196 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertIs(self.value(bodies(with_sections(DEFAULTS, **change)))[0], True)
 
     # ---- group_app bindings -----------------------------------------------------------------------
-    def test_group_policy_adding_condition_to_uncovered_app_is_indeterminate(self):
-        customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
-        out = self.assertUnevaluated(bodies(DEFAULTS, customs, groups=[(GROUP_KEY, PORTAL)]), "application-level")
-        self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
+    # Duo's policy summary lists, for an application-group binding, the groups the policy applies to
+    # (policy_applies_to[].groups[].group_id, plus group_position). The group policy governs those users; every
+    # other user of the application keeps the application's own policy. Both must carry an access condition.
+    def rdp_body(self, global_sections=None, group_sections=None, group_key=GROUP_KEY, covered_apps=18):
+        """18 applications on the global policy plus one RDP application bound to a group policy."""
+        global_sections = with_sections(DEFAULTS, **GEO_BLOCK) if global_sections is None else global_sections
+        group_sections = DESKTOP_WINDOWS if group_sections is None else group_sections
+        apps = [("DITENANTAAPP%08d" % i, "Example App %02d" % i, None) for i in range(covered_apps)]
+        apps.append((RDP_APP, "RDP Application", None))
+        return bodies(global_sections, [(group_key, "RDP group policy", group_sections)], apps=apps,
+                      groups=[(group_key, RDP_APP)])
+
+    def test_rdp_app_bound_to_a_group_with_a_covered_policy_is_covered(self):
+        value, out = self.value(self.rdp_body())
+        result = out["transformedResponse"]
+        self.assertIs(value, True)
+        self.assertEqual(result[PCT], 100.0)
+        self.assertEqual((result["conditionalAccessAppsCovered"], result["conditionalAccessAppsTotal"],
+                          result["conditionalAccessAppsIndeterminate"]), (19, 19, 0))
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["groupBindings"], 1)
+        self.assertNotIn("DGXXXXXXXXXXXXXXXXXX", json.dumps(out))
+        self.assertNotIn("Example Group", json.dumps(out))
+
+    def test_group_binding_with_several_groups_on_one_policy_is_covered(self):
+        b = self.rdp_body()
+        target = b["summary"]["response"]["policies"][1]["policy_applies_to"][0]
+        target["groups"] = [{"group_id": "DGXXXXXXXXXXXXXXXX%02d" % i, "group_name": "Example Group %d" % i}
+                            for i in range(3)]
+        self.assertIs(self.value(b)[0], True)
+
+    def test_group_policy_that_relaxes_the_condition_leaves_the_app_uncovered(self):
+        relax = {"user_location": {"default_action": "ignore-location", "deny_access_countries_list": []}}
+        value, out = self.value(self.rdp_body(group_sections=relax))
+        result = out["transformedResponse"]
+        self.assertIs(value, False)
+        self.assertEqual(result[PCT], 94.7)
+        self.assertEqual(result["conditionalAccessAppsIndeterminate"], 0)
+        reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
+        self.assertIn("1 of 19", reasons)
+        self.assertIn("RDP Application", reasons)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_group_binding_does_not_cover_users_outside_the_group(self):
+        # the application's own policy (global here) has no condition; only the group policy has one
+        value, out = self.value(self.rdp_body(global_sections=DEFAULTS, group_sections=GEO_BLOCK, covered_apps=0))
+        self.assertIs(value, False)
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
+        self.assertIn("RDP Application", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
 
-    def test_group_policy_relaxing_covered_app_is_indeterminate_never_true(self):
-        customs = [(GROUP_KEY, "Group location ignored",
+    def test_group_binding_on_a_custom_application_policy_uses_that_chain(self):
+        customs = [(VPN_KEY, "VPN trusted only", {"trusted_endpoints": {"trusted_endpoint_checking": "require-trusted"}}),
+                   (GROUP_KEY, "Group policy with no setting", {"remembered_devices": {}})]
+        apps = [(RDP_APP, "RDP Application", VPN_KEY)]
+        b = bodies(DEFAULTS, customs, apps=apps, groups=[(GROUP_KEY, RDP_APP)])
+        self.assertIs(self.value(b)[0], True)
+
+    def test_flip_group_policy_condition_flips_the_verdict(self):
+        self.assertIs(self.value(self.rdp_body(group_sections={}))[0], True)  # inherits the covered global
+        relax = {"user_location": {"default_action": "ignore-location", "deny_access_countries_list": []}}
+        self.assertIs(self.value(self.rdp_body(group_sections=relax))[0], False)
+        self.assertIs(self.value(self.rdp_body(group_sections=DESKTOP_WINDOWS))[0], True)
+
+    def test_genuinely_uncovered_app_stays_false_beside_a_resolved_binding(self):
+        apps = [(RDP_APP, "RDP Application", None), ("DITENANTAMAIL0000001", "Tenant A Mail", VPN_KEY)]
+        customs = [(GROUP_KEY, "RDP group policy", DESKTOP_WINDOWS),
+                   (VPN_KEY, "Mail location ignored",
                     {"user_location": {"default_action": "ignore-location", "deny_access_countries_list": []}})]
-        out = self.assertUnevaluated(bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs,
-                                            groups=[(GROUP_KEY, PORTAL)]))
-        self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
+        value, out = self.value(bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, apps=apps,
+                                       groups=[(GROUP_KEY, RDP_APP)]))
+        self.assertIs(value, False)
+        self.assertEqual(out["transformedResponse"][PCT], 50.0)
+        reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
+        self.assertIn("Tenant A Mail", reasons)
+        self.assertNotIn("RDP Application", reasons)
 
-    def test_any_group_binding_blocks_true_even_when_it_agrees(self):
-        customs = [(GROUP_KEY, "Group remembered devices", {"remembered_devices": {}})]
-        b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, groups=[(GROUP_KEY, PORTAL)])
-        out = self.assertUnevaluated(b)
+    def unresolved(self, mutate, fragment=None):
+        b = self.rdp_body()
+        mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
+        out = self.assertUnevaluated(b, fragment)
         self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertEqual(out["transformedResponse"][PCT], round(18 * 100.0 / 19, 1))
+        return out
 
-    def test_indeterminate_result_does_not_report_data_collection_success(self):
-        customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
-        out = self.assertUnevaluated(bodies(DEFAULTS, customs, groups=[(GROUP_KEY, PORTAL)]))
-        self.assertNotEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+    def test_group_binding_without_a_groups_list_is_unevaluated_never_false(self):
+        cases = {
+            "groups missing": lambda t: t.pop("groups"),
+            "groups none": lambda t: t.__setitem__("groups", None),
+            "groups empty": lambda t: t.__setitem__("groups", []),
+            "groups a string": lambda t: t.__setitem__("groups", "DGXXXXXXXXXXXXXXXXXX"),
+            "groups an object": lambda t: t.__setitem__("groups", {"group_id": GROUP_ID}),
+            "old shape: group_name only": lambda t: (t.pop("groups"), t.__setitem__("group_name", "Example Group")),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label):
+                self.unresolved(mutate, "group")
+
+    def test_partly_readable_groups_are_unevaluated_never_false(self):
+        good = {"group_id": GROUP_ID, "group_name": "Example Group"}
+        cases = {
+            "entry not an object": [good, "DGXXXXXXXXXXXXXXXXXX"],
+            "entry without group_id": [good, {"group_name": "Example Group"}],
+            "group_id none": [good, {"group_id": None}],
+            "group_id blank": [good, {"group_id": "  "}],
+            "group_id a number": [{"group_id": 12345}],
+        }
+        for label, groups in cases.items():
+            with self.subTest(label):
+                self.unresolved(lambda t, g=groups: t.__setitem__("groups", g))
+
+    def test_unresolved_binding_stays_unevaluated_even_when_the_app_policy_is_uncovered(self):
+        b = self.rdp_body(global_sections=DEFAULTS, group_sections=GEO_BLOCK, covered_apps=0)
+        del b["summary"]["response"]["policies"][1]["policy_applies_to"][0]["groups"]
+        value, out = self.value(b)
+        self.assertIsNone(value)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_unresolved_binding_with_an_uncovered_app_is_false_for_the_uncovered_app(self):
+        apps = [(RDP_APP, "RDP Application", None), ("DITENANTAMAIL0000001", "Tenant A Mail", None)]
+        customs = [(GROUP_KEY, "RDP group policy", GEO_BLOCK)]
+        b = bodies(DEFAULTS, customs, apps=apps, groups=[(GROUP_KEY, RDP_APP)])
+        del b["summary"]["response"]["policies"][1]["policy_applies_to"][0]["groups"]
+        value, out = self.value(b)
+        self.assertIs(value, False)
+        self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
+        reasons = json.dumps(out["additionalInfo"]["evaluation"]["failReasons"])
+        self.assertIn("Tenant A Mail", reasons)
+        self.assertNotIn("RDP Application", reasons)
+
+    def test_two_different_group_policies_on_one_app_are_unevaluated(self):
+        customs = [(GROUP_KEY, "RDP group policy one", DESKTOP_WINDOWS), (GROUP_KEY_2, "RDP group policy two", GEO_BLOCK)]
+        b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, apps=[(RDP_APP, "RDP Application", None)],
+                   groups=[(GROUP_KEY, RDP_APP), (GROUP_KEY_2, RDP_APP)])
+        out = self.assertUnevaluated(b, "more than one")
+        self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
 
     def test_unreadable_group_policy_is_unevaluated(self):
         customs = [(GROUP_KEY, "Group broken", {"browsers": "ie"})]
         self.assertUnevaluated(bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs, groups=[(GROUP_KEY, PORTAL)]),
                                "cannot be read")
 
-    def test_indeterminate_with_an_uncovered_app_is_false(self):
-        customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
-        apps = [(PORTAL, "Estate A Portal", None), ("DIESTATEAMAIL0000001", "Estate A Mail", None)]
-        value, out = self.value(bodies(DEFAULTS, customs, apps=apps, groups=[(GROUP_KEY, PORTAL)]))
-        self.assertIs(value, False)
-        self.assertEqual(out["transformedResponse"]["conditionalAccessAppsIndeterminate"], 1)
-        self.assertIn("Estate A Mail", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
-
     def test_group_binding_to_unlisted_app_is_unevaluated(self):
         customs = [(GROUP_KEY, "Group geo block", GEO_BLOCK)]
         self.assertUnevaluated(bodies(DEFAULTS, customs, groups=[(GROUP_KEY, "DIUNLISTED0000000001")]), "incomplete")
+
+    def test_group_binding_naming_an_unlisted_policy_is_unevaluated(self):
+        b = self.rdp_body()
+        b["summary"]["response"]["policies"][1]["policy_key"] = "PONOTINTHELIST000001"
+        self.assertUnevaluated(b)
+
+    def test_summary_that_hides_its_bindings_is_unevaluated(self):
+        cases = {
+            "policy_applies_to missing": lambda p: p[1].pop("policy_applies_to"),
+            "policy_applies_to none": lambda p: p[1].__setitem__("policy_applies_to", None),
+            "policy_applies_to a string": lambda p: p[1].__setitem__("policy_applies_to", "all"),
+            "policy_applies_to an object": lambda p: p[1].__setitem__("policy_applies_to", {"apply_type": "app"}),
+            "policy_applies_to entry not an object": lambda p: p[1]["policy_applies_to"].append("DITENANTA"),
+            "apply_type missing": lambda p: p[1]["policy_applies_to"][0].pop("apply_type"),
+            "apply_type unknown": lambda p: p[1]["policy_applies_to"][0].__setitem__("apply_type", "everyone"),
+            "summary entry not an object": lambda p: p.append("POEXAMPLE"),
+            "summary lacks a policy": lambda p: p.pop(1),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label):
+                b = self.rdp_body()
+                mutate(b["summary"]["response"]["policies"])
+                out = self.assertUnevaluated(b)
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_error_or_empty_summary_with_group_bound_app_is_unevaluated(self):
+        marker = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Access forbidden",
+                                            "body": {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}}}
+        for summary in (marker, {"statusCode": 403, "message": "Forbidden"}, {"stat": "FAIL", "code": 40301},
+                        {}, {"response": {}}, {"response": {"policies": []}}, None, ""):
+            with self.subTest(summary=str(summary)[:50]):
+                b = self.rdp_body()
+                b["summary"] = summary
+                out = self.assertUnevaluated(b)
+                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_group_binding_verdicts_hold_in_the_production_sandbox(self):
+        sandboxed = load_sandboxed()
+        relax = {"user_location": {"default_action": "ignore-location", "deny_access_countries_list": []}}
+        broken = self.rdp_body()
+        del broken["summary"]["response"]["policies"][1]["policy_applies_to"][0]["groups"]
+        cases = [(self.rdp_body(), True), (self.rdp_body(group_sections=relax), False), (broken, None)]
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertIs(sandboxed(copy.deepcopy(payload))["transformedResponse"][KEY], expected)
 
     # ---- Unevaluated ------------------------------------------------------------------------------
     def test_truncated_summary_is_unevaluated(self):
@@ -396,7 +551,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertUnevaluated(b, "exactly one global policy")
 
     def test_unknown_policy_key_is_unevaluated(self):
-        apps = [(VPN_APP, "Estate A VPN", "PONOTINTHELIST000001")]
+        apps = [(VPN_APP, "Tenant A VPN", "PONOTINTHELIST000001")]
         self.assertUnevaluated(bodies(with_sections(DEFAULTS, **GEO_BLOCK), apps=apps), "policy_key")
 
     def test_missing_empty_or_non_list_integrations_is_unevaluated(self):
@@ -406,7 +561,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
             "bare empty": lambda b: b.__setitem__("integrations", []),
             "not a list": lambda b: b.__setitem__("integrations", {"stat": "OK", "response": "apps"}),
             "none": lambda b: b.__setitem__("integrations", None),
-            "entry not object": lambda b: b["integrations"]["response"].append("DIESTATEA"),
+            "entry not object": lambda b: b["integrations"]["response"].append("DITENANTA"),
             "entry without key": lambda b: b["integrations"]["response"].append({"name": "Keyless"}),
         }
         for label, mutate in cases.items():
@@ -542,7 +697,7 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertUnevaluated(body, "exactly one global policy")
 
     def test_unrelated_json_is_unevaluated(self):
-        self.assertUnevaluated({"users": [{"user_id": "DUESTATEA"}]})
+        self.assertUnevaluated({"users": [{"user_id": "DUTENANTA"}]})
 
     def test_invalid_json_string_is_transformation_error(self):
         value, out = self.value("{not json")
