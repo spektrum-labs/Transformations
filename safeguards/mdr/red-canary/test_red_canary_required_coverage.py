@@ -98,7 +98,7 @@ def test_transformation_exception_is_unevaluated(monkeypatch):
 # ---- partial ----------------------------------------------------------------------------------
 
 def test_read_shorter_than_reported_census_is_unevaluated():
-    assert_unevaluated(envelope([endpoint(i) for i in range(10)], total=194), "incomplete")
+    assert_unevaluated(envelope([endpoint(i) for i in range(10)], total=200), "incomplete")
 
 
 def test_endpoint_without_monitoring_status_is_unevaluated():
@@ -193,10 +193,10 @@ def test_decommissioned_are_left_out_of_the_denominator():
 # ---- partly monitored -------------------------------------------------------------------------
 
 @pytest.mark.parametrize("monitored,total,expected", [
-    (107, 194, 55),   # Ethico shape: 55.15% -> 55
-    (18, 21, 85),     # Gohlke shape: 85.71% -> 85
-    (5, 10, 50),      # Kingsmen shape
-    (63, 68, 92),     # Sycuan shape: 92.65% -> 92, below a 95 bar
+    (111, 200, 55),   # large fleet shape: 55.5% -> 55
+    (13, 15, 86),     # mid fleet shape: 86.67% -> 86
+    (5, 10, 50),      # small fleet shape
+    (46, 50, 92),     # just below a 95 bar: 92% -> 92
     (189, 199, 94),   # 94.97%: rounds DOWN, never up to the 95 bar
     (0, 2, 0),        # measured zero is a real 0, not an empty read
 ])
