@@ -9,6 +9,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isSSOEnabled = true when at least one identity server of type SAML is present and not marked
@@ -74,13 +95,13 @@ def transform(input):
         data = unwrap(parse_input(input), "identityServers")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         servers = data.get("identityServers")
         if not isinstance(servers, list):
-            return {key: False, "reason": "Response has no identityServers list"}
+            return respond(key, None, "Response has no identityServers list")
         saml = [s for s in servers if isinstance(s, dict) and str(s.get("type") or "").upper() == "SAML" and s.get("configured") is not False]
         if len(saml) == 0:
-            return {key: False, "reason": "No configured SAML identity server (" + str(len(servers)) + " identity servers read)"}
-        return {key: True, "reason": str(len(saml)) + " SAML identity servers configured", "samlApps": [str(s.get("name")) + " (" + str(s.get("samlType")) + ")" for s in saml][:10]}
+            return respond(key, False, "No configured SAML identity server (" + str(len(servers)) + " identity servers read)")
+        return respond(key, True, str(len(saml)) + " SAML identity servers configured", {"samlApps": [str(s.get("name")) + " (" + str(s.get("samlType")) + ")" for s in saml][:10]})
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

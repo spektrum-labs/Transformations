@@ -84,6 +84,59 @@ class AzureAdminSeparationTests(unittest.TestCase):
     def test_admin_missing_from_user_feed_is_not_evaluated(self):
         self.assert_not_evaluated(body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1", "u-ghost"]))
 
+    # --- a partial page is not the whole tenant -------------------------------
+    def test_partial_page_is_not_evaluated(self):
+        clean = body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1"])
+        self.assertTrue(self.run_t(clean)[0][KEY])
+        link = "https://graph.microsoft.com/v1.0/next"
+        for label in ("roleAssignments", "users"):
+            with self.subTest(label=label):
+                partial = body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1"])
+                partial[label]["@odata.nextLink"] = link
+                self.assert_not_evaluated(partial)
+                self.assertIn(label, " ".join(self.run_t(partial)[1]["dataCollection"]["errors"]))
+        members_page = {
+            "directoryRoles": [{"roleTemplateId": GLOBAL_ADMIN,
+                                "members": {"value": [{"id": "u1"}], "@odata.nextLink": link}}],
+            "users": {"value": [user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])]},
+        }
+        self.assert_not_evaluated(members_page)
+
+    def test_proven_violation_is_measured_even_when_the_page_is_partial(self):
+        partial = body([user("u1", "alice@contoso.com", mail="alice@contoso.com", skus=[SPE_E3])], ["u1"])
+        partial["users"]["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/next"
+        result, info = self.run_t(partial)
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success", info)
+        self.assertIn("also unresolved", info["evaluation"]["failReasons"][0])
+        self.assertIn("nextLink", info["evaluation"]["failReasons"][0])
+
+    # --- an administrator row with no licence list was never checked ----------
+    def test_admin_with_missing_or_null_licences_is_not_evaluated(self):
+        for mail in (None, "second@contoso.com"):
+            for licences in ("missing", None):
+                with self.subTest(mail=mail, licences=licences):
+                    second = {"id": "u2", "userPrincipalName": "second@contoso.com", "mail": mail}
+                    if licences != "missing":
+                        second["assignedLicenses"] = licences
+                    data = body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2]), second], ["u1", "u2"])
+                    self.assert_not_evaluated(data)
+                    errors = " ".join(self.run_t(data)[1]["dataCollection"]["errors"])
+                    self.assertIn("assignedLicenses", errors)
+                    self.assertIn("second@contoso.com", errors)
+        # An empty list is a real answer (no licences), so a clean read of that shape still passes.
+        data = body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2]),
+                     {"id": "u2", "userPrincipalName": "second@contoso.com", "assignedLicenses": []}], ["u1", "u2"])
+        self.assertTrue(self.run_t(data)[0][KEY])
+
+    def test_proven_violation_is_measured_when_another_admin_has_no_licence_list(self):
+        second = {"id": "u2", "userPrincipalName": "second@contoso.com", "mail": None}
+        data = body([user("u1", "alice@contoso.com", mail="alice@contoso.com", skus=[SPE_E3]), second], ["u1", "u2"])
+        result, info = self.run_t(data)
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success", info)
+        self.assertIn("second@contoso.com", info["evaluation"]["failReasons"][0])
+
     # --- AA-3: mail alone is a finding ---------------------------------------
     def test_mail_attribute_alone_is_a_finding_not_a_fail(self):
         admin = user("u1", "admin@contoso.com", mail="admin@contoso.com", skus=[ENTRA_P2])
@@ -145,6 +198,82 @@ class AzureAdminSeparationTests(unittest.TestCase):
         result, info = self.run_t(body([user("u1", "admin@contoso.com", mail="admin@contoso.com", plans=plans)], ["u1"]))
         self.assertFalse(result[KEY])
         self.assertEqual(info["dataCollection"]["status"], "success")
+
+    # --- a body that could not be read is not evidence about admins ----------
+    def test_failed_validation_is_not_evaluated_not_a_measured_fail(self):
+        data = body([user("u1", "admin@contoso.com", mail="admin@contoso.com", skus=[SPE_E3])], ["u1"])
+        result, info = self.run_t(data)
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        result, info = self.run_t({"data": data, "validation": {"status": "failed", "errors": ["bad shape"], "warnings": []}})
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "error", info)
+        self.assertIn("Input validation failed", info["dataCollection"]["errors"][0])
+        self.assertEqual(info["evaluation"]["passReasons"], [])
+
+    def test_unreadable_input_is_not_evaluated_not_a_measured_fail(self):
+        for data in ["{not json", b"\xff\xfe\x00"]:
+            result, info = self.run_t(data)
+            self.assertFalse(result[KEY])
+            self.assertEqual(info["transformation"]["status"], "error")
+            self.assertEqual(info["dataCollection"]["status"], "error", info)
+            self.assertIn("Transformation error", info["dataCollection"]["errors"][0])
+
+    def test_exception_message_is_bounded_in_every_field(self):
+        def boom(_):
+            raise ValueError("x" * 1000)
+
+        original = self.t.extract_input
+        self.t.extract_input = boom
+        try:
+            result, info = self.run_t({"value": []})
+        finally:
+            self.t.extract_input = original
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        for text in (info["dataCollection"]["errors"][0], info["transformation"]["errors"][0],
+                     info["evaluation"]["failReasons"][0]):
+            self.assertLess(len(text), 400)
+
+    def test_validation_echo_is_bounded_whatever_the_status(self):
+        clean = body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1"])
+        big = {"status": "passed", "errors": ["e" * 1000] * 100, "warnings": ["w" * 1000] * 100}
+        for status in ("passed", "failed", "unknown"):
+            with self.subTest(status=status):
+                result, info = self.run_t({"data": clean, "validation": dict(big, status=status)})
+                if status != "failed":
+                    self.assertTrue(result[KEY], info)
+                for field in ("errors", "warnings"):
+                    echoed = info["validation"][field]
+                    self.assertLessEqual(len(echoed), 20)
+                    for item in echoed:
+                        self.assertIsInstance(item, str)
+                        self.assertLess(len(item), 400)
+        for odd in ("one long string " * 200, {"code": "x" * 1000}, 7, [{"code": "x" * 1000}, 7, None]):
+            with self.subTest(odd=type(odd).__name__):
+                result, info = self.run_t({"data": clean, "validation": {"status": "passed", "errors": odd,
+                                                                         "warnings": odd}})
+                self.assertTrue(result[KEY], info)
+                self.assertLessEqual(len(info["validation"]["errors"]), 20)
+                for item in info["validation"]["errors"] + info["validation"]["warnings"]:
+                    self.assertIsInstance(item, str)
+                    self.assertLess(len(item), 400)
+
+    def test_error_body_text_and_codes_are_bounded(self):
+        error = {"code": "c" * 500, "message": "m" * 5000, "innerError": {"code": "i" * 500}}
+        result, info = self.run_t({"error": error})
+        self.assertFalse(result[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertEqual(len(info["validation"]["errors"]), 1)
+        self.assertLess(len(info["validation"]["errors"][0]), 400)
+        summary = info["transformation"]["inputSummary"]
+        self.assertLessEqual(len(summary["errorCode"]), 80)
+        self.assertLessEqual(len(summary["innerErrorCode"]), 80)
+        self.assertLess(len(info["dataCollection"]["errors"][0]), 200)
+        for message in (None, 12, {"x": "y" * 1000}, ["z" * 1000]):
+            with self.subTest(message=type(message).__name__):
+                result, info = self.run_t({"error": {"code": 403, "message": message}})
+                self.assertEqual(info["dataCollection"]["status"], "error")
+                self.assertLess(len(info["validation"]["errors"][0]), 400)
 
     def test_dedicated_admin_passes(self):
         result, info = self.run_t(body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2])], ["u1"]))

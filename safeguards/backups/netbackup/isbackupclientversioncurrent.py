@@ -9,6 +9,34 @@
 import json
 from datetime import datetime, timezone, timedelta
 
+VENDOR = "NetBackup"
+PRODUCT = "NetBackup"
+METHOD = "getSecurityStatus"
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status is derived from the value, never from a key list:
+    None means the body could not answer the check (not measured, "error"); True or False was measured."""
+    result = {key: value, "reason": reason}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": VENDOR, "product": PRODUCT, "method": METHOD,
+                         "category": "backups", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
 
 def transform(input):
     """
@@ -51,22 +79,24 @@ def transform(input):
     try:
         doc, problem = jsonapi(input, False)
         if doc is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         detail = doc["data"]["attributes"].get("securitySettingsDetail")
         if not isinstance(detail, dict):
-            return {key: False, "reason": "securitySettingsDetail is missing"}
+            return respond(key, None, "securitySettingsDetail is missing")
         setting = detail.get(SETTING)
         if not isinstance(setting, dict) or "currentConfigState" not in setting:
-            return {key: False, "reason": SETTING + " is not reported by this NetBackup version"}
+            return respond(key, None, SETTING + " is not reported by this NetBackup version")
         state = setting.get("currentConfigState")
 
         hosts = setting.get("totalHosts")
         if isinstance(state, bool) or not (isinstance(state, int) or isinstance(state, float)):
-            return {key: False, "reason": "Client version percentage is not reported"}
-        if not isinstance(hosts, (int, float)) or isinstance(hosts, bool) or hosts <= 0:
-            return {key: False, "reason": "No client hosts are counted"}
+            return respond(key, None, "Client version percentage is not reported")
+        if not isinstance(hosts, (int, float)) or isinstance(hosts, bool):
+            return respond(key, None, "Client host total is not reported")
+        if hosts <= 0:
+            return respond(key, False, "No client hosts are counted")
         if state >= 100:
-            return {key: True, "reason": "All " + str(int(hosts)) + " clients run the latest NetBackup version"}
-        return {key: False, "reason": str(state) + "% of " + str(int(hosts)) + " clients run the latest NetBackup version"}
+            return respond(key, True, "All " + str(int(hosts)) + " clients run the latest NetBackup version")
+        return respond(key, False, str(state) + "% of " + str(int(hosts)) + " clients run the latest NetBackup version")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "Transformation error: " + str(e)[:300], {"error": str(e)[:300]})

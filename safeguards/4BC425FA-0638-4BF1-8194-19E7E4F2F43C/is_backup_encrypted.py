@@ -9,6 +9,9 @@ Checks that all backups (RDS automated, RDS manual, EBS) are encrypted at rest.
 import json
 from datetime import datetime
 
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "isBackupEncrypted"
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -32,12 +35,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -66,6 +73,20 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+#: The getBackups workflow sections this check reads, each with the describe response it must carry.
+SECTIONS = (("dbBackups", "DescribeDBInstanceAutomatedBackupsResponse"),
+            ("dbManualSnapshots", "DescribeDBSnapshotsResponse"),
+            ("volumeSnapshots", "DescribeSnapshotsResponse"))
+
+
+def unread_sections(data, sections):
+    """The workflow sections that did not come back as a describe response: absent, null or an error
+    envelope. A reading that lacks one of them has not looked at that kind of backup."""
+    if not isinstance(data, dict):
+        return [name for name, response in sections]
+    return [name for name, response in sections
+            if not (isinstance(data.get(name), dict) and isinstance(data[name].get(response), dict))]
+
 def transform(input):
     auto_enc = True
     man_enc = True
@@ -81,7 +102,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={"isBackupEncrypted": False, "isAutoBackupEncrypted": False, "isManualBackupEncrypted": False, "isEbsBackupEncrypted": False},
+                result={"isBackupEncrypted": None, "isAutoBackupEncrypted": None, "isManualBackupEncrypted": None, "isEbsBackupEncrypted": None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -90,9 +111,18 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        db_backups = data.get("dbBackups", {})
-        db_manual_snapshots = data.get("dbManualSnapshots", {})
-        volume_snapshots = data.get("volumeSnapshots", {})
+        # A SECTION THAT IS PRESENT BUT NULL, OR PRESENT BUT NOT A DICT, MUST NOT RAISE.
+        # data.get(name, {}) returns None for "volumeSnapshots": null, because the key IS
+        # present, and the first volume_snapshots.get(...) below then raised AttributeError
+        # into the except branch -- turning an account with a readable unencrypted RDS
+        # backup into Not evaluated instead of the red it had earned. Coerce here so such a
+        # section flows to unread_sections, which already classifies it as unread.
+        db_backups = data.get("dbBackups")
+        db_manual_snapshots = data.get("dbManualSnapshots")
+        volume_snapshots = data.get("volumeSnapshots")
+        db_backups = db_backups if isinstance(db_backups, dict) else {}
+        db_manual_snapshots = db_manual_snapshots if isinstance(db_manual_snapshots, dict) else {}
+        volume_snapshots = volume_snapshots if isinstance(volume_snapshots, dict) else {}
 
         # A BODY CARRYING NONE OF THE THREE SECTIONS WAS SCANNED ZERO TIMES. Unlike a null
         # body -- which raises and is handled below -- {} and an error envelope parse
@@ -106,8 +136,8 @@ def transform(input):
         )
         if not data or any(data.get(k) for k in error_keys) or not sections_present:
             return create_response(
-                result={"isBackupEncrypted": False, "isAutoBackupEncrypted": False,
-                        "isManualBackupEncrypted": False, "isEbsBackupEncrypted": False},
+                result={"isBackupEncrypted": None, "isAutoBackupEncrypted": None,
+                        "isManualBackupEncrypted": None, "isEbsBackupEncrypted": None},
                 validation=validation,
                 fail_reasons=[
                     "The response carried none of dbBackups, dbManualSnapshots or "
@@ -173,6 +203,19 @@ def transform(input):
 
         all_enc = auto_enc and man_enc and ebs_enc
 
+        # An unencrypted snapshot found in what was read is a finding; "all encrypted" only counts when every
+        # section was read, since the unread one may hold the unencrypted snapshot.
+        unread = unread_sections(data, SECTIONS)
+        if unread and all_enc:
+            return create_response(
+                result={"isBackupEncrypted": None, "isAutoBackupEncrypted": None,
+                        "isManualBackupEncrypted": None, "isEbsBackupEncrypted": None},
+                validation=validation,
+                api_errors=[", ".join(unread) + " did not return a describe response, so those backups were not read"],
+                fail_reasons=["Not measured: " + ", ".join(unread) + " did not return a describe response, so those backups were not read"],
+                recommendations=["Confirm the AWS credential can call the describe APIs and that each returned a 2xx body."]
+            )
+
         additional_findings = []
 
         # Primary criteria: isBackupEncrypted (all backups encrypted)
@@ -234,12 +277,20 @@ def transform(input):
                     "recommendation": "Enable encryption for EBS snapshots"
                 })
 
+        # EACH SUB-CRITERION ANSWERS ONLY FOR ITS OWN SECTION. auto_enc, man_enc and ebs_enc
+        # are initialised True and are lowered only by finding an unencrypted item, so a
+        # section that was never read leaves its flag True -- True from missing data, the
+        # same defect the except branch below warns about. Reaching here with anything in
+        # `unread` means the guard above did not fire, i.e. SOMETHING read was unencrypted:
+        # the top-level False is a real finding (one unencrypted item settles the fail
+        # whatever else went unread), but a sub-key whose section was never read has no
+        # answer. `measured` is keyed on isBackupEncrypted alone, so that False stays graded.
         return create_response(
             result={
                 "isBackupEncrypted": all_enc,
-                "isAutoBackupEncrypted": auto_enc,
-                "isManualBackupEncrypted": man_enc,
-                "isEbsBackupEncrypted": ebs_enc
+                "isAutoBackupEncrypted": None if "dbBackups" in unread else auto_enc,
+                "isManualBackupEncrypted": None if "dbManualSnapshots" in unread else man_enc,
+                "isEbsBackupEncrypted": None if "volumeSnapshots" in unread else ebs_enc
             },
             validation=validation,
             pass_reasons=pass_reasons,
@@ -266,8 +317,8 @@ def transform(input):
         # isEbsBackupEncrypted TRUE. Measured 2026-09-21: transform(None) asserted all
         # three. Nothing was scanned, so none of the three has an answer.
         return create_response(
-            result={"isBackupEncrypted": False, "isAutoBackupEncrypted": False,
-                    "isManualBackupEncrypted": False, "isEbsBackupEncrypted": False},
+            result={"isBackupEncrypted": None, "isAutoBackupEncrypted": None,
+                    "isManualBackupEncrypted": None, "isEbsBackupEncrypted": None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}",

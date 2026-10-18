@@ -10,7 +10,7 @@ Every method uses the OAuth bearer from POST {serverUrl}/v8/token (grant_type=pa
 disable_antiforgery_token=true). Pagination: limit=10000; a page that links to a next page is refused.
 
 Fails closed: an error envelope, an empty or unrecognised body, an unread page or a filter the server did
-not apply gives False with the reason. Never a pass from missing data. Tested against the
+not apply gives None (not measured) with the reason. Never a pass from missing data. Tested against the
 documented response shapes only (no customer credentials yet).
 """
 import json
@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 KEY = "isBackupEnabled"
 METHOD = "getJobs"
 PRODUCT = "Veeam Backup for Microsoft 365"
-FALLBACK = False
+FALLBACK = None
 
 WRAPPERS = ["apiResponse", "api_response", "response", "result", "Output"]
 
@@ -127,12 +127,19 @@ def respond(value, reason, extra=None):
         for k in extra:
             result[k] = extra[k]
     bad = value is None or value is False
+    # Measured is read from the value alone: None means the body could not answer the check, so
+    # dataCollection reports an error and Token-Service does not grade it.
+    measured = value is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "evaluation": {"passReasons": [] if bad else [reason], "failReasons": [reason] if bad else []},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [] if bad else [reason], "failReasons": [reason] if bad else [],
+                           "recommendations": [], "additionalFindings": []},
             "metadata": {"transformationId": KEY, "vendor": "Veeam", "product": PRODUCT, "method": METHOD,
-                         "evaluatedAt": datetime.now(timezone.utc).isoformat()},
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
         },
     }
 
@@ -192,10 +199,10 @@ def object_repos(input):
 def evaluate(input):
     items, why = page_list(parse_body(input), "backup jobs (GET /v8/Jobs)")
     if why:
-        return respond(False, why)
+        return respond(None, why)
     on, why = enabled(items, "backup jobs")
     if why:
-        return respond(False, why)
+        return respond(None, why)
     if len(on) == 0:
         return respond(False, str(len(items)) + " backup jobs, none enabled")
     return respond(True, str(len(on)) + " of " + str(len(items)) + " backup jobs are enabled")

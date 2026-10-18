@@ -13,15 +13,19 @@
 # the evidence would mix companies.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isBackupEnabled"
 
 
-def transform(input):
+def transform_bare(input):
     """
     Returns isBackupEnabled = True when every protected domain of the organization has at least one active service
     AND at least one service with a recent backup (Datto backupStats).
 
     Proves: SaaS Protection is backing up data for each domain. Does not prove: that every service is covered
-    (see backupSuccessRatePercentage). False on any unreadable body.
+    (see backupSuccessRatePercentage). False when a domain reports no active service or no recent backup;
+    None (not measured) on an unreadable body or a domain without usable backupStats.
     """
     key = "isBackupEnabled"
 
@@ -87,13 +91,50 @@ def transform(input):
     try:
         domains, problem = read_domains(input)
         if domains is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
+        failed = []
+        unread = []
         for d in domains:
             a, r = stats(d)
             if a is None or r is None:
-                return {key: False, "reason": "Domain " + str(d.get("domain")) + " has no usable backupStats"}
-            if a <= 0 or r <= 0:
-                return {key: False, "reason": "Domain " + str(d.get("domain")) + " has " + str(a) + " active services and " + str(r) + " with a recent backup"}
+                unread.append("Domain " + str(d.get("domain")) + " has no usable backupStats")
+            elif a <= 0 or r <= 0:
+                failed.append("Domain " + str(d.get("domain")) + " has " + str(a) + " active services and " + str(r) + " with a recent backup")
+        if failed:
+            return {key: False, "reason": "; ".join(failed + unread)}
+        if unread:
+            return {key: None, "reason": "; ".join(unread)}
         return {key: True, "reason": "All " + str(len(domains)) + " protected domains have active services with a recent backup"}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Datto", "product": "SaaS Protection",
+                         "method": "getSaasDomains", "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+                         "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, transform_bare(input))

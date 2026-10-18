@@ -73,7 +73,7 @@ def run(body):
 class GmailLogging(unittest.TestCase):
     def test_real_admin_feed_is_not_measured(self):
         res, info = run(admin_feed())
-        self.assertIs(res[KEY], False)
+        self.assertIsNone(res[KEY])
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertIn("admin events, not Gmail log events", info["evaluation"]["failReasons"][0])
         self.assertIn("getGmailLogEvents", info["evaluation"]["recommendations"][0])
@@ -98,18 +98,21 @@ class GmailLogging(unittest.TestCase):
         self.assertEqual(info["dataCollection"]["status"], "success")
         self.assertIn("older than", info["evaluation"]["failReasons"][0])
 
-    def test_empty_gmail_feed_fails(self):
+    def test_empty_gmail_feed_is_not_measured(self):
+        # No mail in the window, or Gmail events not offered for the edition: the read cannot say which.
         res, info = run(feed())
-        self.assertIs(res[KEY], False)
-        self.assertEqual(res["gmailEventsRead"], 0)
-        self.assertIn("No Gmail log events", info["evaluation"]["failReasons"][0])
+        self.assertIsNone(res[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertTrue(info["dataCollection"]["errors"])
+        self.assertIn("no Gmail log events", info["evaluation"]["failReasons"][0])
 
-    def test_gmail_events_without_timestamps_fail(self):
+    def test_gmail_events_without_timestamps_are_not_measured(self):
         item = gmail_event(0.1)
         del item["id"]["time"]
         res, info = run(feed(item))
-        self.assertIs(res[KEY], False)
-        self.assertIn("no timestamps", info["evaluation"]["failReasons"][0])
+        self.assertIsNone(res[KEY])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertIn("no readable timestamps", info["evaluation"]["failReasons"][0])
 
     def test_mixed_feed_reads_only_gmail_events(self):
         res, _ = run(feed(activity("admin", 0.1, "SUSPEND_USER", []), gmail_event(2)))
@@ -119,31 +122,34 @@ class GmailLogging(unittest.TestCase):
     def test_empty_body_is_not_measured(self):
         for body in ("", b"", {}, []):
             res, info = run(body)
-            self.assertIs(res[KEY], False, body)
+            self.assertIsNone(res[KEY], body)
             self.assertEqual(info["dataCollection"]["status"], "error", body)
+            self.assertTrue(info["dataCollection"]["errors"], body)
 
     def test_none_is_not_measured(self):
         res, info = run(None)
-        self.assertIs(res[KEY], False)
+        self.assertIsNone(res[KEY])
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertIn("No response body", info["evaluation"]["failReasons"][0])
 
     def test_google_scope_error_is_named(self):
         res, info = run({"error": {"code": 403, "status": "PERMISSION_DENIED",
                                    "message": "Request had insufficient authentication scopes."}})
-        self.assertIs(res[KEY], False)
+        self.assertIsNone(res[KEY])
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertIn("scope not granted", info["evaluation"]["failReasons"][0])
 
     def test_integration_error_envelope_is_not_measured(self):
         res, info = run({"statusCode": 500, "message": "Upstream timeout"})
-        self.assertIs(res[KEY], False)
+        self.assertIsNone(res[KEY])
         self.assertEqual(info["dataCollection"]["status"], "error")
 
-    def test_unparseable_string_fails_closed(self):
+    def test_unparseable_string_is_not_measured(self):
         res, info = run("{not json")
-        self.assertIs(res[KEY], False)
+        self.assertIsNone(res[KEY])
         self.assertEqual(info["transformation"]["status"], "error")
+        self.assertEqual(info["dataCollection"]["status"], "error")
+        self.assertTrue(info["dataCollection"]["errors"])
 
 
 if __name__ == "__main__":

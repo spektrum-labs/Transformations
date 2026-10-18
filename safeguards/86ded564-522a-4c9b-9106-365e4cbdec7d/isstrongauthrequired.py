@@ -7,7 +7,7 @@ Evaluates whether strong authentication is REQUIRED, by counting active authenti
 
 WHAT THIS FILE IS HANDED, AND THE BUG THAT FIXES
 ------------------------------------------------
-Both Okta definitions wire this key to `getEstateSecondFactors`
+Both Okta definitions wire this key to the second-factors method
 (GET /api/v1/org/factors), which is NOT a policy list -- it is the Classic Engine
 catalogue of which factor TYPES the org has available. Measured on a real tenant
 2026-10-05 06:32 UTC: 17 rows, of which exactly two were ACTIVE -- `sms/OKTA` and
@@ -17,7 +17,7 @@ The old logic counted "any item with status ACTIVE" and reported
     "Strong authentication is required with 2 active policies"
 It was counting FACTORS and calling them POLICIES, so the pass was produced by SMS
 and TOTP being switched on -- the two weakest factors in the list. Across the Okta
-estate the key only ever read Passed, which is the distribution of a check that
+environment the key only ever read Passed, which is the distribution of a check that
 cannot fail rather than a measurement of anyone's posture.
 
 Two further problems with that reading, independent of the shape confusion:

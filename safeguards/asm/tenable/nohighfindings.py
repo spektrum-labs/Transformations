@@ -64,7 +64,7 @@ def read_assets(data):
     """POST /inventory returns {"total", "stats", "assets": [...]}. Under the engine's cursor
     pagination `assets` holds every page; `total` and `stats` survive from page 1. A bare list is
     tolerated. Returns (assets, total, stats, partial) -- `partial` is True when the pages we hold
-    are fewer than the estate, so a count derived from them is a LOWER BOUND and says so."""
+    are fewer than all assets in scope, so a count derived from them is a LOWER BOUND and says so."""
     if isinstance(data, list):
         return data, len(data), {}, False
     if not isinstance(data, dict):
@@ -140,12 +140,12 @@ def evaluate(data):
 
     Returns a bool for `isEquals true`; the count lives in `extras.count`. A partial
     scan returns False -- no high-ranked asset among a sample is not evidence that
-    none exists in the estate.
+    none exists in the environment.
     """
     assets, total, stats_unused, partial = read_assets(data)
     if not assets:
         # See nocriticalfindings.py: `read_assets` returns [] for an unreadable body, so
-        # scanning nothing must not read as a clean estate.
+        # scanning nothing must not read as proof of no findings in scope.
         return False, {"count": None, "assetsScanned": 0, "inventoryTotal": total}, [], \
             ["no assets returned -- the inventory is empty or the response was unreadable"], \
             ["Confirm the API key can read the inventory and that discovery sources are configured"], \
@@ -158,7 +158,7 @@ def evaluate(data):
     if n:
         return False, extras, [], [f"{n} asset(s) ranked high"], ['Remediate or archive the high-ranked assets in ASM'], []
     if partial:
-        return False, extras, [], [f"no high-ranked asset among the {len(assets)} of {total} assets scanned -- too few to claim the estate is clear"], ['Widen the inventory page window so the whole estate is scanned'], []
+        return False, extras, [], [f"no high-ranked asset among the {len(assets)} of {total} assets scanned -- too few to claim that no findings exist in scope"], ['Widen the inventory page window so all assets in scope are scanned'], []
     return True, extras, [f"no asset(s) ranked high across all {len(assets)} asset(s)"], [], [], []
 
 

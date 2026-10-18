@@ -2,6 +2,24 @@ import json
 from datetime import datetime
 
 
+CRITERIA_KEY = "unprotectedResourcesCount"
+
+
+def error_reason(body):
+    """A reason string when the body is an API error or refusal (any 4xx/5xx), else None."""
+    if not isinstance(body, dict):
+        return None
+    for key in ("error", "Error", "errors"):
+        err = body.get(key)
+        if err:
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
+    for key in ("statusCode", "status_code", "status", "httpStatus"):
+        code = body.get(key)
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "IDrive API returned HTTP " + str(code) + "; " + CRITERIA_KEY + " was not measured."
+    return None
+
+
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -32,9 +50,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    api_err_list = api_errors or []
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get(CRITERIA_KEY) if isinstance(result, dict) else None
+    measured = value is not None
+    api_err_list = [] if measured else (api_errors or transformation_errors or fail_reasons
+                                        or [CRITERIA_KEY + " could not be measured from the response"])
     transform_err_list = transformation_errors or []
-    data_collection_status = "error" if api_err_list else "success"
+    data_collection_status = "success" if measured else "error"
     transformation_status = "error" if transform_err_list else "success"
     response_metadata = {
         "evaluatedAt": datetime.utcnow().isoformat() + "Z",
@@ -67,7 +90,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
+def evaluate(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
 
@@ -85,13 +108,20 @@ def transform(input):
             else:
                 plans = []
 
+    api_error = error_reason(input) or error_reason(data)
+    if api_error:
+        plans = []
+
     total_plans = len(plans)
 
     pending_ids = []
     plan_device_ids = []
+    plans_without_list = 0
 
     for plan in plans:
-        if not isinstance(plan, dict):
+        if not isinstance(plan, dict) or not isinstance(plan.get("backup_pending_on"), list):
+            # Missing, null or "" backup_pending_on proves nothing about this plan's pending devices.
+            plans_without_list = plans_without_list + 1
             continue
 
         devices_list = plan.get("devices") or []
@@ -115,13 +145,32 @@ def transform(input):
         "totalPendingDeviceIds": unprotected_count,
     }
 
-    if total_plans == 0:
+    result_count = unprotected_count
+    if api_error:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = [api_error]
+        recommendations = [
+            "Check the IDrive API credentials and permissions for getBackupPlan, then re-run the check."
+        ]
+    elif total_plans == 0:
+        result_count = None
         pass_reasons = []
         fail_reasons = [
             "No backup plan records were returned for this account, so backup-plan coverage cannot be confirmed."
         ]
         recommendations = [
             "Verify at least one backup plan is configured for this account."
+        ]
+    elif plans_without_list > 0:
+        result_count = None
+        pass_reasons = []
+        fail_reasons = [
+            f"{plans_without_list} of {total_plans} backup plan record(s) carry no backup_pending_on list; "
+            f"the unprotected resource count cannot be determined, so it is not evaluated."
+        ]
+        recommendations = [
+            "Confirm getBackupPlan returns backup_pending_on for every plan for this account."
         ]
     elif unprotected_count == 0:
         pass_reasons = [
@@ -141,8 +190,14 @@ def transform(input):
             "Assign and apply a backup plan to the pending devices so they are actively protected."
         ]
 
+    if result_count is None:
+        # Not measured: the derived counts were never read, so they are not 0.
+        total_devices_in_plans = None
+        input_summary["totalDevicesAssignedToPlans"] = None
+        input_summary["totalPendingDeviceIds"] = None
+
     result = {
-        "unprotectedResourcesCount": unprotected_count,
+        "unprotectedResourcesCount": result_count,
         "totalBackupPlansScanned": total_plans,
         "totalDevicesAssignedToPlans": total_devices_in_plans,
     }
@@ -159,4 +214,17 @@ def transform(input):
             "vendor": "IDrive",
             "category": "backup",
         },
+        api_errors=[api_error] if api_error else None,
     )
+
+
+def transform(input):
+    try:
+        return evaluate(input)
+    except Exception as e:
+        return create_response(
+            result={CRITERIA_KEY: None},
+            fail_reasons=["Transformation error: " + str(e)],
+            transformation_errors=["Transformation error: " + str(e)],
+            metadata={"transformationId": CRITERIA_KEY, "vendor": "IDrive", "category": "backup"},
+        )

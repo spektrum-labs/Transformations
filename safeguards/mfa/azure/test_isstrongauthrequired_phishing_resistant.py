@@ -17,7 +17,7 @@ def out(enabled):
 
 
 def test_authenticator_only_fails():
-    # Trebron (2 Oct): Microsoft Authenticator and SMS only, passed until now.
+    # Microsoft Authenticator and SMS only, passed until now.
     r = out(["MicrosoftAuthenticator", "Sms"])
     assert r["isStrongAuthRequired"] is False
     assert r["enabledStrongMethods"] == []
@@ -25,7 +25,7 @@ def test_authenticator_only_fails():
 
 
 def test_fido2_with_phishable_methods_passes():
-    # Thoma Bravo / LSC Comm shape: FIDO2 plus Authenticator, SMS, email OTP, OATH, voice.
+    # Mixed shape: FIDO2 plus Authenticator, SMS, email OTP, OATH, voice.
     r = out(["Fido2", "MicrosoftAuthenticator", "Sms", "Email", "SoftwareOath", "Voice"])
     assert r["isStrongAuthRequired"] is True
     assert r["enabledStrongMethods"] == ["FIDO2 Security Key"]
@@ -36,7 +36,7 @@ def test_certificate_based_auth_passes():
 
 
 def test_email_otp_only_fails():
-    # Permasteelisa / Millar Western: email OTP only.
+    # Email OTP is the only enabled method.
     r = out(["Email"])
     assert r["isStrongAuthRequired"] is False
     assert r["enabledWeakMethods"] == ["Email OTP"]
