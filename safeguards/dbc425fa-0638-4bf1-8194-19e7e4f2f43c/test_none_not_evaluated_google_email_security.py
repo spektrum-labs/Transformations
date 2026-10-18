@@ -354,6 +354,11 @@ SPECS = [
             ("truncated_and_a_spoofing_setting_missing", lambda: phishing(SPOOF_ONE_MISSING, nextPageToken=TOKEN)),
             ("truncated_but_a_setting_is_off", lambda: phishing(SPOOF_OFF, nextPageToken=TOKEN)),
             ("truncation_marker_but_a_setting_is_off", lambda: phishing(SPOOF_OFF, paginationTruncated="true")),
+            ("override_in_force_without_spoofing_settings_over_a_default_on",
+             lambda: {"policies": [spoofing_policy(SPOOF_ON, "1.0", "SYSTEM"), spoofing_policy({}, "5.0", "ADMIN")]}),
+            ("override_in_force_with_only_other_spoofing_keys_over_a_default_on",
+             lambda: {"policies": [spoofing_policy(SPOOF_ON, "1.0", "SYSTEM"),
+                                   spoofing_policy({"detectUnauthenticatedEmails": True}, "5.0", "ADMIN")]}),
         ],
         "measured": [
             ("a_spoofing_setting_off", lambda: phishing(SPOOF_OFF),
