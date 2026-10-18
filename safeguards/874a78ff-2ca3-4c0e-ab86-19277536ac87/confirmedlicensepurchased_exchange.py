@@ -10,10 +10,20 @@ excluding EXCHANGE_S_FOUNDATION, which ships inside non-mail SKUs such as Power 
 plans) whose provisioning is not Disabled. Exchange Online includes Exchange Online Protection, the
 email-security baseline this integration evaluates. Any subscribedSkus body with a row (the old
 affirmative_signal rule) passed on free SKUs every tenant carries.
+
+Not evaluated (None, with a collection error) whenever the body does not prove the answer: a vendor or Graph
+error body, a body with no SKU rows, a page that continues (a next-page link that is not null or empty) or a row the code cannot read when
+no enabled mailbox plan was seen elsewhere, malformed or unreadable input, and failed input validation. A row the
+code cannot read is one without service plans, a plan without a name, or a row with a mailbox plan whose status or
+enabled unit count is missing or not readable. A SKU list that was read whole and holds no enabled Exchange
+mailbox plan is a real False. An enabled mailbox plan that was read stays True beside any of the above.
 """
 
 import json
 from datetime import datetime
+
+NEXT_LINK_KEYS = ("@odata.nextLink", "odata.nextLink", "nextLink")
+WRAPPER_KEYS = ("api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data")
 
 
 def extract_input(input_data):
@@ -104,6 +114,34 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+def not_evaluated(validation, api_error, fail_reason, recommendation, transformation_errors=None):
+    """No value beside an error: the None reaches the evaluator as Not evaluated through the collection error."""
+    return create_response(
+        result={"confirmedLicensePurchased": None},
+        validation=validation,
+        transformation_errors=transformation_errors,
+        api_errors=[api_error],
+        fail_reasons=[fail_reason],
+        recommendations=[recommendation]
+    )
+
+
+def has_next_link(body, depth=0):
+    """True when the body, or a wrapper layer around it, carries a next-page link: the read is then partial.
+
+    Only a null or empty-text link means the read is complete. Any other value (text, an object, a list, a number,
+    a flag) is a continuation that was not followed, so the read is partial."""
+    if not isinstance(body, dict) or depth > 3:
+        return False
+    for key in NEXT_LINK_KEYS:
+        if key in body and body[key] is not None and body[key] != "":
+            return True
+    for key in WRAPPER_KEYS:
+        if has_next_link(body.get(key), depth + 1):
+            return True
+    return False
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
     try:
@@ -113,40 +151,46 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+            return not_evaluated(
+                validation,
+                "Could not read subscribed SKUs: input validation failed",
+                "Input validation failed",
+                "Re-evaluate this check once the subscribedSkus read succeeds"
             )
         if isinstance(data, dict) and ("PSError" in data or data.get("error")):
             raw = str(data.get("PSError") or data.get("error"))
             api_error, recommendation = parse_api_error(raw, source="Microsoft Graph")
-            return create_response(
-                result={criteriaKey: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=["Could not read subscribed SKUs"],
-                recommendations=[recommendation]
+            return not_evaluated(
+                {"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_error,
+                "Could not read subscribed SKUs",
+                recommendation
             )
-        skus = data.get("value") if isinstance(data, dict) else data
-        if not isinstance(skus, list):
-            skus = []
-        skus = [s for s in skus if isinstance(s, dict) and isinstance(s.get("servicePlans"), list)]
-        if not skus:
-            return create_response(
-                result={criteriaKey: False, "exchangeSkus": []},
-                validation=validation,
-                fail_reasons=["No subscribed SKU with service plans was returned; the licence is not evidenced"],
-                recommendations=["Grant Organization.Read.All so subscribedSkus can be read"]
+        rows = data.get("value") if isinstance(data, dict) else data
+        if not isinstance(rows, list) or len(rows) == 0:
+            # No SKU rows is both a tenant that holds none and a read that returned nothing, so it proves nothing.
+            return not_evaluated(
+                validation,
+                "The subscribedSkus read returned no SKU rows",
+                "No subscribed SKU was returned, so the licence could not be evaluated",
+                "Verify the integration can read subscribedSkus (Organization.Read.All), then re-evaluate this check"
             )
+        partial = has_next_link(input)
+        skus = [s for s in rows if isinstance(s, dict) and isinstance(s.get("servicePlans"), list)]
+        unreadable = len(rows) - len(skus)
         licensed = []
         inactive = []
         for sku in skus:
             plans = []
             for plan in sku.get("servicePlans"):
                 if not isinstance(plan, dict):
+                    unreadable += 1
                     continue
-                name = str(plan.get("servicePlanName") or "").upper()
+                raw_name = plan.get("servicePlanName")
+                if not isinstance(raw_name, str) or raw_name.strip() == "":
+                    unreadable += 1
+                    continue
+                name = raw_name.strip().upper()
                 if not (name.startswith("EXCHANGE_S_") or name.startswith("EXCHANGE_B_")):
                     continue
                 if name == "EXCHANGE_S_FOUNDATION" or "ARCHIVE" in name:
@@ -156,22 +200,48 @@ def transform(input):
                 plans.append(name)
             if not plans:
                 continue
-            units = sku.get("prepaidUnits") if isinstance(sku.get("prepaidUnits"), dict) else {}
-            try:
-                enabled_units = int(units.get("enabled") or 0)
-            except (TypeError, ValueError):
-                enabled_units = 0
             part = str(sku.get("skuPartNumber") or sku.get("skuId") or "unknown")
-            if str(sku.get("capabilityStatus") or "").lower() == "enabled" and enabled_units > 0:
+            status = sku.get("capabilityStatus")
+            if not isinstance(status, str) or status.strip() == "":
+                unreadable += 1
+                continue
+            if status.strip().lower() != "enabled":
+                # The status alone proves the subscription is not active.
+                inactive.append(part + " (" + status.strip() + ")")
+                continue
+            units = sku.get("prepaidUnits")
+            enabled_units = units.get("enabled") if isinstance(units, dict) else None
+            if not isinstance(enabled_units, int) or isinstance(enabled_units, bool):
+                unreadable += 1
+                continue
+            if enabled_units > 0:
                 licensed.append(part)
             else:
-                inactive.append(part + " (" + str(sku.get("capabilityStatus")) + ", " + str(enabled_units) + " units)")
+                inactive.append(part + " (" + status.strip() + ", 0 units)")
         is_licensed = len(licensed) > 0
+        if not is_licensed and partial:
+            # A page that continues holds SKUs that were not read, so the absence of a mailbox plan proves nothing.
+            return not_evaluated(
+                validation,
+                "The subscribedSkus read is incomplete: more pages exist than were read",
+                "More subscribed SKU pages exist than were read, so the absence of a mailbox plan is not proven",
+                "Re-evaluate this check once every subscribedSkus page can be read"
+            )
+        if not is_licensed and unreadable > 0:
+            # A row or plan the code cannot read may be the mailbox plan, so its absence from the answer proves nothing.
+            return not_evaluated(
+                validation,
+                "Could not read every subscribed SKU",
+                "Not every subscribed SKU could be read, so the absence of a mailbox plan is not proven",
+                "Verify the integration can read subscribedSkus (Organization.Read.All), then re-evaluate this check"
+            )
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         if is_licensed:
             pass_reasons.append("Enabled Exchange Online subscription(s): " + ", ".join(licensed[:5]))
+            if partial or unreadable > 0:
+                pass_reasons.append("Not every subscribed SKU was read; an enabled mailbox plan that was read proves the licence")
         elif inactive:
             fail_reasons.append("Exchange Online subscriptions are present but not active: " + ", ".join(inactive[:5]))
             recommendations.append("Renew the Microsoft 365 / Exchange Online subscription")
@@ -184,12 +254,14 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"skuCount": len(skus), "exchangeSkusEnabled": len(licensed), "exchangeSkusInactive": len(inactive)}
+            input_summary={"skuCount": len(skus), "exchangeSkusEnabled": len(licensed), "exchangeSkusInactive": len(inactive), "unreadable": unreadable, "moreSkuPages": partial}
         )
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+        message = str(e)[:200]  # the text reaches the stored result, so a long one is cut
+        return not_evaluated(
+            {"status": "error", "errors": [], "warnings": []},
+            "Could not evaluate the response",
+            f"Transformation error: {message}",
+            "Re-evaluate this check once the subscribedSkus read succeeds",
+            transformation_errors=[message]
         )

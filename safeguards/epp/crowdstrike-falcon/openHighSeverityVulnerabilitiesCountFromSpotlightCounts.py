@@ -8,12 +8,12 @@ openHighSeverityVulnerabilitiesCount: open or reopened Spotlight instances with 
 
 WHY COUNTS AND NOT RECORDS. The *FromSpotlight.py files read every open critical/high record from
 GET /spotlight/combined/vulnerabilities/v1 (page size 5000, at most 20 pages = 100,000 records) and count them. Large
-estates hold more than that (on 2-3 Oct 2026 one estate held about 1M open/reopened critical+high instances and another
+environments hold more than that (on 2-3 Oct 2026 one environment held about 1M open/reopened critical+high instances and another
 about 100k), so every read stopped at the page cap and those checks were Unevaluated ("a partial read is not scored").
 Reading a million records with facet=cve on every evaluation is not workable. CrowdStrike already answers the exact
 question: GET /spotlight/queries/vulnerabilities/v1?filter=<FQL>&limit=1 returns meta.pagination.total, the number of
 vulnerability instances (one CVE on one host, the same record id the combined endpoint returns) that match the filter,
-over the whole estate. That is a complete read of the count, computed by the vendor; nothing is sampled or capped.
+over all assets in scope. That is a complete read of the count, computed by the vendor; nothing is sampled or capped.
 
 Input: the spotlightCriticalHighCounts workflow output, one block per step (IS merge + output.key):
   openCriticalHigh  filter status:['open','reopen']+cve.severity:['CRITICAL','HIGH']
@@ -44,7 +44,7 @@ Missing scope (SCOPE-NOT-GRANTED): CrowdStrike answers a client without "Vulnera
 {"errors": [{"code": 403, "message": "access denied, scope not permitted"}]}. When the method opts in to
 Integration-Service's vendorErrorAsResponse for that 403, IS hands it over in the block as
 {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <the vendor body>}}. That refusal says nothing
-about the estate: every key stays None and dataCollection carries errorCode "scope_not_granted" and requiredScope
+about the environment: every key stays None and dataCollection carries errorCode "scope_not_granted" and requiredScope
 "Vulnerabilities: Read". Any other handed-over refusal is Unevaluated with errorCode "vendor_refusal".
 
 Measured zero: a block whose meta.pagination.total is explicitly 0 (an int, or the digit string "0" as stored evidence
@@ -308,7 +308,7 @@ def transform(input):
                   "spotlightOpenCriticalHighTotal"]:
             if k != KEY:
                 result[k] = numbers[k]
-        summary = ("Spotlight vendor counts over the whole estate (" + str(numbers["spotlightOpenCriticalHighTotal"])
+        summary = ("Spotlight vendor counts over all assets in scope (" + str(numbers["spotlightOpenCriticalHighTotal"])
                    + " open/reopened critical+high instances): " + str(numbers[KEY_CRITICAL]) + " critical, "
                    + str(numbers[KEY_HIGH]) + " high, " + str(numbers[KEY_OVERDUE])
                    + " past the BOD 19-02 window (" + str(numbers["overdueCriticalCount"]) + " critical > 15 days, "

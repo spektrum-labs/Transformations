@@ -12,9 +12,14 @@ device. An FMC enforces traffic through the access control policy assigned to ea
 policy to a device"), so a device with none assigned is not being firewalled by this FMC. Assignments read with none
 of them an access control policy on a device is False.
 
-Not evaluated (every key routed here None, with a dataCollection error): an empty, error or unrecognised body; no
+Cisco emits only isFirewallEnabled: no other criterion is answered here, on any path.
+
+Not evaluated (isFirewallEnabled None, with a dataCollection error): an empty, error or unrecognised body; no
 assignment at all; items without policy and targets (the list was read without expanded=true); a partial page that
-shows no access control policy on a device; or any other FMC body. That includes the management audit log
+shows no access control policy on a device; or any other FMC body. A page is partial when paging says more
+assignments exist: a count above the items read, pages above one unless the count equals the items read, a next link,
+an offset above zero, or a paging field that cannot be read. An access control policy on a device that was read still
+proves True on a partial page. The "or any other FMC body" case includes the management audit log
 (getAuditLogging), which this file used to be wired to: audit records describe administrator activity on the FMC and
 say nothing about whether a firewall is enforcing traffic.
 
@@ -164,6 +169,78 @@ def fmc_collection(raw):
     return None, "the response carries no FMC items list"
 
 
+def page_int(value):
+    """A whole-number page field, or None. Stored replays stringify numbers: 4, 4.0, "4" and "4.0" are all 4."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(str(value).strip())
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        whole = int(number)
+        if whole != number:
+            return None
+        return whole
+    except Exception:
+        return None
+
+
+def page_field_unreadable(value):
+    """True when a page field is present but is not a whole number (null, an empty string and the stringified nulls are absent)."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "null"):
+        return False
+    return page_int(value) is None
+
+
+def page_cursor(value):
+    """A pagination cursor, or None. Stored replays stringify null as "None" or "null"."""
+    if value is None or value is False:
+        return None
+    text = str(value).strip()
+    if text.lower() in ("", "none", "null", "false"):
+        return None
+    return text
+
+
+def marker_set(value):
+    """True when a next-page marker (a link or a list of links) is set."""
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    return page_cursor(value) is not None
+
+
+def more_assignments_exist(body, items_read):
+    """True when paging shows assignments beyond the items this body carries (a partial read)."""
+    paging = body.get("paging")
+    if paging is None:
+        return False
+    if not isinstance(paging, dict):
+        return page_cursor(paging) is not None
+    count_raw = paging.get("count")
+    if page_field_unreadable(count_raw):
+        return True
+    count = page_int(count_raw)
+    if count is not None and count > items_read:
+        return True
+    offset_raw = paging.get("offset")
+    if page_field_unreadable(offset_raw):
+        return True
+    offset = page_int(offset_raw)
+    if offset is not None and offset > 0:
+        return True
+    pages_raw = paging.get("pages")
+    if page_field_unreadable(pages_raw):
+        return True
+    pages = page_int(pages_raw)
+    if pages is not None and pages > 1 and count != items_read:
+        return True
+    return marker_set(paging.get("next"))
+
+
 def is_assignment(item):
     return isinstance(item, dict) and (item.get("type") == "PolicyAssignment" or "targets" in item)
 
@@ -226,9 +303,7 @@ def transform(input):
                 if isinstance(t, dict):
                     devices.append(str(t.get("name") or t.get("id") or "?")[:60])
 
-        paging = body.get("paging") if isinstance(body.get("paging"), dict) else {}
-        count = as_int(paging.get("count"))
-        partial = count is not None and count > len(items)
+        partial = more_assignments_exist(body, len(items))
         summary = {"assignmentsRead": len(assignments), "accessPoliciesOnDevices": len(enforcing),
                    "devicesWithAccessPolicy": len(devices), "otherPolicyAssignments": other_policies,
                    "assignmentsWithoutDetail": unexpanded, "partialRead": partial}
@@ -243,8 +318,9 @@ def transform(input):
             return not_measured(validation, "Cisco FMC: " + str(unexpanded) + " policy assignment(s) were listed "
                                 "without their policy and targets; the list must be read with expanded=true.", summary)
         if partial:
-            return not_measured(validation, "Cisco FMC: the first page of " + str(len(items)) + " of " + str(count) +
-                                " policy assignments has no access control policy on a device.", summary)
+            return not_measured(validation, "Cisco FMC: the " + str(len(items)) + " policy assignment(s) read have no "
+                                "access control policy on a device, and the paging says more assignments exist than "
+                                "were read.", summary)
         return create_response(
             {KEY: False}, validation,
             fail_reasons=["Cisco FMC: none of " + str(len(assignments)) + " policy assignments puts an access "

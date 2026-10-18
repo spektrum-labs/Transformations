@@ -11,7 +11,7 @@ before, and a partial read that already shows a streaming sensor still answers T
 cannot undo a host that was read). isEPPDeployed is now a measured share of reporting hosts (see
 test_crowdstrike_epp_deployed_measured.py): a host-ID list and every partial read are Unevaluated.
 
-All host data here is synthetic ("estate A")."""
+All host data here is synthetic ("environment A")."""
 import importlib.util
 import json
 import pathlib
@@ -37,14 +37,14 @@ EDR = load("isEDRDeployed")
 EPP = load("isEPPDeployed")
 
 
-# ---------------------------------------------------------------- synthetic estate A, real Falcon shapes
+# ---------------------------------------------------------------- synthetic environment A, real Falcon shapes
 
 def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_seen=RECENT):
-    """A host record as GET /devices/entities/devices/v2 returns it (synthetic estate A)."""
+    """A host record as GET /devices/entities/devices/v2 returns it (synthetic environment A)."""
     policies = {"prevention": {"policy_id": "prev-a", "applied": True}}
     if sensor_update:
         policies["sensor_update"] = {"policy_id": "su-a", "applied": True, "uninstall_protection": "ENABLED"}
-    record = {"device_id": "estate-a-dev-%04d" % n, "hostname": "estate-a-host-%04d" % n,
+    record = {"device_id": "env-a-dev-%04d" % n, "hostname": "env-a-host-%04d" % n,
               "status": "normal", "platform_name": "Windows", "product_type_desc": "Workstation",
               "reduced_functionality_mode": rfm, "device_policies": policies, "last_seen": last_seen}
     if agent_version is not None:
@@ -55,7 +55,7 @@ def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_see
 def hosts_body(records, total=None, **pagination):
     page = {"offset": 0, "limit": 5000, "total": len(records) if total is None else total}
     page.update(pagination)
-    return {"meta": {"query_time": 0.12, "pagination": page, "powered_by": "device-api", "trace_id": "estate-a"},
+    return {"meta": {"query_time": 0.12, "pagination": page, "powered_by": "device-api", "trace_id": "env-a"},
             "resources": records, "errors": []}
 
 
@@ -68,7 +68,7 @@ def scroll_body(count, total=None, **pagination):
 
 
 # GET /installation-tokens/entities/customer-settings/v1, the body getLicenseStatus returns
-CUSTOMER_SETTINGS = {"meta": {"query_time": 0.01, "powered_by": "csam", "trace_id": "estate-a"},
+CUSTOMER_SETTINGS = {"meta": {"query_time": 0.01, "powered_by": "csam", "trace_id": "env-a"},
                      "resources": [{"max_active_tokens": 0, "tokens_required": False}], "errors": []}
 AUTH_401 = {"meta": {}, "resources": [], "errors": [{"code": 401, "message": "access denied, invalid bearer token"}]}
 AUTH_403 = {"meta": {}, "resources": None, "errors": [{"code": 403, "message": "access denied, authorization failed"}]}
@@ -276,9 +276,9 @@ def test_edr_partial_read_never_answers_false(partial):
         # Integration-Service at maxPages: first page's block kept, next cleared, truncated + scannedCount
         body = hosts_body(records, total=10, next=None, truncated=True, scannedCount=10)
     elif partial == "after_token":
-        body = hosts_body(records, after="estate-a-scroll-token")
+        body = hosts_body(records, after="env-a-scroll-token")
     elif partial == "next_token":
-        body = hosts_body(records, next="estate-a-next")
+        body = hosts_body(records, next="env-a-next")
     else:
         body = dict(hosts_body(records), nextPage="https://api.example.invalid/devices?page=2")
     info = assert_unevaluated(EDR, "isEDRDeployed", body, "partial")
@@ -287,7 +287,7 @@ def test_edr_partial_read_never_answers_false(partial):
 
 def test_edr_partial_read_that_shows_a_streaming_sensor_still_passes():
     body = hosts_body([host(0)] + [host(i, sensor_update=False) for i in range(1, 10)], total=900,
-                      after="estate-a-scroll-token")
+                      after="env-a-scroll-token")
     value, info = run(EDR, "isEDRDeployed", body)
     assert value is True
     assert info["dataCollection"]["status"] == "success"
@@ -309,7 +309,7 @@ def test_blank_next_tokens_are_not_partial(blank):
 def test_epp_partial_page_is_unevaluated():
     # one page of a larger tenant answered True from meta.pagination.total before 2026-10-07
     assert_unevaluated(EPP, "isEPPDeployed", hosts_body([host(i) for i in range(10)], total=1517,
-                                                        next="estate-a-next"), "partial")
+                                                        next="env-a-next"), "partial")
     truncated = dict(hosts_body([host(i) for i in range(10)]), paginationTruncated=True)
     assert_unevaluated(EPP, "isEPPDeployed", truncated, "partial")
 
@@ -324,7 +324,7 @@ def test_epp_never_answers_false_from_nothing():
 
 class Exploding(dict):
     def get(self, *args, **kwargs):
-        raise RuntimeError("estate-a synthetic failure")
+        raise RuntimeError("env-a synthetic failure")
 
 
 @pytest.mark.parametrize("module,key", BOTH)
@@ -360,7 +360,7 @@ def test_both_files_compile_and_run_in_the_restricted_sandbox():
 @pytest.mark.parametrize("ids", [
     ["ldt:0000000000000000000000000000000a:1234"],             # detection ids
     ["0000000000000000000000000000000a_cve-2024-0001"],         # vulnerability instance ids
-    ["estate-a-group-1", "estate-a-group-2"],                   # non-hex names
+    ["env-a-group-1", "env-a-group-2"],                   # non-hex names
     ["0123456789abcdef"],                                       # too short
 ])
 def test_epp_misrouted_id_list_is_unevaluated(ids):

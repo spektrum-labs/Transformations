@@ -8,7 +8,7 @@ Now a host counts as deployed when it has an agent_version, is not in Reduced Fu
 checked in within ACTIVE_WINDOW_DAYS; mobile hosts are left out; isEPPDeployed holds when that share
 reaches DEPLOYED_THRESHOLD. A host-ID list, a partial read and an all-mobile read are Unevaluated.
 
-All host data built here is synthetic ("estate E"); the real fixtures are only read, never copied."""
+All host data built here is synthetic ("environment E"); the real fixtures are only read, never copied."""
 import importlib.util
 import json
 import pathlib
@@ -35,7 +35,7 @@ def ago(days=0, hours=1):
 
 
 def host(n, last_seen=None, rfm="no", agent_version="7.40.21309.0", product="Workstation", platform="Windows"):
-    record = {"device_id": "estate-e-dev-%04d" % n, "platform_name": platform, "product_type_desc": product,
+    record = {"device_id": "environment-e-dev-%04d" % n, "platform_name": platform, "product_type_desc": product,
               "status": "normal", "reduced_functionality_mode": rfm, "last_seen": last_seen or ago()}
     if agent_version is not None:
         record["agent_version"] = agent_version
@@ -75,7 +75,7 @@ def assert_unevaluated(payload, reason=None):
 
 def test_threshold_is_explicit():
     assert EPP.DEPLOYED_THRESHOLD == 95.0
-    assert EPP.ACTIVE_WINDOW_DAYS == 15
+    assert EPP.ACTIVE_WINDOW_DAYS == 45
 
 
 def test_every_host_reporting_passes():
@@ -86,10 +86,10 @@ def test_every_host_reporting_passes():
 
 
 def test_exactly_at_the_bar_passes_and_one_below_fails():
-    at_bar = [host(i) for i in range(19)] + [host(19, last_seen=ago(days=40))]
+    at_bar = [host(i) for i in range(19)] + [host(19, last_seen=ago(days=60))]
     result, _ = assert_measured(body(at_bar), True)
     assert result["sensorDeploymentPercentage"] == 95.0
-    below = [host(i) for i in range(18)] + [host(18, last_seen=ago(days=40)), host(19, last_seen=ago(days=40))]
+    below = [host(i) for i in range(18)] + [host(18, last_seen=ago(days=60)), host(19, last_seen=ago(days=60))]
     result, info = assert_measured(body(below), False)
     assert result["sensorDeploymentPercentage"] == 90.0
     assert "below the 95.0% bar" in info["evaluation"]["failReasons"][0]
@@ -98,12 +98,21 @@ def test_exactly_at_the_bar_passes_and_one_below_fails():
 
 def test_one_reporting_host_of_many_fails():
     # "at least one host exists" was the old pass condition
-    records = [host(0)] + [host(i, last_seen=ago(days=30)) for i in range(1, 50)]
+    records = [host(0)] + [host(i, last_seen=ago(days=60)) for i in range(1, 50)]
     result, _ = assert_measured(body(records), False)
     assert result["reportingDevices"] == 1
 
 
 # ---------------------------------------------------------------- what counts as deployed
+
+def test_an_old_newest_checkin_does_not_stretch_the_window():
+    # Newest host checked in 44 days ago; the rest 80 days ago. The clock follows the data, but a host
+    # is never accepted more than CACHE_GRACE_DAYS past the window from now, so the 80-day hosts are dark.
+    records = [host(0, last_seen=ago(days=44))] + [host(i, last_seen=ago(days=80)) for i in range(1, 20)]
+    result, info = assert_measured(body(records), False)
+    assert result["reportingDevices"] == 1
+    assert info["transformation"]["inputSummary"]["notReportingDevices"] == 19
+
 
 def test_a_fleet_dark_for_90_days_fails():
     records = [host(i, last_seen=ago(days=90)) for i in range(25)]
@@ -169,7 +178,7 @@ def test_host_id_list_is_unevaluated():
     assert_unevaluated(body(ids), "not that its sensor is reporting")
 
 
-@pytest.mark.parametrize("partial", [{"total": 900}, {"total": "900"}, {"next": "estate-e-next"},
+@pytest.mark.parametrize("partial", [{"total": 900}, {"total": "900"}, {"next": "environment-e-next"},
                                      {"truncated": True}])
 def test_partial_read_is_unevaluated_even_when_every_host_read_reports(partial):
     assert_unevaluated(body([host(i) for i in range(10)], **partial), "partial")
@@ -200,6 +209,10 @@ class CaptureTimeDatetime(datetime):
 
 def test_real_complete_host_list_is_measured_and_discriminates(monkeypatch):
     real = json.loads((HERE / "fixtures" / "falcon_hosts_sensor_update_real_2026-09-25.json").read_text())
+    # The capture's own last_seen spread is narrower than the 45-day window, so ten hosts are pushed
+    # 60 days before the capture time to give the window a stale population to discriminate on.
+    for record in real["resources"][:10]:
+        record["last_seen"] = (CAPTURE_TIME - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     monkeypatch.setattr(EPP, "datetime", CaptureTimeDatetime)
     result, info = assert_measured(real, False)
     assert 0 < result["sensorDeploymentPercentage"] < EPP.DEPLOYED_THRESHOLD
