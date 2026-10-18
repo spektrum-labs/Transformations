@@ -4,7 +4,7 @@
   "generated_by": "tools/check_criteria_registry.py --emit-allowlist",
   "how_to_shrink": "register the key (contracts/criteria-registry/keys/<key>.json) with what is evidenced and \"unknown\" for what is not, or stop emitting it. Never add to this list by hand.",
   "count": {
-    "unregistered": 1860,
+    "unregistered": 1859,
     "type": 0
   },
   "unregistered": [
@@ -835,7 +835,6 @@
     "safeguards/emailsecurity/avanan/isurlrewriteenabled.py::isURLRewriteEnabled",
     "safeguards/emailsecurity/check-point-software-technologies-email-security/isAccountTakeoverDetectionEnabled.py::atoEventCount",
     "safeguards/emailsecurity/check-point-software-technologies-email-security/isAccountTakeoverDetectionEnabled.py::isAccountTakeoverDetectionEnabled",
-    "safeguards/emailsecurity/check-point-software-technologies-email-security/isAttachmentSandboxDetonationEnabled.py::detonationEventCount",
     "safeguards/emailsecurity/check-point-software-technologies-email-security/isAttachmentSandboxDetonationEnabled.py::isAttachmentSandboxDetonationEnabled",
     "safeguards/emailsecurity/check-point-software-technologies-email-security/isCloudDataLeakPreventionEnabled.py::isCloudDataLeakPreventionEnabled",
     "safeguards/emailsecurity/check-point-software-technologies-email-security/isDKIMEnforced.py::isDKIMEnforced",
@@ -1365,6 +1364,7 @@
     "safeguards/iam/duo/hasHighRiskUserDetectionByPolicy.py::hasHighRiskUserDetectionAPIAccess",
     "safeguards/iam/duo/isAdminMFAPhishingResistant.py::isAdminMFAPhishingResistant",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::isAuditLoggingEnabled",
+    "safeguards/iam/duo/isAuditLoggingEnabled.py::maxEventAgeDays",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::newestEventAgeDays",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::totalLogCount",
     "safeguards/iam/duo/isAuditLoggingEnabled.py::wellFormedLogCount",
