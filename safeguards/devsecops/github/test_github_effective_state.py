@@ -99,3 +99,31 @@ def test_truncated_secret_count_is_flagged_as_lower_bound():
     for n in (3, 200, 4900):
         tr = load("openSecretScanningAlertsCount").transform([alert()] * n)["transformedResponse"]
         assert tr["countIsLowerBound"] is False
+
+
+def _empty_connection(**extra):
+    """The shape the paginator leaves when the organization could not be read: a nodes list and nothing else."""
+    return {"organization": {"repositories": {"nodes": [], **extra}}}
+
+
+def test_dependabot_withholds_when_the_organization_could_not_be_read():
+    """No nodes and no totalCount: the connection never arrived (wrong organization name, or a token that cannot
+    see it). That is a read failure, so the criterion is not evaluated; it must not be scored as a finding."""
+    out = load("isDependabotAlertsEnabled").transform(_empty_connection())
+    assert out["transformedResponse"]["isDependabotAlertsEnabled"] is False
+    collection = out["additionalInfo"]["dataCollection"]
+    assert collection["status"] == "error"
+    assert "organization name may be wrong" in collection["errors"][0]
+
+
+def test_dependabot_scores_an_organization_that_really_has_no_repositories():
+    """totalCount 0 arrived, so the organization was read: nothing to confirm, a fail with a read that succeeded."""
+    out = load("isDependabotAlertsEnabled").transform(_empty_connection(totalCount=0))
+    assert out["transformedResponse"]["isDependabotAlertsEnabled"] is False
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_dependabot_pass_is_unchanged_by_the_empty_read_rule():
+    out = load("isDependabotAlertsEnabled").transform(gql(True, True))
+    assert out["transformedResponse"]["isDependabotAlertsEnabled"] is True
+    assert out["additionalInfo"]["dataCollection"]["status"] == "success"

@@ -79,7 +79,7 @@ class AgentReads(unittest.TestCase):
                 self.assertEqual(self.value(key, body), (None, "error"), (key, body))
 
     def test_measured_zero_fleet_is_not_evaluated(self):
-        # A complete read with no agents proves nothing either way (2026-10-02, Collaborative Fund): Unevaluated
+        # A complete read with no agents proves nothing either way (2 Oct 2026): Unevaluated
         # (None plus a dataCollection reason Token-Service renders as "Not evaluated"), never False or 0%.
         for key in AGENT_KEYS:
             self.assertEqual(self.value(key, ts(is_response([], 0))), (None, "error"), key)

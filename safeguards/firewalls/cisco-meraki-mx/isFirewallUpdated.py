@@ -1,5 +1,5 @@
 """
-Transformation: isFirewallUpdated (THL NW-02: Routine Network Device Patching)
+Transformation: isFirewallUpdated (NW-02: Routine Network Device Patching)
 Vendor: Cisco Meraki MX  |  Category: firewalls
 Source: GET /networks/{networkId}/firmwareUpgrades, fanned out over appliance networks
 Value: the percentage of appliance networks whose MX runs the latest stable firmware Meraki

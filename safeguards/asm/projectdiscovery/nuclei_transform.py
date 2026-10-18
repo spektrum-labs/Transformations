@@ -82,6 +82,19 @@ def to_int(value):
         return None
 
 
+def scan_reason_suffix(data):
+    """The reason Integration-Service gave for a scan that has no result (asm_scan_in_progress,
+    asm_scan_retry_backoff, ...) as " (reason: ...)", or "" when it gave none. Only a short
+    lower-case token is passed on, so a body cannot put free text into the stream."""
+    reason = str(data.get("reason") or "").strip().lower() if isinstance(data, dict) else ""
+    if not reason or len(reason) > 60:
+        return ""
+    for ch in reason:
+        if ch not in "abcdefghijklmnopqrstuvwxyz0123456789_":
+            return ""
+    return " (reason: " + reason + ")"
+
+
 def capped_note(data):
     """The reason a zero would be partial (more hosts discovered than scanned), else None."""
     scanned = to_int(data.get("domainsScanned"))
@@ -231,7 +244,7 @@ def transform(input):
             return create_response(
                 result={"noCriticalFindings": False, "noHighFindings": False},
                 validation=validation,
-                api_errors=[f"Nuclei scan status: {scan_status}"],
+                api_errors=[f"Nuclei scan status: {scan_status}{scan_reason_suffix(data)}"],
                 fail_reasons=[f"Scan did not complete successfully for {domain}"],
                 input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
             )
