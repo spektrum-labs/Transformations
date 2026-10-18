@@ -17,6 +17,8 @@ indicator IP address and the user agents are the vendor's and Microsoft's publis
 import importlib.util
 import pathlib
 
+import pytest
+
 HERE = pathlib.Path(__file__).resolve().parent
 
 BACKUP_APP = "506e08f9-6e9a-4da4-942b-a099a03644ae"
@@ -433,6 +435,20 @@ def at(module_day):
 def reset_clock():
     for module in (EXPOSURE, INDICATORS):
         module.today = module.__dict__["utc_now"]
+
+
+@pytest.fixture(autouse=True)
+def _clock_inside_retention():
+    """Every test runs on 1 Nov 2026, inside log retention, so the suite does not turn red on 14 Nov 2026
+    when the real clock passes the retention window. The retention tests still pin their own dates."""
+    at(1)
+    yield
+    reset_clock()
+
+
+def test_clock_is_pinned_for_every_test():
+    from datetime import datetime as _dt
+    assert INDICATORS.today() == _dt(2026, 11, 1) and EXPOSURE.today() == _dt(2026, 11, 1)
 
 
 def test_unreadable_delegated_grants_for_an_enabled_app_leave_risk_unknown():
