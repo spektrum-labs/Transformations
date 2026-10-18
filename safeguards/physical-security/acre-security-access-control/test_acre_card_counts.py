@@ -103,10 +103,10 @@ def test_flipping_the_exemption_changes_the_count():
     assert value("antiPassbackExemptCardCount", body([person(1, [card(1, exempt=True)])])) == 1
 
 
-def test_a_string_true_is_not_an_exemption_and_a_missing_field_hides_a_zero():
+def test_a_string_true_is_not_a_reading_and_a_missing_field_hides_a_zero():
     c = card(1)
     c["AntiPassbackExempt"] = "true"
-    assert value("antiPassbackExemptCardCount", body([person(1, [c])])) == 0
+    assert not_evaluated("antiPassbackExemptCardCount", body([person(1, [c])]))
     assert not_evaluated("antiPassbackExemptCardCount", body([person(1, [card(1, with_exempt_field=False)])]))
     assert value("antiPassbackExemptCardCount", body([person(1, [card(1, with_exempt_field=False), card(2, exempt=True)])])) == 1
 
@@ -156,3 +156,12 @@ NO_EVIDENCE = [
 @pytest.mark.parametrize("payload", NO_EVIDENCE)
 def test_no_evidence_is_not_measured(key, payload):
     assert not_evaluated(key, payload)
+
+
+@pytest.mark.parametrize("flag", ["true", "false", 1, 0, None])
+def test_an_exempt_flag_that_is_not_a_boolean_is_not_a_reading(flag):
+    """A string, a number or null is not the vendor's boolean: a zero cannot be shown from it."""
+    people = [person(1, [card(1, exempt=False), dict(card(2), AntiPassbackExempt=flag)])]
+    assert not_evaluated("antiPassbackExemptCardCount", body(people))
+    flagged = [person(1, [card(1, exempt=True), dict(card(2), AntiPassbackExempt=flag)])]
+    assert value("antiPassbackExemptCardCount", body(flagged)) == 1
