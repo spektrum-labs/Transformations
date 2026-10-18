@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 # for one 100-record page of a 1,511-host tenant. isEPPDeployed is now the share of hosts with a
 # reporting sensor, against DEPLOYED_THRESHOLD, from host records read whole:
 #   - a host counts when it has an agent_version, is not in Reduced Functionality Mode, and checked in
-#     (last_seen) within ACTIVE_WINDOW_DAYS -- the same window and clock as the sibling host checks;
+#     (last_seen) within ACTIVE_WINDOW_DAYS -- the same clock and reporting rule as the sibling host checks (the window is per check);
 #   - mobile hosts stay out of the denominator, as isEPPConfiguredFromHosts does;
 #   - a host-ID list (devices-scroll, queries/devices) carries no last_seen, so it proves enrolment, not
 #     a reporting sensor, and is Unevaluated; so is any partial read, since a share needs every host.
@@ -283,11 +283,15 @@ def unevaluated(problem, validation=None, transformation_errors=None, input_summ
 
 
 # A host counts as reporting only when its last_seen is within this many days of the response's
-# clock. The same window, clock and rule are written identically in requiredCoveragePercentage.py,
-# isEPPConfiguredFromHosts.py, isEDRDeployed.py, isEPPDeployed.py and
-# isPatchManagementEnabledFromHosts.py, so every CrowdStrike host check agrees on which hosts are
-# reporting.
-ACTIVE_WINDOW_DAYS = 15
+# clock. The clock and rule are written identically in requiredCoveragePercentage.py,
+# isEPPConfiguredFromHosts.py, isEDRDeployed.py and isPatchManagementEnabledFromHosts.py. The
+# window matches requiredCoveragePercentage.py (45 days): CrowdStrike keeps a silent host in Host
+# Management for 45 days before hiding it, so a host inside this window is one Falcon itself still
+# reports as managed. The other three checks keep 15 days.
+ACTIVE_WINDOW_DAYS = 45
+# The clock follows the data (reference_clock) but is never set more than this many days before now, so
+# a fleet whose newest check-in is itself weeks old cannot stretch the window past the wall clock.
+CACHE_GRACE_DAYS = 3
 
 
 def parse_time(value):
@@ -422,7 +426,7 @@ def evaluate(input):
         return unevaluated("The read is partial (" + partial + "): a deployment share needs every host, so "
                            "nothing was measured", validation, input_summary=input_summary)
 
-    clock = reference_clock(host_records)
+    clock = max(reference_clock(host_records), datetime.utcnow() - timedelta(days=CACHE_GRACE_DAYS))
     hosts = 0
     mobile = 0
     reporting = 0

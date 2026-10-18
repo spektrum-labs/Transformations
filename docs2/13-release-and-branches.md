@@ -185,7 +185,6 @@ Develop's tip stringifies the `bitLockerStatus` **object** and compares it to st
 
 - **3 sandbox-fatal transforms**: `develop:safeguards/mfa/azure/{areadminaccountsseparate,isadminmfaphishingresistant,ismfaenforced}.py` define top-level underscore-prefixed helpers (`def _as_list` at `develop:safeguards/mfa/azure/ismfaenforced.py:69`, and at `areadminaccountsseparate.py:102`, `isadminmfaphishingresistant.py:117`) — the exact pattern three separate fix cycles — two of them production hotfixes (ENG-463 anthropic, BeyondTrust PRA) — already removed because RestrictedPython rejects underscore-leading names ([03-writing-a-transform.md](03-writing-a-transform.md)). Main's safeguards tree had **zero** such defs until 2026-09-16, when Tenable ASM PRs #558–#560 shipped 26 `asm/tenable/` transforms built entirely on them (`def _parse` at `main:safeguards/asm/tenable/nocriticalfindings.py:19`, `_run` at `:120`) — so the pattern is now broken in production on both branches ([14-known-issues.md](14-known-issues.md)). These three would deploy as permanent `isEvaluated: False`.
 - **10 colocated pytest files** (9 `test_*.py` + 1 `conftest.py`, mostly under `firewall/sonicwall/`): harmless unless a URL is ever minted to them (they fail the sandbox's AST validation), but they ship into production paths and no CI ever runs them.
-- **`customer_requirements_ef1397e7.json`** (root, develop-only): an orphaned, self-inconsistent snapshot nothing reads — it would land on main as noise.
 
 ### What breaks silently: the redcanary rename
 
@@ -236,6 +235,17 @@ This is a stated open question, not a finding with an owner. What the history sh
 
 No document in the repo assigns this responsibility (`CONTRIBUTING.md` describes no branch, merge, or deploy process at all), and no in-repo evidence identifies who, if anyone, owns it.
 
+## Promotion and release PRs use merge commits, never squash
+
+**Ruled 2026-09-29 by J.J.:** every `develop → staging` promotion and every `staging → main` release PR in this repo merges with **Create a merge commit** (`gh pr merge <number> --merge`). Squash and rebase are for single-change PRs only.
+
+**Why.** A squash writes the promoted tree as one new commit with a single parent, so the two branches keep no shared history past their old merge-base. Every later promotion is computed against that stale base, and git can silently keep the target's copy of a file the source already fixed:
+
+- #665 (`develop → staging`, 2026-09-28) was squashed, so staging shared no history with develop. The next develop PRs had to be cherry-picked across (#673).
+- #674 (`staging → main`, 2026-09-28 16:07 ET) was squashed. Staging had restored NinjaOne `isEDRDeployed` / `isEPPDeployed` one minute earlier (#675), but main and staging still met only at `2002dfe7`, where those files already held the good versions. Relative to that base staging had "not changed" them, so `git merge-tree origin/main origin/staging` returned main's own tree and dropped the fix. It reached production only through a hotfix straight to main (#677).
+
+**Before merging a release PR**, run `git merge-tree --write-tree origin/main <head>` and confirm it is the tree the release checks ran on. If a squash has already happened, back-merge the target into the source branch before the next promotion, so the merge-base moves forward.
+
 ## What a safe develop→main promotion would require
 
 Derived directly from the simulation and the failure modes above — this is the checklist, in order:
@@ -247,7 +257,7 @@ Derived directly from the simulation and the failure modes above — this is the
 5. **Review the collision set explicitly.** Diff the 70 both-sides files at the two tips; confirm the 61 byte-identical, and confirm the qualys file resolves to main's version.
 6. **Trace the 9 retired paths before merging.** Check whether any live tenant config references SRN `cloudsecurity/redcanary` (an Integration-Service/tenant-data question — not answerable from this repo). If yes, the rename is a silent outage; keep the old paths or migrate the configs first.
 7. **Decide the anthropic duplication.** Post-merge, both anthropic directories exist; pick one SRN story before tenants can be configured against either.
-8. **Strip the non-transform files.** The 10 pytest files, the fixtures, and `customer_requirements_ef1397e7.json` don't belong on the branch that is production.
+8. **Strip the non-transform files.** The 10 pytest files and the fixtures don't belong on the branch that is production.
 9. **Plan the timing like a deploy, because it is one.** ~300 files go live within ≤300 s + ≤1 h of the merge; the 20 modified files change the behavior of currently-executing production transforms (Microsoft 365 anti-phishing, Cloudflare DNS, ThreatDown ×4, Huntress ×8, Tenable ×2, Darktrace, DNSFilter schema). Rollback is another merge with the same latency.
 
 > [!TIP]

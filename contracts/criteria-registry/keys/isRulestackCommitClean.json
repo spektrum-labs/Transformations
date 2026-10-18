@@ -1,0 +1,40 @@
+{
+  "name": "isRulestackCommitClean",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the policy the firewall tool reads has no uncommitted (candidate) changes, so the policy the firewall enforces equals the last committed configuration.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the policy sets (candidate configuration or rulestacks) in use by the firewalls the credential reaches; unused ones are ignored",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete, successful read showing no pending changes for every policy set in use; an error, empty or possibly cut-off read is Not evaluated.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Answers only a tool that has a commit step between candidate and running policy. Hardware firewalls use the pending-changes check; cloud rulestacks use the uncommitted list."
+}
