@@ -473,10 +473,11 @@ def test_unreadable_delegated_grants_for_an_enabled_app_leave_risk_unknown():
 
 def test_clean_indicators_read_after_log_retention_passed_the_window_are_not_evaluated():
     try:
-        at(13)
+        # window start 13 Oct 2026: 11 Nov is day 29 (inside 30-day retention), 12 Nov is day 30 (outside)
+        at(11)
         _, indicators = run_both(exposed_backup())
         assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
-        at(15)
+        at(12)
         exposure, indicators = run_both(exposed_backup())
         assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
         assert "retention" in " ".join(indicators["additionalInfo"]["evaluation"]["failReasons"])
@@ -747,3 +748,59 @@ def test_seven_apps_are_covered_with_distinct_feeds():
         for app_id, (name, role_feed, grant_feed) in NEW_APPS.items():
             assert module.CONNECTWISE_APPS[app_id] == name
             assert module.APP_ROLE_FEEDS[app_id] == (role_feed, grant_feed)
+
+
+# ---- gate follow-ups on 54fbb18b: curl/7.88.1 user agent (Medium), window from 13 Oct (Low)
+
+CURL = "curl/7.88.1"
+
+
+def test_curl_user_agent_is_an_indicator_only_for_a_connectwise_app():
+    for module in (EXPOSURE, INDICATORS):
+        assert CURL in module.INDICATOR_USER_AGENTS
+    for app_id in (BACKUP_APP, TEAMS_APP, "412dcf96-176d-4b3a-a1b0-4981ad66971e"):
+        hit = sign_in(app_id, "203.0.113.7", agent="curl/7.88.1", sp_id=NEW_SP)
+        exposure, indicators = run_both(clean(spSignInsByApp=graph(hit)))
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False, app_id
+        assert value(exposure, "connectWiseVerdict") == "Indicators found"
+        assert "indicator user agent curl/7.88.1" in reasons(indicators)
+    # another app with that user agent, from an ordinary address, is not an indicator
+    other = sign_in("de8bc8b5-d9f9-48b1-a8ad-b748da725064", "203.0.113.7", agent="curl/7.88.1")
+    _, indicators = run_both(clean(spSignInsByApp=graph(other)))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
+    # from the indicator IP it counts on its own, whatever the app or agent
+    _, indicators = run_both(clean(userSignInsFromIndicatorIp=graph(sign_in("de8bc8b5-d9f9-48b1-a8ad-b748da725064", IOC_IP,
+                                                                           agent="curl/7.88.1", kind="interactiveUser"))))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+
+
+def test_window_starts_13_oct_for_audit_changes_and_sign_ins():
+    for module in (EXPOSURE, INDICATORS):
+        assert module.WINDOW_START == "2026-10-13T00:00:00"
+    for when, counts in (("2026-10-13T00:00:00Z", True), ("2026-10-14T08:00:00Z", True),
+                         ("2026-10-12T23:59:59Z", False)):
+        changed = audit("Add service principal credentials", OTHER_SP, when=when, by_app=BACKUP_APP)
+        _, indicators = run_both(clean(directoryAudits=graph(changed)))
+        assert (value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False) is counts, when
+        role = audit("Add member to role", OTHER_SP, when=when, by_app=TEAMS_APP)
+        _, indicators = run_both(clean(directoryAudits=graph(role)))
+        assert (value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False) is counts, when
+        ip_hit = sign_in(BACKUP_APP, IOC_IP, when=when)
+        _, indicators = run_both(clean(spSignInsFromIndicatorIp=graph(ip_hit)))
+        assert (value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False) is counts, when
+
+
+def test_once_13_oct_is_past_retention_a_clean_read_is_never_clean():
+    try:
+        at(12)  # 12 Nov 2026: 13 Oct is 30 days back
+        exposure, indicators = run_both(clean())
+        assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+        text = reasons(indicators)
+        assert "13 Oct 2026" in text and "retention" in text
+        assert indicators["additionalInfo"]["transformation"]["inputSummary"]["feeds"]["logRetention"] != "ok"
+        # exposure does not depend on the log window, and an indicator found still counts
+        assert value(exposure, "isFreeOfConnectWiseAppExposure") is True
+        _, indicators = run_both(clean(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP))))
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    finally:
+        reset_clock()

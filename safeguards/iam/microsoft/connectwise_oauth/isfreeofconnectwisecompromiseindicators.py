@@ -8,7 +8,7 @@ apps, from 15 Oct 2026. Scope: 7 ConnectWise apps (J.J. 18 Oct 2026): these two 
 Cloud Management apps listed in isfreeofconnectwiseappexposure.py beside this file.
 
 Criterion: True when the three sign-in feeds and the directory-audit feed were read whole, the
-window start is still inside Entra's 30-day log retention, and they show none of the published indicators since 2026-10-15T00:00:00Z. False when any
+window start is still inside Entra's 30-day log retention, and they show none of the published indicators since 2026-10-13T00:00:00Z. False when any
 readable feed shows one (an indicator found is evidence even if another feed failed).
 Indicators:
   - a sign-in from 144.172.64.128 (service principal, interactive or non-interactive user);
@@ -28,19 +28,19 @@ False and Not evaluated) then says "Defender alerts were not read", so no result
 covered (decision 18 Oct 2026).
 
 Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria):
-  spSignInsByApp            GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-15T00:00:00Z and (appId eq ... or appId eq ...)
-  spSignInsFromIndicatorIp  GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-15T00:00:00Z and ipAddress eq '144.172.64.128'
+  spSignInsByApp            GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-13T00:00:00Z and (appId eq ... or appId eq ...)
+  spSignInsFromIndicatorIp  GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-13T00:00:00Z and ipAddress eq '144.172.64.128'
   userSignInsFromIndicatorIp GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'interactiveUser' or t eq 'nonInteractiveUser') and createdDateTime ge ... and ipAddress eq '144.172.64.128'
                             (a separate read: Graph documents that user and service-principal event types
                             cannot be combined in one filter)
                             (AuditLog.Read.All plus Directory.Read.All; sign-in logs need Entra ID P1 or P2)
-  directoryAudits           GET /v1.0/auditLogs/directoryAudits?$filter=activityDateTime ge 2026-10-15T00:00:00Z  (AuditLog.Read.All;
+  directoryAudits           GET /v1.0/auditLogs/directoryAudits?$filter=activityDateTime ge 2026-10-13T00:00:00Z  (AuditLog.Read.All;
                             category is not a documented filter, so this file picks the activities)
-  securityAlerts            GET /v1.0/security/alerts_v2?$filter=createdDateTime ge 2026-10-15T00:00:00Z   (optional)
+  securityAlerts            GET /v1.0/security/alerts_v2?$filter=createdDateTime ge 2026-10-13T00:00:00Z   (optional)
   plus the presence and grant feeds the sibling file reads, so both files report one verdict.
 Entra keeps sign-in and audit logs for 30 days with P1/P2 and 7 days without. Without P1/P2 the
 sign-in reads are refused, so the check is Not evaluated there. With P1/P2, once the window start is
-30 days old (14 Nov 2026) a clean read reads Not evaluated; an indicator found still reads False.
+30 days old (12 Nov 2026) a clean read reads Not evaluated; an indicator found still reads False.
 
 Not evaluated (None and dataCollection.status "error"): no indicator found and a sign-in feed or the
 audit feed is missing, refused, errored or paged, or the window has aged out of log retention. An
@@ -67,9 +67,14 @@ CONNECTWISE_APPS = {
 }
 # Published indicators (Microsoft Threat Intelligence and Huntress, 16-17 Oct 2026). Data, not logic.
 INDICATOR_IPS = ("144.172.64.128",)
-INDICATOR_USER_AGENTS = ("python-urllib/3.12", "python-requests/2.31", "python-requests/2.34.2")
-WINDOW_START = "2026-10-15T00:00:00"
-WINDOW_START_DT = datetime(2026, 10, 15)
+# Matched as a lowercase prefix, and only on a sign-in by one of the seven apps. curl/7.88.1: Huntress, "ConnectWise
+# (SkyKick) Vendor Credentials Abused in M365 Attacks" (16-17 Oct 2026) IOC table, seen on the attacker's password spray.
+INDICATOR_USER_AGENTS = ("python-urllib/3.12", "python-requests/2.31", "python-requests/2.34.2", "curl/7.88.1")
+# Window start 13 Oct 2026: Huntress says to review credentials and app changes since 13 Oct (the password spray from
+# the indicator IP ran 13-14 Oct; the app sign-ins began 15 Oct). One start for sign-ins, audit changes and alerts, so
+# the log-retention guard below is measured from the earliest day any check needs.
+WINDOW_START = "2026-10-13T00:00:00"
+WINDOW_START_DT = datetime(2026, 10, 13)
 # Entra keeps sign-in and audit logs 30 days with P1/P2 (the sign-in reads need P1/P2, so a tenant whose
 # sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
 # longer show the start of the activity, so "no indicators" is not evaluated.
@@ -495,7 +500,7 @@ def transform(input):
             reasons = found["indicators"] + ([alerts_note] if alerts_note else [])
             return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
         if not found["retentionOk"]:
-            return not_measured(("The indicator window (from 15 Oct 2026) is now older than Entra's "
+            return not_measured(("The indicator window (from 13 Oct 2026) is now older than Entra's "
                                  + str(LOG_RETENTION_DAYS) + "-day sign-in and audit log retention, so a clean "
                                  "read can no longer rule out early activity; indicators are not evaluated. "
                                  + alerts_note).strip(), found)
@@ -508,7 +513,7 @@ def transform(input):
                                  "for sign-in logs. " + alerts_note).strip(), found)
         result = {KEY: True}
         result.update(summary_fields(found))
-        reasons = ["No published indicator in sign-ins (service principal, and user sign-ins from the indicator IP) or the directory audit log since 15 Oct 2026."]
+        reasons = ["No published indicator in sign-ins (service principal, and user sign-ins from the indicator IP) or the directory audit log since 13 Oct 2026."]
         if alerts_note:
             reasons.append(alerts_note)
         return create_response(result, pass_reasons=reasons, input_summary=summary, findings=findings)

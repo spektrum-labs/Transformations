@@ -38,7 +38,7 @@ Verdict fields (identical in both criterion files):
                          directory role such as Global Administrator) | standard | unknown (a
                          grant, delegated-grant or role feed for an enabled app could not be read) |
                          low (present, but every present app is disabled) | none
-  indicatorsFound        indicators found since 15 Oct 2026
+  indicatorsFound        indicators found since 13 Oct 2026
   nameOnlyMatches        how many of them matched the apps by exact display name only (no app or service
                          principal id): still indicators, but each needs confirmation before any action
 Not evaluated (None and dataCollection.status "error"): the service-principal feed is missing,
@@ -65,9 +65,14 @@ CONNECTWISE_APPS = {
 }
 # Published indicators (Microsoft Threat Intelligence and Huntress, 16-17 Oct 2026). Data, not logic.
 INDICATOR_IPS = ("144.172.64.128",)
-INDICATOR_USER_AGENTS = ("python-urllib/3.12", "python-requests/2.31", "python-requests/2.34.2")
-WINDOW_START = "2026-10-15T00:00:00"
-WINDOW_START_DT = datetime(2026, 10, 15)
+# Matched as a lowercase prefix, and only on a sign-in by one of the seven apps. curl/7.88.1: Huntress, "ConnectWise
+# (SkyKick) Vendor Credentials Abused in M365 Attacks" (16-17 Oct 2026) IOC table, seen on the attacker's password spray.
+INDICATOR_USER_AGENTS = ("python-urllib/3.12", "python-requests/2.31", "python-requests/2.34.2", "curl/7.88.1")
+# Window start 13 Oct 2026: Huntress says to review credentials and app changes since 13 Oct (the password spray from
+# the indicator IP ran 13-14 Oct; the app sign-ins began 15 Oct). One start for sign-ins, audit changes and alerts, so
+# the log-retention guard below is measured from the earliest day any check needs.
+WINDOW_START = "2026-10-13T00:00:00"
+WINDOW_START_DT = datetime(2026, 10, 13)
 # Entra keeps sign-in and audit logs 30 days with P1/P2 (the sign-in reads need P1/P2, so a tenant whose
 # sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
 # longer show the start of the activity, so "no indicators" is not evaluated.
