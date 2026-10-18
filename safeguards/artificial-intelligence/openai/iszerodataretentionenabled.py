@@ -140,12 +140,13 @@ def says_not_enabled(obj):
     """True only for OpenAI's 403 whose body says data retention controls are not enabled."""
     envelope = vendor_answer(obj)
     if envelope is not None:
-        status, probe = envelope.get("status"), envelope
+        # the vendor's own body only: bodyContains is the definition's matcher echoed back, not OpenAI's words
+        status, probe = envelope.get("status"), envelope.get("body")
     elif isinstance(obj, dict) and (obj.get("error") or obj.get("errorType")):
         status, probe = obj.get("statusCode") or obj.get("status_code"), obj
     else:
         return False
-    text = json.dumps(probe, default=str).lower()
+    text = probe.lower() if isinstance(probe, str) else json.dumps(probe, default=str).lower()
     return NOT_ENABLED in text and (status == 403 or (status is None and "http 403" in text))
 
 

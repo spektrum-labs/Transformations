@@ -217,3 +217,26 @@ def test_audit_log_with_events_still_passes_and_junk_still_fails():
     junk = module.transform(lst([{"note": "x"}]))
     assert junk["transformedResponse"]["isActivityAuditTrailEnabled"] is False
     assert junk["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_the_phrase_is_read_from_the_vendor_body_not_the_echoed_matcher():
+    # bodyContains carries the phrase but the vendor body does not: not the documented answer, so a refusal
+    echo_only = {"vendorErrorAsResponse": {"status": 404, "bodyContains": "No organization spend limit is configured",
+                                           "body": {"error": {"message": "Not found."}}}}
+    out = load("isspendlimitenforced").transform(echo_only)
+    assert out["transformedResponse"]["isSpendLimitEnforced"] is False
+    assert "spendLimitConfigured" not in out["transformedResponse"]
+    assert "no hard spend limit is configured" not in reasons(out)
+    ret = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Data retention controls are not enabled for this organization",
+                                     "body": {"error": {"message": "Forbidden."}}}}
+    out = load("iszerodataretentionenabled").transform(dict(lst([project("p1")]), orgDataRetention=ret, projectDataRetention=[]))
+    assert "dataRetentionControlsEnabled" not in out["transformedResponse"]
+    assert "controls are not enabled" not in reasons(out)
+
+
+def test_the_documented_spec_phrase_is_also_the_no_limit_answer():
+    spec = envelope(404, "does not have a hard spend limit", {"error": {"message": "The organization does not have a hard spend limit."}})
+    out = load("isspendlimitenforced").transform(spec)
+    assert out["transformedResponse"]["isSpendLimitEnforced"] is False
+    assert out["transformedResponse"]["spendLimitConfigured"] is False
+    assert "no hard spend limit is configured" in reasons(out)

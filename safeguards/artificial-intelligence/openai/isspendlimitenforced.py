@@ -122,7 +122,9 @@ def detect_refusal(data):
     return why
 
 
-NO_SPEND_LIMIT = "no organization spend limit is configured"
+# The phrases OpenAI uses for "this organization has no hard spend limit": the text seen in a real answer, and the
+# text OpenAI's API spec documents for the 404.
+NO_SPEND_LIMIT = ("no organization spend limit is configured", "does not have a hard spend limit")
 
 
 def vendor_answer(obj):
@@ -140,13 +142,14 @@ def says_no_spend_limit(data):
     """True only for OpenAI's 404 whose body says no organization spend limit is configured."""
     envelope = vendor_answer(data)
     if envelope is not None:
-        status, probe = envelope.get("status"), envelope
+        # the vendor's own body only: bodyContains is the definition's matcher echoed back, not OpenAI's words
+        status, probe = envelope.get("status"), envelope.get("body")
     elif isinstance(data, dict) and (data.get("error") or data.get("errorType")):
         status, probe = data.get("statusCode") or data.get("status_code"), data
     else:
         return False
-    text = json.dumps(probe, default=str).lower()
-    return NO_SPEND_LIMIT in text and (status == 404 or (status is None and "http 404" in text))
+    text = probe.lower() if isinstance(probe, str) else json.dumps(probe, default=str).lower()
+    return any(p in text for p in NO_SPEND_LIMIT) and (status == 404 or (status is None and "http 404" in text))
 
 
 def read_list(obj):

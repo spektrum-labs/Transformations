@@ -192,3 +192,11 @@ def test_background_detection_unchanged():
     assert result("isbehavioralmonitoringvalid", page(dev(), dev()), "isBehavioralMonitoringValid") is True
     assert result("isbehavioralmonitoringvalid", page(dev(), dev(bg=False)), "isBehavioralMonitoringValid") is False
     assert result("isbehavioralmonitoringvalid", page(dev(), dev(bg=None)), "isBehavioralMonitoringValid") is False
+
+
+def test_a_null_placeholder_policy_is_not_an_assignment():
+    blank = dev()
+    blank["policy"] = {"id": None, "name": None}
+    empty = dev()
+    empty["policy"] = {"id": "", "name": " "}
+    assert result("iseppconfigured", page(blank, empty), "isEPPConfigured") is False
