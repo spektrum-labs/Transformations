@@ -89,13 +89,11 @@ class FailClosed(unittest.TestCase):
         "validation failed": {"data": scan(), "validation": {"status": "failed", "errors": ["x"], "warnings": []}},
     }
 
-    # A scan that completed with counts that agree and no error, but shows no discovery or is older than the
-    # window, is a proven negative: a graded False, with its reason as a fail reason and no error. Every other
-    # body measured nothing and is None (Not evaluated) with its error, including a missing, garbage or future
-    # timestamp.
+    # A scan that completed with counts that agree and no error but is older than the window is a proven
+    # negative: a graded False, with its reason as a fail reason and no error. Every other body measured nothing
+    # and is None (Not evaluated) with its error, including a missing, garbage or future timestamp and a seed-only
+    # scan (a swallowed subfinder failure looks the same, so it is not a proven negative).
     MEASURED_FALSE = {
-        "subfinder found nothing (seed only)",
-        "seed listed twice",
         "stale scan",
     }
 
@@ -157,7 +155,8 @@ class Discovered(unittest.TestCase):
 
     def test_flips_on_the_same_shape(self):
         self.assertIs(value(scan()), True)
-        self.assertIs(value(seed_only()), False)
+        self.assertIs(value(scan(timestamp=(datetime.utcnow() - timedelta(days=3)).isoformat())), False)
+        self.assertIsNone(value(seed_only()))
 
     def test_schema_version_and_sections(self):
         out = run(scan())

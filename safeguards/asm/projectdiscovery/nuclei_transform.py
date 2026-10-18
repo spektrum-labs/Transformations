@@ -320,24 +320,8 @@ def transform(input):
                 domains_scanned = int(str(data.get("domainsScanned")).strip())
             except (TypeError, ValueError):
                 domains_scanned = 0
-        if domains_scanned is not None and domains_scanned <= 0:
-            reason = f"Nuclei scanned zero domains for {domain}"
-        elif failed_domains or scan_errors:
-            reason = (f"Nuclei scan failed for {max(len(failed_domains), len(scan_errors))} "
-                      f"domain(s) of {domain}")
-        else:
-            reason = None
-        if reason:
-            return create_response(
-                result={"noCriticalFindings": None, "noHighFindings": None},
-                validation=validation,
-                api_errors=[reason],
-                fail_reasons=[reason],
-                input_summary={"domain": domain, "status": scan_status, "domainsScanned": domains_scanned,
-                               "failedDomains": failed_domains[:20], "errorCount": len(scan_errors)}
-            )
 
-        # Count findings by severity
+        # Count findings by severity (before the guard below, so a finding seen on a partial scan still fails)
         critical_count = 0
         high_count = 0
         medium_count = 0
@@ -372,6 +356,30 @@ def transform(input):
                 low_count += 1
             elif severity == "info":
                 info_count += 1
+
+        if domains_scanned is not None and domains_scanned <= 0:
+            reason = f"Nuclei scanned zero domains for {domain}"
+        elif failed_domains or scan_errors:
+            reason = (f"Nuclei scan failed for {max(len(failed_domains), len(scan_errors))} "
+                      f"domain(s) of {domain}")
+        else:
+            reason = None
+        if reason:
+            # A failed host can hide findings, so a clean answer is unknown (None). It cannot remove a finding
+            # actually seen on another host: a key with a finding keeps its measured False.
+            if domains_scanned is not None and domains_scanned <= 0:
+                critical_count = 0
+                high_count = 0
+            return create_response(
+                result={"noCriticalFindings": False if critical_count else None,
+                        "noHighFindings": False if high_count else None},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                input_summary={"domain": domain, "status": scan_status, "domainsScanned": domains_scanned,
+                               "failedDomains": failed_domains[:20], "errorCount": len(scan_errors),
+                               "criticalCount": critical_count, "highCount": high_count}
+            )
 
         no_critical = critical_count == 0
         no_high = high_count == 0

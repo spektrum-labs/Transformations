@@ -282,6 +282,24 @@ def test_nuclei_a_scan_error_entry_is_none():
     assert collection(info)["status"] == "error"
 
 
+
+@pytest.mark.parametrize("partial", [
+    {"domainResults": [{"domain": "example.com", "findingsCount": 1, "status": "success"},
+                       {"domain": "www.example.com", "findingsCount": 0, "status": "error"}]},
+    {"errors": [{"domain": "www.example.com", "error": "x"}]},
+])
+def test_nuclei_a_finding_seen_on_a_partial_scan_still_fails_its_key(partial):
+    # A failed host can hide findings (so a clean key is unknown), but it cannot remove a finding actually seen.
+    crit = {"info": {"severity": "critical", "name": "Synthetic finding"}, "matched-at": "https://example.com/x"}
+    high = {"info": {"severity": "high", "name": "Synthetic finding"}, "matched-at": "https://example.com/y"}
+    values, info = run("nuclei_transform.py", {**success_body(), **partial, "total": "1", "findings": [crit]})
+    assert values == {"noCriticalFindings": False, "noHighFindings": None}
+    assert collection(info)["status"] == "error"
+    values, info = run("nuclei_transform.py", {**success_body(), **partial, "total": "2", "findings": [crit, high]})
+    assert values == {"noCriticalFindings": False, "noHighFindings": False}
+    values, info = run("nuclei_transform.py", {**success_body(), **partial, "total": "1", "findings": [high]})
+    assert values == {"noCriticalFindings": None, "noHighFindings": False}
+
 def test_nuclei_findings_still_fail_and_a_clean_scan_still_passes():
     clean, clean_info = run("nuclei_transform.py", success_body())
     assert clean["noCriticalFindings"] is True and clean["noHighFindings"] is True
@@ -329,18 +347,20 @@ def assert_not_evaluated_with_error(values, info, where):
 
 
 # Case 1: a completed scan, counts that agree, no host beyond the seed, nothing wrong anywhere: a proven negative.
-def test_discovery_a_completed_scan_with_no_host_beyond_the_seed_is_a_graded_false():
+def test_discovery_a_completed_scan_with_no_host_beyond_the_seed_is_none_with_its_error():
+    # IS swallows a subfinder error or timeout into an empty list with no error recorded, so a seed-only body
+    # cannot tell "found nothing" from "discovery failed": Not evaluated, never a graded False.
     values, info = run(DISCOVERY, discovery_body(timestamp=stamp(1), **SEED_ONLY))
-    assert_graded_false(values, info, "seed only")
-    assert any("beyond the seed" in r for r in info["evaluation"]["failReasons"])
+    assert_not_evaluated_with_error(values, info, "seed only")
+    assert any("beyond the seed" in r for r in collection(info)["errors"])
 
 
-def test_discovery_the_seed_listed_twice_is_a_graded_false():
+def test_discovery_the_seed_listed_twice_is_none_with_its_error():
     values, info = run(DISCOVERY, discovery_body(
         timestamp=stamp(1), domainsScanned="2", totalDiscovered="2",
         domainResults=[{"domain": "example.com", "findingsCount": 0, "status": "success"},
                        {"domain": "EXAMPLE.com.", "findingsCount": 0, "status": "success"}]))
-    assert_graded_false(values, info, "seed twice")
+    assert_not_evaluated_with_error(values, info, "seed twice")
 
 
 @pytest.mark.parametrize("error", [
