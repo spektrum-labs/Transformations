@@ -261,3 +261,20 @@ def test_new_method_next_to_an_external_one_never_reads_failed(tx):
     assert "external authentication method" in errors(out)
     value, _ = run(tx, body(policy(include_users=(), include_groups=(G1,)), auth=methods(DUO, CBA_MULTI)))
     assert value is None
+
+
+# --- review Medium: a strength next to another control under OR ------------------------------------------------------
+
+def test_strength_or_compliant_device_is_not_enforcement(tx):
+    # A compliant device alone satisfies this policy, so it does not require MFA (fail closed, as on develop).
+    grant = strength_grant(strength(combinations=MULTIFACTOR_COMBINATIONS), operator="OR", built_in=("compliantDevice",))
+    value, out = run(tx, body(policy(grant=grant)))
+    assert value is not True
+    assert out["transformedResponse"]["policiesEnforcingMFAForUsers"] == []
+
+
+def test_strength_and_compliant_device_still_passes(tx):
+    # Under AND the strength is always required, so the policy enforces MFA.
+    grant = strength_grant(strength(combinations=MULTIFACTOR_COMBINATIONS), operator="AND", built_in=("compliantDevice",))
+    value, _ = run(tx, body(policy(grant=grant)))
+    assert value is True
