@@ -7,7 +7,7 @@ ConnectWise Cloud Management - MS Teams (24205314-2b89-4e07-a2a4-579e898a5640) m
 apps, from 15 Oct 2026. Scope: 7 ConnectWise apps (J.J. 18 Oct 2026): these two and the five other
 Cloud Management apps listed in isfreeofconnectwiseappexposure.py beside this file.
 
-Criterion: True when the three sign-in feeds and the directory-audit feed were read whole, the
+Criterion: True when the service-principal (presence) feed, the three sign-in feeds and the directory-audit feed were read whole, the
 window start is still inside Entra's 30-day log retention, and they show none of the published indicators since 2026-10-13T00:00:00Z. False when any
 readable feed shows one (an indicator found is evidence even if another feed failed).
 Indicators:
@@ -419,7 +419,9 @@ def assess(data):
                 indicators.append("Defender alert '" + str(item.get("title")) + "' naming an indicator")
     retention_ok = retention_covers_window()
     feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
-    indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
+    # The presence read is the only source of the apps' service-principal ids when they have no sign-ins, so
+    # without it a credential add on a ConnectWise service principal cannot be ruled out.
+    indicators_read = (presence_known and by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
                        and audits_state == "ok" and retention_ok and scope_ok)
 
     # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
@@ -507,6 +509,10 @@ def transform(input):
         if not found["scopeOk"]:
             return not_measured(("No indicator was found, but " + SCOPE_NOTE + "; indicators are not evaluated. "
                                  + alerts_note).strip(), found)
+        if not found["presenceKnown"]:
+            return not_measured(("No indicator was found, but the service-principal read could not be read whole, "
+                                 "so a credential change on a ConnectWise service principal cannot be ruled out; "
+                                 "indicators are not evaluated. " + alerts_note).strip(), found)
         if not found["indicatorsRead"]:
             return not_measured(("A sign-in log read or the directory audit log could not be read "
                                  "whole; indicators are not evaluated. Needs AuditLog.Read.All, and Entra ID P1 or P2 "

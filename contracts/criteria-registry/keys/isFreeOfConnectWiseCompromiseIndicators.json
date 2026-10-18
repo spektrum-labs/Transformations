@@ -1,13 +1,13 @@
 {
   "name": "isFreeOfConnectWiseCompromiseIndicators",
-  "revision": 3,
+  "revision": 4,
   "status": "proposed",
-  "definition": "True when the tenant's three sign-in reads and directory audit log since 2026-10-13 were read whole, the reads cover all seven ConnectWise apps, the window is inside the 30-day log retention, and they show none of the published indicators of the ConnectWise multitenant OAuth app abuse.",
+  "definition": "True when the tenant's ConnectWise service-principal read, three sign-in reads and directory audit log since 2026-10-13 were read whole, the reads cover all seven ConnectWise apps, the window is inside the 30-day log retention, and they show none of the published indicators of the ConnectWise multitenant OAuth app abuse.",
   "valueType": "boolean",
   "unit": "none",
   "population": "service-principal sign-ins for the seven ConnectWise apps in scope (ConnectWise Cloud Backup (506e08f9-6e9a-4da4-942b-a099a03644ae), ConnectWise Cloud Management - MS Teams (24205314-2b89-4e07-a2a4-579e898a5640), ConnectWise Cloud Management (2399d300-6fca-4e6a-a686-399fefe75b83), ConnectWise Cloud Management - Exchange Online (b78f6a77-d4e5-46fb-87e5-d1648bd02519), ConnectWise Cloud Management - MS Graph (0de14c77-b9b0-4137-9360-34878a929827), ConnectWise Cloud Management - Partner Center (412dcf96-176d-4b3a-a1b0-4981ad66971e) and ConnectWise Cloud Management - SharePoint Online (b2b55f5b-7758-4719-8d8f-88ae172e6bdb)), service-principal and user sign-ins from 144.172.64.128, and credential, role, grant and owner directory audit events, from 2026-10-13T00:00:00Z in one Microsoft Entra tenant",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "The three sign-in reads (service principal by app, service principal from the indicator IP, user sign-ins from the indicator IP) and the directory-audit read complete, unpaged and error-free, every app's per-app role feed present in the body, the window inside log retention, with no sign-in from 144.172.64.128, no ConnectWise sign-in with the published user agents (including curl/7.88.1), no credential added to a ConnectWise service principal and no credential, role, grant or owner change made by a ConnectWise app (matched by id, or by exact published name, which is tagged name-only).",
+  "evidenceRequiredForTrue": "The service-principal read filtered by the seven appIds (the only source of the apps' service-principal ids when they have no sign-ins), the three sign-in reads (service principal by app, service principal from the indicator IP, user sign-ins from the indicator IP) and the directory-audit read complete, unpaged and error-free, every app's per-app role feed present in the body, the window inside log retention, with no sign-in from 144.172.64.128, no ConnectWise sign-in with the published user agents (including curl/7.88.1), no credential added to a ConnectWise service principal and no credential, role, grant or owner change made by a ConnectWise app (matched by id, or by exact published name, which is tagged name-only).",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,
@@ -41,6 +41,11 @@
       "revision": 3,
       "date": "2026-10-18",
       "change": "Window start moved from 15 Oct to 2026-10-13T00:00:00Z (Huntress: review changes since 13 Oct), so a change on 13-14 Oct now reads false and a clean read is Not evaluated from 12 Nov 2026; curl/7.88.1 added to the indicator user agents."
+    },
+    {
+      "revision": 4,
+      "date": "2026-10-18",
+      "change": "A clean read also needs the service-principal (presence) read whole: without it a credential added to a ConnectWise service principal with no published target name cannot be ruled out, so such a body is Not evaluated instead of true (review Medium). An indicator found still reads false."
     }
   ],
   "notes": "Indicators are data from the advisory and live in the transform's constants. Defender alerts are read when the connection grants SecurityAlert.Read.All and add indicators, but an unreadable alert feed does not block true; every outcome then says 'Defender alerts were not read', so no result implies Defender was covered. Entra keeps sign-in and audit logs 7 days without P1/P2, so the 13 Oct window ages out about 20 Oct 2026 on those tenants, and sign-in logs need P1/P2 at all. With P1/P2 the 30-day retention guard makes a clean read Not evaluated from 12 Nov 2026."

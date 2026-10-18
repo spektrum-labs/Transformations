@@ -804,3 +804,49 @@ def test_once_13_oct_is_past_retention_a_clean_read_is_never_clean():
         assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     finally:
         reset_clock()
+
+
+# ---- review Medium (fail-open): a clean indicator read also needs the presence read
+
+UNREAD_PRESENCE = (
+    STEP_403,
+    {"value": [], "@odata.nextLink": "https://graph.example/next"},
+    {"value": [{"displayName": "no app id here"}]},
+    None,
+)
+
+
+def presence_unread_body(presence, **overrides):
+    body = clean(servicePrincipals=presence, **overrides)
+    if presence is None:
+        del body["servicePrincipals"]
+    return body
+
+
+def test_credential_add_on_an_unknown_sp_is_not_clean_when_the_presence_read_failed():
+    # The presence read is the only source of the apps' service-principal ids when they have no sign-ins.
+    # Without it, a credential add on a ConnectWise SP with no published target name cannot be ruled out.
+    target = UNKNOWN_SP
+    for presence in UNREAD_PRESENCE:
+        body = presence_unread_body(presence, directoryAudits=graph(
+            audit("Add service principal credentials", target, target_name=None)))
+        exposure, indicators = run_both(body)
+        assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+        assert_not_measured(exposure, "isFreeOfConnectWiseAppExposure")
+        assert value(indicators, "connectWiseVerdict") == "Not evaluated"
+        assert "service-principal" in reasons(indicators), reasons(indicators)
+
+
+def test_clean_logs_are_not_evaluated_when_the_presence_read_failed():
+    for presence in UNREAD_PRESENCE:
+        _, indicators = run_both(presence_unread_body(presence))
+        assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
+        assert value(indicators, "connectWiseVerdict") == "Not evaluated"
+
+
+def test_an_indicator_still_counts_when_the_presence_read_failed():
+    for presence in UNREAD_PRESENCE:
+        body = presence_unread_body(presence, spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)))
+        _, indicators = run_both(body)
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+        assert_measured(indicators)

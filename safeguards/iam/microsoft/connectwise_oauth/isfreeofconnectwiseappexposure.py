@@ -417,7 +417,9 @@ def assess(data):
                 indicators.append("Defender alert '" + str(item.get("title")) + "' naming an indicator")
     retention_ok = retention_covers_window()
     feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
-    indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
+    # The presence read is the only source of the apps' service-principal ids when they have no sign-ins, so
+    # without it a credential add on a ConnectWise service principal cannot be ruled out.
+    indicators_read = (presence_known and by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
                        and audits_state == "ok" and retention_ok and scope_ok)
 
     # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
