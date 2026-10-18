@@ -111,9 +111,9 @@ def test_undated_computer_is_still_judged_beside_a_current_dated_computer(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_no_dated_computer_at_all_is_unchanged(mode):
-    # unchanged behaviour: with no readable lastCheckin anywhere, every live computer is judged
+def test_no_dated_computer_at_all_is_not_evaluated(mode):
+    # with no readable lastCheckin anywhere, undated rows alone would decide the result: nothing is judged
     rows = fleet(2)
     for r in rows:
         r["lastCheckin"] = None
-    assert run(rows, mode)[:2] == (100, "success")
+    assert run(rows, mode)[:2] == (None, "error")
