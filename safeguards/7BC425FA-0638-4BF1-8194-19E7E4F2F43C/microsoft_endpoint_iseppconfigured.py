@@ -7,12 +7,12 @@ not reported for 7 days or more, so it is counted as configured: staleness is ne
 machine. The sensor fault states (ImpairedCommunication, NoSensorData, NoSensorDataImpairedCommunication,
 Unknown) are not configured.
 
-No onboarded machine in a fully read inventory: 0, with the reason "Defender for Endpoint is connected and
-has 0 onboarded devices". The tool is connected and verifiably protects nothing, which is a finding for
-this tool, not a gap in the data.
+Eligible machines but none onboarded: 0, a real finding for this tool.
 
-Not evaluated (dataCollection error, no value): an error or unrecognised body, or a merged inventory that
-still carries @odata.nextLink (pages left unread).
+Not evaluated (dataCollection error, value None): an error or unrecognised body, a merged inventory that
+still carries @odata.nextLink (pages left unread), or an inventory with no eligible machine (not excluded,
+not unsupported) at all, reason "Defender has no onboarded devices". An empty result is never a fail; the
+onboard-or-disconnect hint is guidance only.
 
 Separate file so the one-click transform's other keys (pinned at their own commit) are untouched.
 """
@@ -78,7 +78,7 @@ def create_response(result, validation, errors=(), passed=(), failed=(), summary
 
 def seen_in_inventory(count):
     if count:
-        return " (" + str(count) + " machines in its inventory, none onboarded)"
+        return " (" + str(count) + " eligible machines in its inventory, none onboarded)"
     return " (its machine inventory is empty)"
 
 
@@ -93,14 +93,18 @@ def measure(data):
     next_link = data.get("@odata.nextLink")
     if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
         raise ValueError("The machine inventory has more pages than were read (@odata.nextLink still present)")
-    onboarded = [
+    eligible = [
         machine for machine in machines
         if not is_true(machine.get("isExcluded"))
-        and str(machine.get("onboardingStatus") or "").lower() == "onboarded"
+        and str(machine.get("onboardingStatus") or "").lower() not in ("unsupported", "insufficientinfo")
     ]
+    onboarded = [machine for machine in eligible if str(machine.get("onboardingStatus") or "").lower() == "onboarded"]
+    if not eligible:
+        return {"isEPPConfigured": None, "protectedDevices": 0, "configuredDevices": 0, "inactiveDevices": 0,
+                "inventoryMachines": len(machines), "eligibleDevices": 0}
     if not onboarded:
         return {"isEPPConfigured": 0, "protectedDevices": 0, "configuredDevices": 0, "inactiveDevices": 0,
-                "inventoryMachines": len(machines)}
+                "inventoryMachines": len(machines), "eligibleDevices": len(eligible)}
     configured = [
         machine for machine in onboarded
         if str(machine.get("healthStatus") or "").lower() in CONFIGURED_SENSOR_STATES
@@ -120,9 +124,15 @@ def transform(input):
         if validation.get("status") == "failed":
             raise ValueError("Input validation failed")
         result = measure(data)
+        if result["isEPPConfigured"] is None:
+            return create_response(result, validation, errors=["Defender has no onboarded devices"], summary=result,
+                                   recommendations=[
+                "Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, Settings > "
+                "Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint "
+                "tool protects them"])
         if result["protectedDevices"] == 0:
             line = ("Defender for Endpoint is connected and has 0 onboarded devices"
-                    + seen_in_inventory(result["inventoryMachines"]) + ", so no machine reports a healthy sensor (0%)")
+                    + seen_in_inventory(result["eligibleDevices"]) + ", so no machine reports a healthy sensor (0%)")
             return create_response(result, validation, failed=[line], summary=result, recommendations=[
                 "Onboard the organisation's devices to Defender for Endpoint (Microsoft Defender portal, Settings > "
                 "Endpoints > Device management > Onboarding), or disconnect this integration if another endpoint "

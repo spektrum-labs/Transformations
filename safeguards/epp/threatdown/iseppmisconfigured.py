@@ -2,6 +2,11 @@
 Transformation: isEPPMisconfigured
 Vendor: ThreatDown (Malwarebytes Nebula)  |  Category: EPP
 Evaluates: Whether ThreatDown EPP policies have misconfigured or unhealthy settings.
+
+Mapped for isEPPConfigured (method getPolicies). isEPPConfigured is a whole-number percentage,
+floor(100 * passing policies / policies returned); the pass bar lives in the requirement. It is a
+POLICY percentage, not an endpoint percentage (GET /nebula/v1/policies carries no endpoint counts).
+No policy returned is not evaluated (dataCollection error, no value).
 """
 import json
 from datetime import datetime
@@ -107,10 +112,10 @@ def evaluate(data):
         else:
             configured = configured + 1
 
-    percentage = int(round((configured * 100.0) / total)) if total else 0
+    percentage = (configured * 100) // total if total else None
 
     return {
-        "isEPPConfigured": total > 0 and configured == total,
+        "isEPPConfigured": percentage,
         "totalPolicies": total,
         "configuredPolicies": configured,
         "configuredPercentage": percentage,
@@ -142,9 +147,12 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
+        api_errors = []
 
-        if not result_value:
-            total = extra_fields.get("totalPolicies", 0)
+        total = extra_fields.get("totalPolicies", 0)
+        if total == 0:
+            api_errors.append("No policies were returned by ThreatDown Nebula; configuration not evaluated")
+        if total == 0 or extra_fields.get("configuredPolicies", 0) == total:
             if total == 0:
                 fail_reasons.append("No policies found in ThreatDown Nebula")
                 recommendations.append("Create and configure endpoint protection policies in ThreatDown Nebula")
@@ -166,6 +174,7 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
+            api_errors=api_errors,
             input_summary={criteriaKey: result_value, "totalPolicies": extra_fields.get("totalPolicies", 0), "misconfiguredCount": (extra_fields.get("totalPolicies", 0) - extra_fields.get("configuredPolicies", 0))}
         )
 

@@ -1,9 +1,13 @@
 """
 Transformation: confirmedLicensePurchased
-Vendor: Generic IDP
+Vendor: Microsoft Entra ID (Azure AD)
 Category: Licensing
 
-Evaluates if the license has been purchased for the given IDP.
+Method: GET https://graph.microsoft.com/v1.0/organization (Organization.Read.All).
+True only when the tenant's organization record carries an ENABLED Entra ID P1 or P2 service plan
+in assignedPlans (service "AADPremiumService", or servicePlanId AAD_PREMIUM 41781fb2-... /
+AAD_PREMIUM_P2 eec0eb4f-...). Every tenant has an organization record and Entra ID Free, so the
+record existing (the old affirmative_signal rule) proved only that the call succeeded.
 """
 
 import json
@@ -68,50 +72,74 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
-
+    premium_plan_ids = ("41781fb2-bc02-4b7c-bd55-b576c07bb09d", "eec0eb4f-6444-4f95-aba0-50c24d67f998")
     try:
         if isinstance(input, str):
             input = json.loads(input)
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
-
         data, validation = extract_input(input)
-
         if validation.get("status") == "failed":
             return create_response(
                 result={criteriaKey: False},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
-
+        if isinstance(data, dict) and data.get("error"):
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation,
+                api_errors=["Microsoft Graph returned an error for /organization"],
+                fail_reasons=["The organization record could not be read"]
+            )
+        orgs = data.get("value") if isinstance(data, dict) and "value" in data else data
+        if isinstance(orgs, dict):
+            orgs = [orgs]
+        if not isinstance(orgs, list):
+            orgs = []
+        orgs = [o for o in orgs if isinstance(o, dict) and isinstance(o.get("assignedPlans"), list)]
+        if not orgs:
+            return create_response(
+                result={criteriaKey: False, "premiumPlansEnabled": 0},
+                validation=validation,
+                fail_reasons=["No organization record with assignedPlans was returned; the licence is not evidenced"],
+                recommendations=["Grant Organization.Read.All so the tenant's assigned plans can be read"]
+            )
+        enabled_premium = []
+        suspended_premium = []
+        for org in orgs:
+            for plan in org.get("assignedPlans"):
+                if not isinstance(plan, dict):
+                    continue
+                service = str(plan.get("service") or "")
+                plan_id = str(plan.get("servicePlanId") or "").lower()
+                if service != "AADPremiumService" and plan_id not in premium_plan_ids:
+                    continue
+                status = str(plan.get("capabilityStatus") or "").lower()
+                if status == "enabled":
+                    enabled_premium.append(plan_id or service)
+                else:
+                    suspended_premium.append(plan_id + " (" + status + ")")
+        is_licensed = len(enabled_premium) > 0
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-
-        # Default to True if data is present
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
-
-        # Check for explicit licensePurchased field, or default based on data presence
-        license_purchased = data.get('licensePurchased', default_value) if isinstance(data, dict) else default_value
-
-        if license_purchased:
-            pass_reasons.append("License active and confirmed")
+        if is_licensed:
+            pass_reasons.append(str(len(enabled_premium)) + " enabled Entra ID P1/P2 service plan(s) assigned to the tenant")
+        elif suspended_premium:
+            fail_reasons.append("Entra ID P1/P2 plans are present but not enabled: " + ", ".join(suspended_premium[:5]))
+            recommendations.append("Renew the Entra ID P1/P2 subscription")
         else:
-            fail_reasons.append("License purchase not confirmed")
-            recommendations.append("Confirm license has been purchased for the IDP")
-
+            fail_reasons.append("No Entra ID P1/P2 plan is assigned to the tenant (Entra ID Free only)")
+            recommendations.append("License Entra ID P1 or P2 (standalone or through Microsoft 365 E3/E5/Business Premium)")
         return create_response(
-            result={criteriaKey: license_purchased},
+            result={criteriaKey: is_licensed, "premiumPlansEnabled": len(enabled_premium)},
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased}
+            input_summary={"premiumPlansEnabled": len(enabled_premium), "premiumPlansNotEnabled": len(suspended_premium)}
         )
-
     except Exception as e:
         return create_response(
             result={criteriaKey: False},
@@ -119,50 +147,3 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
-
-
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
-
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
-    """
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
-        if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False

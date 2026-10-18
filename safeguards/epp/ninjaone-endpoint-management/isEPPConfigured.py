@@ -1,8 +1,164 @@
-import json
-from datetime import datetime
+"""Transformation: isEPPConfigured (NinjaOne).
+
+Value: a whole-number percentage, floor(100 * judged devices with an antivirus or EPP product reporting ON / devices
+judged). The pass bar lives in the requirement. The evidence is the antivirus-status report (GET /v2/queries/antivirus-status),
+one row per product per device, with the device list beside it for phones and tablets (workflow key "devices").
+
+A policy id is not evidence. policyId only says which NinjaOne policy a device uses (and is empty when the policy is
+inherited from the device role), not that a protection product is installed or running, so it is never read here:
+it can neither make a device configured nor count against one. With no product rows (the device list alone, an empty
+or error body) the check is not evaluated (dataCollection error, no value), never a pass and never a 0.
+Endpoint rules (2026-09-29) as in the other NinjaOne antivirus-status checks: devices seen within 15 days of the newest
+row, phones and tablets left out, a Mac with only third-party products not reporting ON is unreadable and left out.
+"""
+from datetime import datetime, timezone
+
+
+# Endpoint rules (2026-09-29), shared by every NinjaOne antivirus-status check:
+#   1. Judge a device only when its newest row is within ACTIVE_WINDOW_DAYS of the newest row
+#      in the report. A device whose rows carry no timestamp is judged. If the newest row is itself
+#      more than ACTIVE_WINDOW_DAYS before evaluation time, the whole fleet is dark and every device is stale.
+#   2. Phones and tablets are left out (needs the device list beside the report).
+#   3. A Mac whose only products are third-party ones not reporting ON is unreadable, not
+#      unprotected: NinjaOne cannot read third-party AV state on macOS, so coverage there is
+#      the EDR vendor's to prove. A Mac reporting productName NONE is still judged.
+ACTIVE_WINDOW_DAYS = 15
+FUTURE_SLACK_SECONDS = 86400  # a stamp more than a day ahead of now is a fault, not a contact
+MOBILE_NODE_CLASSES = ("APPLE_IOS", "APPLE_IPADOS", "ANDROID")
+
+
+def epoch(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def device_classes(data):
+    """deviceId -> nodeClass from a device list riding beside the report (workflow key "devices")."""
+    devices = data.get("devices") if isinstance(data, dict) else None
+    if isinstance(devices, dict):
+        devices = devices.get("data") or devices.get("results")
+    classes = {}
+    for device in devices if isinstance(devices, list) else []:
+        if isinstance(device, dict) and device.get("id") is not None:
+            classes[str(device.get("id"))] = str(device.get("nodeClass") or "").upper()
+    return classes
+
+
+def usable_row(row, need_state):
+    """True when an antivirus-status row is usable evidence.
+
+    A row must name its product, and (when the caller reads the state) state that product's state. A missing
+    or null name or state is not "no product" and not OFF: it is unreadable. productName "NONE" is a real
+    answer (the device has no product) and needs no state. A caller that does not read the state (the
+    signature check reads definitionStatus) also accepts a row that carries a definitionStatus, with or
+    without a product name: that field is the evidence it reads.
+    """
+    name = row.get("productName")
+    named = name is not None and str(name).strip() != ""
+    if not need_state:
+        status = row.get("definitionStatus")
+        return named or (status is not None and str(status).strip() != "")
+    if not named:
+        return False
+    if str(name).strip().upper() == "NONE":
+        return True
+    state = row.get("productState")
+    return state is not None and str(state).strip() != ""
+
+
+def body_problem(input_data, data):
+    """A short reason when the reply is an error rather than a measurement, else None.
+
+    A reply that carries an error, errors, or an HTTP status of 400 or more proves nothing, even when it
+    also carries product rows. It is checked on the raw reply and on the unwrapped body.
+    """
+    for body in (input_data, data):
+        if isinstance(body, (str, bytes)):
+            try:
+                body = json.loads(body)
+            except Exception:
+                body = None
+        if not isinstance(body, dict):
+            continue
+        err = body.get("errors") or body.get("error")
+        if err:
+            return "NinjaOne returned an error instead of a measurement: " + str(err)[:200]
+        code = body.get("status_code") or body.get("statusCode") or body.get("status")
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "NinjaOne returned HTTP " + str(code) + " instead of a measurement."
+    return None
+
+
+def endpoint_rows(rows, data, mac_unreadable, need_state=True):
+    """Apply the endpoint rules to antivirus-status rows. Returns (rows to judge, scope counts)."""
+    classes = device_classes(data)
+    by_device = {}
+    for row in rows:
+        if isinstance(row, dict) and row.get("deviceId") is not None:
+            by_device.setdefault(str(row.get("deviceId")), []).append(row)
+    # A timestamp more than FUTURE_SLACK_SECONDS ahead of now cannot be a real contact: it is a clock or data
+    # fault. It is ignored for the newest-contact cutoff, so one such stamp cannot make every other device look
+    # stale, and a device with no other stamp is left out as stale, never judged on it.
+    ceiling = datetime.now(timezone.utc).timestamp() + FUTURE_SLACK_SECONDS
+    newest = {}
+    impossible = {}
+    for device_id, device_rows in by_device.items():
+        stamps = [epoch(r.get("timestamp")) for r in device_rows]
+        stamps = [s for s in stamps if s is not None]
+        usable = [s for s in stamps if s <= ceiling]
+        newest[device_id] = max(usable) if usable else None
+        impossible[device_id] = bool(stamps) and not usable
+    known = [s for s in newest.values() if s is not None]
+    cutoff = max(known) - ACTIVE_WINDOW_DAYS * 86400 if known else None
+    wall_cutoff = datetime.now(timezone.utc).timestamp() - ACTIVE_WINDOW_DAYS * 86400
+    dark = bool(known) and max(known) < wall_cutoff
+    if dark:
+        # Dark fleet: the newest check-in is itself older than the window, so every device is stale.
+        cutoff = wall_cutoff
+    kept = []
+    stale = 0
+    mobile = 0
+    unreadable = 0
+    unreadable_state = 0
+    for device_id, device_rows in by_device.items():
+        node_class = classes.get(device_id, "")
+        if node_class in MOBILE_NODE_CLASSES:
+            mobile = mobile + 1
+            continue
+        if impossible[device_id]:
+            stale = stale + 1
+            continue
+        if cutoff is not None and newest[device_id] is not None and newest[device_id] < cutoff:
+            stale = stale + 1
+            continue
+        readable = [r for r in device_rows if usable_row(r, need_state)]
+        if not readable:
+            unreadable_state = unreadable_state + 1
+            continue
+        if mac_unreadable and node_class == "MAC":
+            named = [r for r in readable if str(r.get("productName") or "NONE").upper() != "NONE"]
+            running = [r for r in readable if str(r.get("productState") or "").upper() == "ON"]
+            if named and not running:
+                unreadable = unreadable + 1
+                continue
+        kept.extend(readable)
+    scope = {
+        "devicesReported": len(by_device),
+        "devicesJudged": len(by_device) - stale - mobile - unreadable - unreadable_state,
+        "devicesLeftOutStale": stale,
+        "devicesLeftOutMobile": mobile,
+        "devicesLeftOutUnreadable": unreadable_state,
+        "macDevicesUnreadable": unreadable,
+        "activeWindowDays": ACTIVE_WINDOW_DAYS,
+        "fleetDark": dark,
+    }
+    return kept, scope
 
 
 def extract_input(input_data):
+    """Extract data and validation from input, handling enriched + legacy formats."""
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
         return input_data["data"], input_data["validation"]
     data = input_data
@@ -28,6 +184,7 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
+    """Create the standardized 5-section transformation response."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
@@ -67,7 +224,10 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 def transform(input):
     data, validation = extract_input(input)
-    data = data if isinstance(data, (dict, list)) else {}
+    data = data if isinstance(data, (dict, list)) else []
+    problem = body_problem(input, data)
+    if problem is not None:
+        return create_response(result={"isEPPConfigured": None}, validation=validation, api_errors=[problem], fail_reasons=[problem])
 
     if isinstance(data, list):
         records = data
@@ -78,64 +238,67 @@ def transform(input):
     else:
         records = []
 
-    total_records = len(records)
-    deployed = []
-    for r in records:
-        if not isinstance(r, dict):
-            continue
-        product_name = r.get("productName") or "NONE"
-        if product_name != "NONE":
-            deployed.append(r)
-
-    deployed_count = len(deployed)
-    with_state = [r for r in deployed if r.get("productState")]
-    on_count = sum(1 for r in with_state if r.get("productState") == "ON")
-    off_count = sum(1 for r in with_state if r.get("productState") == "OFF")
-    state_count = len(with_state)
-
-    on_ratio = (on_count / state_count) if state_count > 0 else 0.0
-
-    is_configured = state_count > 0 and on_ratio >= 0.5
-
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-
-    if is_configured:
-        pass_reasons.append(
-            "%d of %d devices with a reporting EPP product show productState=ON (%.1f%%), meeting the 50%% configured threshold." % (on_count, state_count, on_ratio * 100)
+    # Product rows carry productName or productState. A bare device list (policyId, rolePolicyId, nodeClass, ...)
+    # has neither, and shows no protection product, so it cannot answer this check either way.
+    rows = [r for r in records if isinstance(r, dict) and ("productName" in r or "productState" in r)]
+    if not rows:
+        reason = ("No antivirus or EPP product state was returned. A device's policy id shows which NinjaOne policy it "
+                  "uses, not whether a protection product is installed or running, so endpoint protection could not be "
+                  "verified here.")
+        return create_response(
+            result={"isEPPConfigured": None, "devicesReported": 0, "devicesJudged": 0},
+            validation=validation,
+            fail_reasons=[reason],
+            recommendations=["Verify the NinjaOne antivirus-status report is readable and that managed devices report an antivirus or EPP product."],
+            api_errors=[reason],
+            input_summary={"productRows": 0},
+            metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
         )
+
+    judged_rows, scope = endpoint_rows(rows, data, True)
+    if not scope["devicesJudged"]:
+        reason = ("Every device in the antivirus-status report was left out (stale, phone or tablet, without a readable product state, or a Mac whose "
+                  "third-party AV NinjaOne cannot read), so this is not evaluated here.")
+        return create_response(
+            result=dict(scope, isEPPConfigured=None),
+            validation=validation,
+            fail_reasons=[reason],
+            api_errors=[reason],
+            input_summary={"productRows": len(rows)},
+            metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
+        )
+
+    device_state = {}
+    for row in judged_rows:
+        device_id = str(row.get("deviceId"))
+        if device_id not in device_state:
+            device_state[device_id] = False
+        name = str(row.get("productName") or "NONE").upper()
+        state = str(row.get("productState") or "").upper()
+        if name != "NONE" and state == "ON":
+            device_state[device_id] = True
+
+    total_devices = len(device_state)
+    covered = len([d for d in device_state if device_state[d]])
+    configured_pct = (covered * 100) // total_devices
+
+    if covered:
+        pass_reasons = ["%d of %d devices (%d%%) have an antivirus or EPP product reporting ON." % (covered, total_devices, configured_pct)]
+        fail_reasons = []
+        recommendations = []
+        if covered < total_devices:
+            fail_reasons = ["%d of %d devices have no antivirus or EPP product reporting ON." % (total_devices - covered, total_devices)]
+            recommendations = ["Deploy and enable an antivirus or EPP product on the devices that report none."]
     else:
-        if state_count == 0:
-            fail_reasons.append(
-                "No devices among %d antivirus-status records report a productState value; EPP configuration cannot be confirmed." % total_records
-            )
-            recommendations.append(
-                "Verify that the assigned policy pushes and enables an endpoint protection product so that productState reports ON."
-            )
-        else:
-            fail_reasons.append(
-                "Only %d of %d devices with a reporting EPP product show productState=ON (%.1f%%); %d devices report OFF, indicating EPP is installed but not actively configured/running under the assigned policy." % (on_count, state_count, on_ratio * 100, off_count)
-            )
-            recommendations.append(
-                "Review the policy-assigned endpoint protection product configuration and enable real-time protection on devices currently reporting productState=OFF."
-            )
+        pass_reasons = []
+        fail_reasons = ["None of the %d devices judged have an antivirus or EPP product reporting ON." % total_devices]
+        recommendations = ["Deploy and enable an antivirus or EPP product on managed devices so NinjaOne can report its state."]
 
     result = {
-        "isEPPConfigured": is_configured,
-        "totalDevicesReported": total_records,
-        "devicesWithEPPProduct": deployed_count,
-        "devicesWithProductState": state_count,
-        "devicesConfiguredOn": on_count,
-        "devicesConfiguredOff": off_count,
-    }
-
-    input_summary = {
-        "totalRecords": total_records,
-        "deployedCount": deployed_count,
-        "stateReportingCount": state_count,
-        "onCount": on_count,
-        "offCount": off_count,
+        **scope,
+        "isEPPConfigured": configured_pct,
+        "totalDevices": total_devices,
+        "devicesWithRunningProduct": covered,
     }
 
     return create_response(
@@ -144,10 +307,6 @@ def transform(input):
         pass_reasons=pass_reasons,
         fail_reasons=fail_reasons,
         recommendations=recommendations,
-        input_summary=input_summary,
-        metadata={
-            "transformationId": "isEPPConfigured",
-            "vendor": "NinjaOne Endpoint Management",
-            "category": "epp",
-        },
+        input_summary={"totalDevices": total_devices, "devicesWithRunningProduct": covered},
+        metadata={"transformationId": "isEPPConfigured", "vendor": "NinjaOne", "category": "epp"},
     )

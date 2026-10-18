@@ -57,11 +57,11 @@ def evaluate(data):
             return {"confirmedLicensePurchased": False, "reason": "expirationDate missing from license"}
 
         try:
-            expiration_date = datetime.strptime(expiration_str[:10], "%Y-%m-%d").date()
+            expiration_date = datetime.fromisoformat(expiration_str[:10]).date()
         except ValueError:
             return {"confirmedLicensePurchased": False, "reason": f"Could not parse expirationDate: {expiration_str}"}
 
-        today = date.today()
+        today = datetime.now().date()
         result = expiration_date >= today
 
         return {

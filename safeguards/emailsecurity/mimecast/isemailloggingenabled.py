@@ -72,12 +72,42 @@ def transform(input_data):
     """
     Transformation: isEmailLoggingEnabled (Mimecast)
 
+    Also emitted as isEmailSecurityLoggingEnabled (same value, same evidence).
+
     Checks whether the Mimecast account has the Enhanced Logging package
     (product ID 1061) active. Enhanced Logging is Mimecast's MTA-level
     log stream used for SIEM integration. Its presence in the account
     packages list confirms the feature is licensed and enabled.
     """
+    if isinstance(input_data, bytes):
+        input_data = input_data.decode("utf-8")
+    if isinstance(input_data, str):
+        try:
+            input_data = json.loads(input_data) if input_data.strip() else None
+        except ValueError:
+            input_data = None
     data, validation = extract_input(input_data)
+
+    # An Integration-Service error envelope ({"error": true, "message": "... HTTP 403 ..."}) or a
+    # Mimecast "fail" list is not an account without Enhanced Logging: report it as not measured
+    # (dataCollection error, shown Unevaluated) instead of a FAIL.
+    api_errors = []
+    if data is None:
+        api_errors.append("No response body from getAccount")
+    elif isinstance(data, dict):
+        if data.get("error") is True or str(data.get("status", "")).lower() == "error":
+            api_errors.append("getAccount failed: %s" % str(data.get("message") or "Integration error")[:300])
+        fails = data.get("fail")
+        if isinstance(fails, list) and fails and not data.get("data"):
+            api_errors.append("Mimecast returned fail: %s" % json.dumps(fails)[:300])
+    if api_errors:
+        return create_response(
+            result={"isEmailLoggingEnabled": False, "isEmailSecurityLoggingEnabled": False},
+            validation=validation,
+            fail_reasons=["Not measured: " + "; ".join(api_errors)],
+            api_errors=api_errors,
+            metadata={"transformationId": "isEmailLoggingEnabled", "vendor": "Mimecast", "category": "emailsecurity"},
+        )
 
     # Token-Service navigates into the response's "data" key, so this transform
     # usually receives the bare account list. Re-wrap it (and a lone account dict)
@@ -132,6 +162,9 @@ def transform(input_data):
     return create_response(
         result={
             "isEmailLoggingEnabled": enhanced_logging_enabled,
+            # Same evidence under the key the Email Security requirement asks for; Token-Service
+            # reads transformedResponse[criteriaKey] exactly, so a synonym evaluates nothing.
+            "isEmailSecurityLoggingEnabled": enhanced_logging_enabled,
             "enhancedLoggingPackageFound": enhanced_logging_enabled,
             "totalPackages": total_packages,
             "accountCode": account_code,

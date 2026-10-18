@@ -55,19 +55,12 @@ def transform(input):
             """Parse various date formats."""
             if not date_str:
                 return None
-            formats = [
-                '%Y-%m-%dT%H:%M:%S.%fZ',
-                '%Y-%m-%dT%H:%M:%SZ',
-                '%Y-%m-%dT%H:%M:%S',
-                '%Y-%m-%d %H:%M:%S',
-                '%Y-%m-%d'
-            ]
-            for fmt in formats:
-                try:
-                    return datetime.strptime(date_str, fmt)
-                except ValueError:
-                    continue
-            return None
+            text = date_str[:-1] if date_str.endswith('Z') else date_str
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+            return parsed if parsed.tzinfo is None else None
 
         # Check SCIM Resources
         has_resources_key = 'Resources' in input or 'resources' in input
