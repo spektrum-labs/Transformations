@@ -18,7 +18,9 @@ Indicators:
   - a Defender alert titled "Verified Threat Actor IP" or "Graph API activity from a Microsoft
     threat intelligence IP address", or "Suspicious sign-in" naming an indicator.
 Defender alerts (Graph security/alerts_v2, SecurityAlert.Read.All) are optional: most connections
-do not grant that permission, so an unreadable alert feed is reported but does not block True.
+do not grant that permission, so an unreadable alert feed does not block True. Every outcome (True,
+False and Not evaluated) then says "Defender alerts were not read", so no result implies Defender was
+covered (decision 18 Oct 2026).
 
 Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria):
   spSignInsByApp            GET /beta/auditLogs/signIns?$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and createdDateTime ge 2026-10-15T00:00:00Z and (appId eq ... or appId eq ...)
@@ -353,16 +355,21 @@ def assess(data):
     indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
                        and audits_state == "ok" and retention_ok)
 
+    # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
+    # its consent, grants and credentials, so the customer must remove it, not just leave it disabled.
     if indicators:
         verdict = "Indicators found"
     elif not presence_known:
         verdict = "Not evaluated"
-    elif enabled:
+    elif present:
         verdict = "Exposed"
     else:
         verdict = "Not exposed"
     if not enabled:
-        risk = "none" if presence_known else "unknown"
+        if present:
+            risk = "low"
+        else:
+            risk = "none" if presence_known else "unknown"
     elif high:
         risk = "high"
     elif unknown_risk:
@@ -414,23 +421,28 @@ def transform(input):
         found = assess(data)
         summary = {"feeds": found["feeds"]}
         findings = found["indicators"] + found["high"]
+        alerts_note = ""
+        if found["alertsState"] != "ok":
+            alerts_note = "Defender alerts were not read (" + found["alertsState"] + ")."
         if found["indicators"]:
             result = {KEY: False}
             result.update(summary_fields(found))
-            return create_response(result, fail_reasons=found["indicators"], input_summary=summary, findings=findings)
+            reasons = found["indicators"] + ([alerts_note] if alerts_note else [])
+            return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
         if not found["retentionOk"]:
-            return not_measured("The indicator window (from 15 Oct 2026) is now older than Entra's "
-                                + str(LOG_RETENTION_DAYS) + "-day sign-in and audit log retention, so a clean "
-                                "read can no longer rule out early activity; indicators are not evaluated.", found)
+            return not_measured(("The indicator window (from 15 Oct 2026) is now older than Entra's "
+                                 + str(LOG_RETENTION_DAYS) + "-day sign-in and audit log retention, so a clean "
+                                 "read can no longer rule out early activity; indicators are not evaluated. "
+                                 + alerts_note).strip(), found)
         if not found["indicatorsRead"]:
-            return not_measured("A sign-in log read or the directory audit log could not be read "
-                                "whole; indicators are not evaluated. Needs AuditLog.Read.All, and Entra ID P1 or P2 "
-                                "for sign-in logs.", found)
+            return not_measured(("A sign-in log read or the directory audit log could not be read "
+                                 "whole; indicators are not evaluated. Needs AuditLog.Read.All, and Entra ID P1 or P2 "
+                                 "for sign-in logs. " + alerts_note).strip(), found)
         result = {KEY: True}
         result.update(summary_fields(found))
         reasons = ["No published indicator in sign-ins (service principal, and user sign-ins from the indicator IP) or the directory audit log since 15 Oct 2026."]
-        if found["alertsState"] != "ok":
-            reasons.append("Defender alerts were not read (" + found["alertsState"] + ").")
+        if alerts_note:
+            reasons.append(alerts_note)
         return create_response(result, pass_reasons=reasons, input_summary=summary, findings=findings)
     except Exception as e:
         return not_measured("The Microsoft Graph feeds could not be read; indicators are not evaluated.",

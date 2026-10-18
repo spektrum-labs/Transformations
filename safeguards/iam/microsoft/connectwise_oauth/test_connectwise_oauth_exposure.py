@@ -206,12 +206,33 @@ def test_unreadable_grants_for_a_present_app_leave_risk_unknown():
     assert value(exposure, "connectWiseRiskLevel") == "unknown"
 
 
-def test_disabled_service_principal_is_not_exposed_but_reported():
-    body = clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP, enabled=False)))
+def test_disabled_service_principal_is_exposed_at_low_risk_and_must_be_removed():
+    # Decision 18 Oct: a present but disabled app can be re-enabled and keeps its consent, grants and
+    # credentials, so it is Exposed at risk low, and the finding says to remove it.
+    body = clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP, enabled=False)),
+                 cwBackupAppRoles=graph(app_role(DIRECTORY_READWRITE_ALL)), cwBackupDelegatedGrants=graph())
+    exposure, indicators = run_both(body)
+    assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    assert_measured(exposure)
+    for out in (exposure, indicators):
+        assert value(out, "connectWiseVerdict") == "Exposed"
+        assert value(out, "connectWiseRiskLevel") == "low"
+    failed = " ".join(exposure["additionalInfo"]["evaluation"]["failReasons"])
+    assert "disabled" in failed and "remove" in failed.lower()
+    assert "(disabled)" in value(exposure, "connectWiseAppsPresent")[0]
+
+
+def test_one_enabled_and_one_disabled_app_keeps_the_enabled_risk():
+    body = exposed_backup(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP), sp(TEAMS_APP, TEAMS_SP, enabled=False)))
     exposure, _ = run_both(body)
-    assert value(exposure, "isFreeOfConnectWiseAppExposure") is True
+    assert value(exposure, "connectWiseVerdict") == "Exposed"
+    assert value(exposure, "connectWiseRiskLevel") == "standard"
+
+
+def test_absent_apps_are_still_not_exposed_with_risk_none():
+    exposure, _ = run_both(clean())
     assert value(exposure, "connectWiseVerdict") == "Not exposed"
-    assert "disabled" in " ".join(exposure["additionalInfo"]["evaluation"]["passReasons"])
+    assert value(exposure, "connectWiseRiskLevel") == "none"
 
 
 def test_missing_enabled_flag_counts_as_enabled():
@@ -337,6 +358,25 @@ def test_unreadable_alerts_do_not_block_but_are_reported():
     assert "Defender alerts were not read" in passed
 
 
+def test_unread_alerts_are_named_on_every_indicator_outcome():
+    # Decision 18 Oct: alerts stay optional, but no finding may imply Defender was covered.
+    found = exposed_backup(securityAlerts=STEP_403, spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)))
+    not_evaluated = exposed_backup(securityAlerts=STEP_403, directoryAudits=STEP_403)
+    for body in (found, not_evaluated):
+        _, indicators = run_both(body)
+        reasons = " ".join(indicators["additionalInfo"]["evaluation"]["failReasons"])
+        assert "Defender alerts were not read" in reasons, indicators["additionalInfo"]["evaluation"]
+    _, indicators = run_both(found)
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert value(indicators, "indicatorsFound") == 1
+
+
+def test_read_alerts_are_not_called_unread():
+    _, indicators = run_both(exposed_backup(securityAlerts=graph()))
+    evaluation = indicators["additionalInfo"]["evaluation"]
+    assert "Defender alerts were not read" not in " ".join(evaluation["passReasons"] + evaluation["failReasons"])
+
+
 def test_poisoned_body_is_not_evaluated():
     class Poison(dict):
         def get(self, *args, **kwargs):
@@ -361,6 +401,7 @@ def test_wrapped_inputs_are_read():
 
 def test_both_files_agree_on_every_fixture():
     bodies = [clean(), exposed_backup(), exposed_backup(cwBackupAppRoles=graph(app_role(DIRECTORY_READWRITE_ALL))),
+              clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP, enabled=False))),
               exposed_backup(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP))),
               exposed_backup(directoryAudits=STEP_403)] + NO_EVIDENCE
     for body in bodies:

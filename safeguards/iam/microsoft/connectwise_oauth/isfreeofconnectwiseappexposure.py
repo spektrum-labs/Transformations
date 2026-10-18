@@ -8,9 +8,10 @@ tokens in customer tenants, ran Graph reconnaissance and added credentials to se
   ConnectWise Cloud Backup (formerly SkyKick Backup)   appId 506e08f9-6e9a-4da4-942b-a099a03644ae
   ConnectWise Cloud Management - MS Teams              appId 24205314-2b89-4e07-a2a4-579e898a5640
 
-Criterion: True when the tenant's service-principal list was read and neither app has an enabled
-service principal in it. False when either app is present and enabled (Exposed). A present but
-disabled service principal cannot get tokens, so it reads True and is named in the pass reason.
+Criterion: True when the tenant's service-principal list was read and neither app has a service
+principal in it. False when either app is present (Exposed). A present but disabled service principal
+is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps its consent, grants and
+credentials, so the fail reason tells the customer to remove it, not just leave it disabled.
 
 Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria), merged Graph reads:
   servicePrincipals         GET /v1.0/servicePrincipals?$filter=appId in (...)          (Application.Read.All or Directory.Read.All)
@@ -27,7 +28,8 @@ Verdict fields (identical in both criterion files):
   connectWiseVerdict     Not evaluated | Not exposed | Exposed | Indicators found
   connectWiseRiskLevel   high (Directory.ReadWrite.All or a peer permission, or a privileged
                          directory role such as Global Administrator) | standard | unknown (a
-                         grant, delegated-grant or role feed for an enabled app could not be read) | none
+                         grant, delegated-grant or role feed for an enabled app could not be read) |
+                         low (present, but every present app is disabled) | none
 Not evaluated (None and dataCollection.status "error"): the service-principal feed is missing,
 refused, errored, paged or unrecognised. A failed read is never "not exposed".
 """
@@ -345,16 +347,21 @@ def assess(data):
     indicators_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
                        and audits_state == "ok" and retention_ok)
 
+    # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
+    # its consent, grants and credentials, so the customer must remove it, not just leave it disabled.
     if indicators:
         verdict = "Indicators found"
     elif not presence_known:
         verdict = "Not evaluated"
-    elif enabled:
+    elif present:
         verdict = "Exposed"
     else:
         verdict = "Not exposed"
     if not enabled:
-        risk = "none" if presence_known else "unknown"
+        if present:
+            risk = "low"
+        else:
+            risk = "none" if presence_known else "unknown"
     elif high:
         risk = "high"
     elif unknown_risk:
@@ -408,7 +415,7 @@ def transform(input):
             return not_measured("The service-principal list could not be read whole ("
                                 + found["feeds"].get("servicePrincipals", "missing")
                                 + "); exposure is not evaluated. Grant Application.Read.All or Directory.Read.All.", found)
-        result = {KEY: not found["enabled"]}
+        result = {KEY: not found["present"]}
         result.update(summary_fields(found))
         summary = {"feeds": found["feeds"]}
         findings = found["indicators"] + found["high"]
@@ -418,9 +425,12 @@ def transform(input):
             if found["risk"] == "unknown":
                 reasons.append("The app's permissions or directory roles could not be read; risk level unknown.")
             return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
-        reasons = ["Neither ConnectWise app has an enabled service principal in this tenant."]
         if found["present"]:
-            reasons.append("Present but disabled: " + ", ".join(found["names"]))
+            reasons = ["Present but disabled: " + ", ".join(found["names"]),
+                       "A disabled app can be re-enabled and keeps its consent, grants and credentials. Remove it: "
+                       "delete its service principal and revoke its consent; do not just leave it disabled."]
+            return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
+        reasons = ["Neither ConnectWise app has a service principal in this tenant."]
         return create_response(result, pass_reasons=reasons, input_summary=summary, findings=findings)
     except Exception as e:
         return not_measured("The Microsoft Graph feeds could not be read; exposure is not evaluated.",

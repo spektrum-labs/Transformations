@@ -33,5 +33,5 @@
       "change": "Registered with the ConnectWise OAuth app indicator transform; proposed, no requirement reads it yet."
     }
   ],
-  "notes": "Indicators are data from the advisory and live in the transform's constants. Defender alerts are read when the connection grants SecurityAlert.Read.All and add indicators, but an unreadable alert feed does not block true; the pass reason says so. Entra keeps sign-in and audit logs 7 days without P1/P2, so the 15 Oct window ages out about 22 Oct 2026 on those tenants, and sign-in logs need P1/P2 at all."
+  "notes": "Indicators are data from the advisory and live in the transform's constants. Defender alerts are read when the connection grants SecurityAlert.Read.All and add indicators, but an unreadable alert feed does not block true; every outcome then says 'Defender alerts were not read', so no result implies Defender was covered. Entra keeps sign-in and audit logs 7 days without P1/P2, so the 15 Oct window ages out about 22 Oct 2026 on those tenants, and sign-in logs need P1/P2 at all."
 }
