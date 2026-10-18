@@ -2,7 +2,9 @@
 
 Duo answers a missing Admin API permission with HTTP 403 {"stat": "FAIL", "code": 40301,
 "message": "Access forbidden"}. getDuoSettings needs "Grant settings"; getAdmins needs
-"Grant administrators - Read"; the authentication log methods need "Grant read log". When the method opts in, the refusal reaches the transformation as
+"Grant administrators - Read"; the authentication log methods need "Grant read log"; the user reads
+(GET /admin/v1/users, and the per-user bypass_codes and webauthncredentials reads) need "Grant resource - Read".
+When the method opts in, the refusal reaches the transformation as
 {"vendorErrorAsResponse": {"status", "bodyContains", "body"}}. These checks must report it (authTypesAllowed reads Policies v2 now and has its own refusal tests in
 test_duo_authtypes_allowed_policies.py)
 Unevaluated (every value None, dataCollection error), name the permission only for 403/40301, and
@@ -33,6 +35,25 @@ AUTH_LOGS_OK = {"stat": "OK", "response": [
     {"txid": "t2", "timestamp": 1790000100, "username": "u2", "factor": "passcode", "result": "denied"},
 ]}
 
+USERS_OK = {"stat": "OK", "response": [
+    {"user_id": "DU1", "username": "ann", "status": "active", "is_enrolled": True,
+     "last_directory_sync": 1790000000, "phones": [{"phone_id": "DP1"}], "tokens": [], "u2ftokens": [],
+     "webauthncredentials": [{"webauthnkey": "WK1"}], "desktop_authenticators": [{"did": "DA1"}]},
+    {"user_id": "DU2", "username": "bob", "status": "active", "is_enrolled": True,
+     "last_directory_sync": None, "phones": [{"phone_id": "DP2"}], "tokens": [], "u2ftokens": [],
+     "webauthncredentials": [], "desktop_authenticators": []},
+], "metadata": {"next_offset": None, "total_objects": 2}}
+
+BYPASS_OK = {"stat": "OK", "response": [
+    {"bypass_code_id": "BC1", "user_id": "DU1", "created": 1790000000, "expiration": 1790003600,
+     "remaining_uses": 1},
+], "metadata": {"next_offset": None, "total_objects": 1}}
+
+WEBAUTHN_OK = {"stat": "OK", "response": [
+    {"webauthnkey": "WK1", "credential_name": "key", "label": "Security key", "date_added": 1790000000,
+     "user": {"user_id": "DU1", "username": "ann"}},
+], "metadata": {"next_offset": None, "total_objects": 1}}
+
 # file, criteria key, required permission, healthy payload, healthy value
 CASES = [
     ("confirmPasswordPolicyEnforced", "confirmPasswordPolicyEnforced", "Grant settings", SETTINGS_OK, True),
@@ -41,6 +62,16 @@ CASES = [
     ("isrbacimplemented", "isRBACImplemented", "Grant administrators - Read", ADMINS_OK, True),
     ("isiamloggingenabled", "isIAMLoggingEnabled", "Grant read log", AUTH_LOGS_OK, True),
     ("hasAuthenticationLogAPIAccess", "hasAuthenticationLogAPIAccess", "Grant read log", AUTH_LOGS_OK, True),
+    ("isMFAEnforcedForUsers", "isMFAEnforcedForUsers", "Grant resource - Read", USERS_OK, True),
+    ("islifecyclemanagementenabled", "isLifeCycleManagementEnabled", "Grant resource - Read", USERS_OK, True),
+    ("mfaDeviceEnrollmentPercentage", "mfaDeviceEnrollmentPercentage", "Grant resource - Read", USERS_OK, 100.0),
+    ("desktopAuthenticatorEnrollmentPercentage", "desktopAuthenticatorEnrollmentPercentage",
+     "Grant resource - Read", USERS_OK, 50.0),
+    ("hasEmergencyAccessCodeAPIAccess", "hasEmergencyAccessCodeAPIAccess", "Grant resource - Read", BYPASS_OK, True),
+    ("hasFIDOAuthenticatorManagementAPIAccess", "hasFIDOAuthenticatorManagementAPIAccess",
+     "Grant resource - Read", WEBAUTHN_OK, True),
+    ("webAuthnCredentialAdoptionPercentage", "webAuthnCredentialAdoptionPercentage",
+     "Grant resource - Read", USERS_OK, 50.0),
 ]
 
 

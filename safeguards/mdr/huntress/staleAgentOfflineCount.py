@@ -138,6 +138,8 @@ def complete_list(input, list_key, noun):
     if not isinstance(pagination, dict):
         return None, "The " + noun + " list carries no pagination block, so a complete read cannot be shown."
     items = [i for i in box[list_key] if isinstance(i, dict)]
+    if len(items) != len(box[list_key]):
+        return None, "The " + noun + " list holds entries that are not " + noun + " records, so it cannot be scored."
     if pagination.get("truncated"):
         return None, "Read stopped at the page limit (" + str(len(items)) + " " + noun + "s); a partial read is not scored."
     if str(pagination.get("next_page_token") or "").strip() not in ("", "None", "null"):
@@ -204,6 +206,8 @@ def transform(input):
     agents, problem = complete_list(input, "agents", "agent")
     if problem is not None:
         return not_measured(key, problem, validation)
+    if not agents:
+        return not_measured(key, "Huntress returned an empty agent list; there is no fleet to count stale agents in.", validation)
     fresh, stale, undated, future = agent_windows(agents)
     # An agent with no usable callback (never called back, or a callback time in the future) is offline.
     count = len(stale) + len(undated) + len(future)

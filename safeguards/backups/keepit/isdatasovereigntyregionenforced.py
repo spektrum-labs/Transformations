@@ -12,9 +12,13 @@
 # when the product allows multiple geolocations.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isDataSovereigntyRegionEnforced"
+METHOD = "getResources"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when the account's product configuration carries the multigeo resource and it is
     false: backups may not use more than one geolocation, so they stay in the account's
@@ -22,8 +26,8 @@ def transform(input):
 
     Proves: Keepit's own product configuration forbids multi-geolocation backup.
     Does not prove: which region that is (it is the serverUrl host, not an API field).
-    multigeo true, multigeo absent from the configuration, an unrecognised value, or an
-    unreadable body answers false.
+    multigeo true answers false. multigeo absent from the configuration, an unrecognised
+    value, or an unreadable body answers None (not measured).
     """
     key = "isDataSovereigntyRegionEnforced"
 
@@ -77,18 +81,48 @@ def transform(input):
     try:
         data = unwrap(parse_input(input), "resources")
         if isinstance(data, dict) and data.get("error") is True:
-            return {key: False, "reason": "Integration-Service returned an error envelope"}
+            return {key: None, "reason": "Integration-Service returned an error envelope"}
         resources, problem = read_resources(data)
         if resources is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         if "multigeo" not in resources:
-            return {key: False, "reason": "The product configuration has no multigeo resource, so single-region storage is not proven", "resourceCount": len(resources)}
+            return {key: None, "reason": "The product configuration has no multigeo resource, so single-region storage is not proven", "resourceCount": len(resources)}
         raw = resources.get("multigeo")
         low = str(raw or "").strip().lower()
         if low in ["false", "0"]:
             return {key: True, "reason": "multigeo is false: the product does not allow backups in more than one geolocation", "multigeo": raw}
         if low in ["true", "1"]:
             return {key: False, "reason": "multigeo is true: the product allows backups in more than one geolocation", "multigeo": raw}
-        return {key: False, "reason": "multigeo has an unrecognised value", "multigeo": raw}
+        return {key: None, "reason": "multigeo has an unrecognised value", "multigeo": raw}
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

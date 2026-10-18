@@ -9,6 +9,9 @@ Checks if all backup types (RDS automated, RDS manual, EBS) are on a defined sch
 import json
 from datetime import datetime
 
+#: The criterion this file answers; a None value is reported as not measured.
+CRITERIA_KEY = "isBackupTypesScheduled"
+
 
 def extract_input(input_data):
     if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
@@ -32,12 +35,16 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, transformation_errors=None, api_errors=None, additional_findings=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -66,8 +73,20 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+#: The getBackups workflow sections this check reads, each with the describe response it must carry.
+SECTIONS = (("dbBackups", "DescribeDBInstanceAutomatedBackupsResponse"),)
+
+
+def unread_sections(data, sections):
+    """The workflow sections that did not come back as a describe response: absent, null or an error
+    envelope. A reading that lacks one of them has not looked at that kind of backup."""
+    if not isinstance(data, dict):
+        return [name for name, response in sections]
+    return [name for name, response in sections
+            if not (isinstance(data.get(name), dict) and isinstance(data[name].get(response), dict))]
+
 def transform(input):
-    criteriaKey = "isBackupTypesScheduled"
+    criteriaKey = CRITERIA_KEY
 
     try:
         if isinstance(input, str):
@@ -79,7 +98,7 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
                 fail_reasons=["Input validation failed"]
             )
@@ -89,6 +108,16 @@ def transform(input):
         recommendations = []
 
         # Automated RDS: scheduled if BackupRetentionPeriod > 0
+        unread = unread_sections(data, SECTIONS)
+        if unread:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["dbBackups did not return a DescribeDBInstanceAutomatedBackups response, so the RDS backup schedule was not read"],
+                fail_reasons=["Not measured: " + "dbBackups did not return a DescribeDBInstanceAutomatedBackups response, so the RDS backup schedule was not read"],
+                recommendations=["Confirm the AWS credential can call the describe APIs and that each returned a 2xx body."]
+            )
+
         db_backups = data.get("dbBackups", {}) if isinstance(data, dict) else {}
         resp = db_backups.get("DescribeDBInstanceAutomatedBackupsResponse", {})
         result = resp.get("DescribeDBInstanceAutomatedBackupsResult", {})
@@ -141,7 +170,7 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]

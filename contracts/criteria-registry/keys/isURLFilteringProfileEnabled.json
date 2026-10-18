@@ -1,0 +1,40 @@
+{
+  "name": "isURLFilteringProfileEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every rule or rulestack the tool reads that can carry web traffic has a URL filtering profile set (not none).",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the policy rules or rulestacks the tool reads that can carry web traffic; denominator = every one read",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the policy and its profiles showing a URL filtering profile on every in-scope rule or rulestack; an error, empty or possibly cut-off read is Not evaluated.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Firewalls"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "PAN-OS 11.1 XML API and configure CLI command hierarchy (docs.paloaltonetworks.com/pan-os/11-1/pan-os-panorama-api)",
+    "Public OpenAPI reference for Cloud NGFW for AWS (pan.dev/cloudngfw/aws/api/)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Palo Alto firewall transformations (hardware and cloud) can emit it. Meaning is vendor-neutral and written from public references only; no real device or customer read, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Presence of a profile, not its strength: a custom profile is not graded. How web-capable rules are told apart is per tool (hardware: application any, web-browsing or ssl)."
+}

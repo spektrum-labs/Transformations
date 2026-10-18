@@ -6,10 +6,189 @@ Category: Endpoint Security / MDR
 Evaluates safeguard types coverage based on endpoints response data
 and assigns a score from 0 to 100 for each safeguard type.
 Focuses on MDR-specific metrics.
+
+An error, refusal, empty or unreadable endpoint read is Not evaluated (every key None with a
+data-collection error), never a failed check. So is a partial read (a next-page cursor or a
+truncation marker is present), and so is a body with no endpoint list: a figure, a "none found"
+or a count taken from part of the fleet is not a total. The configured key (isMDRConfigured) is
+derived from the endpoint list alone: Sophos documents no such field, so a flag in the body is never
+read, never kept and never overrides what the list shows.
 """
 
 import json
 from datetime import datetime
+
+
+# A read that proves nothing is Not evaluated, never False. An error body, an HTTP 4xx/5xx body, a
+# failed input validation, an empty, null or unrecognised body, an empty endpoint list and an
+# exception all return every key as None with dataCollection.status "error", which the evaluator
+# shows as Not evaluated, as do a partial read (pages left unread) and a body with no endpoint list.
+# A complete endpoint list that holds no managed endpoint still reads 0 / False.
+# The reason text is fixed: the vendor's own error text is never copied into the result.
+RESULT_KEYS = [
+    "Endpoint Protection", "Endpoint Security", "Server Protection", "MDR", "Network Protection",
+    "Cloud Security", "Mobile Protection", "Email Security", "Phishing Protection",
+    "Zero Trust Network Access", "Encryption", "isEPPEnabled", "isEPPLoggingEnabled",
+    "isEPPEnabledForCriticalSystems", "isEDRDeployed", "isEndpointSecurityEnabled", "isMDREnabled",
+    "isMDRLoggingEnabled", "requiredCoveragePercentage", "requiredConfigurationPercentage",
+    "isMDRConfigured",
+]
+STATUS_KEYS = ["status_code", "statusCode", "httpStatus", "status"]
+ERROR_REASON = "Not evaluated: Sophos returned an error instead of an endpoint list; nothing was measured."
+NO_ENDPOINTS_REASON = "Not evaluated: no endpoints returned"
+NO_LIST_REASON = "Not evaluated: no endpoint list in the response; nothing was measured."
+PARTIAL_REASON = (
+    "Not evaluated: the endpoint list is only part of the fleet (it has further pages that were not read, "
+    "or it starts after the first page), so a coverage figure from part of the list is not a total; "
+    "nothing was measured."
+)
+VALIDATION_REASON = "Not evaluated: the response failed input validation; nothing was measured."
+EXCEPTION_REASON = "Not evaluated: the transformation could not read the response; nothing was measured."
+
+
+def not_measured_result():
+    result = {}
+    for key in RESULT_KEYS:
+        result[key] = None
+    return result
+
+
+def error_reason(body):
+    """A fixed-text reason when a dict is an error or refusal body, else None."""
+    if not isinstance(body, dict):
+        return None
+    if body.get("error") or body.get("errors") or body.get("vendorErrorAsResponse"):
+        return ERROR_REASON
+    for name in STATUS_KEYS:
+        code = body.get(name)
+        if isinstance(code, str) and code.strip().isdecimal():
+            code = int(code.strip())
+        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+            return "Not evaluated: Sophos answered the endpoint read with HTTP " + str(code) + "; nothing was measured."
+    return None
+
+
+def list_problem(items):
+    """Why a list of endpoint records proves nothing, or None when it holds at least one record."""
+    if len(items) == 0:
+        return NO_ENDPOINTS_REASON
+    has_record = False
+    for entry in items:
+        if isinstance(entry, dict):
+            if entry.get("error") or entry.get("errors"):
+                return ERROR_REASON
+            has_record = True
+    if not has_record:
+        return NO_LIST_REASON
+    return None
+
+
+def read_problem(data):
+    """Why a body is not a complete, readable endpoint list (fixed text), or None when it is one.
+
+    A complete list of endpoints, even one with no managed endpoint, is a read that proves a
+    negative and is scored as before. A list that is only part of the fleet is not (see
+    unread_pages). A body with no endpoint list, whatever else it carries (a configured flag
+    included), has nothing to score.
+    """
+    if isinstance(data, list):
+        return list_problem(data)
+    if isinstance(data, dict):
+        reason = error_reason(data)
+        if reason is not None:
+            return reason
+        items = data.get("items")
+        if isinstance(items, list):
+            problem = list_problem(items)
+            if problem is not None:
+                return problem
+            return unread_pages(data, len(items))
+        return NO_LIST_REASON
+    return NO_LIST_REASON
+
+
+def page_cursor(value):
+    """A pagination cursor, or None. Stored replays stringify null as "None" or "null"."""
+    if value is None or value is False:
+        return None
+    text = str(value).strip()
+    if text.lower() in ("", "none", "null", "false"):
+        return None
+    return text
+
+
+def page_int(value):
+    """A whole-number page field, or None. Stored replays stringify numbers: 4, 4.0, "4" and "4.0" are all 4."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(str(value).strip())
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        whole = int(number)
+        if whole != number:
+            return None
+        return whole
+    except Exception:
+        return None
+
+
+def page_field_unreadable(value):
+    """True when a page total or item total is present but is not a whole number (null, an empty string and the stringified nulls are absent)."""
+    if value is None:
+        return False
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "null"):
+        return False
+    return page_int(value) is None
+
+
+def marked_true(value):
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def unread_pages(data, item_count):
+    """PARTIAL_REASON when the endpoint list may be only part of the fleet, else None.
+
+    A next-page cursor still set, a truncation marker, more items than were returned, more pages
+    than one page of endpoints, or a page that does not start at the beginning (fromKey set) all
+    mean part of the fleet was not read. More than one page (pages.total above 1) is partial unless
+    pages.items says how many items the whole list holds and that is exactly the number returned (a
+    body whose pages were joined): a page total says nothing about how many items a page holds, so it
+    cannot show the list is whole, with or without a page size. A page total or item total that is present
+    but not a whole number ("many", "4.5", a boolean) shows nothing either, so it is partial too; 4.0 and "4.0"
+    are read as 4. A pages field that is present but not an object, and a next key at the top of the body, are partial too. Anything computed from the part
+    that was read (a percentage, a "none found" False, a count) rests on endpoints nobody has
+    seen, so it is not reported. A full first page with no cursor is not treated as partial: a
+    complete read of a large fleet looks the same.
+    """
+    if marked_true(data.get("truncated")):
+        return PARTIAL_REASON
+    if page_cursor(data.get("nextKey")) is not None:
+        return PARTIAL_REASON
+    pages = data.get("pages")
+    if not isinstance(pages, dict):
+        # An absent pages field (null, an empty string, a stringified null) says nothing and is complete; a pages
+        # field that is present but is not an object (text, a number, a list) cannot be read, so the list may be only part.
+        if page_cursor(pages) is None:
+            return None
+        return PARTIAL_REASON
+    if marked_true(pages.get("truncated")):
+        return PARTIAL_REASON
+    if page_cursor(pages.get("nextKey")) is not None:
+        return PARTIAL_REASON
+    if page_cursor(pages.get("fromKey")) is not None:
+        return PARTIAL_REASON
+    if page_field_unreadable(pages.get("items")) or page_field_unreadable(pages.get("total")):
+        return PARTIAL_REASON
+    total_items = page_int(pages.get("items"))
+    if total_items is not None and total_items > item_count:
+        return PARTIAL_REASON
+    total_pages = page_int(pages.get("total"))
+    if total_pages is not None and total_pages > 1 and total_items != item_count:
+        return PARTIAL_REASON
+    return None
 
 
 def transform(input):
@@ -78,9 +257,19 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={"isMDREnabled": False},
+                result=not_measured_result(),
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=[VALIDATION_REASON],
+                api_errors=[VALIDATION_REASON]
+            )
+
+        problem = read_problem(data)
+        if problem is not None:
+            return create_response(
+                result=not_measured_result(),
+                validation=validation,
+                fail_reasons=[problem],
+                api_errors=[problem]
             )
 
         pass_reasons = []
@@ -93,15 +282,12 @@ def transform(input):
         # containing `items`. Handle both so counts aren't silently zeroed.
         if isinstance(data, list):
             items = data
-            explicit_configured = None
         elif isinstance(data, dict):
             items = data.get("items") or []
             if not isinstance(items, list):
                 items = []
-            explicit_configured = data.get("isMDRConfigured")
         else:
             items = []
-            explicit_configured = None
         total_endpoints = len(items)
         total_computers = 0
         total_servers = 0
@@ -280,15 +466,12 @@ def transform(input):
         coverage_scores["requiredCoveragePercentage"] = coverage_scores["MDR"]
         coverage_scores["requiredConfigurationPercentage"] = coverage_scores["MDR"]
 
-        # "Configured" must reflect real deployment: honor an explicit flag from
-        # the API if present, otherwise require at least one MDR-covered endpoint.
-        # Previously this defaulted to True, producing a false PASS on zero data.
-        if explicit_configured is not None:
-            coverage_scores["isMDRConfigured"] = bool(explicit_configured)
-        else:
-            coverage_scores["isMDRConfigured"] = (
-                total_endpoints > 0 and coverage_scores["MDR"] > 0
-            )
+        # "Configured" must reflect real deployment, so it is derived from the endpoint list alone:
+        # at least one MDR-covered endpoint. Sophos documents no configured field, so a flag in the
+        # body is never read (it could only override what the list shows).
+        coverage_scores["isMDRConfigured"] = (
+            total_endpoints > 0 and coverage_scores["MDR"] > 0
+        )
 
         # Build pass/fail reasons
         if coverage_scores["isMDREnabled"]:
@@ -321,8 +504,9 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={"isMDREnabled": False},
+            result=not_measured_result(),
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[EXCEPTION_REASON],
+            api_errors=[EXCEPTION_REASON]
         )

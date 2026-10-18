@@ -1,9 +1,9 @@
-"""Cisco Meraki MX - isFirewallLoggingEnabled (THL NW-01: Config and Change Monitoring).
+"""Cisco Meraki MX - isFirewallLoggingEnabled (NW-01: Config and Change Monitoring).
 
 Reads GET /networks/{networkId}/syslogServers, iterated across the organisation's
 appliance networks, so the input is normally a list of per-network responses.
 
-Passes when at least one syslog server is configured anywhere in the estate. The
+Passes when at least one syslog server is configured anywhere in the environment. The
 roles seen ('Flows', 'URLs', 'Security events', 'Appliance event log') are reported
 rather than required: NW-01 asks that monitoring exists, not which feeds are on.
 """
@@ -120,7 +120,7 @@ def transform(input):
         # `output.key`. The wrapped form nests one level deeper -- the value is
         # a list of {"servers": [...]} dicts, not of server objects -- so this
         # recurses rather than filtering, which silently returned "no logging
-        # anywhere" for an estate that had it.
+        # anywhere" for an environment that had it.
         WRAPPERS = ("servers", "syslogServers", "items", "value")
 
         def servers_from_payload(payload, depth=0):

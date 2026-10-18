@@ -66,6 +66,24 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def migration_pending(policy):
+    """The policy's policyMigrationState (cut to 40 characters) when it is anything but migrationComplete, else "".
+
+    Until the migration to the authentication methods policy is complete, the legacy per-user MFA and SSPR
+    policies still decide which methods members can use and cannot be read here. A policy with no state reads
+    as before."""
+    state = str(policy.get('policyMigrationState') or '').strip() if isinstance(policy, dict) else ''
+    if state and state.lower() != 'migrationcomplete':
+        return state[:40]
+    return ''
+
+
+def migration_reason(state, what):
+    return ("The authentication methods policy lists no " + what + " (policyMigrationState: " + state + "): the legacy "
+            "per-user MFA and SSPR policies still apply and cannot be read here, so the policy alone does not "
+            "show that MFA is unavailable")
+
+
 def transform(input):
     criteriaKey = "isMFAEnabled"
 
@@ -118,6 +136,14 @@ def transform(input):
                 policies_without_mfa.append(policy.get('displayName'))
 
         mfa_enforced = len(policies_with_mfa) > 0
+        pending = migration_pending(auth_methods)
+        if pending and not methods_available and mfa_enforced:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=[migration_reason(pending, "Microsoft Authenticator, FIDO2, OATH or Temporary Access Pass method")]
+            )
+
         is_enabled = methods_available and mfa_enforced
 
         if methods_available:

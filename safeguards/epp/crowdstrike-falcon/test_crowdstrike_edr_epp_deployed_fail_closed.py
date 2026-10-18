@@ -6,11 +6,12 @@ including the customer-settings body of getLicenseStatus. A failed read is not a
 
 Now: no body, a body that is not JSON, an error at any wrapper level, a body with no Falcon host
 records, and a partial read that would have said False all return the key as None with a
-dataCollection error and the reason. Real, complete host data measures exactly as before, and a
-partial read that already shows a streaming sensor still answers True (hosts not read cannot undo
-a host that was read).
+dataCollection error and the reason. For isEDRDeployed, real, complete host data measures exactly as
+before, and a partial read that already shows a streaming sensor still answers True (hosts not read
+cannot undo a host that was read). isEPPDeployed is now a measured share of reporting hosts (see
+test_crowdstrike_epp_deployed_measured.py): a host-ID list and every partial read are Unevaluated.
 
-All host data here is synthetic ("estate A")."""
+All host data here is synthetic ("environment A")."""
 import importlib.util
 import json
 import pathlib
@@ -36,14 +37,14 @@ EDR = load("isEDRDeployed")
 EPP = load("isEPPDeployed")
 
 
-# ---------------------------------------------------------------- synthetic estate A, real Falcon shapes
+# ---------------------------------------------------------------- synthetic environment A, real Falcon shapes
 
 def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_seen=RECENT):
-    """A host record as GET /devices/entities/devices/v2 returns it (synthetic estate A)."""
+    """A host record as GET /devices/entities/devices/v2 returns it (synthetic environment A)."""
     policies = {"prevention": {"policy_id": "prev-a", "applied": True}}
     if sensor_update:
         policies["sensor_update"] = {"policy_id": "su-a", "applied": True, "uninstall_protection": "ENABLED"}
-    record = {"device_id": "estate-a-dev-%04d" % n, "hostname": "estate-a-host-%04d" % n,
+    record = {"device_id": "env-a-dev-%04d" % n, "hostname": "env-a-host-%04d" % n,
               "status": "normal", "platform_name": "Windows", "product_type_desc": "Workstation",
               "reduced_functionality_mode": rfm, "device_policies": policies, "last_seen": last_seen}
     if agent_version is not None:
@@ -54,7 +55,7 @@ def host(n, sensor_update=True, rfm="no", agent_version="7.40.21309.0", last_see
 def hosts_body(records, total=None, **pagination):
     page = {"offset": 0, "limit": 5000, "total": len(records) if total is None else total}
     page.update(pagination)
-    return {"meta": {"query_time": 0.12, "pagination": page, "powered_by": "device-api", "trace_id": "estate-a"},
+    return {"meta": {"query_time": 0.12, "pagination": page, "powered_by": "device-api", "trace_id": "env-a"},
             "resources": records, "errors": []}
 
 
@@ -67,7 +68,7 @@ def scroll_body(count, total=None, **pagination):
 
 
 # GET /installation-tokens/entities/customer-settings/v1, the body getLicenseStatus returns
-CUSTOMER_SETTINGS = {"meta": {"query_time": 0.01, "powered_by": "csam", "trace_id": "estate-a"},
+CUSTOMER_SETTINGS = {"meta": {"query_time": 0.01, "powered_by": "csam", "trace_id": "env-a"},
                      "resources": [{"max_active_tokens": 0, "tokens_required": False}], "errors": []}
 AUTH_401 = {"meta": {}, "resources": [], "errors": [{"code": 401, "message": "access denied, invalid bearer token"}]}
 AUTH_403 = {"meta": {}, "resources": None, "errors": [{"code": 403, "message": "access denied, authorization failed"}]}
@@ -140,30 +141,29 @@ def test_edr_without_pagination_meta_measures_as_before():
 
 
 @pytest.mark.parametrize("total", [130, "130"])
-def test_epp_real_shape_scroll_passes(total):
-    out = EPP.transform(scroll_body(130, total=total))
-    assert out["transformedResponse"] == {"isEPPDeployed": True, "totalDevices": 130}
-    assert out["additionalInfo"]["dataCollection"]["status"] == "success"
-    assert out["additionalInfo"]["evaluation"]["passReasons"][0].startswith("meta.pagination.total reports 130")
+def test_epp_scroll_id_list_is_unevaluated(total):
+    # devices-scroll IDs prove enrolment, not a reporting sensor: answered True before 2026-10-07
+    assert_unevaluated(EPP, "isEPPDeployed", scroll_body(130, total=total), "not that its sensor is reporting")
 
 
 def test_epp_host_records_and_no_pagination_count_the_page():
     out = EPP.transform({"resources": [host(i) for i in range(7)], "errors": []})
-    assert out["transformedResponse"] == {"isEPPDeployed": True, "totalDevices": 7}
+    assert out["transformedResponse"] == {"isEPPDeployed": True, "sensorDeploymentPercentage": 100.0,
+                                          "totalDevices": 7, "reportingDevices": 7}
 
 
 def test_json_string_bodies_measure_like_dicts():
     edr_body = hosts_body([host(0), host(1, sensor_update=False)])
     assert run(EDR, "isEDRDeployed", json.dumps(edr_body))[0] is True
     assert run(EDR, "isEDRDeployed", json.dumps(hosts_body([host(0, sensor_update=False)])))[0] is False
-    assert run(EPP, "isEPPDeployed", json.dumps(scroll_body(5)).encode("utf-8"))[0] is True
+    assert run(EPP, "isEPPDeployed", json.dumps(hosts_body([host(i) for i in range(5)])).encode("utf-8"))[0] is True
 
 
 @pytest.mark.parametrize("wrapper", ["api_response", "response", "result", "apiResponse", "Output"])
 def test_clean_platform_wrappers_are_still_peeled(wrapper):
     assert run(EDR, "isEDRDeployed", {wrapper: hosts_body([host(0)])})[0] is True
     assert run(EDR, "isEDRDeployed", {wrapper: {"response": hosts_body([host(0, sensor_update=False)])}})[0] is False
-    assert run(EPP, "isEPPDeployed", {wrapper: scroll_body(3)})[0] is True
+    assert run(EPP, "isEPPDeployed", {wrapper: hosts_body([host(i) for i in range(3)])})[0] is True
 
 
 def test_enriched_input_measures_its_data():
@@ -171,7 +171,7 @@ def test_enriched_input_measures_its_data():
     out = EDR.transform({"data": hosts_body([host(0)]), "validation": validation})
     assert out["transformedResponse"]["isEDRDeployed"] is True
     assert out["additionalInfo"]["validation"]["status"] == "valid"
-    assert run(EPP, "isEPPDeployed", {"data": scroll_body(2), "validation": validation})[0] is True
+    assert run(EPP, "isEPPDeployed", {"data": hosts_body([host(0), host(1)]), "validation": validation})[0] is True
 
 
 # ---------------------------------------------------------------- nothing to measure: Unevaluated
@@ -197,7 +197,7 @@ def test_edr_host_id_list_is_not_host_records():
 
 
 def test_epp_zero_total_with_records_is_inconsistent():
-    assert_unevaluated(EPP, "isEPPDeployed", scroll_body(3, total=0), "inconsistent")
+    assert_unevaluated(EPP, "isEPPDeployed", hosts_body([host(i) for i in range(3)], total=0), "inconsistent")
 
 
 # ---------------------------------------------------------------- error bodies, at every wrapper level
@@ -276,9 +276,9 @@ def test_edr_partial_read_never_answers_false(partial):
         # Integration-Service at maxPages: first page's block kept, next cleared, truncated + scannedCount
         body = hosts_body(records, total=10, next=None, truncated=True, scannedCount=10)
     elif partial == "after_token":
-        body = hosts_body(records, after="estate-a-scroll-token")
+        body = hosts_body(records, after="env-a-scroll-token")
     elif partial == "next_token":
-        body = hosts_body(records, next="estate-a-next")
+        body = hosts_body(records, next="env-a-next")
     else:
         body = dict(hosts_body(records), nextPage="https://api.example.invalid/devices?page=2")
     info = assert_unevaluated(EDR, "isEDRDeployed", body, "partial")
@@ -287,7 +287,7 @@ def test_edr_partial_read_never_answers_false(partial):
 
 def test_edr_partial_read_that_shows_a_streaming_sensor_still_passes():
     body = hosts_body([host(0)] + [host(i, sensor_update=False) for i in range(1, 10)], total=900,
-                      after="estate-a-scroll-token")
+                      after="env-a-scroll-token")
     value, info = run(EDR, "isEDRDeployed", body)
     assert value is True
     assert info["dataCollection"]["status"] == "success"
@@ -306,28 +306,25 @@ def test_blank_next_tokens_are_not_partial(blank):
     assert run(EDR, "isEDRDeployed", body)[0] is False
 
 
-def test_epp_partial_page_reports_the_tenant_total():
-    # devices-scroll returns one page of IDs and the tenant total; the total is the measurement
-    body = scroll_body(100, total=1517, next="estate-a-next")
-    out = EPP.transform(body)
-    assert out["transformedResponse"] == {"isEPPDeployed": True, "totalDevices": 1517}
-    assert out["additionalInfo"]["evaluation"]["additionalFindings"][0].startswith("Partial read")
-    truncated = dict(scroll_body(10, total=10), paginationTruncated=True)
-    assert run(EPP, "isEPPDeployed", truncated)[0] is True
+def test_epp_partial_page_is_unevaluated():
+    # one page of a larger tenant answered True from meta.pagination.total before 2026-10-07
+    assert_unevaluated(EPP, "isEPPDeployed", hosts_body([host(i) for i in range(10)], total=1517,
+                                                        next="env-a-next"), "partial")
+    truncated = dict(hosts_body([host(i) for i in range(10)]), paginationTruncated=True)
+    assert_unevaluated(EPP, "isEPPDeployed", truncated, "partial")
 
 
-def test_epp_never_answers_false():
-    probes = [None, {}, AUTH_401, CUSTOMER_SETTINGS, scroll_body(0), scroll_body(3, total=0),
-              hosts_body([host(0, sensor_update=False)]), {"statusCode": 500}]
+def test_epp_never_answers_false_from_nothing():
+    probes = [None, {}, AUTH_401, CUSTOMER_SETTINGS, scroll_body(0), scroll_body(3, total=0), {"statusCode": 500}]
     for probe in probes:
-        assert run(EPP, "isEPPDeployed", probe)[0] is not False, probe
+        assert run(EPP, "isEPPDeployed", probe)[0] is None, probe
 
 
 # ---------------------------------------------------------------- transformation errors
 
 class Exploding(dict):
     def get(self, *args, **kwargs):
-        raise RuntimeError("estate-a synthetic failure")
+        raise RuntimeError("env-a synthetic failure")
 
 
 @pytest.mark.parametrize("module,key", BOTH)
@@ -351,7 +348,9 @@ def test_both_files_compile_and_run_in_the_restricted_sandbox():
     assert edr(hosts_body([host(0)]))["transformedResponse"]["isEDRDeployed"] is True
     assert edr(hosts_body([host(0, sensor_update=False)]))["transformedResponse"]["isEDRDeployed"] is False
     assert edr(hosts_body([host(0, sensor_update=False)], total=50))["transformedResponse"]["isEDRDeployed"] is None
-    assert epp(scroll_body(3))["transformedResponse"]["isEPPDeployed"] is True
+    assert epp(hosts_body([host(0)]))["transformedResponse"]["isEPPDeployed"] is True
+    assert epp(hosts_body([host(0, last_seen="2020-01-01T00:00:00Z")]))["transformedResponse"]["isEPPDeployed"] is False
+    assert epp(scroll_body(3))["transformedResponse"]["isEPPDeployed"] is None
     for probe in (None, {}, AUTH_401, CUSTOMER_SETTINGS, {"response": dict(AUTH_403, error=True)}):
         assert edr(probe)["transformedResponse"]["isEDRDeployed"] is None
         assert epp(probe)["transformedResponse"]["isEPPDeployed"] is None
@@ -361,7 +360,7 @@ def test_both_files_compile_and_run_in_the_restricted_sandbox():
 @pytest.mark.parametrize("ids", [
     ["ldt:0000000000000000000000000000000a:1234"],             # detection ids
     ["0000000000000000000000000000000a_cve-2024-0001"],         # vulnerability instance ids
-    ["estate-a-group-1", "estate-a-group-2"],                   # non-hex names
+    ["env-a-group-1", "env-a-group-2"],                   # non-hex names
     ["0123456789abcdef"],                                       # too short
 ])
 def test_epp_misrouted_id_list_is_unevaluated(ids):
@@ -371,16 +370,15 @@ def test_epp_misrouted_id_list_is_unevaluated(ids):
     assert "not Falcon device IDs" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
 
 
-def test_epp_device_ids_are_counted_in_either_case():
+def test_epp_device_ids_are_recognised_in_either_case():
     ids = ["%032x" % (0xb0 + i) for i in range(3)] + ["%032X" % 0xc0]
-    out = EPP.transform({"meta": {"pagination": {"total": 4}}, "resources": ids, "errors": []})
-    assert out["transformedResponse"]["isEPPDeployed"] is True
+    body = {"meta": {"pagination": {"total": 4}}, "resources": ids, "errors": []}
+    assert_unevaluated(EPP, "isEPPDeployed", body, "4 Falcon device ID(s)")
 
 
-def test_epp_32_hex_policy_ids_are_indistinguishable_from_device_ids_known_limit():
-    # Known Low: real Falcon policy ids are also 32 hex, so a misrouted policy-id list reads as hosts. The control is
-    # the definition's method binding (devices-scroll for isEPPDeployed), not the id shape. This asserts the honest
-    # current behaviour so a future change to it is deliberate.
+def test_epp_32_hex_policy_ids_no_longer_read_as_deployed():
+    # Real Falcon policy ids are also 32 hex, so a misrouted policy-id list reads as device IDs. Before
+    # 2026-10-07 that answered True; an ID list is now Unevaluated whatever it lists, which closes the gap.
     policy_ids = ["%032x" % (0xd0 + i) for i in range(2)]
-    out = EPP.transform({"meta": {"pagination": {"total": 2}}, "resources": policy_ids, "errors": []})
-    assert out["transformedResponse"]["isEPPDeployed"] is True
+    body = {"meta": {"pagination": {"total": 2}}, "resources": policy_ids, "errors": []}
+    assert_unevaluated(EPP, "isEPPDeployed", body)

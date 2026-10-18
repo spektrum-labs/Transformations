@@ -21,8 +21,13 @@ A security.password policy that was read and misses the standard is false (a rea
 
 Not measured (key None, dataCollection error, so Token-Service shows it Not evaluated, never
 Failed): a Google error or missing scope, a body that is not JSON or not a policy list, a list
-that still carries nextPageToken (truncated: an unread page could hold a weak policy), a list
-with no security.password policy at all, and this transform's own exception.
+that still carries nextPageToken with no weak policy in the pages read (truncated: an unread page
+could hold a weak policy), a list with no security.password policy at all, and this transform's
+own exception.
+
+A weak policy already read settles the answer even when the list is truncated: the rule needs EVERY
+policy to pass, so an unread page cannot undo it. That case is a measured false, and the reason says
+the list was incomplete. True always needs the whole list.
 
 Does not prove: password expiry or reuse settings, or that users have changed passwords since the
 policy was tightened.
@@ -162,12 +167,11 @@ def transform(input):
             return not_measured(error[:300], validation)
         if not isinstance(data, dict) or not isinstance(data.get("policies"), list):
             return not_measured("response is not a Cloud Identity policy list", validation)
-        if data.get("nextPageToken"):
-            return not_measured("policy list was truncated (nextPageToken present); an unread page may hold a weaker "
-                                "password policy", validation, {"policiesRead": len(data["policies"])})
+        truncated = bool(data.get("nextPageToken"))
 
         checked = []
         weak = []
+        weak_admin = 0  # weak policies an administrator set; Google's SYSTEM default is overridden by them
         for policy in data["policies"]:
             if not isinstance(policy, dict):
                 continue
@@ -190,14 +194,21 @@ def transform(input):
                             "enforceRequirementsAtLogin": enforced})
             if problems:
                 weak.append("%s: %s" % (scope, ", ".join(problems)))
+                if str(policy.get("type") or "").upper() != "SYSTEM":
+                    weak_admin += 1
 
-        summary = {"policiesRead": len(data["policies"]), "passwordPolicies": len(checked), "weakPolicies": len(weak)}
+        summary = {"policiesRead": len(data["policies"]), "passwordPolicies": len(checked), "weakPolicies": len(weak),
+                   "truncated": truncated}
+        if truncated and not weak_admin:
+            return not_measured("policy list was truncated (nextPageToken present); an unread page may hold a weaker "
+                                "password policy", validation, summary)
         if not checked:
             return not_measured("no %s policy was returned" % SETTING, validation, summary)
         if weak:
+            note = " (the policy list was truncated; a weak policy already read settles this)" if truncated else ""
             return create_response(result={CRITERIA_KEY: False, "passwordPolicies": checked}, validation=validation,
-                                   fail_reasons=["%d of %d password policies do not meet the standard: %s"
-                                                 % (len(weak), len(checked), "; ".join(weak[:10]))],
+                                   fail_reasons=["%d of %d password policies read do not meet the standard%s: %s"
+                                                 % (len(weak), len(checked), note, "; ".join(weak[:10]))],
                                    recommendations=["In the Google Admin console (Security > Password management) require "
                                                     "strong passwords of at least %d characters and enforce them at next "
                                                     "sign-in for every organizational unit" % MIN_LENGTH],

@@ -8,7 +8,7 @@ critical or high severity findings are present for a scanned domain.
 
 A capped scan (more hosts discovered than scanned, the ASM host cap) that found no critical or high
 finding returns None for both keys with the coverage reason in dataCollection.errors: zero findings on a
-partial estate is not a clean estate, so Token-Service reads it as Unevaluated, never a pass. A capped scan
+partial scan is not proof of no findings in scope, so Token-Service reads it as Unevaluated, never a pass. A capped scan
 that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
 one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
 scan), so a response is only ever read for the key whose severity it scanned.
@@ -80,6 +80,19 @@ def to_int(value):
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+def scan_reason_suffix(data):
+    """The reason Integration-Service gave for a scan that has no result (asm_scan_in_progress,
+    asm_scan_retry_backoff, ...) as " (reason: ...)", or "" when it gave none. Only a short
+    lower-case token is passed on, so a body cannot put free text into the stream."""
+    reason = str(data.get("reason") or "").strip().lower() if isinstance(data, dict) else ""
+    if not reason or len(reason) > 60:
+        return ""
+    for ch in reason:
+        if ch not in "abcdefghijklmnopqrstuvwxyz0123456789_":
+            return ""
+    return " (reason: " + reason + ")"
 
 
 def capped_note(data):
@@ -231,7 +244,7 @@ def transform(input):
             return create_response(
                 result={"noCriticalFindings": False, "noHighFindings": False},
                 validation=validation,
-                api_errors=[f"Nuclei scan status: {scan_status}"],
+                api_errors=[f"Nuclei scan status: {scan_status}{scan_reason_suffix(data)}"],
                 fail_reasons=[f"Scan did not complete successfully for {domain}"],
                 input_summary={"domain": domain, "status": scan_status, "stderr": stderr}
             )
@@ -306,7 +319,7 @@ def transform(input):
 
         capped = capped_note(data)
         if capped and no_critical and no_high:
-            reason = capped + "; zero critical or high findings on a partial scan is not a clean estate"
+            reason = capped + "; zero critical or high findings on a partial scan is not proof of no findings in scope"
             return create_response(
                 result={"noCriticalFindings": None, "noHighFindings": None, "domain": domain},
                 validation=validation,

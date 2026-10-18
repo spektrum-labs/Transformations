@@ -95,7 +95,8 @@ def test_sso_unknown_is_null_with_collection_error():
     cases = [sso_body(saml(None), ...), sso_body(..., instances()), sso_body(saml(None), ERR_IS),
              sso_body(ERR_IS, instances()), sso_body(saml(None), AWS_DENIED), sso_body(saml(None), CORAL_UNKNOWN),
              sso_body({"ErrorResponse": {"Error": {"Code": "AccessDenied"}}}, instances()),
-             sso_body(saml(None), dict(instances(), NextToken="n")), sso_body({"x": 1}, {"y": 2})] + EMPTYISH
+             sso_body(saml(None), dict(instances(), NextToken="n")),
+             sso_body(saml(None), dict(instances(), nextToken="n")), sso_body({"x": 1}, {"y": 2})] + EMPTYISH
     for bad in cases:
         out = t(bad)
         assert value(out, "isSSOEnabled") is None, bad
@@ -139,6 +140,7 @@ def test_session_never_zero_null_with_collection_error():
              session_body(["PT1H"], inst=()),                   # no instance
              session_body(["PT1H"], inst=("CREATE_IN_PROGRESS",)),
              session_body(["PT1H"], extra={"NextToken": "n"}),  # unread page
+             session_body(["PT1H"], extra={"nextToken": "n"}),  # unread page, lower camel case token
              no_details, short,
              session_body(["1 hour"]), session_body([None]), session_body(["PT"]), session_body(["PTXH"]),
              instances("ACTIVE"),                               # workflow stopped after step 1
