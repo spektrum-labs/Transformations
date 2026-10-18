@@ -156,7 +156,7 @@ def evaluate_policies(input):
 # (evaluated for the reading admin), so "no factor" can be a false positive; the line says so.
 # Fails closed on the naming only: a user list that is missing or an error, a user without an id, a factor list
 # for another user, or results that do not line up with the user list name no one. A capped or partly failed
-# read names only the users read and says what was not read; it never claims the whole estate.
+# read names only the users read and says what was not read; it never claims all assets in scope.
 # Same shape as #891 / #905 / #909: the first reason names at most USER_MAX_NAMED, then "and N more";
 # inputSummary.affectedAccounts carries at most USER_MAX_AFFECTED, with the full count in affectedAccountCount.
 # The verdict never reads any of this, and without the users read (today's workflow) the output is exactly what

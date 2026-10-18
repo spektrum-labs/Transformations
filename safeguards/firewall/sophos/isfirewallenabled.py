@@ -15,11 +15,14 @@ that exclusion is an interpretation: a standby reporting DISCONNECTED is therefo
 excluded, which would let an interpretation pass a fleet whose standby is genuinely down.
 
 - True: the list was read whole, it lists at least one firewall, and every counted firewall has status.connected true.
-- False: the list was read whole and at least one counted firewall has status.connected false.
-- Not evaluated (None, dataCollection error): an error body, a list not read whole (pages.total above pages.current,
-  pages.nextKey present, or a full page of pages.size items with no total to say it was the last), no firewall listed,
-  or a firewall whose status.connected is absent or neither a boolean nor "true"/"false" (an unrecognised shape is
-  not an offline firewall).
+- False: at least one counted firewall was seen with status.connected false. One offline firewall fails the control
+  however many others were not read, so this holds when the list was not read whole or another firewall's status is
+  unreadable. totalFirewalls and connectedFirewalls are then None, because they cover only the part that was read;
+  on a whole read they carry the real counts.
+- Not evaluated (None, dataCollection error), when no offline firewall was seen: an error body, a list not read whole
+  (pages.total above pages.current, pages.nextKey present, or a full page of pages.size items with no total to say it
+  was the last), no firewall listed, or a firewall whose status.connected is absent or neither a boolean nor
+  "true"/"false" (an unrecognised shape is not an offline firewall).
 """
 import json
 from datetime import datetime
@@ -111,9 +114,9 @@ def transform(input):
         if not isinstance(items, list):
             return not_evaluated("The Sophos firewall response carries no items array", validation)
         partial = partial_read(data, items)
-        if partial:
-            return not_evaluated("The Sophos firewall list was not read whole (" + partial + ")", validation)
         if not items:
+            if partial:
+                return not_evaluated("The Sophos firewall list was not read whole (" + partial + ")", validation)
             return not_evaluated("Sophos Central lists no firewalls, so there is nothing to measure", validation)
 
         counted = 0
@@ -141,18 +144,30 @@ def transform(input):
         summary = {"firewalls": len(items), "counted": counted, "connected": connected,
                    "haAuxiliary": auxiliary, "haAuxiliaryOffline": auxiliary_offline,
                    "unreadable": unreadable}
-        result = {CRITERIA_KEY: None, "totalFirewalls": counted, "connectedFirewalls": connected}
+        summary["partialRead"] = bool(partial)
+        if connected < counted:
+            # A counted firewall was seen offline: the fleet fails whatever was not read. The counts are real only
+            # when every firewall was read, so on a partial or unreadable read they are None.
+            if partial or unreadable:
+                why = partial or f"{unreadable} firewall(s) carry no boolean status.connected"
+                return create_response(
+                    {CRITERIA_KEY: False, "totalFirewalls": None, "connectedFirewalls": None}, validation,
+                    failed=[f"{counted - connected} Sophos firewall(s) read are not connected to Sophos Central "
+                            f"(status.connected false). The list was not read whole ({why}), so the offline "
+                            "firewall fails the control and the counts are not reported"], summary=summary)
+            return create_response(
+                {CRITERIA_KEY: False, "totalFirewalls": counted, "connectedFirewalls": connected}, validation,
+                failed=[f"{counted - connected} of {counted} Sophos firewall(s) are not connected to Sophos Central "
+                        "(status.connected false)"], summary=summary)
+        if partial:
+            return not_evaluated("The Sophos firewall list was not read whole (" + partial + ")", validation,
+                                 summary=summary)
         if unreadable:
             return not_evaluated(f"{unreadable} of {len(items)} Sophos firewall(s) carry no boolean status.connected",
                                  validation, summary=summary)
         if not counted:
             return not_evaluated("Sophos Central lists only standby high-availability firewalls", validation,
                                  summary=summary)
-        if connected < counted:
-            result[CRITERIA_KEY] = False
-            return create_response(result, validation, failed=[
-                f"{counted - connected} of {counted} Sophos firewall(s) are not connected to Sophos Central "
-                "(status.connected false)"], summary=summary)
         # Only AFTER the counted firewalls have had their say. A standby is excluded because the
         # docs do not say whether it reports connected, and that is an interpretation rather than
         # a documented rule. The interpretation can only matter where it would flip the verdict
@@ -165,8 +180,8 @@ def transform(input):
                 f"{auxiliary_offline} standby high-availability firewall(s) report status.connected false, and "
                 "the Sophos documentation does not say whether a standby reports itself connected",
                 validation, summary=summary)
-        result[CRITERIA_KEY] = True
-        return create_response(result, validation, passed=[
+        return create_response({CRITERIA_KEY: True, "totalFirewalls": counted, "connectedFirewalls": connected},
+                               validation, passed=[
             f"All {counted} Sophos firewall(s) are connected to Sophos Central (status.connected true)"],
             summary=summary)
     except Exception as e:

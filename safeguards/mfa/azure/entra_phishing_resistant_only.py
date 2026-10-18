@@ -1,5 +1,5 @@
 """isPhishingResistantOnlyEnabled for Microsoft Entra ID (Azure AD and Azure AD One-Click), from the authentication
-methods policy: GET /v1.0/policies/authenticationMethodsPolicy. That is the One-Click method getEstateMFAStatus and
+methods policy: GET /v1.0/policies/authenticationMethodsPolicy. That is the One-Click MFA status method and
 the Azure AD method getAuthenticationMethodsPolicy. Both read the same Graph body, which needs Policy.Read.All
 (already granted for isStrongAuthRequired and authTypesAllowed), so no new permission is involved.
 

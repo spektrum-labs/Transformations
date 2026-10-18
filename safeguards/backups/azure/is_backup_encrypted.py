@@ -5,11 +5,18 @@ Category: Backup / Data Protection
 
 Checks that all Azure backup vaults have encryption configured.
 Azure vaults are always encrypted at rest with Platform Managed Keys (PMK)
-at minimum; this check verifies encryption is present and reports whether
-Customer Managed Keys (CMK) are in use for stronger protection.
+at minimum; this check reports whether Customer Managed Keys (CMK) are in use
+for stronger protection.
 
 Data source: Azure Resource Graph query returning vault encryption settings
 including encryptionMode (PMK/CMK), state, and keyUri.
+
+A vault counts as encrypted only when its row states a recognised mode (CMK, PMK, or the Data
+Protection state Enabled or Disabled). The existence of a vault is not evidence: a row with no
+mode, an empty or Unknown mode, or any other value says nothing about that vault, so the criterion
+is None (Not evaluated) together with a dataCollection error. A vault whose Data Protection state
+is Inconsistent has customer-managed key settings that are not applied consistently, which is a
+real False. Azure Backup has no unencrypted mode, so that is the only False these rows can show.
 """
 
 import json
@@ -101,49 +108,77 @@ def transform(input):
                                  "holding a Recovery Services or Backup vault, then re-run the query."]
             )
 
-        # Parse Resource Graph rows for encryption details
+        # Parse Resource Graph rows for encryption details. A vault counts only when its row states a
+        # recognised mode; the presence of a row is not a reading of the vault's encryption.
         vaults_evaluated = 0
         cmk_vaults = []
         pmk_vaults = []
+        inconsistent_vaults = []
+        unverified_vaults = []
+        recognised_pmk = ("pmk", "enabled", "disabled")
 
         for row in rows:
             if isinstance(row, list):
                 # Expected: name, type, subscriptionId, resourceGroup, location,
                 # encryptionMode, state, infrastructureEncryption, keyUri, kekIdentityType, kekIdentityId
                 vault_name = row[0] if len(row) > 0 else "Unknown"
-                encryption_mode = row[5] if len(row) > 5 else "Unknown"
+                encryption_mode = row[5] if len(row) > 5 else None
             elif isinstance(row, dict):
                 vault_name = row.get("name", "Unknown")
-                encryption_mode = row.get("encryptionMode", "Unknown")
+                encryption_mode = row.get("encryptionMode")
             else:
                 continue
 
             vaults_evaluated += 1
-            if encryption_mode == "CMK":
+            mode = encryption_mode.strip().lower() if isinstance(encryption_mode, str) else ""
+            if mode == "cmk":
                 cmk_vaults.append(vault_name)
-            else:
+            elif mode in recognised_pmk:
                 pmk_vaults.append(vault_name)
+            elif mode == "inconsistent":
+                inconsistent_vaults.append(vault_name)
+            else:
+                unverified_vaults.append(vault_name)
 
-        # All Azure vaults are encrypted (PMK at minimum), so presence = encrypted
-        all_encrypted = vaults_evaluated > 0
+        counts = {"vaultsEvaluated": vaults_evaluated, "cmkVaults": len(cmk_vaults), "pmkVaults": len(pmk_vaults),
+                  "inconsistentVaults": len(inconsistent_vaults), "unverifiedVaults": len(unverified_vaults)}
 
-        if all_encrypted:
-            pass_reasons.append(f"All {vaults_evaluated} backup vaults are encrypted at rest")
+        if vaults_evaluated == 0:
+            return create_response(
+                result=dict({criteriaKey: None}, **counts),
+                validation=validation,
+                api_errors=["isBackupEncrypted not evaluated: the response held no readable vault row"]
+            )
+
+        if inconsistent_vaults:
+            # Stated by Azure: the vault's customer-managed key settings are not applied consistently.
+            all_encrypted = False
+            fail_reasons.append(f"{len(inconsistent_vaults)} backup vault(s) report an inconsistent encryption state")
+            recommendations.append("Repair the customer-managed key settings on the vaults reporting an inconsistent state")
+        elif unverified_vaults:
+            # A row with no recognised mode proves nothing about that vault: not evaluated, never a pass.
+            return create_response(
+                result=dict({criteriaKey: None}, **counts),
+                validation=validation,
+                api_errors=[f"isBackupEncrypted not evaluated: {len(unverified_vaults)} of {vaults_evaluated} vault row(s) "
+                            "state no recognised encryption mode, so their encryption could not be read"],
+                recommendations=["Re-run the Resource Graph vault encryption query and confirm each vault row carries an encryptionMode"]
+            )
+        else:
+            all_encrypted = True
+            pass_reasons.append(f"All {vaults_evaluated} backup vaults state an encryption mode (encrypted at rest)")
             if cmk_vaults:
                 pass_reasons.append(f"{len(cmk_vaults)} vault(s) use Customer Managed Keys (CMK)")
             if pmk_vaults:
                 pass_reasons.append(f"{len(pmk_vaults)} vault(s) use Platform Managed Keys (PMK)")
-        else:
-            fail_reasons.append("No backup vaults found in subscription")
-            recommendations.append("Create Azure backup vaults to protect critical resources")
 
         return create_response(
-            result={criteriaKey: all_encrypted, "vaultsEvaluated": vaults_evaluated, "cmkVaults": len(cmk_vaults), "pmkVaults": len(pmk_vaults)},
+            result=dict({criteriaKey: all_encrypted}, **counts),
             validation=validation,
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"vaultsEvaluated": vaults_evaluated, "cmkCount": len(cmk_vaults), "pmkCount": len(pmk_vaults)}
+            input_summary=dict(counts)
         )
 
     except Exception as e:

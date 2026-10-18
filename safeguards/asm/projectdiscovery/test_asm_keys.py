@@ -137,7 +137,7 @@ class CriticalCountCappedScan(unittest.TestCase):
         self.assertIsNone(tr["criticalVulnerabilityCount"])
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertIn("Only 25 of 45 discovered host(s) of example.com were scanned", info["dataCollection"]["errors"][0])
-        self.assertIn("not a clean estate", info["dataCollection"]["errors"][0])
+        self.assertIn("not proof of no findings in scope", info["dataCollection"]["errors"][0])
 
     def test_numeric_short_without_flag_is_unevaluated(self):
         out = self.full(scan(domainsScanned="25", totalDiscovered="70", domainResults=[]))

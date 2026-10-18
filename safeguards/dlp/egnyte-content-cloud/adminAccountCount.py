@@ -3,7 +3,7 @@ Transformation: adminAccountCount
 Vendor: Egnyte Content Cloud  |  Category: Data Security
 Source: GET /pubapi/v2/users, reading userType per active account
 Measures: how many active accounts hold the Administrator role, and what share of the
-estate that is. Administrators can change permissions on any folder and read any file.
+environment that is. Administrators can change permissions on any folder and read any file.
 """
 import json
 import re
@@ -177,7 +177,7 @@ def evaluate(data):
             )
         elif result["adminAccountPercentage"] and result["adminAccountPercentage"] > 10:
             recs.append(
-                "Administrators are %s%% of the active estate. Review whether each needs "
+                "Administrators are %s%% of the active environment. Review whether each needs "
                 "domain-wide permission and file access, or whether Power User suffices."
                 % result["adminAccountPercentage"]
             )

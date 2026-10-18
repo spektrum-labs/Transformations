@@ -4,10 +4,21 @@ Vendor: Microsoft
 Category: Email Security / Logging
 
 Evaluates if email security logging is enabled.
+
+True when the read returned at least one sign-in entry (an object with at least one field); more pages beyond it
+change nothing, and entries that are null, text, numbers, lists or empty objects are not counted.
+
+Not evaluated (every key None, with a collection error) whenever the body does not prove the answer: a vendor
+error marker, a body that is not a sign-in list (an error body, an empty or null response), an empty sign-in
+list, a list with no readable sign-in entry, malformed or unreadable input, and failed input validation. An empty list proves nothing either way: it is
+both a tenant with no retained sign-ins and a read that was not allowed to see them, and the read carries no date
+window that would make it a stated "no logs". Nothing here can prove logging is off, so there is no False.
 """
 
 import json
 from datetime import datetime
+
+RESULT_KEYS = ("isEmailSecurityLoggingEnabled", "isEmailLoggingEnabled")
 
 
 def extract_input(input_data):
@@ -98,6 +109,18 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+def not_evaluated(validation, api_error, fail_reason, recommendation, transformation_errors=None):
+    """No value beside an error: the None reaches the evaluator as Not evaluated through the collection error."""
+    return create_response(
+        result={key: None for key in RESULT_KEYS},
+        validation=validation,
+        transformation_errors=transformation_errors,
+        api_errors=[api_error],
+        fail_reasons=[fail_reason],
+        recommendations=[recommendation]
+    )
+
+
 def transform(input):
     criteriaKey = "isEmailSecurityLoggingEnabled"
 
@@ -110,50 +133,63 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False, "isEmailLoggingEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+            return not_evaluated(
+                validation,
+                "Could not read the sign-in logs: input validation failed",
+                "Input validation failed",
+                "Re-evaluate this check once the sign-in log read succeeds"
             )
-
 
         # Check for API error (e.g., OAuth failure)
         if isinstance(data, dict) and 'PSError' in data:
-            api_error, recommendation = parse_api_error(data.get('PSError', ''), source="Microsoft 365")
-            return create_response(
-                result={criteriaKey: False},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[api_error],
-                fail_reasons=["Could not retrieve data from Microsoft 365"],
-                recommendations=[recommendation]
+            api_error, recommendation = parse_api_error(str(data.get('PSError') or ''), source="Microsoft 365")
+            return not_evaluated(
+                {"status": "skipped", "errors": [], "warnings": ["API returned error"]},
+                api_error,
+                "Could not retrieve data from Microsoft 365",
+                recommendation
             )
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
+        # A Graph error body, an empty body or a null value is not a sign-in list, so it proves nothing either way.
+        logging_entries = data.get('value') if isinstance(data, dict) else None
+        if not isinstance(logging_entries, list):
+            return not_evaluated(
+                validation,
+                "The sign-in log read did not return a list of sign-ins (error body, missing permission or empty response)",
+                "No sign-in list was returned, so this check could not be evaluated",
+                "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
+            )
+        if len(logging_entries) == 0:
+            return not_evaluated(
+                validation,
+                "The sign-in log read returned no sign-ins (empty list)",
+                "No sign-in was returned, so this check could not be evaluated",
+                "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
+            )
 
-        logging_entries = data.get('value', [])
-        is_enabled = len(logging_entries) > 0
-
-        if is_enabled:
-            pass_reasons.append(f"Email security logging is enabled with {len(logging_entries)} log entries found")
-        else:
-            fail_reasons.append("Email security logging not enabled or no recent entries")
-            recommendations.append("Enable email security logging in Microsoft 365 Security & Compliance Center")
+        # Only an object with at least one field is a sign-in entry; null, text, a number, a list or {} proves nothing.
+        sign_ins = [entry for entry in logging_entries if isinstance(entry, dict) and len(entry) > 0]
+        if len(sign_ins) == 0:
+            return not_evaluated(
+                validation,
+                "The sign-in log read returned no readable sign-in entry (the list holds no object with fields)",
+                "No sign-in entry could be read, so this check could not be evaluated",
+                "Verify the integration can read Microsoft Entra sign-in logs (AuditLog.Read.All), then re-evaluate this check"
+            )
 
         return create_response(
-            result={criteriaKey: is_enabled, "isEmailLoggingEnabled": is_enabled},
+            result={criteriaKey: True, "isEmailLoggingEnabled": True},
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"logEntryCount": len(logging_entries)}
+            pass_reasons=[f"Email security logging is enabled with {len(sign_ins)} log entries found"],
+            input_summary={"logEntryCount": len(sign_ins)}
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False, "isEmailLoggingEnabled": False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+        message = str(e)[:200]  # the text reaches the stored result, so a long one is cut
+        return not_evaluated(
+            {"status": "error", "errors": [], "warnings": []},
+            "Could not evaluate the response",
+            f"Transformation error: {message}",
+            "Re-evaluate this check once the sign-in log read succeeds",
+            transformation_errors=[message]
         )
