@@ -3,6 +3,10 @@ Transformation: isActivityAuditTrailEnabled
 Vendor: OpenAI  |  Category: Artificial Intelligence
 Product: OpenAI API (API Platform)
 Evaluates: The organization audit log is enabled and readable: GET /v1/organization/audit_logs returns at least one event.
+A list with events proves logging is on (OpenAI cannot switch it off once enabled). An empty list proves nothing:
+the Administration API exposes no setting that says whether audit logging is on (the public OpenAPI spec has
+only the list endpoint), so "off" and "on but quiet" look the same. An empty list is reported as not evaluated
+(None with a dataCollection error), never as False.
 API Source: listAuditLogs (GET /v1/organization/audit_logs?limit=1)
 Credential: Admin API key (sk-admin-...). Endpoints confirmed in the OpenAI OpenAPI spec
 (github.com/openai/openai-openapi, security AdminApiKeyAuth).
@@ -167,6 +171,15 @@ def not_measured(validation, reason, recommendation=None, extra=None, summary=No
                            transformation_errors=transformation_errors)
 
 
+def fail(validation, reason, recommendation=None, summary=None, extra=None):
+    result = {KEY: False}
+    if extra:
+        result.update(extra)
+    return create_response(result=result, validation=validation, fail_reasons=[reason],
+                           recommendations=[recommendation] if recommendation else [],
+                           input_summary=summary or {})
+
+
 def refused_or_unrecognised(data, validation, what):
     refusal = detect_refusal(data)
     if refusal:
@@ -199,18 +212,25 @@ def evaluate(input):
     if items is None:
         return refused_or_unrecognised(data, validation, "Audit log")
     events = [e for e in items if isinstance(e.get("type"), str) and e.get("id")]
+    if not items:
+        reason = ("GET /v1/organization/audit_logs returned no events. OpenAI exposes no setting that says whether "
+                  "audit logging is on, so an empty list cannot tell logging that is off from logging that is on "
+                  "but has recorded nothing. The control was not measured.")
+        return create_response(
+            result={KEY: None, "events": 0},
+            validation=validation,
+            api_errors=[reason],
+            recommendations=["Confirm in Organization settings > Data controls that audit logging is on and attach "
+                             "that as evidence, or re-run once the organization has logged activity. Once enabled it "
+                             "cannot be turned off from settings."],
+            input_summary={"events": 0},
+        )
     if not events:
-        # A readable but empty log is not a "no". Audit logging is opt-in and the API
-        # documents no response for "not activated", so an empty list looks the same
-        # whether logging is off or on and quiet. No verdict.
-        return not_measured(validation,
-                            "GET /v1/organization/audit_logs returned no events. Audit logging may be off, or it "
-                            "may be on with nothing logged yet; the API does not say which, so the control was "
-                            "not evaluated.",
-                            "If audit logging is not yet on, an organization owner enables it in Organization "
-                            "settings > Data controls > Data retention. Once enabled it cannot be turned off "
-                            "from settings.",
-                            {"events": 0})
+        return fail(validation,
+                    "GET /v1/organization/audit_logs returned entries but none is a recognisable audit event "
+                    "(no id and type), so nothing proves the trail exists.",
+                    "Inspect the raw integration response.",
+                    {"events": 0})
     newest = events[0]
     ts = as_int(newest.get("effective_at"))
     age = None
