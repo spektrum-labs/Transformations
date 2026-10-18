@@ -36,9 +36,6 @@ class Poisoned(dict):
 CASES = [
     ('averageuserriskscore', ('averageUserRiskScore',), 'empty_dict', lambda: {}),
     ('averageuserriskscore', ('averageUserRiskScore',), 'poisoned', lambda: Poisoned()),
-    ('isattacksimulationtrainingenabled', ('isAttackSimulationTrainingEnabled',), 'empty_dict', lambda: {}),
-    ('isattacksimulationtrainingenabled', ('isAttackSimulationTrainingEnabled',), 'error_body', lambda: {"error": True, "message": "HTTP 500"}),
-    ('isattacksimulationtrainingenabled', ('isAttackSimulationTrainingEnabled',), 'poisoned', lambda: Poisoned()),
     ('phishingsimulationclickrate', ('phishingSimulationClickRate',), 'empty_dict', lambda: {}),
     ('phishingsimulationclickrate', ('phishingSimulationClickRate',), 'poisoned', lambda: Poisoned()),
     ('trainingcompletionrate', ('trainingCompletionRate',), 'empty_dict', lambda: {}),

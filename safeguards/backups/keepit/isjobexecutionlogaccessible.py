@@ -16,9 +16,13 @@
 # says backup). Terminal states: successful, unsuccessful, incomplete, cancelled.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isJobExecutionLogAccessible"
+METHOD = "getDeviceJobs"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when, for every cloud connector, Keepit's /jobs returns at least one finished backup
     job that carries its start time (<started>), its end time (<succeeded>, <failed> or
@@ -26,8 +30,9 @@ def transform(input):
 
     Proves: per-run execution records (start, end, outcome) are retrievable through the API
     for each connector. Does not prove: that the runs succeeded (see
-    backupSuccessRatePercentage). An unreadable body, a connector that was not read, or a
-    connector with no finished backup job in the window answers false.
+    backupSuccessRatePercentage). A connector whose /jobs was read but holds no finished backup
+    job in the window answers false. An unreadable body, a connector that was not read, or an
+    account with no cloud connectors answers None (not measured).
     """
     key = "isJobExecutionLogAccessible"
 
@@ -154,9 +159,9 @@ def transform(input):
     try:
         rows, problem = read_connectors(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return {key: None, "reason": problem}
         if len(rows) == 0:
-            return {key: False, "reason": "The account has no cloud connectors, so no job log was read"}
+            return {key: None, "reason": "The account has no cloud connectors, so no job log was read"}
         with_log = []
         without_log = []
         for r in rows:
@@ -182,4 +187,34 @@ def transform(input):
             "connectorsWithoutJobLog": without_log,
         }
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

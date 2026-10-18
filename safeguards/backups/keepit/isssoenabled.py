@@ -9,9 +9,13 @@
 # Keepit returns an empty <configurations/>, which parses to {"configurations": None}.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isSSOEnabled"
+METHOD = "getSSOConfig"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when at least one Keepit SSO configuration is enabled (<enabled>true</enabled>) and
     applies to the account's own logins or to its sub-accounts (<apply_self>true</apply_self>
@@ -19,7 +23,8 @@ def transform(input):
 
     Proves: Keepit sign-in is federated to an identity provider for this account.
     Does not prove: that password login is switched off (see isSAMLEnforced) or that the
-    identity provider enforces MFA.
+    identity provider enforces MFA. An empty <configurations/> (SSO not configured) answers
+    false; a body without <configurations>, or one that cannot be read, answers None.
     """
     key = "isSSOEnabled"
 
@@ -58,13 +63,13 @@ def transform(input):
                 data = data[wrapper]
 
         if not isinstance(data, dict) or "configurations" not in data:
-            return {key: False, "reason": "Response has no <configurations> element, so SSO could not be read"}
+            return {key: None, "reason": "Response has no <configurations> element, so SSO could not be read"}
 
         block = data.get("configurations")
         if block is None or block == "":
             block = {}
         if not isinstance(block, dict):
-            return {key: False, "reason": "<configurations> element has an unexpected shape"}
+            return {key: None, "reason": "<configurations> element has an unexpected shape"}
 
         configs = [c for c in listify(block.get("configuration")) if isinstance(c, dict)]
         active = []
@@ -86,4 +91,34 @@ def transform(input):
             "activeSsoConfigurations": active,
         }
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

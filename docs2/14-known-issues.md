@@ -117,7 +117,6 @@ Everything here ships to production the moment develop is promoted ([13-release-
 | **The redcanary rename retires 9 production paths** | `cloudsecurity/redcanary/` → `mdr/red-canary/` — on merge, every DB-stored URL into the old path 404s silently. Coordinate with DB-side URL updates or keep the old paths | [04-catalog.md](04-catalog.md) |
 | **qualys reasons divergence** | `develop:safeguards/asm/qualys/knownexploitedvulncount.py:71` still emits "check failed" for the perfect score of 0 (main fixed it in `93a929fd`) — pollutes reasons/recommendations, not provably the verdict; auto-resolves to main's version on a clean merge | [13-release-and-branches.md](13-release-and-branches.md) |
 | **10 colocated pytest files** | 9 `test_*.py` + 1 `conftest.py` inside fetchable `safeguards/` paths; all 10 fail the sandbox's AST validation if ever fetched, and no CI ever runs them | [12-local-development.md](12-local-development.md) |
-| **A production data snapshot in the tree** | `develop:customer_requirements_ef1397e7.json` (root) — a production passport requirements snapshot, orphaned and self-inconsistent (identified by location only); would land on the world-readable main on promotion | [04-catalog.md](04-catalog.md) |
 | **A plural duplicate category** | develop's `firewalls/cisco-meraki-mx/` sits next to main's singular `firewall/` — two spellings of one category, both load-bearing | [04-catalog.md](04-catalog.md) |
 
 ## Platform-side issues that shape this repo's risk

@@ -42,6 +42,10 @@ def criteria_unmeasured(result):
 
 
 VENDOR = "Trend Micro"
+#: dataCollection.errorCode for a value the vendor does not expose (Worry-Free managed agents report no
+#: policy, status, isolation or component version to Vision One). Set only when EVERY unmeasured endpoint is
+#: Worry-Free managed, never on an API error and never when another manager or no agent is the cause.
+VENDOR_DATA_NOT_EXPOSED = "VENDOR_DATA_NOT_EXPOSED"
 CATEGORY = "Endpoint Security"
 
 
@@ -65,7 +69,7 @@ def extract_input(input_data):
 
 def create_response(criteria_key, result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    api_errors=None, additional_findings=None):
+                    api_errors=None, additional_findings=None, error_code=None):
     # A None criterion was not measured. Token-Service grades None as FAILED unless
     # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
     # reason across when the caller did not.
@@ -74,10 +78,13 @@ def create_response(criteria_key, result, validation=None, pass_reasons=None, fa
                       or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    collection = {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []}
+    if error_code and api_errors:
+        collection["errorCode"] = error_code
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
+            "dataCollection": collection,
             "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []), "warnings": validation.get("warnings", [])},
             "transformation": {"status": "error" if (transformation_errors or []) else "success", "errors": transformation_errors or [], "inputSummary": input_summary or {}},
             "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [], "recommendations": recommendations or [], "additionalFindings": additional_findings or []},
@@ -161,6 +168,16 @@ def failure(criteria_key, fail_value, error):
                            transformation_errors=[str(error)], fail_reasons=["Transformation error: " + str(error)])
 
 
+def worry_free_managed(endpoint):
+    """True when the endpoint's protection agent is managed by Worry-Free Business Security, which sends no policy,
+    status, isolation or component version to Vision One. An endpoint with no agent block, a sensor-only placeholder
+    or another manager (Apex One, Server & Workload Protection) is not, so a hidden value there is another cause."""
+    agent = sub(endpoint, "eppAgent")
+    if agent is None:
+        return False
+    return "worry-free" in str(agent.get("protectionManager") or "").lower()
+
+
 def transform(input):
     criteriaKey = "isolatedEndpointCount"
     try:
@@ -169,12 +186,15 @@ def transform(input):
             return failed
         isolated = []
         unknown = []
+        unknown_other = 0
         for e in endpoints:
             status = e.get("isolationStatus")
             if status == "on":
                 isolated.append(endpoint_name(e))
             elif status != "off":
                 unknown.append(endpoint_name(e))
+                if not worry_free_managed(e):
+                    unknown_other = unknown_other + 1
         value = len(isolated) if len(unknown) == 0 else None
         summary = {"totalEndpoints": len(endpoints), "isolatedEndpoints": len(isolated),
                    "isolationUnknown": len(unknown), "sampleIsolated": isolated[:10], "sampleUnknown": unknown[:10]}
@@ -193,6 +213,7 @@ def transform(input):
         return create_response(criteriaKey, {criteriaKey: value, **summary}, validation=validation,
                                pass_reasons=pass_reasons, fail_reasons=fail_reasons,
                                recommendations=recommendations, input_summary=summary,
-                               api_errors=(fail_reasons if value is None else None))
+                               api_errors=(fail_reasons if value is None else None),
+                               error_code=(VENDOR_DATA_NOT_EXPOSED if (value is None and len(unknown) > 0 and unknown_other == 0) else None))
     except Exception as e:
         return failure(criteriaKey, None, e)

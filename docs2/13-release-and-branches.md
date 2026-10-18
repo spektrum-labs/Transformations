@@ -185,7 +185,6 @@ Develop's tip stringifies the `bitLockerStatus` **object** and compares it to st
 
 - **3 sandbox-fatal transforms**: `develop:safeguards/mfa/azure/{areadminaccountsseparate,isadminmfaphishingresistant,ismfaenforced}.py` define top-level underscore-prefixed helpers (`def _as_list` at `develop:safeguards/mfa/azure/ismfaenforced.py:69`, and at `areadminaccountsseparate.py:102`, `isadminmfaphishingresistant.py:117`) — the exact pattern three separate fix cycles — two of them production hotfixes (ENG-463 anthropic, BeyondTrust PRA) — already removed because RestrictedPython rejects underscore-leading names ([03-writing-a-transform.md](03-writing-a-transform.md)). Main's safeguards tree had **zero** such defs until 2026-09-16, when Tenable ASM PRs #558–#560 shipped 26 `asm/tenable/` transforms built entirely on them (`def _parse` at `main:safeguards/asm/tenable/nocriticalfindings.py:19`, `_run` at `:120`) — so the pattern is now broken in production on both branches ([14-known-issues.md](14-known-issues.md)). These three would deploy as permanent `isEvaluated: False`.
 - **10 colocated pytest files** (9 `test_*.py` + 1 `conftest.py`, mostly under `firewall/sonicwall/`): harmless unless a URL is ever minted to them (they fail the sandbox's AST validation), but they ship into production paths and no CI ever runs them.
-- **`customer_requirements_ef1397e7.json`** (root, develop-only): an orphaned, self-inconsistent snapshot nothing reads — it would land on main as noise.
 
 ### What breaks silently: the redcanary rename
 
@@ -258,7 +257,7 @@ Derived directly from the simulation and the failure modes above — this is the
 5. **Review the collision set explicitly.** Diff the 70 both-sides files at the two tips; confirm the 61 byte-identical, and confirm the qualys file resolves to main's version.
 6. **Trace the 9 retired paths before merging.** Check whether any live tenant config references SRN `cloudsecurity/redcanary` (an Integration-Service/tenant-data question — not answerable from this repo). If yes, the rename is a silent outage; keep the old paths or migrate the configs first.
 7. **Decide the anthropic duplication.** Post-merge, both anthropic directories exist; pick one SRN story before tenants can be configured against either.
-8. **Strip the non-transform files.** The 10 pytest files, the fixtures, and `customer_requirements_ef1397e7.json` don't belong on the branch that is production.
+8. **Strip the non-transform files.** The 10 pytest files and the fixtures don't belong on the branch that is production.
 9. **Plan the timing like a deploy, because it is one.** ~300 files go live within ≤300 s + ≤1 h of the merge; the 20 modified files change the behavior of currently-executing production transforms (Microsoft 365 anti-phishing, Cloudflare DNS, ThreatDown ×4, Huntress ×8, Tenable ×2, Darktrace, DNSFilter schema). Rollback is another merge with the same latency.
 
 > [!TIP]

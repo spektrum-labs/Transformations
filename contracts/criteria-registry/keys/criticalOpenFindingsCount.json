@@ -1,0 +1,44 @@
+{
+  "name": "criticalOpenFindingsCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of open findings of Critical severity that a cloud security product reports for the connected cloud estate. Open means not resolved, archived, suppressed or rejected. Lower is better.",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the findings the connected cloud security product holds for the connected estate; the value counts those that are Critical and open",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete, successful read of the product's findings that shows none Critical and open (0). An error or refused answer, an empty or unrecognised body, or a read that may be partial (more pages, a truncation flag, an unreadable finding) cannot show 0 and is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Cloud Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/cloudsecurity/wiz/criticalOpenFindingsCount.py (Wiz GraphQL issues connection; severity CRITICAL and status OPEN or IN_PROGRESS; the vendor schema reference is behind a login, so the field names are those the stored getIssues query selects)",
+    "safeguards/cloudsecurity/awsguardduty/criticalOpenFindingsCount.py (existing implementation: unarchived findings of severity 9.0 and above; not reviewed for this entry)",
+    "safeguards/cloudsecurity/awssecurityhub/criticalopenfindingscount.py, safeguards/cloudsecurity/microsoft-defender-for-cloud/criticalOpenFindingsCount.py, safeguards/cloudsecurity/rapid7-insightcloudsec/criticalopenfindingscount.py (existing implementations; not reviewed for this entry)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-13",
+      "change": "Registered so the Wiz transform can emit it. The meaning is the key name made precise; the other implementations of this name (GuardDuty, Security Hub, Defender for Cloud, InsightCloudSec, AWS Security Agent) were not reviewed for this entry, so the key stays proposed and V0 and the owner is not yet named."
+    }
+  ],
+  "notes": "A 0 here means no open critical findings in what the read shows, not that every resource is scanned: coverage of the estate is a separate question. Each implementation decides what counts as open in its own product; Wiz counts status OPEN and IN_PROGRESS."
+}

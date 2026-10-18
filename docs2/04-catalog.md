@@ -56,7 +56,7 @@ Walkthrough: the minted default can only land in an SRN dir (its path has exactl
 All counts computed from the pinned tips via `git ls-tree` (findings corpus, re-verified 2026-09-16). "Schemas" per directory below include that directory's `schemas/__init__.py`, which is why a schema count is typically methods + 1.
 
 > [!NOTE]
-> The only root-level difference between the branches is develop's `customer_requirements_ef1397e7.json`, a production passport requirements snapshot (identified here by location only). Root tooling (`generate_schemas.py`, `local_tester.py`, README, CONTRIBUTING, CLAUDE.md, `.gitignore`) is byte-identical on both tips.
+> Root tooling (`generate_schemas.py`, `local_tester.py`, README, CONTRIBUTING, CLAUDE.md, `.gitignore`) is byte-identical on both tips.
 
 ## SRN (UUID) directories
 
@@ -546,6 +546,5 @@ For the other side of the skew — the 70 main-only files develop lacks (all 27 
 | `main:README.md:28-91`, `main:CONTRIBUTING.md:56-62`, `main:CLAUDE.md:24-26` | the in-repo registry tables and naming/layout rules (and their violations, per this doc) |
 | Integration-Service `src/models/integrator.py:2601` | mints the lowercased default URL (Integration-Service docs2, execution-lifecycle) |
 | `Token-Service main:src/utils/transformation_url.py`, `src/utils/codeexecutor.py` | allowlist + byte-for-byte fetch + sandbox (token-service docs2, evaluate-engine; [02-execution-contract.md](02-execution-contract.md)) |
-| `customer_requirements_ef1397e7.json` (develop root) | production passport requirements snapshot; its `summary` block (6/6/34) contradicts its body (5 groupings / 5 bundles / 22 criteria) |
 
 Related reading: [01-transformations-overview.md](01-transformations-overview.md) for why the repo is the deployment, [03-writing-a-transform.md](03-writing-a-transform.md) for the file contract these counts obey, [13-release-and-branches.md](13-release-and-branches.md) for the merge mechanics of the develop delta, [14-known-issues.md](14-known-issues.md) for the files in this catalog that are broken in production today, and [GLOSSARY.md](GLOSSARY.md) for terms.

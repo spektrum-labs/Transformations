@@ -1,0 +1,14 @@
+{
+  "EmailMfaConfiguration": {"Message": "Complete your sign-in: use {####}", "Subject": "Your sign-in code"},
+  "MfaConfiguration": "OPTIONAL",
+  "SmsMfaConfiguration": {
+    "SmsAuthenticationMessage": "Do not share this code with anyone. Your code is {####}.",
+    "SmsConfiguration": {
+      "ExternalId": "11111111-2222-3333-4444-555555555555",
+      "SnsCallerArn": "arn:aws:iam::111111111111:role/example-cognito-sms-role",
+      "SnsRegion": "us-east-1"
+    }
+  },
+  "SoftwareTokenMfaConfiguration": {"Enabled": true},
+  "WebAuthnConfiguration": {"RelyingPartyId": "auth.example.com", "UserVerification": "preferred"}
+}

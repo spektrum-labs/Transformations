@@ -10,9 +10,13 @@
 # {"configurations": None} when SSO is not configured.
 
 import json
+from datetime import datetime, timezone
+
+KEY = "isSAMLEnforced"
+METHOD = "getSSOConfig"
 
 
-def transform(input):
+def transform_bare(input):
     """
     True when at least one Keepit SSO configuration is enabled, is not optional
     (<optional>false</optional>, so users cannot fall back to a password), and applies both to
@@ -22,6 +26,8 @@ def transform(input):
 
     Proves: Keepit requires IdP (SAML) sign-in for the account and its users.
     Does not prove: the state of any per-user break-glass exemption, or MFA at the IdP.
+    An empty <configurations/> (SSO not configured) answers false; a body without
+    <configurations>, or one that cannot be read, answers None.
     """
     key = "isSAMLEnforced"
 
@@ -60,13 +66,13 @@ def transform(input):
                 data = data[wrapper]
 
         if not isinstance(data, dict) or "configurations" not in data:
-            return {key: False, "reason": "Response has no <configurations> element, so SSO could not be read"}
+            return {key: None, "reason": "Response has no <configurations> element, so SSO could not be read"}
 
         block = data.get("configurations")
         if block is None or block == "":
             block = {}
         if not isinstance(block, dict):
-            return {key: False, "reason": "<configurations> element has an unexpected shape"}
+            return {key: None, "reason": "<configurations> element has an unexpected shape"}
 
         configs = [c for c in listify(block.get("configuration")) if isinstance(c, dict)]
         enforcing = []
@@ -102,4 +108,34 @@ def transform(input):
             "configurationGaps": gaps,
         }
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return {key: None, "error": str(e)}
+
+
+def envelope(key, method, bare):
+    """Wrap a bare result in the platform envelope.
+
+    Whether the criterion was measured is read from its value alone: None means the body could
+    not answer the check, so dataCollection reports an error and Token-Service does not grade
+    it. Every other value, including a measured False, reports success.
+    """
+    value = bare.get(key)
+    reason = str(bare.get("reason") or bare.get("error") or "The response could not answer this check")
+    measured = value is not None
+    passed = value is True or value == "confirmed"
+    return {
+        "transformedResponse": bare,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Keepit", "product": "Keepit", "method": method,
+                         "evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0"},
+        },
+    }
+
+
+def transform(input):
+    """transform_bare() in the platform envelope; a None criterion reports a dataCollection error."""
+    return envelope(KEY, METHOD, transform_bare(input))

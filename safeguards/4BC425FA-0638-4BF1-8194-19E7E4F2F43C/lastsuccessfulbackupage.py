@@ -20,20 +20,6 @@ This file previously held an Azure Recovery Services transform that read Azure-o
 import json
 from datetime import datetime, timezone
 
-#: The criteria this file answers. A None among them means "not measured", never "failed".
-NONE_MEANS_NOT_EVALUATED = ('lastSuccessfulBackupAge',)
-
-
-def criteria_unmeasured(result):
-    """True when every criterion this file answers that the result carries is None.
-
-    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
-    is "error". The status is read per response, so it is set only when no criterion in the
-    result was measured; marking a partly measured result would hide the measured ones.
-    """
-    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
-    return len(present) > 0 and all(result[k] is None for k in present)
-
 CRITERIA_KEY = "lastSuccessfulBackupAge"
 
 
@@ -58,20 +44,18 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
-    # A None criterion was not measured. Token-Service grades None as FAILED unless
-    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
-    # reason across when the caller did not.
-    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
-        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
-                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
+    # Not measured is read off the criterion's value, so every path that leaves it None -- the
+    # except branch included -- reaches Token-Service as not evaluated rather than as a gap.
+    measured = result.get(CRITERIA_KEY) is not None
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else (api_errors or fail_reasons or transformation_errors
+                                               or ["The response could not answer this check, so it was not evaluated."])
             },
             "validation": {
                 "status": validation.get("status", "unknown"),

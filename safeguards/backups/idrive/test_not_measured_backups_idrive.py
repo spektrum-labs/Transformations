@@ -87,6 +87,12 @@ def device(last_backup):
     return {"data": [{"device_id": "d1", "backup_status": "success", "last_backup": last_backup, "next_backup": "2026-10-08"}]}
 
 
+def devices(*statuses):
+    """getDeviceSummary records, one per backup_status (the counts read device status, not plans)."""
+    return {"data": [{"device_id": "d" + str(i), "backup_status": s, "last_backup": "2026-10-06", "next_backup": "2026-10-08"}
+                     for i, s in enumerate(statuses)]}
+
+
 def company(required):
     return {"company_id": 1, "name": "c", "configuration_id": b64json({"encryptionRequired": required})}
 
@@ -117,12 +123,12 @@ MEASURED = {
         ("distinct_sub_ids", lambda: {"company_id": 1, "name": "c", "sub_company_list": [{"company_id": 2}]}, True),
     ],
     "failedBackupJobsCount": [
-        ("no_failures", lambda: plan(backup_failed_on=[]), 0),
-        ("two_failures", lambda: plan(backup_failed_on=["dev-a", "dev-b"]), 2),
+        ("no_failures", lambda: devices("Success", "Success"), 0),
+        ("two_failures", lambda: devices("Failure", "Failure", "Success"), 2),
     ],
     "backupSuccessRatePercentage": [
-        ("all_failed", lambda: plan(backup_applied_on=[], backup_failed_on=["dev-a"]), 0.0),
-        ("three_of_four", lambda: plan(backup_applied_on=["dev-a", "dev-b", "dev-c"], backup_failed_on=["dev-d"]), 75.0),
+        ("all_failed", lambda: devices("Failure"), 0.0),
+        ("three_of_four", lambda: devices("Success", "Success", "Success", "Failure"), 75.0),
     ],
     "staleProtectionJobsCount": [
         ("healthy", lambda: {"data": [{"device_id": "d1", "backup_status": "success", "last_backup": days_ago(1, "%Y-%m-%d %H:%M:%S"), "next_backup": days_ago(-1, "%Y-%m-%d %H:%M:%S")}]}, 0),
@@ -175,10 +181,10 @@ class NotMeasuredIsNotGraded(unittest.TestCase):
 # count must be None with a dataCollection error -- never 0, which a "0 failed" requirement grades
 # as a pass. Field names follow the IDrive getBackupPlan / getDeviceSummary bodies the transforms read.
 COUNT_FIELDS = {
-    "failedBackupJobsCount": ("backup_failed_on",),
-    "backupSuccessRatePercentage": ("backup_applied_on", "backup_failed_on"),
     "unprotectedResourcesCount": ("backup_pending_on",),
 }
+# Files that read getDeviceSummary records rather than backup plans.
+DEVICE_FILES = ("failedBackupJobsCount", "backupSuccessRatePercentage", "staleProtectionJobsCount")
 
 
 def plan_with(fields, value):
@@ -202,7 +208,16 @@ def count_not_measured_cases(name):
         ("data_empty_string", lambda: {"data": ""}),
         ("unreadable_body", lambda: "<html>bad gateway</html>"),
     ]
-    if name == "staleProtectionJobsCount":
+    if name in ("failedBackupJobsCount", "backupSuccessRatePercentage"):
+        cases = cases[:2] + cases[3:] + [
+            ("missing_status", lambda: {"data": [{"device_id": "d1"}]}),
+            ("no_device_has_a_status", lambda: {"data": [{"device_id": "d1", "backup_status": None}]}),
+            ("one_device_unreadable", lambda: {"data": [{"device_id": "d1", "backup_status": "Success"}, {"device_id": "d2"}]}),
+            ("truncated", lambda: dict(devices("Success"), paginationTruncated=True)),
+        ]
+        if name == "backupSuccessRatePercentage":
+            cases = cases + [("no_attempts", lambda: devices("In Progress"))]
+    elif name == "staleProtectionJobsCount":
         cases = cases[:2] + cases[3:] + [
             ("missing_count", lambda: {"data": [{"device_id": "d1"}]}),
             ("empty_count", lambda: {"data": [{"device_id": "d1", "backup_status": "", "last_backup": None, "next_backup": ""}]}),
@@ -281,10 +296,65 @@ class CountsFailClosed(unittest.TestCase):
 
     def test_real_zero_through_a_wrapper(self):
         # The enriched {"data", "validation"} input and an apiResponse wrapper must still measure.
-        body = {"data": plan(backup_failed_on=[]), "validation": {"status": "valid", "errors": [], "warnings": []}}
+        body = {"data": devices("Success"), "validation": {"status": "valid", "errors": [], "warnings": []}}
         self.assertEqual(run("failedBackupJobsCount", "failedBackupJobsCount", body)[0], 0)
         body = {"apiResponse": {"data": [{"id": "p", "backup_pending_on": ["dev-a"]}]}}
         self.assertEqual(run("unprotectedResourcesCount", "unprotectedResourcesCount", body)[0], 1)
+
+
+
+# Counts derived from a read that measured nothing. In a not-measured result these must be None, not
+# the 0 the loop started from, wherever they are published (inputSummary and the transformedResponse
+# side fields). Record counts (plans or devices scanned) are real and stay as read.
+DERIVED_COUNTS = {
+    "failedBackupJobsCount": ("failedDevices",),
+    "backupSuccessRatePercentage": ("successfulDevices", "failedDevices", "attempted"),
+    "staleProtectionJobsCount": ("staleDevices",),
+    "unprotectedResourcesCount": ("totalDevicesAssignedToPlans", "totalPendingDeviceIds"),
+}
+
+# Bodies whose counts were fully read even though the criterion is not measured.
+COUNTS_WERE_READ = {("backupSuccessRatePercentage", "no_attempts"), ("backupSuccessRatePercentage", "no_device_has_a_status")}
+
+VENDOR_TEXT = "vendor-detail-" + "x" * 300
+
+
+class NotMeasuredDetail(unittest.TestCase):
+    def test_derived_counts_are_none_when_not_measured(self):
+        for name in COUNT_FILES:
+            for case, body in count_not_measured_cases(name):
+                if (name, case) in COUNTS_WERE_READ:
+                    continue
+                with self.subTest(transform=name, body=case):
+                    out = load(name).transform(body())
+                    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+                    result = out["transformedResponse"]
+                    for field in DERIVED_COUNTS[name]:
+                        if field in summary:
+                            self.assertIsNone(summary[field], "inputSummary." + field)
+                        if field in result and field != name:
+                            self.assertIsNone(result[field], "transformedResponse." + field)
+
+    def test_derived_counts_stay_as_read_when_measured(self):
+        for name in COUNT_FILES:
+            for case, body, _expected in MEASURED[name]:
+                with self.subTest(transform=name, body=case):
+                    summary = load(name).transform(body())["additionalInfo"]["transformation"]["inputSummary"]
+                    for field in DERIVED_COUNTS[name]:
+                        if field in summary:
+                            self.assertIsInstance(summary[field], int)
+                            self.assertNotIsInstance(summary[field], bool)
+
+    def test_error_reason_does_not_echo_vendor_text(self):
+        for name in COUNT_FILES:
+            for body in ({"error": VENDOR_TEXT}, {"error": {"message": VENDOR_TEXT}},
+                         {"errors": [VENDOR_TEXT]}, {"Error": {"Code": "AccessDenied", "Message": VENDOR_TEXT}}):
+                with self.subTest(transform=name, body=str(body)[:40]):
+                    out = load(name).transform(body)
+                    self.assertIsNone(out["transformedResponse"][name])
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                    self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                    self.assertNotIn("vendor-detail", json.dumps(out))
 
 
 if __name__ == "__main__":

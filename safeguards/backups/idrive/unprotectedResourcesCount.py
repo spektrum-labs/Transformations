@@ -12,7 +12,7 @@ def error_reason(body):
     for key in ("error", "Error", "errors"):
         err = body.get(key)
         if err:
-            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured: " + str(err)[:200]
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
     for key in ("statusCode", "status_code", "status", "httpStatus"):
         code = body.get(key)
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
@@ -189,6 +189,12 @@ def evaluate(input):
         recommendations = [
             "Assign and apply a backup plan to the pending devices so they are actively protected."
         ]
+
+    if result_count is None:
+        # Not measured: the derived counts were never read, so they are not 0.
+        total_devices_in_plans = None
+        input_summary["totalDevicesAssignedToPlans"] = None
+        input_summary["totalPendingDeviceIds"] = None
 
     result = {
         "unprotectedResourcesCount": result_count,
