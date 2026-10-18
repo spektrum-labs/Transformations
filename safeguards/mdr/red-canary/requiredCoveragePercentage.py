@@ -12,8 +12,8 @@ Both come from GET /openapi/v3/endpoints. The threshold lives in the bundle crit
 
 2026-10-02: the previous version divided the number of listed endpoints by an "expected fleet"
 it looked for in the response body. The body never carries one, so the expected count fell back
-to the listed count and every tenant read 100%, whatever monitoring_status said (Ethico 107 of
-194 monitored, Gohlke 18 of 21, Kingsmen 5 of 10 all read 100%). It now reads monitoring_status.
+to the listed count and every tenant read 100%, whatever monitoring_status said (fleets with about half,
+most or half of their endpoints monitored all read 100%). It now reads monitoring_status.
 
 A read that cannot show the whole census -- empty, an error, cut short, or records that do not
 report a monitoring_status -- is Unevaluated with the reason: never 100% and never 0%.
