@@ -1,0 +1,40 @@
+{
+  "name": "isLinkBrandingValid",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the email service has at least one branded link domain and every branded domain has a valid record, so tracked links in mail point at the company's own domain instead of a shared service address.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the branded link domains in one email-service account; denominator = every domain the read lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the account's link branding records showing every domain valid; a cut-off, error, 401/403 or unrecognised read is Not evaluated. An empty list is a real read of no branding and is False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Email Security",
+    "Messaging Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "SendGrid API reference, Link Branding (twilio.com/docs/sendgrid/api-reference/link-branding): GET /v3/whitelabel/links returns valid and the dns records per domain"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written from the public SendGrid API reference and one read of a real account (read-only); no replay-backed validation yet, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Judges the service's own report that the DNS records resolve (valid). Stale invalid duplicates beside a valid record are a finding. Messaging Security is allowed too because the SendGrid integration is catalogued under communication (Messaging Security)."
+}

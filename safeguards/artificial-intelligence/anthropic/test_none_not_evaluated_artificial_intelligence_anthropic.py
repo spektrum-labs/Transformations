@@ -36,6 +36,9 @@ class Poisoned(dict):
 CASES = [
     ('iscodeexecutionnetworkegressenabled', ('isCodeExecutionNetworkEgressEnabled',), 'list_of_empty', lambda: [{}]),
     ('iscodeexecutionnetworkegressenabled', ('isCodeExecutionNetworkEgressEnabled',), 'poisoned', lambda: Poisoned()),
+    ('isgroupprovisioningmanaged', ('isGroupProvisioningManaged',), 'empty groups', lambda: {'data': [], 'has_more': False}),
+    ('isgroupprovisioningmanaged', ('isGroupProvisioningManaged',), 'refused', lambda: {'error': True, 'statusCode': 403}),
+    ('isgroupprovisioningmanaged', ('isGroupProvisioningManaged',), 'poisoned', lambda: Poisoned()),
 ]
 
 
