@@ -1,7 +1,7 @@
 """Defender for Endpoint (One-Click) with an empty machine inventory is Not evaluated, never a fail.
 
 A readable inventory with no eligible machine (empty, or only excluded/unsupported records) proves nothing
-about the estate, so the one-click, isEPPConfigured, EDR and server coverage checks answer None with a dataCollection error
+about the environment, so the one-click, isEPPConfigured, EDR and server coverage checks answer None with a dataCollection error
 ("Defender has no onboarded devices"); the onboard-or-disconnect hint is guidance only. Eligible machines
 with none onboarded is still a definite result. Error bodies,
 unread pages and the advanced-hunting checks stay not evaluated. Tenants with onboarded machines keep
@@ -176,9 +176,16 @@ def test_assessment_with_no_applicable_device_names_the_count():
 
 def test_onboarded_fleet_values_are_unchanged():
     tr = out(ONECLICK, FLEET)["transformedResponse"]
-    assert tr == {"isEPPEnabled": True, "isEPPConfigured": False, "isEPPLoggingEnabled": False,
-                  "requiredCoveragePercentage": 75, "serverCoveragePercentage": 50, "totalEndpointCount": 4,
-                  "totalServerCount": 2, "eligibleDevices": 4, "protectedDevices": 3, "reportingDevices": 2}
+    # The edr* split fields are additive (test_defender_server_workstation_coverage.py); every
+    # field that existed before keeps its value, compared strictly.
+    split = ("edrServerCoveragePercentage", "edrWorkstationCoveragePercentage", "edrTotalServerCount",
+             "edrProtectedServerCount", "edrTotalWorkstationCount", "edrProtectedWorkstationCount",
+             "edrUnclassifiedDeviceCount")
+    assert {k: v for k, v in tr.items() if k not in split} == {
+        "isEPPEnabled": True, "isEPPConfigured": False, "isEPPLoggingEnabled": False,
+        "requiredCoveragePercentage": 75, "serverCoveragePercentage": 50, "totalEndpointCount": 4,
+        "totalServerCount": 2, "eligibleDevices": 4, "protectedDevices": 3, "reportingDevices": 2}
+    assert set(split) <= set(tr)
     assert value(CONFIGURED, FLEET, "isEPPConfigured") == 100
     assert value(EDR, FLEET, "isEDRDeployed") is True
     assert value(SERVER, FLEET, "serverCoveragePercentage") == 50

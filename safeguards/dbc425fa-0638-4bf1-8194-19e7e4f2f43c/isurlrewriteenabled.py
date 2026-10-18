@@ -10,6 +10,10 @@ equivalent control is the Gmail "Links and external images" safety policy, which
 scans links behind shorteners and warns on untrusted links. It is exposed by the
 Cloud Identity Policy API as settings/gmail.links_and_external_images.
 
+Google returns several policies for the setting on one org unit (SYSTEM defaults for unlicensed and
+licensed entities, and any ADMIN override) and applies the one with the greatest policyQuery.sortOrder;
+only that policy is judged per org unit or group.
+
 Previously this transform read a top-level "urlRewrite" field from the mail-server
 DNS tool, which never returns one, so the criterion was false for every customer.
 """
@@ -80,6 +84,37 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def as_order(value):
+    """policyQuery.sortOrder as a number; None when unreadable. Integration-Service hands scalars over as strings."""
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def in_force(records):
+    """Split matching policy records into the ones Google applies and the ones they supersede.
+
+    For one setting on one org unit (or group) Google returns several policies: the SYSTEM default for
+    entities without a Gmail licence, the SYSTEM default for licensed users, and any ADMIN override. It
+    resolves them by precedence: the policy with the greatest policyQuery.sortOrder is the one in force
+    (Policy API concepts, Max reducer), so only that one is judged. Equal sortOrders on one target, and a
+    sortOrder that cannot be read, are all judged (fail closed). Returns (judged, superseded).
+    """
+    top = {}
+    for rec in records:
+        if rec["order"] is not None and (rec["orgUnit"] not in top or rec["order"] > top[rec["orgUnit"]]):
+            top[rec["orgUnit"]] = rec["order"]
+    judged = []
+    superseded = []
+    for rec in records:
+        if rec["order"] is None or rec["orgUnit"] not in top or rec["order"] >= top[rec["orgUnit"]]:
+            judged.append(rec)
+        else:
+            superseded.append(rec)
+    return judged, superseded
+
+
 def transform(input):
     criteriaKey = "isURLRewriteEnabled"
 
@@ -110,8 +145,9 @@ def transform(input):
             # Token-Service can hand list-shaped API data straight through
             policies = data
 
-        # Collect every link-protection policy. Google returns one per org unit,
-        # so the tenant is only covered if all of them have link checking on.
+        # Collect every link-protection policy. Google returns several per org unit (SYSTEM defaults and
+        # any ADMIN override); only the one in force on each org unit is judged, and the tenant is covered
+        # when every one of those has link checking on.
         link_policies = []
         for policy in policies:
             if not isinstance(policy, dict):
@@ -121,10 +157,18 @@ def transform(input):
                 continue
             if str(setting.get("type", "")).endswith(SETTING_TYPE):
                 value = setting.get("value", {})
+                query = policy.get("policyQuery") if isinstance(policy.get("policyQuery"), dict) else {}
+                target = str(query.get("orgUnit") or "unknown")
+                if query.get("group"):
+                    target = target + " " + str(query.get("group"))
                 link_policies.append({
-                    "orgUnit": policy.get("policyQuery", {}).get("orgUnit", "unknown"),
-                    "value": value if isinstance(value, dict) else {}
+                    "orgUnit": target,
+                    "value": value if isinstance(value, dict) else {},
+                    "order": as_order(query.get("sortOrder")),
+                    "policyType": str(policy.get("type") or "")
                 })
+        # Judge only the policy in force on each org unit or group; Google's own precedence decides which.
+        link_policies, superseded = in_force(link_policies)
 
         enabled_count = 0
         disabled_fields = []
@@ -142,7 +186,9 @@ def transform(input):
             additional_findings.append({
                 "metric": entry["orgUnit"],
                 "value": entry_enabled,
-                "reason": "Link checking enabled" if entry_enabled else "Link checking not fully enabled"
+                "reason": "Link checking enabled" if entry_enabled else "Link checking not fully enabled",
+                "policyType": entry["policyType"],
+                "sortOrder": entry["order"]
             })
 
         is_url_rewrite_enabled = len(link_policies) > 0 and enabled_count == len(link_policies)
@@ -182,7 +228,8 @@ def transform(input):
             input_summary={
                 "totalPolicies": len(policies),
                 "linkPolicies": len(link_policies),
-                "enabledPolicies": enabled_count
+                "enabledPolicies": enabled_count,
+                "supersededPolicies": len(superseded)
             }
         )
 

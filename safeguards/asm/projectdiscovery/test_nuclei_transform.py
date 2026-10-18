@@ -91,7 +91,7 @@ class NucleiTransformTest(unittest.TestCase):
         self.assertIsNone(tr["noHighFindings"])
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertIn("Only 25 of 45 discovered host(s) of example.com were scanned", info["dataCollection"]["errors"][0])
-        self.assertIn("not a clean estate", info["dataCollection"]["errors"][0])
+        self.assertIn("not proof of no findings in scope", info["dataCollection"]["errors"][0])
         self.assertEqual(info["transformation"]["inputSummary"]["totalDiscovered"], 45)
 
     def test_numeric_cap_without_flag_is_unevaluated(self):

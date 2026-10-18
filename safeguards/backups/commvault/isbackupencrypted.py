@@ -8,11 +8,32 @@
 # Docs:   https://github.com/Commvault/CVPowershellSDKV2/blob/main/OpenAPI3.yaml (Commvault's published V4 OpenAPI 3 spec)
 #         GetDiskStorageDetails / GetCloudStorageById: encryption.encrypt, encryption.cipher (BlowFish, AES, DES3,
 #         GOST, Serpent, Twofish), encryption.keyLength.
-# A pool list whose detail bodies are missing or a different count is refused (part of the estate unread).
+# A pool list whose detail bodies are missing or a different count is refused (part of the assets in scope unread).
 #
 # Every method sends Accept: application/json and authenticates with the Login token in the Authtoken header.
 
 import json
+
+
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
 
 
 def transform(input):
@@ -119,13 +140,13 @@ def transform(input):
     try:
         disk, cloud, problem = read_all(input)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         allp = disk + cloud
         if len(allp) == 0:
-            return {key: False, "reason": "No disk or cloud storage pool exists"}
+            return respond(key, False, "No disk or cloud storage pool exists")
         bad = [str(b.get("name") or b.get("id")) for b in allp if not encrypted(b)]
         if bad:
-            return {key: False, "reason": str(len(bad)) + " of " + str(len(allp)) + " storage pools are not encrypted", "unencryptedPools": bad[:25]}
-        return {key: True, "reason": "All " + str(len(allp)) + " disk and cloud storage pools are encrypted"}
+            return respond(key, False, str(len(bad)) + " of " + str(len(allp)) + " storage pools are not encrypted", {"unencryptedPools": bad[:25]})
+        return respond(key, True, "All " + str(len(allp)) + " disk and cloud storage pools are encrypted")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})
