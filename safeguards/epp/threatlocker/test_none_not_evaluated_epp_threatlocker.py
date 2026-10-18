@@ -36,6 +36,8 @@ class Poisoned(dict):
 CASES = [
     ('pendingapprovalrequestcount', ('pendingApprovalRequestCount',), 'empty_dict', lambda: {}),
     ('pendingapprovalrequestcount', ('pendingApprovalRequestCount',), 'poisoned', lambda: Poisoned()),
+    ('isDefaultDenyApplicationControlEnabled', ('isDefaultDenyApplicationControlEnabled',), 'empty_dict', lambda: {}),
+    ('isDefaultDenyApplicationControlEnabled', ('isDefaultDenyApplicationControlEnabled',), 'poisoned', lambda: Poisoned()),
 ]
 
 
