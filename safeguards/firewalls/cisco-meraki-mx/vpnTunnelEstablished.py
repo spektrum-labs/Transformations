@@ -100,6 +100,15 @@ def network_status_objects(data):
     return [n for n in networks if isinstance(n, dict) and any(k in n for k in keys)]
 
 
+def peer_list(value):
+    """(peers, readable): a peer list is a list. Absent or null is no peers; anything else is unreadable."""
+    if value is None:
+        return [], True
+    if isinstance(value, list):
+        return value, True
+    return [], False
+
+
 def transform(input):
     data, validation = extract_input(input)
     networks = network_status_objects(data)
@@ -113,13 +122,16 @@ def transform(input):
     unreachable_names = []
     reachable_names = []
     networks_with_peers = 0
+    unreadable = []
 
     for net in networks:
         if not isinstance(net, dict):
             continue
         network_name = net.get("networkName") or net.get("networkId") or "unknown-network"
-        meraki_peers = net.get("merakiVpnPeers") or []
-        third_peers = net.get("thirdPartyVpnPeers") or []
+        meraki_peers, meraki_ok = peer_list(net.get("merakiVpnPeers"))
+        third_peers, third_ok = peer_list(net.get("thirdPartyVpnPeers"))
+        if not (meraki_ok and third_ok):
+            unreadable.append(str(network_name))
         peers = list(meraki_peers) + list(third_peers)
         if peers:
             networks_with_peers = networks_with_peers + 1
@@ -136,6 +148,16 @@ def transform(input):
                 unreachable_names.append(f"{network_name}:{peer_name}:{reachability}")
 
     vpn_tunnel_established = reachable_peers > 0
+
+    if unreadable and not vpn_tunnel_established:
+        # A reachable peer proves a tunnel whatever else is in the body; without one, the network
+        # whose peer list could not be read might hold it, so "no tunnel" is not proven.
+        return not_measured(
+            "The VPN peer list of %d of %d network(s) could not be read (%s), and no reachable peer "
+            "was found in the others, so it cannot be confirmed that no tunnel is established."
+            % (len(unreadable), len(networks), ", ".join(unreadable[:10])),
+            validation,
+        )
 
     input_summary = {
         "networksEvaluated": len(networks),

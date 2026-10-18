@@ -98,6 +98,15 @@ def network_status_objects(data):
     return [n for n in networks if isinstance(n, dict) and any(k in n for k in keys)]
 
 
+def peer_list(value):
+    """(peers, readable): a peer list is a list. Absent or null is no peers; anything else is unreadable."""
+    if value is None:
+        return [], True
+    if isinstance(value, list):
+        return value, True
+    return [], False
+
+
 def transform(input):
     data, validation = extract_input(input)
     networks = network_status_objects(data)
@@ -110,14 +119,17 @@ def transform(input):
     reachable_peers = 0
     unreachable_names = []
     network_names_seen = []
+    unreadable = []
 
     for net in networks:
         if not isinstance(net, dict):
             continue
         net_name = net.get("networkName") or net.get("networkId") or "unknown-network"
         network_names_seen.append(net_name)
-        meraki_peers = net.get("merakiVpnPeers") or []
-        third_party_peers = net.get("thirdPartyVpnPeers") or []
+        meraki_peers, meraki_ok = peer_list(net.get("merakiVpnPeers"))
+        third_party_peers, third_ok = peer_list(net.get("thirdPartyVpnPeers"))
+        if not (meraki_ok and third_ok):
+            unreadable.append(str(net_name))
         all_peers = list(meraki_peers) + list(third_party_peers)
         for peer in all_peers:
             if not isinstance(peer, dict):
@@ -129,6 +141,13 @@ def transform(input):
             else:
                 peer_name = peer.get("name") or peer.get("publicIp") or "unknown-peer"
                 unreachable_names.append(f"{net_name}:{peer_name}({reachability})")
+
+    if unreadable:
+        return not_measured(
+            "The VPN peer list of %d of %d network(s) could not be read (%s), so the share of "
+            "reachable peers cannot be measured." % (len(unreadable), len(network_names_seen), ", ".join(unreadable[:10])),
+            validation,
+        )
 
     if total_peers == 0:
         percentage = 0.0
