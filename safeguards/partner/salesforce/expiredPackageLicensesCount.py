@@ -3,7 +3,8 @@
 
 Counts installed package licences whose Status is Expired. An expired package licence leaves an installed app
 unlicensed and unsupported. Measured only on a complete query result; an org with no package licence reads as zero.
-A positive count is always reported; a zero is reported only when every record carried a Status, else not measured (None).
+The count is reported only when every record carried a Status, else not measured (None): a count beside a missing Status
+is only a lower bound.
 """
 import json
 from datetime import datetime
