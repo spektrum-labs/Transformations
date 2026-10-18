@@ -1,6 +1,6 @@
 """isLegacyAuthBlocked reads Cloud Identity Policy API security.less_secure_apps policies (getLessSecureAppsPolicies).
 
-Fixture shape mirrors a stored Workspace policy read (estate A, 2026-10-01), with every id, customer and
+Fixture shape mirrors a stored Workspace policy read (2026-10-01), with every id, customer and
 group replaced by synthetic values: Integration-Service stringifies scalars ("False", "201.00183"); the root
 org unit carries a SYSTEM policy that allows less secure apps and a later ADMIN policy that turns them off;
 two child org units and one group carry ADMIN policies that allow them.

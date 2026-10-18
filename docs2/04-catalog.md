@@ -11,7 +11,7 @@
 - **Two addressing schemes coexist**: SRN dirs are the targets of Integration-Service's [minted default URLs](GLOSSARY.md#minted-url) (`safeguards/{srn.lower()}/{key.lower()}.py`); category/vendor paths are reached only by explicit [`retrievalTransformationArray` ("RTA")](GLOSSARY.md#exact-case-db-url)/criteria-mapping URLs stored in the DB and fetched byte-for-byte.
 - **Reachability is a casing question**: raw.githubusercontent.com paths are case-sensitive, 10 of the 22 SRN dirs are committed UPPERCASE, and 59 main method files are camelCase — every one of those paths 404s under the lowercased minted default (curl-verified 2026-09-16, including the GitHub files new on main).
 - **The registry is incomplete and dead weight**: `safeguards/registry.json` names 19 of 22 SRN dirs (last touched 2026-02-06) and nothing machine-reads it.
-- **Develop stages 275 more files** — 131 new transform modules, 126 schemas, 10 test files, 8 JSON fixtures — including two whole new category dirs (`firewalls/`, sic, and `threat-vulnerability-management/`) and a URL-breaking `cloudsecurity/redcanary` → `mdr/red-canary` rename. (`mobile-security/` left this list on 2026-09-04 via the Lookout hotfix PR #548, and `devsecops/` on 2026-09-14 when ENG-576 twin-landed `github/` on main byte-identical; see [13-release-and-branches.md](13-release-and-branches.md).)
+- **Develop stages 275 more files** — 131 new transform modules, 126 schemas, 10 test files, 8 JSON fixtures — including two whole new category dirs (`firewalls/`, sic, and `threat-vulnerability-management/`) and a URL-breaking `cloudsecurity/redcanary` → `mdr/red-canary` rename. (`mobile-security/` left this list on 2026-09-04 via the Lookout hotfix PR #548, and `devsecops/` on 2026-09-14 when ENG-576 landed `github/` on main as a paired PR, byte-identical; see [13-release-and-branches.md](13-release-and-branches.md).)
 - **Main also has 70 files develop lacks** (the whole `artificial-intelligence/anthropic/` set and the 27-file `asm/tenable/` set among them) — the skew is bidirectional; see [13-release-and-branches.md](13-release-and-branches.md).
 
 Two URL sources feed Token-Service's fetch, and they see different halves of the tree:
@@ -56,7 +56,7 @@ Walkthrough: the minted default can only land in an SRN dir (its path has exactl
 All counts computed from the pinned tips via `git ls-tree` (findings corpus, re-verified 2026-09-16). "Schemas" per directory below include that directory's `schemas/__init__.py`, which is why a schema count is typically methods + 1.
 
 > [!NOTE]
-> The only root-level difference between the branches is develop's `customer_requirements_ef1397e7.json`, a production passport requirements snapshot (identified here by location only). Root tooling (`generate_schemas.py`, `local_tester.py`, README, CONTRIBUTING, CLAUDE.md, `.gitignore`) is byte-identical on both tips.
+> Root tooling (`generate_schemas.py`, `local_tester.py`, README, CONTRIBUTING, CLAUDE.md, `.gitignore`) is byte-identical on both tips.
 
 ## SRN (UUID) directories
 
@@ -182,7 +182,7 @@ Walkthrough: an explicit DB URL wins and is used verbatim; otherwise the lowerca
 > A transform can be broken-in-production and look merely "not evaluated". Deleting, renaming, or re-casing a file on main does not fail loudly anywhere — it silently converts evaluations to `isEvaluated: False`. This is also why a well-intentioned "normalize all filenames to lowercase" cleanup would sever every live exact-case DB URL at once.
 
 > [!TIP]
-> Never trust `ls` for casing on macOS — the checkout is case-insensitive and shows one casing where git may store another. `git ls-tree -r origin/main --name-only` is the only truth. (At the 2026-04-22 merge-base, `emailsecurity/mimecast/` held both `isDNSConfigured.py` and `isdnsconfigured.py` — a state a Mac cannot even check out correctly. Both branches later deleted the camelCase twin.)
+> Never trust `ls` for casing on macOS — the checkout is case-insensitive and shows one casing where git may store another. `git ls-tree -r origin/main --name-only` is the only truth. (At the 2026-04-22 merge-base, `emailsecurity/mimecast/` held both `isDNSConfigured.py` and `isdnsconfigured.py` — a state a Mac cannot even check out correctly. Both branches later deleted the camelCase copy.)
 
 ## Category directories
 
@@ -193,25 +193,25 @@ Walkthrough: an explicit DB URL wins and is used verbatim; otherwise the lowerca
 | `artificial-intelligence` | 1 | 24 | 0 | its sole vendor `anthropic/` is main-only; develop instead holds `anthropic-claude-developer-platform-claude-api/` |
 | `asm` | 4 | 45 | 9 | `tenable/` (26 transforms) is main-only, merged 2026-09-16 — **all 26 sandbox-fatal** ([14-known-issues.md](14-known-issues.md)) |
 | `assetmgmt` | 2 | 11 | 13 | |
-| `backups` | 6 | 61 | 37 | `azure/` is a divergent twin of SRN `729cebc6-…` |
+| `backups` | 6 | 61 | 37 | `azure/` is a divergent copy of SRN `729cebc6-…` |
 | `cloudsecurity` | 5 | 26 | 22 | `redcanary/` renamed away on develop — see [staged inventory](#staged-on-develop-the-delta) |
 | `compliancemanagement` | 1 | 6 | 7 | |
 | `conditionalaccess` | 1 | 1 | 0 | |
 | `crq` | 1 | 9 | 10 | |
 | `datagovernance` | 1 | 1 | 0 | |
-| `devsecops` | 1 | 5 | 6 | `github/` — twin-landed on both branches 2026-09-14 (ENG-576, PRs #555/#556); all 5 filenames camelCase |
+| `devsecops` | 1 | 5 | 6 | `github/` — landed on both branches as a pair 2026-09-14 (ENG-576, PRs #555/#556); all 5 filenames camelCase |
 | `dlp` | 2 | 8 | 0 | |
 | `emailsecurity` | 10 | 50 | 29 | three proofpoint variants coexist |
 | `encryption` | 1 | 16 | 0 | all 16 filenames camelCase |
 | `epp` | 11 | 58 | 26 | `kaseya/vsa/` nest; two ninjaone dirs |
 | `firewall` | 7 | 30 | 17 | `cisco/fmc/` nest; develop adds a **separate** `firewalls/` |
 | `grc` | 1 | 7 | 8 | |
-| `iam` | 19 | 123 | 27 | largest category; `beyondtrust` twins `identity-and-access-management/` |
-| `identity-and-access-management` | 1 | 8 | 9 | camelCase twin of `iam/beyondtrust/` — divergent |
+| `iam` | 19 | 123 | 27 | largest category; `beyondtrust` is paired with `identity-and-access-management/` |
+| `identity-and-access-management` | 1 | 8 | 9 | camelCase copy of `iam/beyondtrust/` — divergent |
 | `incidentmgmt` | 1 | 3 | 0 | |
 | `logging` | 1 | 3 | 0 | |
 | `mdr` | 3 | 9 | 10 | |
-| `mfa` | 3 | 29 | 27 | `azure/` is a divergent twin of SRN `d9b6f27a-…` |
+| `mfa` | 3 | 29 | 27 | `azure/` is a divergent copy of SRN `d9b6f27a-…` |
 | `mobile-security` | 1 | 7 | 2 | all 7 filenames camelCase; landed via hotfix PR #548 (2026-09-04) after staging on develop — develop's copies now lag main's fleet-count fix |
 | `networksecurity` | 4 | 33 | 18 | `dnsfilter/` breaks both filename rules |
 | `sase` | 3 | 16 | 9 | |
@@ -251,7 +251,7 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `6c0e6e63`
 
 | Vendor dir | Transforms | Schemas | Notes |
 |---|---|---|---|
-| `azure` | 13 | 14 | divergent twin of SRN `729cebc6-…` — production config repointed to the SRN copy (Integration-Service docs2, config-registry) |
+| `azure` | 13 | 14 | divergent copy of SRN `729cebc6-…` — production config repointed to the SRN copy (Integration-Service docs2, config-registry) |
 | `commvault` | 11 | 12 | |
 | `crashplan` | 8 | 0 | |
 | `datto` | 10 | 11 | dir also holds the repo's only stray README (`main:safeguards/backups/datto/README.md`) |
@@ -299,7 +299,7 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `6c0e6e63`
 | `avanan` | 7 | 0 | |
 | `checkpoint` | 4 | 0 | distinct from develop's new `check-point-software-technologies-email-security/` |
 | `cloudflare` | 5 | 6 | |
-| `mimecast` | 5 | 6 | the case-twin deletion site (`isDNSConfigured.py` removed on both branches) |
+| `mimecast` | 5 | 6 | the case-variant deletion site (`isDNSConfigured.py` removed on both branches) |
 | `proofpoint` | 4 | 0 | |
 | `proofpoint-threat-protection` | 4 | 0 | main-only (ENG-469, 2026-08-28) |
 | `proofpoint-v2` | 10 | 11 | |
@@ -351,7 +351,7 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `6c0e6e63`
 | Vendor dir | Transforms | Schemas | Notes |
 |---|---|---|---|
 | `aquera` | 6 | 0 | |
-| `beyondtrust` | 8 | 9 | lowercase names; untouched on main since the 2026-04-22 merge-base — the divergent camelCase twin lives in `identity-and-access-management/` |
+| `beyondtrust` | 8 | 9 | lowercase names; untouched on main since the 2026-04-22 merge-base — the divergent camelCase copy lives in `identity-and-access-management/` |
 | `beyondtrust-pra` | 8 | 9 | |
 | `britive` | 8 | 9 | |
 | `cognito` | 5 | 0 | |
@@ -374,7 +374,7 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `6c0e6e63`
 
 | Vendor dir | Transforms | Schemas | Notes |
 |---|---|---|---|
-| `beyondtrust` | 8 | 9 | camelCase twin of `iam/beyondtrust/` — same 8 criteria, **all 8 pairs content-divergent**; `isPAMEnabled` counts ManagedSystems here vs ManagedAccounts in `iam/` |
+| `beyondtrust` | 8 | 9 | camelCase copy of `iam/beyondtrust/` — same 8 criteria, **all 8 pairs content-divergent**; `isPAMEnabled` counts ManagedSystems here vs ManagedAccounts in `iam/` |
 
 **incidentmgmt** — `microsoft` 3 / 0.
 
@@ -396,7 +396,7 @@ Per-vendor matrices (transform / schema counts per vendor dir, main @ `6c0e6e63`
 
 | Vendor dir | Transforms | Schemas | Notes |
 |---|---|---|---|
-| `azure` | 19 | 19 | divergent twin of SRN `d9b6f27a-…` (`mfa_transform.py` differs by direct diff) |
+| `azure` | 19 | 19 | divergent copy of SRN `d9b6f27a-…` (`mfa_transform.py` differs by direct diff) |
 | `microsoftauthenticator` | 3 | 0 | |
 | `pingfederate` | 7 | 8 | |
 
@@ -518,10 +518,10 @@ For the other side of the skew — the 70 main-only files develop lacks (all 27 
 ## Gotchas
 
 > [!CAUTION]
-> **Every rename is a production incident waiting on a fetch.** GitHub paths are the public API of this repo; a moved, deleted, or re-cased file on main 404s for every URL that referenced it, and the failure surfaces only as `isEvaluated: False` — no alert, no gap. The redcanary rename staged on develop and the mimecast case-twin cleanup are both live examples of path changes with production blast radius.
+> **Every rename is a production incident waiting on a fetch.** GitHub paths are the public API of this repo; a moved, deleted, or re-cased file on main 404s for every URL that referenced it, and the failure surfaces only as `isEvaluated: False` — no alert, no gap. The redcanary rename staged on develop and the mimecast case-variant cleanup are both live examples of path changes with production blast radius.
 
 > [!WARNING]
-> **Twin trees are divergent, not copies.** `mfa/azure/` vs SRN `d9b6f27a-…`, `backups/azure/` vs SRN `729cebc6-…` (production's config was repointed to the SRN copy, stranding the category copy), `iam/microsoftentra/` vs `iam/msentra/` (same filenames, different content), and sharpest of all `iam/beyondtrust/` vs `identity-and-access-management/beyondtrust/`: same 8 criteria, all 8 file pairs differ, and `isPAMEnabled` counts ManagedAccounts on one side and ManagedSystems on the other (`main:safeguards/iam/beyondtrust/ispamenabled.py` vs `main:safeguards/identity-and-access-management/beyondtrust/isPAMEnabled.py`). Which verdict a customer gets depends on which path their DB URL targets. Fix the twin the DB actually fetches — a fix to the other one is a silent no-op.
+> **Paired trees are divergent, not copies.** `mfa/azure/` vs SRN `d9b6f27a-…`, `backups/azure/` vs SRN `729cebc6-…` (production's config was repointed to the SRN copy, stranding the category copy), `iam/microsoftentra/` vs `iam/msentra/` (same filenames, different content), and sharpest of all `iam/beyondtrust/` vs `identity-and-access-management/beyondtrust/`: same 8 criteria, all 8 file pairs differ, and `isPAMEnabled` counts ManagedAccounts on one side and ManagedSystems on the other (`main:safeguards/iam/beyondtrust/ispamenabled.py` vs `main:safeguards/identity-and-access-management/beyondtrust/isPAMEnabled.py`). Which verdict a customer gets depends on which path their DB URL targets. Fix the copy the DB actually fetches — a fix to the other one is a silent no-op.
 
 > [!WARNING]
 > **Nothing shared is actually shared.** `common/response_helper.py` is imported by nothing but its own `common/__init__.py` — no transform can import it, because Token-Service fetches and executes each file standalone — so the `extract_input`/`create_response` pattern is inlined in 527 of 803 main transforms, and `confirmedlicensepurchased.py` exists as **80 independent copies** with drifted logic (the 80th is Tenable's). A bug fixed in one place is fixed in one place.
@@ -546,6 +546,5 @@ For the other side of the skew — the 70 main-only files develop lacks (all 27 
 | `main:README.md:28-91`, `main:CONTRIBUTING.md:56-62`, `main:CLAUDE.md:24-26` | the in-repo registry tables and naming/layout rules (and their violations, per this doc) |
 | Integration-Service `src/models/integrator.py:2601` | mints the lowercased default URL (Integration-Service docs2, execution-lifecycle) |
 | `Token-Service main:src/utils/transformation_url.py`, `src/utils/codeexecutor.py` | allowlist + byte-for-byte fetch + sandbox (token-service docs2, evaluate-engine; [02-execution-contract.md](02-execution-contract.md)) |
-| `customer_requirements_ef1397e7.json` (develop root) | production passport requirements snapshot; its `summary` block (6/6/34) contradicts its body (5 groupings / 5 bundles / 22 criteria) |
 
 Related reading: [01-transformations-overview.md](01-transformations-overview.md) for why the repo is the deployment, [03-writing-a-transform.md](03-writing-a-transform.md) for the file contract these counts obey, [13-release-and-branches.md](13-release-and-branches.md) for the merge mechanics of the develop delta, [14-known-issues.md](14-known-issues.md) for the files in this catalog that are broken in production today, and [GLOSSARY.md](GLOSSARY.md) for terms.
