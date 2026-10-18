@@ -201,8 +201,10 @@ def transform(input):
             continue
         elif parsed < now:
             expired = expired + 1
-    if expired == 0 and unreadable > 0:
-        return not_measured(key, str(unreadable) + " enabled card(s) carry an ExpiresOn that cannot be read, so a count of zero cannot be shown.", validation)
+    if unreadable > 0:
+        # a count beside unreadable dates is only a lower bound, and an inclusive lessThan would pass on it
+        return not_measured(key, str(unreadable) + " enabled card(s) carry an ExpiresOn that cannot be read, so the count of expired cards (at least "
+                            + str(expired) + ") cannot be shown exactly.", validation)
     text = (str(expired) + " of " + str(len(cards)) + " enabled card assignments have an expiry date in the past and are still enabled.")
     return create_response(
         result={key: expired, "enabledCardCount": len(cards), "peopleEvaluated": people_count, "cardsNotMeasured": unreadable},

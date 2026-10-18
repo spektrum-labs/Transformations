@@ -80,11 +80,13 @@ def test_never_expires_is_not_expired():
     assert value("expiredButActiveCardCount", body(people)) == 0
 
 
-def test_an_unreadable_expiry_hides_a_zero_but_not_a_positive():
+def test_an_unreadable_expiry_is_never_scored_beside_a_count():
     people = [person(1, [card(1, "next tuesday")])]
     assert not_evaluated("expiredButActiveCardCount", body(people))
+    # one expired card plus an unreadable date is only "at least 1": an inclusive lessThan would pass on it
     people = [person(1, [card(1, "next tuesday"), card(2, when(-3))])]
-    assert value("expiredButActiveCardCount", body(people)) == 1
+    assert not_evaluated("expiredButActiveCardCount", body(people))
+    assert value("expiredButActiveCardCount", body([person(1, [card(2, when(-3))])])) == 1
 
 
 def test_exempt_enabled_cards_are_counted():
@@ -108,7 +110,7 @@ def test_a_string_true_is_not_a_reading_and_a_missing_field_hides_a_zero():
     c["AntiPassbackExempt"] = "true"
     assert not_evaluated("antiPassbackExemptCardCount", body([person(1, [c])]))
     assert not_evaluated("antiPassbackExemptCardCount", body([person(1, [card(1, with_exempt_field=False)])]))
-    assert value("antiPassbackExemptCardCount", body([person(1, [card(1, with_exempt_field=False), card(2, exempt=True)])])) == 1
+    assert not_evaluated("antiPassbackExemptCardCount", body([person(1, [card(1, with_exempt_field=False), card(2, exempt=True)])]))
 
 
 def test_camel_case_projection_is_read():
@@ -160,8 +162,8 @@ def test_no_evidence_is_not_measured(key, payload):
 
 @pytest.mark.parametrize("flag", ["true", "false", 1, 0, None])
 def test_an_exempt_flag_that_is_not_a_boolean_is_not_a_reading(flag):
-    """A string, a number or null is not the vendor's boolean: a zero cannot be shown from it."""
+    """A string, a number or null is not the vendor's boolean: no count can be shown beside it."""
     people = [person(1, [card(1, exempt=False), dict(card(2), AntiPassbackExempt=flag)])]
     assert not_evaluated("antiPassbackExemptCardCount", body(people))
     flagged = [person(1, [card(1, exempt=True), dict(card(2), AntiPassbackExempt=flag)])]
-    assert value("antiPassbackExemptCardCount", body(flagged)) == 1
+    assert not_evaluated("antiPassbackExemptCardCount", body(flagged))

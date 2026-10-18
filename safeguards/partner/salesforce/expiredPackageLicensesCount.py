@@ -165,8 +165,10 @@ def transform(input):
             unknown = unknown + 1
         elif status == "expired":
             expired.append(r)
-    if not expired and unknown > 0:
-        return not_measured(key, str(unknown) + " package licence(s) carry no Status, so a count of zero cannot be shown.", validation)
+    if unknown > 0:
+        # a count beside licences with no Status is only a lower bound, and an inclusive lessThan would pass on it
+        return not_measured(key, str(unknown) + " package licence(s) carry no Status, so the count of expired packages (at least "
+                            + str(len(expired)) + ") cannot be shown exactly.", validation)
     names = [str(r.get("NamespacePrefix") or r.get("Id") or "unnamed") for r in expired][:25]
     text = str(len(expired)) + " of " + str(len(records)) + " installed package licences are expired."
     return create_response(

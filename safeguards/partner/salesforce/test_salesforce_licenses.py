@@ -78,9 +78,11 @@ def test_no_expired_package_is_zero_and_no_package_is_zero():
     assert value(KEY_PKG, query("PackageLicense", [])) == 0
 
 
-def test_a_missing_status_hides_a_zero_but_not_a_positive():
+def test_a_missing_status_is_never_scored_beside_a_count():
     assert not_evaluated(KEY_PKG, query("PackageLicense", [pkg("Active"), {"Id": "x", "NamespacePrefix": "n"}]))
-    assert value(KEY_PKG, query("PackageLicense", [pkg("Expired"), {"Id": "x"}])) == 1
+    # one Expired plus a missing Status is only "at least 1": an inclusive lessThan would pass on it
+    assert not_evaluated(KEY_PKG, query("PackageLicense", [pkg("Expired"), {"Id": "x"}]))
+    assert value(KEY_PKG, query("PackageLicense", [pkg("Expired"), pkg("Active")])) == 1
 
 
 @pytest.mark.parametrize("key,sobject,rec", [(KEY_LIC, "UserLicense", lic()), (KEY_PKG, "PackageLicense", pkg("Expired"))])
