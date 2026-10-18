@@ -2,8 +2,8 @@
 
 Counts enabled card assignments (IsDisabled not true) with AntiPassbackExempt set to true. An exempt card bypasses the
 anti-passback rule that stops one credential being used twice to enter without leaving. The count is measured only on a
-complete read of the people list that holds at least one enabled card. A positive count is always reported; a zero is
-reported only when every enabled card carried the AntiPassbackExempt field, else the answer is not measured (None).
+complete read of the people list that holds at least one enabled card. The count is reported only when every enabled card
+carried the AntiPassbackExempt field, else the answer is not measured (None): a count beside a missing field is only a lower bound.
 """
 import json
 from datetime import datetime

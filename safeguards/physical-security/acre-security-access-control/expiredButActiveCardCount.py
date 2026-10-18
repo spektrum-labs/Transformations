@@ -3,8 +3,8 @@
 Counts enabled card assignments (IsDisabled not true) whose ExpiresOn is a real date in the past. A card that has expired
 but is still enabled is a credential that outlived its holder's need for it. A never-expires value (no date, or a sentinel
 more than 25 years out) is not expired. The count is measured only on a complete read of the people list that holds at
-least one enabled card. A positive count is always reported; a zero is reported only when every ExpiresOn was readable, else
-the answer is not measured (None).
+least one enabled card. The count is reported only when every ExpiresOn was readable, else the answer is not measured
+(None): a count beside an unreadable date is only a lower bound.
 """
 import json
 import re
