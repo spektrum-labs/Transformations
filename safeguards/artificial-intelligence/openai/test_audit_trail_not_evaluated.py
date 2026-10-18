@@ -61,6 +61,7 @@ NOT_EVALUATED = [
                                                "type": "invalid_request_error", "code": "invalid_api_key"}}),
     ("empty audit log", lambda: lst([])),
     ("empty audit log, more pages", lambda: lst([], has_more=True)),
+    ("only unreadable entries", lambda: lst([{}, {"id": "x"}, {"type": 3, "id": "y"}])),
     ("empty dict", lambda: {}),
     ("None", lambda: None),
     ("bare list", lambda: [{"id": "x"}]),
@@ -96,18 +97,6 @@ class ReadsThatProveNothingAreNotEvaluated(unittest.TestCase):
     def test_empty_log_reports_the_zero_it_read(self):
         out = load().transform(lst([]))
         self.assertEqual(out["transformedResponse"]["events"], 0)
-
-
-class EntriesThatAreNotEventsStillFail(unittest.TestCase):
-    # A readable list whose entries are not audit events was read in full and holds no proof:
-    # that stays False with a successful read, as on develop.
-    def test_only_unreadable_entries_is_false(self):
-        body = lst([{}, {"id": "x"}, {"type": 3, "id": "y"}])
-        for form in (body, enriched(body)):
-            with self.subTest(form=form):
-                out = load().transform(form)
-                self.assertIs(out["transformedResponse"][KEY], False)
-                self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
 
 
 class ReadableEventsStillPass(unittest.TestCase):

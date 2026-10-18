@@ -171,15 +171,6 @@ def not_measured(validation, reason, recommendation=None, extra=None, summary=No
                            transformation_errors=transformation_errors)
 
 
-def fail(validation, reason, recommendation=None, summary=None, extra=None):
-    result = {KEY: False}
-    if extra:
-        result.update(extra)
-    return create_response(result=result, validation=validation, fail_reasons=[reason],
-                           recommendations=[recommendation] if recommendation else [],
-                           input_summary=summary or {})
-
-
 def refused_or_unrecognised(data, validation, what):
     refusal = detect_refusal(data)
     if refusal:
@@ -226,11 +217,12 @@ def evaluate(input):
             input_summary={"events": 0},
         )
     if not events:
-        return fail(validation,
-                    "GET /v1/organization/audit_logs returned entries but none is a recognisable audit event "
-                    "(no id and type), so nothing proves the trail exists.",
-                    "Inspect the raw integration response.",
-                    {"events": 0})
+        # Entries that are not audit events were not read as an answer: no verdict, never False.
+        return not_measured(validation,
+                            "GET /v1/organization/audit_logs returned entries but none is a recognisable audit event "
+                            "(no id and type), so the control was not evaluated.",
+                            "Inspect the raw integration response.",
+                            {"events": 0})
     newest = events[0]
     ts = as_int(newest.get("effective_at"))
     age = None

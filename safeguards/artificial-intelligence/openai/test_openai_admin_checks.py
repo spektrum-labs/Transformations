@@ -103,7 +103,7 @@ def test_good_and_flip(name, key, good, bad):
     for form in (good, enriched(good)):
         assert module.transform(form)["transformedResponse"][key] is True
     for form in (bad, enriched(bad)):
-        assert module.transform(form)["transformedResponse"][key] is False
+        assert module.transform(form)["transformedResponse"][key] is expected_no(key)
 
 
 @pytest.mark.parametrize("name,key,good,bad", CASES)
@@ -219,13 +219,13 @@ def test_audit_log_empty_list_is_not_evaluated(wrap, empty):
     assert out["additionalInfo"]["evaluation"]["failReasons"] == []
 
 
-def test_audit_log_with_events_still_passes_and_junk_still_fails():
+def test_audit_log_with_events_still_passes_and_junk_is_not_evaluated():
     module = load("isactivityaudittrailenabled")
     good = lst([{"id": "audit_log-1", "type": "api_key.created", "effective_at": NOW - 40 * DAY}])
     assert module.transform(good)["transformedResponse"]["isActivityAuditTrailEnabled"] is True
     junk = module.transform(lst([{"note": "x"}]))
-    assert junk["transformedResponse"]["isActivityAuditTrailEnabled"] is False
-    assert junk["additionalInfo"]["dataCollection"]["status"] == "success"
+    assert junk["transformedResponse"]["isActivityAuditTrailEnabled"] is None
+    assert junk["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 def test_the_phrase_is_read_from_the_vendor_body_not_the_echoed_matcher():
