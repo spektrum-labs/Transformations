@@ -1,0 +1,37 @@
+{
+  "name": "isFreeOfConnectWiseCompromiseIndicators",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the tenant's service-principal sign-in logs and directory audit log since 2026-10-15 were read whole and show none of the published indicators of the ConnectWise multitenant OAuth app abuse.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "service-principal sign-ins for the two ConnectWise apps or from 144.172.64.128, and ApplicationManagement and RoleManagement directory audit events, from 2026-10-15T00:00:00Z in one Microsoft Entra tenant",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "Both sign-in reads and the directory-audit read complete, unpaged and error-free, with no sign-in from 144.172.64.128, no ConnectWise sign-in with the published user agents, no credential added to a ConnectWise service principal and no credential, role, grant or owner change made by a ConnectWise app.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "compliant",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/iam/microsoft/connectwise_oauth/isfreeofconnectwisecompromiseindicators.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered with the ConnectWise OAuth app indicator transform; proposed, no requirement reads it yet."
+    }
+  ],
+  "notes": "Indicators are data from the advisory and live in the transform's constants. Defender alerts are read when the connection grants SecurityAlert.Read.All and add indicators, but an unreadable alert feed does not block true; the pass reason says so. Entra keeps sign-in and audit logs 7 days without P1/P2, so the 15 Oct window ages out about 22 Oct 2026 on those tenants, and sign-in logs need P1/P2 at all."
+}
