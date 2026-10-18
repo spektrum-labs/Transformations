@@ -142,6 +142,25 @@ def parse_api_error(raw_error: str, source: str = None) -> tuple:
         return (f"Could not connect to {src}: {clean}",
                 f"Check {src} credentials and configuration")
 
+
+def migration_pending(policy):
+    """The policy's policyMigrationState (cut to 40 characters) when it is anything but migrationComplete, else "".
+
+    Until the migration to the authentication methods policy is complete, the legacy per-user MFA and SSPR
+    policies still decide which methods members can use and cannot be read here. A policy with no state reads
+    as before."""
+    state = str(policy.get('policyMigrationState') or '').strip() if isinstance(policy, dict) else ''
+    if state and state.lower() != 'migrationcomplete':
+        return state[:40]
+    return ''
+
+
+def migration_reason(state, what):
+    return ("The authentication methods policy lists no " + what + " (policyMigrationState: " + state + "): the legacy "
+            "per-user MFA and SSPR policies still apply and cannot be read here, so the policy alone does not "
+            "show that MFA is unavailable")
+
+
 def transform(input):
     """
     Evaluates if MFA is enforced for users based on Microsoft Secure Score
@@ -292,6 +311,15 @@ def transform(input):
                     api_errors=["No authentication method that targets members is enabled"
                                 + (" (Email one-time passcode is enabled for B2B guests only)" if guest_only_email else "")
                                 + ", so the authentication methods policy does not show whether MFA is enforced for users"],
+                    recommendations=["Answer this check from Conditional Access or the Microsoft Entra ID integration"]
+                )
+            elif migration_pending(data):
+                # Weak or unlisted methods only, while the policy is still migrating: the legacy per-user MFA and
+                # SSPR policies may enable Microsoft Authenticator or OATH codes, so this is not a FAIL.
+                return create_response(
+                    result={criteriaKey: None, "weakMethodsEnabled": weak_names},
+                    validation=validation,
+                    api_errors=[migration_reason(migration_pending(data), "strong MFA method")],
                     recommendations=["Answer this check from Conditional Access or the Microsoft Entra ID integration"]
                 )
             else:
