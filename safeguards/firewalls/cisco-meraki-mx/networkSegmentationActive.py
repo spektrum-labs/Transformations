@@ -121,14 +121,31 @@ def per_network(data, key):
     return True, pairs
 
 
+def as_flag(value):
+    """True or False for a boolean, for 0 or 1, or for the text true/false; None for anything else.
+
+    A text flag must not be read by its truthiness: the text "false" is not empty."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return value == 1
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "true":
+            return True
+        if text == "false":
+            return False
+    return None
+
+
 def evaluate(data):
     reached, pairs = per_network(data, "vlanSettings")
     segmented, flat, unreadable = [], [], []
     for name, response in pairs:
-        value = response.get("vlansEnabled") if isinstance(response, dict) else None
-        if value is None:
+        flag = as_flag(response.get("vlansEnabled")) if isinstance(response, dict) else None
+        if flag is None:
             unreadable.append(name)
-        elif bool(value):
+        elif flag:
             segmented.append(name)
         else:
             flat.append(name)

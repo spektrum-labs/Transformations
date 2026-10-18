@@ -1,10 +1,10 @@
 """SentinelOne (2bc425fa): an empty agent list is Unevaluated with the reason, never FAIL or 0%.
 
-Read-only fleet run, 2 Oct 2026 17:37 ET: at Collaborative Fund GET /web/api/v2.1/agents returned a complete read
+Read-only fleet run, 2 Oct 2026: for one tenant GET /web/api/v2.1/agents returned a complete read
 with no agents ("No SentinelOne agents were returned"). isEPPConfigured already read Not evaluated, but
 requiredCoveragePercentage read a measured 0.0 and isEPPEnabled / isEPPLoggingEnabled a measured False, so the
-passport went from 6 passing to 2 on an empty list. The same shape read FAIL at Padilla Law, ValueSelling, ATX
-Venture Partners, HeyApril and MEASURE, and a fully stale fleet (GeriCloud) did the same.
+passport went from 6 passing to 2 on an empty list. The same shape read FAIL at several other tenants with
+empty fleets, and a fully stale fleet did the same.
 
 The contract every getEndpoints transform now holds, through the Token-Service envelope:
 - empty complete read, all-stale fleet, error body, partial read: value None and dataCollection "error" with the
