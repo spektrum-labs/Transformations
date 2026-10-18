@@ -1,4 +1,4 @@
-"""Cisco Meraki MX - isFirewallLoggingEnabled (THL NW-01: Config and Change Monitoring).
+"""Cisco Meraki MX - isFirewallLoggingEnabled (NW-01: Config and Change Monitoring).
 
 Reads GET /networks/{networkId}/syslogServers, iterated across the organisation's
 appliance networks, so the input is normally a list of per-network responses.

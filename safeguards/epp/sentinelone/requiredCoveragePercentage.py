@@ -9,8 +9,8 @@ SentinelOne isActive reflects only a recent management-console check-in/online
 session, so it is false for asleep, offline, or roaming endpoints that remain
 fully installed and protected (activeProtection still [edr], mitigationMode
 still protect/detect). Gating coverage on isActive understates protection and
-produced false "low coverage" failures — e.g. UFT reported 265/919 = 28.84%
-while the isEPPConfigured / isEPPEnabled checks found all 919 agents installed
+produced false "low coverage" failures: a fleet with most agents asleep or roaming read
+under 30% while the isEPPConfigured / isEPPEnabled checks found every agent installed
 and in an enforcing mitigation mode.
 """
 
