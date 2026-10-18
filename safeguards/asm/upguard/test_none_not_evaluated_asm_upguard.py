@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the account, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -36,6 +36,30 @@ class Poisoned(dict):
 CASES = [
     ('exploitedfindingscount', ('exploitedFindingsCount',), 'empty_dict', lambda: {}),
     ('exploitedfindingscount', ('exploitedFindingsCount',), 'poisoned', lambda: Poisoned()),
+    ('isasmenabled', ('isASMEnabled',), 'empty_dict', lambda: {}),
+    ('isasmenabled', ('isASMEnabled',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
+    ('isasmenabled', ('isASMEnabled',), 'poisoned', lambda: Poisoned()),
+    ('nocriticalfindings', ('noCriticalFindings',), 'empty_dict', lambda: {}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'poisoned', lambda: Poisoned()),
+    ('nohighfindings', ('noHighFindings',), 'empty_dict', lambda: {}),
+    ('nohighfindings', ('noHighFindings',), 'error_body', lambda: {"error": True, "message": "HTTP 503"}),
+    ('nohighfindings', ('noHighFindings',), 'poisoned', lambda: Poisoned()),
+    ('isasmenabled', ('isASMEnabled',), 'empty_list_no_count', lambda: {"domains": []}),
+    ('exploitedfindingscount', ('exploitedFindingsCount',), 'empty_list_contradicting_count',
+     lambda: {"vulnerabilities": [], "total_results": 3}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'empty_list_contradicting_count',
+     lambda: {"risks": [], "total_results": 3}),
+    ('nohighfindings', ('noHighFindings',), 'empty_list_contradicting_count',
+     lambda: {"risks": [], "total_results": 3}),
+    ('isasmenabled', ('isASMEnabled',), 'cut_off_page',
+     lambda: {"domains": [{"active": False}], "next_page_token": "abc"}),
+    ('exploitedfindingscount', ('exploitedFindingsCount',), 'cut_off_page',
+     lambda: {"vulnerabilities": [{"known_exploited_vulnerability": False}], "next_page_token": "abc"}),
+    ('nocriticalfindings', ('noCriticalFindings',), 'cut_off_page',
+     lambda: {"risks": [{"severity": "low"}], "next_page_token": "abc"}),
+    ('nohighfindings', ('noHighFindings',), 'error_beside_records',
+     lambda: {"risks": [{"severity": "low"}], "error": "boom"}),
 ]
 
 

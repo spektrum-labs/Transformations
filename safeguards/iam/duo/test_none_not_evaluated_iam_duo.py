@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the environment, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -38,6 +38,16 @@ CASES = [
     ('isAdminMFAPhishingResistant', ('isAdminMFAPhishingResistant',), 'poisoned', lambda: Poisoned()),
     ('isConditionalAccessEnabled', ('isConditionalAccessEnabled',), 'poisoned', lambda: Poisoned()),
     ('isStrongAuthRequiredByPolicy', ('isStrongAuthRequired',), 'poisoned', lambda: Poisoned()),
+    ('isMFAEnforcedForUsers', ('isMFAEnforcedForUsers',), 'poisoned', lambda: Poisoned()),
+    ('islifecyclemanagementenabled', ('isLifeCycleManagementEnabled',), 'poisoned', lambda: Poisoned()),
+    ('mfaDeviceEnrollmentPercentage', ('mfaDeviceEnrollmentPercentage',), 'poisoned', lambda: Poisoned()),
+    ('desktopAuthenticatorEnrollmentPercentage', ('desktopAuthenticatorEnrollmentPercentage',), 'poisoned',
+     lambda: Poisoned()),
+    ('hasEmergencyAccessCodeAPIAccess', ('hasEmergencyAccessCodeAPIAccess',), 'poisoned', lambda: Poisoned()),
+    ('hasFIDOAuthenticatorManagementAPIAccess', ('hasFIDOAuthenticatorManagementAPIAccess',), 'poisoned',
+     lambda: Poisoned()),
+    ('webAuthnCredentialAdoptionPercentage', ('webAuthnCredentialAdoptionPercentage',), 'poisoned',
+     lambda: Poisoned()),
 ]
 
 

@@ -89,8 +89,18 @@ def test_empty_fleet():
     # Nothing to judge: not measured, never a graded False or True.
     assert value("isEDRAgentActive", body("agents", [])) is None
     assert load("isEDRAgentActive")(body("agents", []))["additionalInfo"]["dataCollection"]["status"] == "error"
-    assert value("staleAgentOfflineCount", body("agents", [])) == 0
+    assert value("staleAgentOfflineCount", body("agents", [])) is None
+    assert load("staleAgentOfflineCount")(body("agents", []))["additionalInfo"]["dataCollection"]["status"] == "error"
     assert value("assetInventoryCoveragePercentage", body("agents", [])) is None
+
+
+@pytest.mark.parametrize("key", [c[0] for c in AGENT_CASES])
+@pytest.mark.parametrize("items", [[], ["a", "b"], [1, 2, 3], [None], [agent(1), "not an agent"]])
+def test_empty_or_non_record_list_is_not_measured(key, items):
+    # An empty list, or a list whose entries are not agent records, proves nothing: never a 0 and never a pass.
+    out = load(key)(body("agents", items))
+    assert out["transformedResponse"][key] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 def test_error_body_is_not_measured():
