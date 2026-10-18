@@ -121,13 +121,13 @@ def judged_computers(computers):
     """(judged, stale count): not deleted, and lastCheckin within 15 days of the newest check-in (endpoint rules
     2026-09-29). When the newest check-in is itself older than 15 days, every dated computer is stale. A computer
     without a readable lastCheckin is judged beside current dated computers, not dropped; but when no dated computer
-    is inside the window, the estate has no current evidence and nothing is judged (undated rows alone never
-    decide the result)."""
+    is inside the window (including when no computer has a readable lastCheckin at all), the estate has no current
+    evidence and nothing is judged (undated rows alone never decide the result)."""
     live = [c for c in computers if not flag(c.get("isDeleted"))]
     seen = [parse_when(c.get("lastCheckin")) for c in live]
     known = [s for s in seen if s is not None]
     if not known:
-        return live, 0
+        return [], 0
     cutoff = max(known) - timedelta(days=ACTIVE_WINDOW_DAYS)
     wall = datetime.utcnow() - timedelta(days=ACTIVE_WINDOW_DAYS)
     if max(known) < wall:

@@ -213,6 +213,20 @@ def test_undated_computer_alone_is_not_judged_when_every_dated_computer_is_stale
     assert "15 days" in out["additionalInfo"]["dataCollection"]["errors"][0]
 
 
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("undated", [None, "", "not a date"])
+def test_estate_with_no_dated_computer_is_not_judged(mode, shape, undated):
+    # Every row Secure but none has a readable lastCheckin: no evidence any of them is current, so the estate
+    # is Not evaluated, never True.
+    rows = fleet(3)
+    for r in rows:
+        r.update(lastCheckin=undated)
+    v, dc, out = run(shape(rows), mode)
+    assert (v, dc) == (None, "error")
+    assert out["transformedResponse"]["staleComputerCount"] == 0
+
 @pytest.mark.parametrize("mode", MODES)
 def test_undated_computer_is_still_judged_beside_a_current_dated_computer(mode):
     rows = fleet(3)
