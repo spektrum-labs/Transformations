@@ -1,0 +1,39 @@
+{
+  "name": "isContinuousValidationEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when at least one NodeZero schedule is not disabled and has a non-disabled action that carries a cadence or cron expression.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "The schedules in the NodeZero schedules page for one tenant.",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A schedule with is_disabled falsy and an action with is_disabled falsy and a cadence or cron_expression. A one-off op, or a schedule whose every action is disabled, is not enough.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Threat & Vulnerability Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/threat-vulnerability-management/horizon3-nodezero/isContinuousValidationEnabled.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered so the Horizon3 NodeZero transforms can emit it; the meaning is what the transform reads, stated precisely. Unverified fields are named in notes."
+    }
+  ],
+  "notes": "Only the NodeZero transform emits this key today. Field names are as that transform reads them; they were not live-verified against a NodeZero tenant, so the key stays proposed at V0 with the owner not yet named. This reads configuration: it shows a recurring test is set up, not that a recent run completed. With no schedules the transform returns false with dataCollection status success."
+}

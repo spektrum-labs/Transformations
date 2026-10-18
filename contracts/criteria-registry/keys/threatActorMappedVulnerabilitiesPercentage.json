@@ -1,0 +1,39 @@
+{
+  "name": "threatActorMappedVulnerabilitiesPercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The percentage of weaknesses in NodeZero's most recent op that carry a non-empty vuln.threat_actors list, meaning NodeZero maps them to a named threat actor.",
+  "valueType": "number",
+  "unit": "percent",
+  "population": "The weaknesses page for the most recent NodeZero op of one tenant; the denominator is every weakness in the page, the numerator the ones with at least one threat actor.",
+  "polarity": "unknown",
+  "evidenceRequiredForTrue": "A passing percentage needs a non-empty weaknesses page; a weakness without vuln.threat_actors counts as unmapped.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Threat & Vulnerability Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/threat-vulnerability-management/horizon3-nodezero/threatActorMappedVulnerabilitiesPercentage.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered so the Horizon3 NodeZero transforms can emit it; the meaning is what the transform reads, stated precisely. Unverified fields are named in notes."
+    }
+  ],
+  "notes": "Only the NodeZero transform emits this key today. Field names are as that transform reads them; they were not live-verified against a NodeZero tenant, so the key stays proposed at V0 with the owner not yet named. Polarity is not settled: a high figure means more of the tenant's weaknesses are ones named actors use (more exposure), while the transform's own recommendation treats 0% as the problem (enrichment off). No requirement should gate on this key until the owner rules. With no weaknesses the transform returns 0.0 with dataCollection status success, not null."
+}

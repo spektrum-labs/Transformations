@@ -1,0 +1,59 @@
+{
+  "name": "isPullRequestApprovalRequired",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the default branch of every active repository requires at least one approving review AND approval of the most recent reviewable push, so no change merges on the approval of the person who pushed it last.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "every active (not archived, not disabled) repository the organization read lists; one default branch each. Archived and disabled repositories are excluded and counted in the reasons",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of every active repository's default-branch rules (effective ruleset rules and classic branch protection) showing, for each, across every layer in active enforcement (organization rulesets, repository rulesets, classic protection; GitHub applies the strictest value of each parameter), a highest required_approving_review_count >= 1 and require_last_push_approval true on at least one layer. Rulesets in evaluate or disabled enforcement do not count. A layer that does not state its count or last-push setting cannot prove a failure (not measured unless the other layers pass); repositories with no default branch commit (classic protection 404 Branch not found) are skipped and counted. A cut-off repository list or any repository whose rules could not be read is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "openDecisions": [
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Should an admin bypass (classic enforce_admins off, bypass allowances, or bypass actors on the ruleset) fail this key? Today it is reported in the reasons and does not fail.",
+      "positions": [
+        "Report only (implemented): the rule exists and binds everyone else; bypass is a separate finding.",
+        "Fail: a rule an admin can skip does not stop that admin merging their own unreviewed push."
+      ]
+    },
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Which canonical integration category should allowedCategories name for the GitHub definition? Left empty because the category name could not be evidenced from this repository.",
+      "positions": [
+        "Name the source-code / application security category the GitHub definition is filed under once confirmed from GET /integration/enum/categories."
+      ]
+    }
+  ],
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/devsecops/github/isPullRequestApprovalRequired.py (reads the Integration-Service GitHub workflow isPullRequestApprovalRequired: GET /orgs/{org}/repos, GET /repos/{owner}/{repo}/rules/branches/{branch}, GET /repos/{owner}/{repo}/branches/{branch}/protection, GET /orgs/{org}/rulesets and /rulesets/{id})",
+    "https://docs.github.com/en/rest/branches/branch-protection (required_pull_request_reviews.require_last_push_approval: whether the most recent push must be approved by someone other than the person who pushed it; retrieved 2026-10-13)",
+    "https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch (returns all active rules from every level; rules in rulesets with evaluate or disabled enforcement are not returned; retrieved 2026-10-13)",
+    "https://docs.github.com/en/rest/orgs/rules (bypass_actors is only returned to a user with write access to the ruleset; retrieved 2026-10-13)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-13",
+      "change": "Registered for the GitHub pull request approval check. No live replay yet, so the key is proposed and V0."
+    }
+  ],
+  "notes": "GitHub always blocks an author approving their own pull request, so self-approval is not a setting; this key measures what the organization controls: a required approval plus last-push approval on the default branch."
+}
