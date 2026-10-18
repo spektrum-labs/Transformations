@@ -160,9 +160,11 @@ def transform(input):
     exempt = 0
     unreadable = 0
     for card in cards:
-        if not has_field(card, "AntiPassbackExempt"):
+        flag = field_value(card, "AntiPassbackExempt")
+        if not isinstance(flag, bool):
+            # absent, null, or a string or number: only a real boolean is a reading, so a zero cannot rest on it
             unreadable = unreadable + 1
-        elif field_value(card, "AntiPassbackExempt") is True:
+        elif flag:
             exempt = exempt + 1
     if exempt == 0 and unreadable > 0:
         return not_measured(key, str(unreadable) + " enabled card(s) carry no AntiPassbackExempt field, so a count of zero cannot be shown.", validation)
