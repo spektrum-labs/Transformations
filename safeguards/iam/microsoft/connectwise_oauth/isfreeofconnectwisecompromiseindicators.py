@@ -15,6 +15,10 @@ Indicators:
   - credentials added to a ConnectWise service principal;
   - a ConnectWise app adding credentials, roles, grants or owners anywhere (including itself as
     Global Administrator), or such a change made from the indicator IP;
+  - the same audit changes where the only link to the apps is the exact published display name (a
+    deleted service principal leaves nothing else). These count, but are tagged "Name only, needs
+    confirmation before any action" and counted in nameOnlyMatches; other ConnectWise or SkyKick apps
+    (Automate, ScreenConnect, SkyKick Migration) never match;
   - a Defender alert titled "Verified Threat Actor IP" or "Graph API activity from a Microsoft
     threat intelligence IP address", or "Suspicious sign-in" naming an indicator.
 Defender alerts (Graph security/alerts_v2, SecurityAlert.Read.All) are optional: most connections
@@ -99,9 +103,24 @@ APP_ROLE_FEEDS = {
     "24205314-2b89-4e07-a2a4-579e898a5640": ("cwTeamsAppRoles", "cwTeamsDelegatedGrants"),
 }
 WRAPPER_KEYS = ("apiResponse", "api_response", "response", "result", "Output")
-# Display-name markers for the two apps. App-initiated audit entries often carry a null appId, and a deleted
-# app's service principal id is no longer in the presence feed, so the initiator's name is the remaining link.
-CONNECTWISE_NAME_MARKERS = ("connectwise cloud backup", "connectwise cloud management", "skykick")
+# Exact display names of the two apps (and their former SkyKick names), normalised by norm_name. App-initiated
+# audit entries often carry a null appId, and a deleted app's service principal id is no longer in the presence
+# feed, so the name can be the only link. It is compared by equality, never as a substring: MSP tenants run other
+# ConnectWise and SkyKick apps (Automate, Manage, ScreenConnect, Control, SkyKick Migration) whose routine credential
+# rotations are not indicators. No advisory shows a suffixed variant, so none is accepted. Sources:
+#   Microsoft Threat Intelligence on X, 16 Oct 2026: "ConnectWise Cloud Backup (AppId: 506e08f9-...), formerly
+#     SkyKick Backup";
+#   Huntress, "ConnectWise (SkyKick) Vendor Credentials Abused in M365 Attacks", 16-17 Oct 2026: "ConnectWise Cloud
+#     Backup" ("SkyKick Backup" in its IOC table) and "ConnectWise Cloud Management - MS Teams", formerly "SkyKick
+#     Cloud Manager - MS Teams";
+#   Coalition, 16 Oct 2026: shown in Entra as "SkyKick Backup" or "ConnectWise Cloud Backup", formerly "SkyKick Cloud
+#     Backup".
+# A match by name alone is still an indicator (fail closed), but it is tagged: it needs confirmation before action.
+CONNECTWISE_APP_NAMES = (
+    "connectwise cloud backup", "skykick backup", "skykick cloud backup",
+    "connectwise cloud management - ms teams", "skykick cloud manager - ms teams",
+)
+NAME_ONLY_PREFIX = "Name only, needs confirmation before any action: "
 
 
 def create_response(result, pass_reasons=None, fail_reasons=None, input_summary=None, api_errors=None,
@@ -140,9 +159,14 @@ def lower(value):
 
 def norm_activity(value):
     text = lower(value)
-    for dash in ("–", "—"):
+    for dash in ("–", "—", "‐", "‑", "‒", "−"):
         text = text.replace(dash, "-")
     return " ".join(text.split())
+
+
+def norm_name(value):
+    """A display name for an exact comparison: lowercase, single spaces, one kind of dash with a space each side."""
+    return " ".join(norm_activity(value).replace("-", " - ").split())
 
 
 def in_window(stamp):
@@ -266,6 +290,7 @@ def assess(data):
 
     # Indicators of compromise since the window start.
     indicators = []
+    name_only = []
     by_app, by_app_state = read_feed(data, "spSignInsByApp")
     by_ip, by_ip_state = read_feed(data, "spSignInsFromIndicatorIp")
     by_user_ip, by_user_ip_state = read_feed(data, "userSignInsFromIndicatorIp")
@@ -314,19 +339,18 @@ def assess(data):
         initiated = item.get("initiatedBy") if isinstance(item.get("initiatedBy"), dict) else {}
         app = initiated.get("app") if isinstance(initiated.get("app"), dict) else {}
         user = initiated.get("user") if isinstance(initiated.get("user"), dict) else {}
-        app_name = lower(app.get("displayName"))
+        app_name = norm_name(app.get("displayName"))
         by_connectwise = lower(app.get("appId")) in CONNECTWISE_APPS or lower(app.get("servicePrincipalId")) in sp_ids
-        for marker in CONNECTWISE_NAME_MARKERS:
-            if marker in app_name:
-                by_connectwise = True
         from_ioc_ip = lower(user.get("ipAddress")) in INDICATOR_IPS
         on_connectwise = False
+        on_name = ""
         for target in item.get("targetResources") or []:
             if not isinstance(target, dict):
                 continue
-            target_name = lower(target.get("displayName"))
-            if lower(target.get("id")) in sp_ids or "connectwise" in target_name or "skykick" in target_name:
+            if lower(target.get("id")) in sp_ids:
                 on_connectwise = True
+            elif norm_name(target.get("displayName")) in CONNECTWISE_APP_NAMES:
+                on_name = norm_name(target.get("displayName"))
         when = str(item.get("activityDateTime"))
         if by_connectwise:
             indicators.append("A ConnectWise app performed '" + activity + "' at " + when)
@@ -334,6 +358,15 @@ def assess(data):
             indicators.append("'" + activity + "' from the indicator IP address at " + when)
         elif on_connectwise and is_credential:
             indicators.append("Credentials changed on a ConnectWise service principal ('" + activity + "') at " + when)
+        elif app_name in CONNECTWISE_APP_NAMES:
+            name_only.append(NAME_ONLY_PREFIX + "an app named '" + app_name + "' performed '" + activity + "' at "
+                             + when + ". It matched by display name only (no app or service principal id); confirm "
+                             "in the audit entry that it is the ConnectWise app.")
+        elif on_name and is_credential:
+            name_only.append(NAME_ONLY_PREFIX + "credentials changed on an app named '" + on_name + "' ('" + activity
+                             + "') at " + when + ". It matched by display name only (no service principal id); "
+                             "confirm in the audit entry that it is the ConnectWise app.")
+    indicators.extend(name_only)
     alerts, alerts_state = read_feed(data, "securityAlerts")
     feeds["securityAlerts"] = alerts_state
     for item in alerts or []:
@@ -385,6 +418,7 @@ def assess(data):
     return {
         "presenceKnown": presence_known, "present": present, "enabled": enabled, "names": names,
         "high": high, "risk": risk, "indicators": indicators, "indicatorsRead": indicators_read,
+        "nameOnly": len(name_only),
         "alertsState": alerts_state, "verdict": verdict, "feeds": feeds,
         "retentionOk": retention_ok,
     }
@@ -396,6 +430,7 @@ def summary_fields(found):
         "connectWiseRiskLevel": found["risk"],
         "connectWiseAppsPresent": found["names"],
         "indicatorsFound": len(found["indicators"]),
+        "nameOnlyMatches": found["nameOnly"],
     }
 
 
@@ -405,7 +440,7 @@ def not_measured(reason, found=None, transformation_errors=None):
         result.update(summary_fields(found))
     else:
         result.update({"connectWiseVerdict": "Not evaluated", "connectWiseRiskLevel": "unknown",
-                       "connectWiseAppsPresent": [], "indicatorsFound": 0})
+                       "connectWiseAppsPresent": [], "indicatorsFound": 0, "nameOnlyMatches": 0})
     summary = {"feeds": found["feeds"]} if found is not None else {}
     findings = found["indicators"] + found["high"] if found is not None else []
     return create_response(result, fail_reasons=[reason], api_errors=[reason], input_summary=summary,

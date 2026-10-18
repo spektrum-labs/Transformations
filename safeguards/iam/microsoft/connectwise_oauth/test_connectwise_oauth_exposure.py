@@ -300,6 +300,7 @@ def test_audit_by_a_removed_connectwise_app_named_only_by_display_name_is_an_ind
     entry["initiatedBy"]["app"]["displayName"] = "ConnectWise Cloud Backup"
     _, indicators = run_both(clean(directoryAudits=graph(entry)))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    assert value(indicators, "nameOnlyMatches") == 1
 
 
 def test_audit_by_an_unrelated_app_with_a_similar_vendor_name_is_not_an_indicator():
@@ -405,10 +406,13 @@ def test_both_files_agree_on_every_fixture():
     bodies = [clean(), exposed_backup(), exposed_backup(cwBackupAppRoles=graph(app_role(DIRECTORY_READWRITE_ALL))),
               clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP, enabled=False))),
               exposed_backup(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP))),
-              exposed_backup(directoryAudits=STEP_403)] + NO_EVIDENCE
+              exposed_backup(directoryAudits=STEP_403),
+              clean(directoryAudits=graph(audit("Add service principal credentials", OTHER_SP,
+                                                target_name="SkyKick Backup")))] + NO_EVIDENCE
     for body in bodies:
         exposure, indicators = run_both(body)
-        for key in ("connectWiseVerdict", "connectWiseRiskLevel", "connectWiseAppsPresent", "indicatorsFound"):
+        for key in ("connectWiseVerdict", "connectWiseRiskLevel", "connectWiseAppsPresent", "indicatorsFound",
+                    "nameOnlyMatches"):
             assert value(exposure, key) == value(indicators, key), (key, body)
 
 
@@ -526,3 +530,98 @@ def test_audit_by_connectwise_sp_id_counts_when_the_presence_read_failed():
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     assert_not_measured(exposure, "isFreeOfConnectWiseAppExposure")
     assert value(exposure, "connectWiseVerdict") == "Indicators found"
+
+
+# ---- name matching narrowed (18 Oct): exact published names only, name-only matches tagged
+
+OTHER_VENDOR_APPS = ("ConnectWise Automate", "ConnectWise Manage", "ConnectWise ScreenConnect", "ScreenConnect",
+                     "ConnectWise Control", "SkyKick Migration", "SkyKick", "ConnectWise",
+                     "ConnectWise Cloud Backup Reporting")
+UNKNOWN_SP = "11111111-aaaa-4aaa-8aaa-000000000009"
+
+
+def by_named_app(name, activity="Add service principal credentials", target=OTHER_SP):
+    entry = audit(activity, target, by_sp=UNKNOWN_SP)
+    entry["initiatedBy"]["app"]["displayName"] = name
+    return entry
+
+
+def on_named_app(name, activity="Add service principal credentials"):
+    return audit(activity, UNKNOWN_SP, target_name=name)
+
+
+def reasons(out):
+    return " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+def test_credential_changes_by_or_on_other_connectwise_and_skykick_apps_are_not_indicators():
+    for name in OTHER_VENDOR_APPS:
+        for entry in (by_named_app(name), on_named_app(name),
+                      by_named_app(name, "Update application - Certificates and secrets management")):
+            exposure, indicators = run_both(clean(directoryAudits=graph(entry)))
+            assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True, name
+            assert value(exposure, "connectWiseVerdict") == "Not exposed", name
+            assert value(indicators, "nameOnlyMatches") == 0, name
+
+
+def test_published_names_match_exactly_after_normalising_and_are_tagged_name_only():
+    variants = ("ConnectWise Cloud Backup", "connectwise  cloud backup", "SkyKick Backup", "SKYKICK CLOUD BACKUP",
+                "ConnectWise Cloud Management - MS Teams", "ConnectWise Cloud Management – MS Teams",
+                "ConnectWise Cloud Management-MS Teams", "SkyKick Cloud Manager - MS Teams", " SkyKick Backup ")
+    for name in variants:
+        for entry in (by_named_app(name), on_named_app(name)):
+            exposure, indicators = run_both(clean(directoryAudits=graph(entry)))
+            assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False, name
+            for out in (exposure, indicators):
+                assert value(out, "connectWiseVerdict") == "Indicators found", name
+                assert value(out, "indicatorsFound") == 1 and value(out, "nameOnlyMatches") == 1, name
+            text = reasons(indicators).lower()
+            assert "name only" in text and "confirm" in text and "before any action" in text, name
+
+
+def test_name_only_change_that_is_not_a_credential_change_on_a_named_target_is_not_an_indicator():
+    # A role or grant change whose only link is a target named like the app is not one of the published
+    # indicators (the old code did not flag it either); only credential changes on it are.
+    _, indicators = run_both(clean(directoryAudits=graph(on_named_app("ConnectWise Cloud Backup", "Add member to role"))))
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
+
+
+def test_id_matches_are_unchanged_and_never_tagged_name_only():
+    by_id = audit("Add service principal credentials", OTHER_SP, by_app=TEAMS_APP)
+    by_id["initiatedBy"]["app"]["displayName"] = "ConnectWise Cloud Management - MS Teams"
+    by_unrelated_name = audit("Add member to role", OTHER_SP, by_sp=TEAMS_SP)
+    by_unrelated_name["initiatedBy"]["app"]["displayName"] = "Renamed by the tenant"
+    on_id = audit("Add service principal credentials", BACKUP_SP, target_name="Renamed by the tenant")
+    for entry, message in ((by_id, "A ConnectWise app performed"),
+                           (by_unrelated_name, "A ConnectWise app performed"),
+                           (on_id, "Credentials changed on a ConnectWise service principal")):
+        body = clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP), sp(TEAMS_APP, TEAMS_SP)),
+                     cwBackupAppRoles=graph(), cwBackupDelegatedGrants=graph(), cwTeamsAppRoles=graph(),
+                     cwTeamsDelegatedGrants=graph(), directoryAudits=graph(entry))
+        exposure, indicators = run_both(body)
+        assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+        assert value(indicators, "nameOnlyMatches") == 0 and value(exposure, "nameOnlyMatches") == 0
+        assert message in reasons(indicators)
+        assert "name only" not in reasons(indicators).lower()
+
+
+def test_name_only_and_id_matches_are_counted_apart():
+    body = clean(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)),
+                 directoryAudits=graph(by_named_app("SkyKick Backup")))
+    exposure, indicators = run_both(body)
+    for out in (exposure, indicators):
+        assert value(out, "indicatorsFound") == 2 and value(out, "nameOnlyMatches") == 1
+
+
+def test_no_bare_vendor_substring_test_remains():
+    for name in FILES:
+        source = (HERE / (name + ".py")).read_text()
+        assert "CONNECTWISE_NAME_MARKERS" not in source
+        assert '"connectwise" in' not in source and '"skykick" in' not in source
+        assert "for marker in CONNECTWISE" not in source
+
+
+def test_clean_and_not_evaluated_outcomes_report_zero_name_only_matches():
+    for body in (clean(), {"servicePrincipals": STEP_403}, None):
+        for out in run_both(body):
+            assert value(out, "nameOnlyMatches") == 0
