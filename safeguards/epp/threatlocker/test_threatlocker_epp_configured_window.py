@@ -116,4 +116,8 @@ def test_no_dated_computer_at_all_is_not_evaluated(mode):
     rows = fleet(2)
     for r in rows:
         r["lastCheckin"] = None
-    assert run(rows, mode)[:2] == (None, "error")
+    value, status, out = run(rows, mode)
+    assert (value, status) == (None, "error")
+    reason = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "readable lastCheckin" in reason
+    assert "checked in within" not in reason
