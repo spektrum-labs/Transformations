@@ -1,16 +1,23 @@
-"""isEPPDeployed for Arctic Wolf Aurora Endpoint Security (Aurora Protect).
+"""isEPPDeployed for Arctic Wolf Aurora Endpoint Defense (the Aurora Protect Desktop agent).
 
-Input: GET {baseURL}/devices/v2?page=1&page_size=200 (Get Devices Extended):
-page_items[] with products[] {name, version, status}. Docs:
-https://docs.arcticwolf.com/ja-jp/開発者およびoem/aurora-endpoint-defense-api/device-api/get-devices-extended
+Input: the extended device list, GET {baseURL}/devices/v2/extended (scope device:list), read through the
+paging envelope: page_items[], plus total_number_of_items. The vendor documents agent_version on each device
+as the installed Aurora Protect Desktop agent version. Page:
+https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api/device-api/get-devices-extended
 
-True when at least one device runs the Protect (prevention) agent.
+True when at least one device reports an agent version. A device is only in this list because the agent
+registered with the console, so this proves the agent is deployed, not on what share of the estate (the API
+cannot see endpoints that never enrolled).
+
+The plain device list (GET /devices/v2) has no agent_version. When devices come back and not one record has
+the field at all, the reply is the wrong view and proves nothing: a data-collection error (Not evaluated),
+never False.
 """
 
 import json
 from datetime import datetime
 
-DOCS = "https://docs.arcticwolf.com/ja-jp/開発者およびoem/aurora-endpoint-defense-api/device-api/get-devices-extended"
+DOCS = "https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api/device-api/get-devices-extended"
 
 
 def unwrap(value):
@@ -38,25 +45,18 @@ def unwrap(value):
     return value
 
 
-
-
 def devices(body):
-    """Get Devices Extended (GET /devices/v2): page_items, each with products, policy, state, background_detection."""
+    """The device records, or None when the reply is not a device list."""
     if isinstance(body, dict):
-        items = body.get("page_items")
-        if isinstance(items, list):
-            return [d for d in items if isinstance(d, dict)]
+        body = body.get("page_items")
     if isinstance(body, list):
         return [d for d in body if isinstance(d, dict)]
     return None
 
 
-def product_names(device):
-    names = []
-    for product in device.get("products") or []:
-        if isinstance(product, dict) and isinstance(product.get("name"), str):
-            names.append(product["name"].strip().lower())
-    return names
+def has_agent_version(device):
+    version = device.get("agent_version")
+    return isinstance(version, str) and bool(version.strip())
 
 
 def response(key, passed, summary, pass_reasons=None, fail_reasons=None, errors=None):
@@ -74,13 +74,18 @@ def response(key, passed, summary, pass_reasons=None, fail_reasons=None, errors=
         },
     }
 
+
 def transform(input):
     key = "isEPPDeployed"
     found = devices(unwrap(input))
     if found is None:
         return response(key, False, {}, fail_reasons=["No device list returned"], errors=["unreadable response"])
-    protected = [d for d in found if any("protect" in n for n in product_names(d))]
-    summary = {"devices": len(found), "protectDevices": len(protected)}
-    if protected:
-        return response(key, True, summary, pass_reasons=[f"Aurora Protect on {len(protected)} of {len(found)} device(s)"])
-    return response(key, False, summary, fail_reasons=["No device reports the Aurora Protect agent"])
+    if found and not any("agent_version" in d for d in found):
+        return response(key, False, {"devices": len(found)}, fail_reasons=["Device records carry no agent_version"],
+                        errors=["agent_version missing from every device: not the extended device list"])
+    deployed = [d for d in found if has_agent_version(d)]
+    summary = {"devices": len(found), "devicesWithAgent": len(deployed)}
+    if deployed:
+        return response(key, True, summary,
+                        pass_reasons=[f"Aurora agent installed on {len(deployed)} of {len(found)} device(s) read"])
+    return response(key, False, summary, fail_reasons=["No device reports an installed Aurora agent"])
