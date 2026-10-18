@@ -24,7 +24,7 @@ Answer:
   False  a mobile device is present that is not APPROVED, or no mobile device is present at all.
   None   (dataCollection.status "error") for an API error body, an empty or unrelated body, a device list that
          shows it is incomplete, a device with no readable nodeClass, or a mobile device with no readable
-         approvalStatus. A partial read is never judged.
+         approvalStatus. A list that shows it is incomplete is never judged.
 
 What it proves: N mobile devices enrolled in NinjaOne MDM are managed. What it cannot prove: that no unmanaged
 mobile device reaches company data. NinjaOne lists only devices that are enrolled in it.

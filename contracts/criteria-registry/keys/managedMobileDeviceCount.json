@@ -13,7 +13,7 @@
     "value": null,
     "envelope": "additionalInfo.dataCollection.status == \"error\""
   },
-  "emptyPopulationMeans": "not_measured",
+  "emptyPopulationMeans": "undecided",
   "allowedCategories": [
     "Endpoint Security",
     "Mobile Security"
