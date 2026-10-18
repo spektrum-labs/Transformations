@@ -139,6 +139,40 @@ def is_reporting(device, clock):
 CONTAINMENT_STATUSES = ("contained", "containment_pending", "lift_containment_pending")
 
 
+# EDR server / workstation split, under new edr* keys (additive; no existing field reads it). Falcon's product_type_desc is
+# "Workstation", "Server" or "Domain Controller" (a domain controller is a server); product_type is the
+# same as a number (1 workstation, 2 domain controller, 3 server) and is read only when the description is
+# absent. Anything else (Mobile, a missing or unknown value) is unclassified and counted in neither class.
+SERVER_PRODUCT_TYPES = ("server", "domain controller", "2", "3")
+WORKSTATION_PRODUCT_TYPES = ("workstation", "1")
+
+
+def device_class(device):
+    """The class of a device: "server", "workstation", or None (unclassified)."""
+    if not isinstance(device, dict):
+        return None
+    desc = device.get("product_type_desc")
+    if desc is None or str(desc).strip() == "":
+        desc = device.get("product_type")
+    if desc is None or isinstance(desc, bool):
+        return None
+    desc = str(desc).strip().lower()
+    if desc in SERVER_PRODUCT_TYPES:
+        return "server"
+    if desc in WORKSTATION_PRODUCT_TYPES:
+        return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no device: no devices proves nothing, so it is never 0."""
+    if total <= 0:
+        return None
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
+
+
 def transform(input):
     """
     requiredCoveragePercentage (CrowdStrike, GET /devices/combined/devices/v1).
@@ -188,7 +222,19 @@ def transform(input):
     contained = 0
     rfm_hosts = 0
     no_agent = 0
+    servers = 0
+    protected_servers = 0
+    workstations = 0
+    protected_workstations = 0
+    unclassified = 0
     for device in resources:
+        kind = device_class(device)
+        if kind == "server":
+            servers = servers + 1
+        elif kind == "workstation":
+            workstations = workstations + 1
+        else:
+            unclassified = unclassified + 1
         if not isinstance(device, dict):
             continue
         if not is_reporting(device, clock):
@@ -201,6 +247,10 @@ def transform(input):
             no_agent = no_agent + 1
         else:
             active = active + 1
+            if kind == "server":
+                protected_servers = protected_servers + 1
+            elif kind == "workstation":
+                protected_workstations = protected_workstations + 1
             if device.get("status") in CONTAINMENT_STATUSES:
                 contained = contained + 1
     window = f"within {ACTIVE_WINDOW_DAYS} days of the newest check-in ({clock.isoformat()}Z)"
@@ -273,6 +323,30 @@ def transform(input):
         "containedDevices": contained,
         "activeWindowDays": ACTIVE_WINDOW_DAYS,
     }
+    # The split, over the same devices and the same active test as requiredCoveragePercentage. A failed
+    # or truncated read is not measured, so every split field is None rather than a confident number.
+    # An empty device list (no error) measures nothing either, so the split is None there too, as it is in
+    # the SentinelOne and Defender transforms.
+    if api_errors or total == 0:
+        result.update({
+            "edrServerCoveragePercentage": None,
+            "edrWorkstationCoveragePercentage": None,
+            "edrTotalServerCount": None,
+            "edrProtectedServerCount": None,
+            "edrTotalWorkstationCount": None,
+            "edrProtectedWorkstationCount": None,
+            "edrUnclassifiedDeviceCount": None,
+        })
+    else:
+        result.update({
+            "edrServerCoveragePercentage": class_percentage(protected_servers, servers),
+            "edrWorkstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+            "edrTotalServerCount": servers,
+            "edrProtectedServerCount": protected_servers,
+            "edrTotalWorkstationCount": workstations,
+            "edrProtectedWorkstationCount": protected_workstations,
+            "edrUnclassifiedDeviceCount": unclassified,
+        })
 
     return create_response(
         result=result,
