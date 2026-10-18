@@ -3,6 +3,10 @@ Transformation: isActivityAuditTrailEnabled
 Vendor: OpenAI  |  Category: Artificial Intelligence
 Product: OpenAI API (API Platform)
 Evaluates: The organization audit log is enabled and readable: GET /v1/organization/audit_logs returns at least one event.
+A list with events proves logging is on (OpenAI cannot switch it off once enabled). An empty list proves nothing:
+the Administration API exposes no setting that says whether audit logging is on (the public OpenAPI spec has
+only the list endpoint), so "off" and "on but quiet" look the same. An empty list is reported as not evaluated
+(None with a dataCollection error), never as False.
 API Source: listAuditLogs (GET /v1/organization/audit_logs?limit=1)
 Credential: Admin API key (sk-admin-...). Endpoints confirmed in the OpenAI OpenAPI spec
 (github.com/openai/openai-openapi, security AdminApiKeyAuth).
@@ -45,14 +49,14 @@ def extract_input(raw):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
-                    additional_findings=None):
+                    additional_findings=None, api_errors=None):
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "success", "errors": []},
+            "dataCollection": {"status": "error" if api_errors else "success", "errors": api_errors or []},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -185,12 +189,24 @@ def evaluate(input):
     if items is None:
         return refused_or_unrecognised(data, validation, "Audit log")
     events = [e for e in items if isinstance(e.get("type"), str) and e.get("id")]
+    if not items:
+        reason = ("GET /v1/organization/audit_logs returned no events. OpenAI exposes no setting that says whether "
+                  "audit logging is on, so an empty list cannot tell logging that is off from logging that is on "
+                  "but has recorded nothing. The control was not measured.")
+        return create_response(
+            result={KEY: None, "events": 0},
+            validation=validation,
+            api_errors=[reason],
+            recommendations=["Confirm in Organization settings > Data controls that audit logging is on and attach "
+                             "that as evidence, or re-run once the organization has logged activity. Once enabled it "
+                             "cannot be turned off from settings."],
+            input_summary={"events": 0},
+        )
     if not events:
         return fail(validation,
-                    "GET /v1/organization/audit_logs returned no events. Audit logging may be off, or the "
-                    "organization has had no logged activity; either way nothing proves the trail exists.",
-                    "An organization owner enables audit logging in Organization settings > Data controls > "
-                    "Data retention. Once enabled it cannot be turned off from settings.",
+                    "GET /v1/organization/audit_logs returned entries but none is a recognisable audit event "
+                    "(no id and type), so nothing proves the trail exists.",
+                    "Inspect the raw integration response.",
                     {"events": 0})
     newest = events[0]
     ts = as_int(newest.get("effective_at"))
