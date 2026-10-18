@@ -10,7 +10,13 @@ only the list endpoint), so "off" and "on but quiet" look the same. An empty lis
 API Source: listAuditLogs (GET /v1/organization/audit_logs?limit=1)
 Credential: Admin API key (sk-admin-...). Endpoints confirmed in the OpenAI OpenAPI spec
 (github.com/openai/openai-openapi, security AdminApiKeyAuth).
-Fails closed: a refused call, an unrecognised body or a partial read is False with the reason.
+Not evaluated, never False: the API has no field that says audit logging is off, so the only
+readable answer is events (True). A refused call (401/403/404/429), an unrecognised body, an
+empty log and an exception inside this file answer None with dataCollection.status "error",
+which Token-Service records as not evaluated. An empty log cannot tell "logging is off" from
+"logging is on and nothing has been logged yet": audit logging is an opt-in organization setting
+(help.openai.com/en/articles/9687866), and the API reference documents no response that means
+"not activated" (openai-openapi: 200, 400, 404 for a bad cursor, 429).
 """
 import json
 from datetime import datetime, timezone
@@ -53,10 +59,11 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     errors = transformation_errors or []
+    api_err_list = api_errors or []
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if api_errors else "success", "errors": api_errors or []},
+            "dataCollection": {"status": "error" if api_err_list else "success", "errors": api_err_list},
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -85,8 +92,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 # A refused call is not a posture finding: the control's state is unknown, so the key is
-# false with the reason, never true. OpenAI documents: "Admin API keys cannot be used for
-# non-administration endpoints"; the reverse holds too - a project key gets 401/403 here.
+# None (not evaluated) with the reason, never true and never false. OpenAI documents:
+# "Admin API keys cannot be used for non-administration endpoints"; the reverse holds
+# too - a project key gets 401/403 here.
 REFUSAL_REASONS = {
     401: "the key was rejected. The /v1/organization/* endpoints accept only an Admin API key "
          "(sk-admin-...) created by an organization owner at platform.openai.com/settings/organization/admin-keys.",
@@ -98,7 +106,11 @@ REFUSAL_REASONS = {
 
 
 def detect_refusal(data):
-    """Return a reason string when the payload is an error envelope, else None."""
+    """Return (status, reason) when the payload is an error envelope, else None.
+
+    The reason is fixed text. The vendor's own message is never copied in: OpenAI's
+    invalid-key message echoes part of the key it was given.
+    """
     if not isinstance(data, dict):
         return None
     err = data.get("error")
@@ -110,14 +122,9 @@ def detect_refusal(data):
     except (TypeError, ValueError):
         status = None
     why = REFUSAL_REASONS.get(status, "the vendor call did not succeed.")
-    detail = data.get("message") or data.get("errorMessage") or ""
-    if isinstance(err, dict) and err.get("message"):
-        detail = err.get("message")
-    if detail:
-        why = why + " Vendor said: " + str(detail)
     if status:
         why = "HTTP " + str(status) + ": " + why
-    return why
+    return status, why
 
 
 def read_list(obj):
@@ -150,23 +157,30 @@ def now_ts():
     return datetime.now(timezone.utc).timestamp()
 
 
-def fail(validation, reason, recommendation=None, summary=None, extra=None):
-    result = {KEY: False}
+def not_measured(validation, reason, recommendation=None, extra=None, summary=None,
+                 transformation_errors=None):
+    """No verdict: the key is None and dataCollection.status is "error", so the evaluator
+    shows Not evaluated instead of a failed check. extra carries facts really read (an
+    event count of zero, the HTTP status) next to the missing verdict."""
+    result = {KEY: None}
     if extra:
         result.update(extra)
     return create_response(result=result, validation=validation, fail_reasons=[reason],
                            recommendations=[recommendation] if recommendation else [],
-                           input_summary=summary or {})
+                           input_summary=summary or {}, api_errors=[reason],
+                           transformation_errors=transformation_errors)
 
 
 def refused_or_unrecognised(data, validation, what):
-    why = detect_refusal(data)
-    if why:
-        return fail(validation, "The OpenAI call did not return data - " + why +
-                    " This is a credential or reachability result, not a finding; the control's state is unknown.",
-                    "Reconnect the OpenAI integration with an Admin API key.", {"endpointReachable": False})
-    return fail(validation, what + " response not recognised - no OpenAI list or object in the payload.",
-                "Inspect the raw integration response.", {"endpointReachable": None})
+    refusal = detect_refusal(data)
+    if refusal:
+        status, why = refusal
+        return not_measured(validation, "The OpenAI call did not return data - " + why +
+                            " This is a credential or reachability result, not a finding; the control's state is unknown.",
+                            "Reconnect the OpenAI integration with an Admin API key.",
+                            {"endpointReachable": False, "httpStatus": status})
+    return not_measured(validation, what + " response not recognised - no OpenAI list or object in the payload.",
+                        "Inspect the raw integration response.", {"endpointReachable": None})
 
 
 def transform(input):
@@ -175,12 +189,12 @@ def transform(input):
             return evaluate({"data": input.get("data"), "validation": input.get("validation")})
         return evaluate(input)
     except Exception as exc:
-        return create_response(
-            result={KEY: False},
-            validation={"status": "error", "errors": [], "warnings": []},
+        return not_measured(
+            {"status": "error", "errors": [], "warnings": []},
+            "The audit log response could not be read, so the "
+            "control's state is unknown.",
+            "Report this to the Spektrum integrations team with the raw API response.",
             transformation_errors=[str(exc)],
-            fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
-            recommendations=["Report this to the Spektrum integrations team with the raw API response."],
         )
 
 def evaluate(input):
@@ -203,11 +217,12 @@ def evaluate(input):
             input_summary={"events": 0},
         )
     if not events:
-        return fail(validation,
-                    "GET /v1/organization/audit_logs returned entries but none is a recognisable audit event "
-                    "(no id and type), so nothing proves the trail exists.",
-                    "Inspect the raw integration response.",
-                    {"events": 0})
+        # Entries that are not audit events were not read as an answer: no verdict, never False.
+        return not_measured(validation,
+                            "GET /v1/organization/audit_logs returned entries but none is a recognisable audit event "
+                            "(no id and type), so the control was not evaluated.",
+                            "Inspect the raw integration response.",
+                            {"events": 0})
     newest = events[0]
     ts = as_int(newest.get("effective_at"))
     age = None
