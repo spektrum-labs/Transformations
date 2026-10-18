@@ -36,5 +36,5 @@
       "change": "Registered so the ConnectSecure transforms can emit it. The meaning is the catalogue description made precise; unverified fields are named in the transform docstring."
     }
   ],
-  "notes": "Registered for the ConnectSecure transforms. Other vendors' transforms already emit this key (Intruder, Rapid7, Action1, Amazon Inspector); whether they measure the same population was not reviewed, so the key stays proposed and V0 and the owner is not yet named."
+  "notes": "Registered for the ConnectSecure transforms. Other vendors' transforms already emit this key (Intruder, Rapid7, Action1, Amazon Inspector); whether they measure the same population was not reviewed, so the key stays proposed and V0 and the owner is not yet named. NodeZero (safeguards/threat-vulnerability-management/horizon3-nodezero/openMediumSeverityVulnerabilitiesCount.py) also emits this key, but counts weakness series with status OPEN from its own weakness series page, not assets, and returns null when no series carries both severity and status. Whether that population is comparable to the asset-based one was not reviewed."
 }

@@ -43,5 +43,5 @@
       "change": "A Vanta proof-source transform now emits this key from the GRC platform's own vulnerability list; allowedCategories gains Compliance Management for it."
     }
   ],
-  "notes": "Registered for the ConnectSecure transforms. Other vendors' transforms already emit this key (Intruder, Rapid7, Action1, Amazon Inspector); whether they measure the same population was not reviewed, so the key stays proposed and V0 and the owner is not yet named."
+  "notes": "Registered for the ConnectSecure transforms. Other vendors' transforms already emit this key (Intruder, Rapid7, Action1, Amazon Inspector); whether they measure the same population was not reviewed, so the key stays proposed and V0 and the owner is not yet named. NodeZero (safeguards/threat-vulnerability-management/horizon3-nodezero/openCriticalVulnerabilitiesCount.py) also emits this key, but counts weakness series with status OPEN from its own weakness series page, not assets, and returns null when no series carries both severity and status. Whether that population is comparable to the asset-based one was not reviewed."
 }
