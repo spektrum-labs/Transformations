@@ -74,7 +74,6 @@ def as_list(value):
     return [value]
 
 
-
 def migration_pending(policy):
     """The policy's policyMigrationState (cut to 40 characters) when it is anything but migrationComplete, else "".
 
@@ -182,7 +181,7 @@ def transform(input):
 
         mfa_enforced_for_users = len(policies_enforcing_mfa_for_users) > 0
         pending = migration_pending(auth_methods)
-        if pending and not methods_available:
+        if pending and not methods_available and mfa_enforced_for_users:
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,

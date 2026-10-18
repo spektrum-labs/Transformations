@@ -69,6 +69,15 @@ GRAPH_CASES = [(USERS, "isMFAEnforcedForUsers"), (ENABLED, "isMFAEnabled"), (ENF
 
 @pytest.mark.parametrize("module,key", GRAPH_CASES)
 @pytest.mark.parametrize("state", LEGACY_STATES)
+def test_a_migrating_policy_does_not_hide_a_missing_mfa_conditional_access_policy(module, key, state):
+    # No Conditional Access policy requires MFA: False whatever the method list says, so the migration state
+    # (which only explains the method list) must not turn it into not evaluated.
+    out = run(module, graph_input(["Sms", "Voice"], state, ca=()))
+    assert value(out, key) is False
+
+
+@pytest.mark.parametrize("module,key", GRAPH_CASES)
+@pytest.mark.parametrize("state", LEGACY_STATES)
 def test_only_weak_methods_in_a_migrating_policy_is_not_evaluated(module, key, state):
     out = run(module, graph_input(["Sms", "Voice"], state))
     assert value(out, key) is None

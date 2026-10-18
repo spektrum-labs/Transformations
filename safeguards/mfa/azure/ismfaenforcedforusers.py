@@ -736,7 +736,6 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         input_summary=input_summary)
 
 
-
 def migration_pending(policy):
     """The policy's policyMigrationState (cut to 40 characters) when it is anything but migrationComplete, else "".
 
@@ -910,7 +909,7 @@ def transform(input):
         # per-user MFA and SSPR policies may enable Microsoft Authenticator or OATH codes, so the new policy
         # alone is not evidence that no MFA method is available (not a FAIL).
         pending = migration_pending(auth_methods)
-        if pending and not methods_available:
+        if pending and not methods_available and (mfa_enforced_for_users or set_aside):
             return not_evaluated(
                 criteriaKey,
                 migration_reason(pending, "Microsoft Authenticator, FIDO2, OATH or Temporary Access Pass method"),
