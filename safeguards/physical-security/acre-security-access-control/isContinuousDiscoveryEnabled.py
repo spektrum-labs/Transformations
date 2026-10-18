@@ -2,7 +2,7 @@
 Transformation: isContinuousDiscoveryEnabled
 Vendor: acre Access Control  |  Category: Physical Security
 Source: GET /api/f/{instanceKey}/controllers and GET /api/f/{instanceKey}/peripherals
-Pass: the controller and reader estate is enumerable, so the physical access perimeter
+Pass: the controller and reader environment is enumerable, so the physical access perimeter
 under assessment is inventoried rather than assumed.
 """
 import json
@@ -162,7 +162,7 @@ def evaluate(data):
                 % (len(controllers) - len(enabled))
             )
     else:
-        fails.append("No controllers were returned, so the physical access estate cannot be enumerated.")
+        fails.append("No controllers were returned, so the physical access environment cannot be enumerated.")
     return result, passes, fails, recs, {"controllerCount": len(controllers), "readerCount": len(readers)}
 
 

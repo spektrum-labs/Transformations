@@ -68,7 +68,9 @@ def evaluate(data):
                 parsed_dates = []
                 for date_str in lastRunDates:
                     try:
-                        parsed_dates.append(datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S.%fZ'))
+                        if not date_str.endswith('Z'):
+                            continue
+                        parsed_dates.append(datetime.fromisoformat(date_str[:-1]))
                     except Exception:
                         continue
                 if parsed_dates:

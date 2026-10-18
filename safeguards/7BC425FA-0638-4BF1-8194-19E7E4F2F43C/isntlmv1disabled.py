@@ -278,7 +278,7 @@ def never_applicable(devices):
     return out
 
 
-def transform(input):
+def evaluate(input, seen):
     # Reading input.get("data") marks this transform as new-format for Token-Service, which then hands it the
     # undrilled response as {"data": <response>, "validation": ...}, so Schema and Results stay together.
     validation = {"status": "unknown", "errors": [], "warnings": []}
@@ -301,6 +301,7 @@ def transform(input):
         if why:
             return not_measured(validation, "Defender for Endpoint advanced hunting: " + why + ".")
         devices, parts_seen, unknown_ids, unnamed = measure(rows)
+        seen["devices"] = devices
         if unknown_ids:
             return not_measured(validation, "The secure-configuration assessment returned rows this check cannot "
                                 "identify (" + name_list(unknown_ids) + "): the configuration id and its knowledge-base "
@@ -319,6 +320,63 @@ def transform(input):
         return judge(validation, devices)
     except Exception as e:
         return not_measured(validation, "Transformation error: " + str(e)[:300])
+
+
+def rated_of_assessed(out, devices):
+    """Stamp every result with what was measured, in the words "N rated of M assessed: <verdict>".
+
+    Assessed: devices with an identified assessment row for this configuration. Rated: those Defender Vulnerability
+    Management reads as applicable (IsApplicable), the only ones the verdict counts. The verdict is not changed.
+    """
+    try:
+        assessed = 0
+        rated = 0
+        if isinstance(devices, dict):
+            for dkey in devices:
+                assessed = assessed + 1
+                parts = devices[dkey]["parts"]
+                for part in parts:
+                    if parts[part][0]:
+                        rated = rated + 1
+                        break
+        value = out["transformedResponse"].get(KEY)
+        if value is None:
+            verdict = "not evaluated"
+        elif value is True or (value is not False and value == 0):
+            verdict = "compliant"
+        else:
+            verdict = "not compliant"
+        counts = str(rated) + " rated of " + str(assessed) + " assessed"
+        head = counts + ": " + verdict
+        info = out["additionalInfo"]
+        evaluation = info["evaluation"]
+        stamped = False
+        for name in ("passReasons", "failReasons"):
+            reasons = evaluation.get(name) or []
+            if reasons and not stamped:
+                evaluation[name] = [head + ". " + str(reasons[0])] + list(reasons[1:])
+                stamped = True
+        if not stamped:
+            evaluation["passReasons" if verdict == "compliant" else "failReasons"] = [head + "."]
+        errors = info["dataCollection"].get("errors") or []
+        if errors:
+            info["dataCollection"]["errors"] = [head + ". " + str(errors[0])] + list(errors[1:])
+        summary = info["transformation"].get("inputSummary")
+        if not isinstance(summary, dict):
+            summary = {}
+        summary["assessedDevices"] = assessed
+        summary["ratedDevices"] = rated
+        summary["ratedOfAssessed"] = counts
+        info["transformation"]["inputSummary"] = summary
+    except Exception:
+        pass
+    return out
+
+
+def transform(input):
+    seen = {}
+    return rated_of_assessed(evaluate(input, seen), seen.get("devices"))
+
 
 def judge(validation, devices):
     applicable = []

@@ -152,30 +152,31 @@ def evaluate(data):
         else:
             allow.append(name)
     measured = len(deny) + len(allow)
+    if not reached or measured == 0:
+        verdict = None
+    elif allow:
+        verdict = False
+    elif unreadable:
+        verdict = None
+    else:
+        verdict = True
     result = {
-        "defaultDenyInbound": reached and measured > 0 and not allow and not unreadable,
+        "defaultDenyInbound": verdict,
         "defaultDenyCoveragePercentage": pct(len(deny), measured),
         "networksEvaluated": measured,
         "networksFallingThroughToAllowAny": allow[:25],
         "networksNotMeasured": unreadable[:25],
         "endpointReached": reached,
     }
-    passes, fails, recs = [], [], []
+    passes, fails, recs, api_errors = [], [], [], []
     if not reached:
-
-        fails.append(
-            "The response carries no appliance network list and no per-network results, "
-            "so it is indistinguishable from an authentication failure. Not measured."
+        api_errors.append(
+            "The Meraki response carries no appliance network list and no per-network results; "
+            "nothing to measure."
         )
-
     elif measured == 0:
-        fails.append("No appliance network returned L3 firewall rules.")
-    elif not allow and not unreadable:
-        passes.append(
-            "All %d appliance network(s) end their rule set with an explicit deny any-to-any."
-            % measured
-        )
-    else:
+        api_errors.append("No appliance network returned L3 firewall rules; nothing to measure.")
+    elif allow:
         fails.append(
             "%d of %d appliance network(s) fall through to Meraki's implicit allow-any: %s."
             % (len(allow), measured, ", ".join(allow[:10]))
@@ -184,13 +185,27 @@ def evaluate(data):
             "Add a final deny rule (source Any, destination Any) above the default rule on "
             "each network listed, with explicit allows above it."
         )
-    return result, passes, fails, recs, {"networksEvaluated": measured}
+    elif unreadable:
+        api_errors.append(
+            "%d of %d appliance network(s) could not be read (%s), so a final deny rule cannot be confirmed on every network."
+            % (len(unreadable), len(unreadable) + measured, ", ".join(unreadable[:10]))
+        )
+    else:
+        passes.append(
+            "All %d appliance network(s) end their rule set with an explicit deny any-to-any."
+            % measured
+        )
+    if api_errors:
+        fails = list(api_errors)
+    elif unreadable:
+        fails.append("%d more network(s) could not be read and were not counted: %s." % (len(unreadable), ", ".join(unreadable[:10])))
+    return result, passes, fails, recs, api_errors, {"networksEvaluated": measured}
 
 
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else {}
-    result, pass_reasons, fail_reasons, recommendations, input_summary = evaluate(data)
+    result, pass_reasons, fail_reasons, recommendations, api_errors, input_summary = evaluate(data)
     return create_response(
         result=result,
         validation=validation,
@@ -198,6 +213,7 @@ def transform(input):
         fail_reasons=fail_reasons,
         recommendations=recommendations,
         input_summary=input_summary,
+        api_errors=api_errors,
         metadata={
             "transformationId": "defaultDenyInbound",
             "vendor": "Cisco Meraki MX",

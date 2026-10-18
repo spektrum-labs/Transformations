@@ -1,0 +1,12 @@
+{
+  "contract": "sandbox-compiles",
+  "why": "every transform must compile under RestrictedPython, which is what the pipeline runs; this list may only shrink",
+  "generated_by": "tools/check_sandbox_compiles.py --emit-allowlist",
+  "count": 1,
+  "instances": [
+    "safeguards/mfa/pingfederate/ismfaenforced.py"
+  ],
+  "reasons": {
+    "safeguards/mfa/pingfederate/ismfaenforced.py": "SyntaxError: ('Line 73: \"_walk_node\" is an invalid variable name because it starts with \"_\"',)"
+  }
+}

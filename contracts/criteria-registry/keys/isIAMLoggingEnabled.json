@@ -1,0 +1,113 @@
+{
+  "name": "isIAMLoggingEnabled",
+  "revision": 1,
+  "status": "contested",
+  "definition": "CONTESTED -- most implementations answer 'audit records were returned in the read window' (an activity proxy, under which a quiet tenant reads false), one answers 'logging of IAM activity is configured on' (AWS CloudTrail.1), and four RTA rows point at a file that does not emit this key at all. See conflict.positions.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "unknown -- audit records returned by one read at most vendors; a CloudTrail trail configuration at AWS",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "unknown until ruled: either a configuration read showing IAM audit logging on, or a read returning at least one IAM audit record",
+  "evidenceClass": "unknown",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "undecided",
+  "allowedCategories": ["Identity and Access Management", "Cloud Security", "Productivity Suite", "Security Logging & Monitoring"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+    {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+    {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)"},
+    {"srn": "874a78ff-2ca3-4c0e-ab86-19277536ac87", "name": "MS 365"},
+    {"srn": "5f40a1d7-d084-4a3b-ae17-8d2fe592d544", "name": "MS 365 (One-Click)"},
+    {"srn": "2386963a-c01d-4dc2-a3ef-7298d43e82b3", "name": "Microsoft - Cloud Security"},
+    {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"},
+    {"srn": "37d36d50-df89-42f0-9435-c130ba6dc717", "name": "Duo - MSP partner account"},
+    {"srn": "b75b4feb-29a4-4fff-837d-31cd35132d98", "name": "Keeper"},
+    {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"},
+    {"srn": "c52307eb-426d-4a59-a862-df0df241c56a", "name": "AWS Security Hub"},
+    {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management"},
+    {"srn": "7e47e66a-27e9-4300-a24f-4368458fd0c9", "name": "Dashlane"}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "conflict": {
+    "summary": "Fourteen integrations, eight files, three requirements. The type agrees (boolean); the evidence class does not. 'Records exist' cannot tell a tenant with logging off from a quiet one, and 'configured' says nothing about retention or delivery. Separately: the Okta file emits isIAMLoggingEnabled and isMFALoggingEnabled with the SAME value from one System Log read, so at Okta the two keys are aliases in fact, although the QC's cross-vendor table records them as distinct controls.",
+    "positions": [
+      {
+        "meaning": "At least one audit-log record is returned by the read.",
+        "valueType": "boolean",
+        "population": "audit records in the vendor's default read window",
+        "integrations": [
+          {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+          {"srn": "f799acf0-d748-420b-8799-21fa7dde5f5d", "name": "Okta - Application"},
+          {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+          {"srn": "b75b4feb-29a4-4fff-837d-31cd35132d98", "name": "Keeper", "note": "via Commander Service Mode audit-log; requires a Commander deployment"},
+          {"srn": "fc3bd97c-5fea-474f-9214-ba5e4ffe49e2", "name": "Savyint"},
+          {"srn": "7b2c0d10-2b19-48da-b763-8fbe13077f34", "name": "JumpCloud-Identity and Access Management", "note": "pinned URL 404s"}
+        ],
+        "files": [
+          "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/is_mfa_logging_enabled.py:83,:104,:114",
+          "safeguards/mfa/azure/isiamloggingenabled.py",
+          "safeguards/iam/keeper/isiamloggingenabled.py",
+          "safeguards/iam/saviynt/isiamloggingenabled.py"
+        ],
+        "source": "RTA descriptions ('returns true if records exist'); Okta file read for this entry"
+      },
+      {
+        "meaning": "Authentication log events are retrievable with timestamp, user and result; a 403 is a measured false.",
+        "valueType": "boolean",
+        "population": "Duo authentication log",
+        "integrations": [
+          {"srn": "a2abbcf5-6693-4b14-8329-8721302a4ef7", "name": "Duo"},
+          {"srn": "37d36d50-df89-42f0-9435-c130ba6dc717", "name": "Duo - MSP partner account"}
+        ],
+        "files": ["safeguards/iam/duo/isiamloggingenabled.py"],
+        "source": "RTA description; decision Q1 moves Duo to /admin/v2/logs/activity"
+      },
+      {
+        "meaning": "CloudTrail logging of IAM and API activity is enabled (Security Hub control CloudTrail.1).",
+        "valueType": "boolean",
+        "population": "the account's CloudTrail configuration",
+        "integrations": [{"srn": "c52307eb-426d-4a59-a862-df0df241c56a", "name": "AWS Security Hub"}],
+        "files": ["safeguards/cloudsecurity/awssecurityhub/isiamloggingenabled.py @ c6b66a38"],
+        "source": "RTA description"
+      },
+      {
+        "meaning": "No answer: the RTA row points at the Microsoft copy of is_mfa_logging_enabled.py, which emits isMFALoggingEnabled only, so the key is never returned and a real gap is written.",
+        "valueType": "unknown",
+        "integrations": [
+          {"srn": "874a78ff-2ca3-4c0e-ab86-19277536ac87", "name": "MS 365"},
+          {"srn": "5f40a1d7-d084-4a3b-ae17-8d2fe592d544", "name": "MS 365 (One-Click)"},
+          {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)"},
+          {"srn": "2386963a-c01d-4dc2-a3ef-7298d43e82b3", "name": "Microsoft - Cloud Security"}
+        ],
+        "files": ["safeguards/d9b6f27a-2e67-4b55-a09e-0784c5de9abd/is_mfa_logging_enabled.py"],
+        "source": "Plan B2b (four re-points, deferred to the V-gate) and F-KEY-09; Dashlane has no URL at all"
+      }
+    ],
+    "proposedResolution": {
+      "summary": "Keep isIAMLoggingEnabled for the configured state, and move record-presence implementations to a presence key whose empty population is not_measured rather than false, so a quiet tenant stops reading as logging-off. Rule whether isMFALoggingEnabled is a distinct control or an alias, since the reference implementation (Okta) emits one value under both.",
+      "splitKeys": [
+        {"name": "isIAMLoggingEnabled", "definition": "Audit logging of identity and access events is configured on for the tenant or account.", "valueType": "boolean", "existing": true, "wouldTake": ["AWS Security Hub", "any vendor that exposes a logging configuration"]},
+        {"name": "hasRecentIAMAuditEvents", "definition": "The vendor returned at least one identity or access audit event inside the read window; an empty window is not measured, not false.", "valueType": "boolean", "existing": false, "wouldTake": ["Okta", "Okta - Application", "Azure AD", "Keeper", "Savyint", "JumpCloud", "Duo"]}
+      ]
+    },
+    "decision": {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Does isIAMLoggingEnabled mean 'logging is configured on' or 'audit records exist', what does an empty window mean, and is isMFALoggingEnabled a separate control or an alias of this key?"
+    }
+  },
+  "validation": {"level": "V0", "implementations": []},
+  "citations": [
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json and defs/<srn>.json: 14 RTA rows, descriptions, JumpCloud MISSING_404, Dashlane NO_URL",
+    "spektrum-labs-cli docs/integration-qc-2026-10-06-remediation-plan.md B2b and Wave B status",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-registry.md F-KEY-09 and cross-vendor table row isIAMLoggingEnabled / isMFALoggingEnabled",
+    "safeguards/86ded564-522a-4c9b-9106-365e4cbdec7d/is_mfa_logging_enabled.py:2,:7,:83,:104,:114",
+    "tools/check_criteria_registry.py census 2026-10-07: 19 files on main emit this key"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-07", "change": "Seeded as contested from the 2026-10-06 integration QC."}
+  ]
+}
