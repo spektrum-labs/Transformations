@@ -29,7 +29,7 @@ method and some other member-targeted method enabled (for example SMS, voice or 
 policy requiring MFA for users. An external method (e.g. Duo) with no Conditional Access policy
 requiring MFA reads not evaluated, not FAIL.
 
-Entra MFA review (J.J., 16 Oct 2026; shipped live, no flag), two false failures fixed:
+Entra MFA review (decision 16 Oct 2026; shipped live, no flag), two false failures fixed:
 - Microsoft MFA methods are Microsoft Authenticator, FIDO2, software OATH, Temporary Access Pass, hardware OATH
   tokens and certificate-based authentication whose default mode is multi-factor
   (authenticationModeConfiguration.x509CertificateAuthenticationDefaultMode "x509CertificateMultiFactor").

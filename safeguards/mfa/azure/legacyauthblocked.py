@@ -15,7 +15,7 @@ Security Defaults (Entra MFA review): when that read shows isEnabled true, Micro
 every account, so the key is True whatever the policy list holds (Conditional Access cannot be enabled alongside
 Security Defaults). A Security Defaults read that is absent, refused or unreadable changes nothing.
 
-Not evaluated (value None, dataCollection.status "error"; Entra MFA review, J.J. 16 Oct 2026): a policy list that was
+Not evaluated (value None, dataCollection.status "error"; Entra MFA review, decision 16 Oct 2026): a policy list that was
 not read is not evidence that nothing blocks legacy clients, so these never read False:
 - an error envelope, a refused read (vendorErrorAsResponse), a workflow step error, input validation failure, or a
   body with no policy list;

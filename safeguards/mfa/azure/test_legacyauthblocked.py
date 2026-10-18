@@ -162,7 +162,7 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         self.assertNotIn(oid(5), self.reasons(res, "passReasons")[0])
 
     def test_error_input_is_not_evaluated(self):
-        # Entra MFA review (J.J., 16 Oct 2026): a body that is not a policy list was read as Failed before; a read that
+        # Entra MFA review (decision 16 Oct 2026): a body that is not a policy list was read as Failed before; a read that
         # failed is not evidence, so it is Not evaluated (test_legacyauthblocked_not_evaluated.py has the cases).
         res = self.run_t(["not", "a", "dict"])
         self.assertIsNone(res["transformedResponse"][KEY])
