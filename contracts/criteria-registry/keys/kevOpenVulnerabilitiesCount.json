@@ -1,0 +1,41 @@
+{
+  "name": "kevOpenVulnerabilitiesCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of weaknesses in NodeZero's most recent op that it reports as listed in the CISA Known Exploited Vulnerabilities catalogue (vuln_cisa_kev true); 0 only when at least one weakness reports the flag and none is true.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "The weaknesses page for the most recent NodeZero op of one tenant; the value is the number with vuln_cisa_kev true. Weaknesses that do not carry a boolean vuln_cisa_kev are not counted as reporting.",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "For 0: at least one weakness in the page carries a boolean vuln_cisa_kev and none is true. An empty page, or one with no such field, is not 0.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Threat & Vulnerability Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/threat-vulnerability-management/horizon3-nodezero/kevOpenVulnerabilitiesCount.py",
+    "safeguards/threat-vulnerability-management/action1-com/kevOpenVulnerabilitiesCount.py",
+    "safeguards/threat-vulnerability-management/intruder-io/kevOpenVulnerabilitiesCount.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered so the Horizon3 NodeZero transforms can emit it; the meaning is what the transform reads, stated precisely. Unverified fields are named in notes."
+    }
+  ],
+  "notes": "Other vendors' transforms already emit this key (Action1 and Intruder); they count over assets or findings in their own tool, not over NodeZero's weakness rows, and whether the populations are comparable was not reviewed, so the key stays proposed at V0 with the owner not yet named. Field names are as the NodeZero transform reads them; they were not live-verified against a NodeZero tenant."
+}
