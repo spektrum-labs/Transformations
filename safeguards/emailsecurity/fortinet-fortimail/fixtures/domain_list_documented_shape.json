@@ -1,0 +1,21 @@
+{
+  "objectID": "Domain:",
+  "reqAction": 1,
+  "totalRemoteCount": 3,
+  "subCount": 3,
+  "remoteSorting": 0,
+  "nextPage": "",
+  "nodePermission": 3,
+  "nodeAccessDetails": "",
+  "collection": [
+    {"mkey": "example.test", "maindomain": "", "ip": "mx.example.test", "port": 25, "mxflag": 0,
+     "is_subdomain": false, "is_association": false, "is_service_domain": false,
+     "recipient_verification": "disable", "ec_status": "disable", "isReferenced": true, "failed_time": 0},
+    {"mkey": "mail.example.test", "maindomain": "example.test", "ip": "", "port": 25, "mxflag": 0,
+     "is_subdomain": true, "is_association": false, "is_service_domain": false,
+     "recipient_verification": "disable", "ec_status": "disable", "isReferenced": true, "failed_time": 0},
+    {"mkey": "alias.example.test", "maindomain": "example.test", "ip": "", "port": 25, "mxflag": 0,
+     "is_subdomain": false, "is_association": true, "is_service_domain": false,
+     "recipient_verification": "disable", "ec_status": "disable", "isReferenced": false, "failed_time": 0}
+  ]
+}

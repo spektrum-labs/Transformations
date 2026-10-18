@@ -13,7 +13,7 @@ def error_reason(body):
     for key in ("error", "Error", "errors"):
         err = body.get(key)
         if err:
-            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured: " + str(err)[:200]
+            return "IDrive API returned an error; " + CRITERIA_KEY + " was not measured."
     for key in ("statusCode", "status_code", "status", "httpStatus"):
         code = body.get(key)
         if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
@@ -175,6 +175,11 @@ def evaluate(input):
                 f"{total_failed} device backup(s) are listed in backup_failed_on across the plan(s) evaluated."
             )
             recommendations.append("Investigate devices listed in backup_failed_on for recurring backup failures.")
+
+    if api_error or plan_count == 0 or plans_without_lists > 0:
+        # Not read: the derived counts are not 0. (No attempts is a full read, so its zeros stay.)
+        total_applied = total_failed = total_pending = attempted = None
+        input_summary.update(totalApplied=None, totalFailed=None, totalPending=None, attempted=None)
 
     result = {
         "backupSuccessRatePercentage": success_rate,
