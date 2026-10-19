@@ -7,7 +7,9 @@ Evaluates "no weak factors": only strong authentication methods are enabled (FID
 authentication, Microsoft Authenticator, software or hardware OATH tokens, and a Temporary Access Pass
 with a maximum lifetime). SMS, voice and email OTP targeted at members fail. A method enabled with an
 empty includeTargets list targets nobody and is not counted at all. An external method alone, or no
-member method at all, is not evaluated.
+member method at all, is not evaluated. A pass also needs policyMigrationState migrationComplete
+(or no state reported): while the legacy MFA and SSPR policies still apply, a clean method list here
+is not evaluated.
 """
 
 import json
@@ -272,6 +274,24 @@ def transform(input):
                 result={criteriaKey: False},
                 validation=validation, input_summary=input_summary, additional_findings=findings,
                 api_errors=[reason])
+
+        # A pass needs this policy to be the only one in force. Until policyMigrationState is
+        # migrationComplete, Microsoft still applies the legacy per-user MFA and SSPR policies
+        # ("How to migrate MFA and SSPR policy settings to the Authentication methods policy":
+        # in preMigration and migrationInProgress, legacy policy settings are respected). They can
+        # still allow text message, voice call or other methods that this endpoint cannot read, so
+        # "no weak method in this policy" is not evidence that no weak method is allowed: not
+        # evaluated. A weak method enabled here still fails in any state (above), because a method
+        # enabled in either policy can be used. A policy that carries no state reads as before.
+        if migration and migration.lower() != "migrationcomplete":
+            return create_response(
+                result={criteriaKey: False},
+                validation=validation, input_summary=input_summary, additional_findings=findings,
+                api_errors=["Only allowed authentication methods are enabled in the authentication methods "
+                            "policy (" + ", ".join(str(m.get('id'))[:60] for m in allowed) + "), but "
+                            f"policyMigrationState is {migration[:40]} (not migrationComplete): the legacy "
+                            "per-user MFA and SSPR policies still apply, may allow SMS, voice or other "
+                            "methods, and cannot be read here"])
 
         pass_reasons.append("Only allowed authentication methods are enabled: "
                             + ", ".join(str(m.get('id'))[:60] for m in allowed))
