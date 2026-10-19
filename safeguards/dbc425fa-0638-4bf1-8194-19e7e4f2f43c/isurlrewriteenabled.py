@@ -197,6 +197,28 @@ def unmeasured(reason, validation, summary=None):
     )
 
 
+def wrapper_truncated(input_data):
+    """True when a wrapper level that extract_input strips carries a truncation marker. The paginator can put
+    nextPageToken or paginationTruncated beside the wrapped body, where is_truncated(data) never sees it."""
+    data = input_data
+    if isinstance(data, dict) and "data" in data and "validation" in data:
+        data = data["data"]
+    for attempt in range(4):
+        if not isinstance(data, dict):
+            return False
+        if is_truncated(data):
+            return True
+        inner = None
+        for key in ["api_response", "response", "result", "apiResponse", "Output"]:
+            if key in data and isinstance(data.get(key), dict):
+                inner = data[key]
+                break
+        if inner is None:
+            return False
+        data = inner
+    return False
+
+
 def transform(input):
     criteriaKey = CRITERIA_KEY
 
@@ -233,7 +255,7 @@ def transform(input):
         if not [p for p in policies if isinstance(p, dict)]:
             return unmeasured("No Gmail policies were returned: an empty list cannot be told apart from a read "
                               "that returned nothing", validation)
-        if is_truncated(data):
+        if is_truncated(data) or wrapper_truncated(input):
             # More pages exist. A later page could hold a link-protection policy, the only one, or one with a
             # greater sortOrder that supersedes a policy read here, so nothing read so far decides the result.
             return unmeasured("The policy list was truncated (nextPageToken present) before every %s policy was "
