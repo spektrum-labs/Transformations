@@ -11,12 +11,14 @@ The Admin audit log feed, newest event first.
 Rule (fail closed): true when the body is a Reports API activity feed of Admin audit events
 (applicationName "admin") and the newest event is dated within RECENT_DAYS. That proves admin
 activity is being recorded and is readable through the Reports API (the source a SIEM connector
-reads). An empty feed, or one whose newest event is older than RECENT_DAYS, fails: logging is not
+reads). A feed whose newest Admin event is older than RECENT_DAYS is false: logging is not
 shown to be current. Admin audit logging cannot be switched off in Google Workspace, so a pass
 here mostly proves the log is reachable and current, not a configuration choice.
 
-A feed of other applications' events (for example Gmail or login) is not measured, and so is a
-Google error, a missing scope or an unreadable body (key false, dataCollection error).
+Not measured (key None, dataCollection error, so Token-Service shows it Not evaluated, never
+Failed): a feed of other applications' events (for example Gmail or login), an empty feed, Admin
+events with no readable time, a Google error, a missing scope, a body that is not JSON or not a
+Reports feed, and this transform's own exception.
 nextPageToken is ignored on purpose: the first page already holds the newest events.
 
 Does not prove: that the logs are exported to a SIEM or retained beyond Google's defaults.
@@ -24,6 +26,20 @@ Does not prove: that the logs are exported to a SIEM or retained beyond Google's
 
 import json
 from datetime import datetime, timezone, timedelta
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('isAuditLoggingEnabled',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
 
 CRITERIA_KEY = "isAuditLoggingEnabled"
 RECENT_DAYS = 90
@@ -51,6 +67,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -106,7 +128,7 @@ def parse_time(value):
 
 
 def not_measured(reason, validation, summary=None):
-    return create_response(result={CRITERIA_KEY: False}, validation=validation, api_errors=[reason],
+    return create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
                            fail_reasons=["Not measured: " + reason], input_summary=summary or {})
 
 
@@ -155,17 +177,19 @@ def transform(input):
                                    pass_reasons=["Admin audit events are recorded and readable: %d read, newest %s"
                                                  % (admin_events, newest.isoformat())],
                                    input_summary=summary)
+        # An empty feed, or events with no readable time, prove nothing either way: Admin audit
+        # logging cannot be switched off, so they are a read that could not answer, not a finding.
         if admin_events == 0:
-            reason = "No Admin audit events were returned"
-        elif newest is None:
-            reason = "Admin audit events carry no timestamps (%d read)" % admin_events
-        else:
-            reason = "Newest Admin audit event is %s, older than %d days" % (newest.isoformat(), RECENT_DAYS)
+            return not_measured("no Admin audit events were returned", validation, summary)
+        if newest is None:
+            return not_measured("Admin audit events carry no readable timestamps (%d read)" % admin_events,
+                                validation, summary)
+        reason = "Newest Admin audit event is %s, older than %d days" % (newest.isoformat(), RECENT_DAYS)
         return create_response(result={CRITERIA_KEY: False, "adminEventsRead": admin_events}, validation=validation,
                                fail_reasons=[reason],
                                recommendations=["Confirm the Admin audit log is available for the tenant (Admin console > "
                                                 "Reporting > Audit and investigation > Admin log events)"],
                                input_summary=summary)
     except Exception as e:
-        return create_response(result={CRITERIA_KEY: False}, validation={"status": "error", "errors": [], "warnings": []},
+        return create_response(result={CRITERIA_KEY: None}, validation={"status": "error", "errors": [], "warnings": []},
                                transformation_errors=[str(e)], fail_reasons=["Transformation error: %s" % str(e)])
