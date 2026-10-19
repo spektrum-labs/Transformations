@@ -76,9 +76,11 @@ def transform(input):
     configuration definitions, which say nothing about which repositories they are
     applied to. The previous version read those definitions and passed.
 
-    Fails closed on: a GraphQL errors array, a missing organization, no repositories,
-    fewer nodes than totalCount (pagination did not complete), a paginator truncation
-    flag, or any active repository with alerts off or unreported.
+    False only when a repository was read and has alerts off. A GraphQL errors array, a
+    missing organization, no repositories, fewer nodes than totalCount (pagination did not
+    complete), a paginator truncation flag, or a repository that does not report the flag
+    mean the answer could not be read: the result is None with a data collection error,
+    which reads Not evaluated rather than a failed control.
     """
     data, validation = extract_input(input)
     body = data if isinstance(data, dict) else {}
@@ -139,23 +141,36 @@ def transform(input):
         else:
             unknown.append(name)
 
-    is_enabled = (not api_errors) and len(active) > 0 and not disabled and not unknown
+    if not active and not api_errors:
+        api_errors.append("No active (non-archived) repositories were returned, so Dependabot alerts cannot be read on any.")
+    if unknown and not disabled and not api_errors:
+        api_errors.append(f"{len(unknown)} of {len(active)} active repositories did not report hasVulnerabilityAlertsEnabled, so their Dependabot alerts state cannot be read.")
+
+    # True: every repository read reports alerts on. False: a repository was READ and has
+    # alerts off. None (Not evaluated, with a data collection error): the answer could not be
+    # read, which is an error, a short or truncated read, no repository, or an unreported flag.
+    # A repository read with alerts off fails the check even when other repositories could not be read.
+    if disabled:
+        is_enabled = False
+    elif api_errors or unknown:
+        is_enabled = None
+    else:
+        is_enabled = True
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
-    if api_errors:
+    if is_enabled is None:
         fail_reasons.append("Dependabot alert enablement could not be read for every repository: " + " ".join(api_errors))
         recommendations.append("Give the token read access to the organization's repositories and Dependabot alerts, then re-run.")
-    elif not active:
-        fail_reasons.append("No active (non-archived) repositories were returned, so Dependabot alerts cannot be confirmed on any.")
     elif is_enabled:
         pass_reasons.append(f"All {len(active)} active repositories report hasVulnerabilityAlertsEnabled=true.")
     else:
-        if disabled:
-            fail_reasons.append(f"{len(disabled)} of {len(active)} active repositories have Dependabot alerts off (e.g. {', '.join(disabled[:5])}).")
+        fail_reasons.append(f"{len(disabled)} of {len(active)} active repositories have Dependabot alerts off (e.g. {', '.join(disabled[:5])}).")
         if unknown:
             fail_reasons.append(f"{len(unknown)} active repositories did not report hasVulnerabilityAlertsEnabled (e.g. {', '.join(unknown[:5])}).")
+        if api_errors:
+            fail_reasons.append("Not every repository could be read, so others may also have alerts off: " + " ".join(api_errors))
         recommendations.append("Enable Dependabot alerts on every repository, for example through a code security configuration attached to all repositories.")
 
     result = {
@@ -178,7 +193,7 @@ def transform(input):
             "activeRepositories": len(active),
             "disabledRepos": disabled[:20],
         },
-        api_errors=api_errors,
+        api_errors=api_errors if is_enabled is None else None,
         metadata={
             "transformationId": "isDependabotAlertsEnabled",
             "vendor": "GitHub",

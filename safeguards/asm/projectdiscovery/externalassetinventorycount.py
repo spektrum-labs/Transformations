@@ -94,17 +94,57 @@ def to_int(value):
         return None
 
 
-def scan_reason_suffix(data):
-    """The reason Integration-Service gave for a scan that has no result (asm_scan_in_progress,
-    asm_scan_retry_backoff, ...) as " (reason: ...)", or "" when it gave none. Only a short
-    lower-case token is passed on, so a body cannot put free text into the stream."""
-    reason = str(data.get("reason") or "").strip().lower() if isinstance(data, dict) else ""
-    if not reason or len(reason) > 60:
-        return ""
+# --- scan reason ----------------------------------------------------------------------------------------
+# The Integration Service answers a scan it has no result for as {"status": "error", "reason": "<code>",
+# "message": ...}: asm_scan_in_progress (a scan is still running), asm_scan_retry_backoff (the last scan
+# produced nothing usable, so no new scan was started), asm_scan_shared_no_result and
+# asm_scan_max_duration_exceeded. The code is passed on as dataCollection.errorCode, so a reader can tell a scan
+# that is still running from a broken integration. An error reply measured nothing, so the criterion is None
+# (Not evaluated), never False, whatever the reason: an asm_scan_ code, any other code, no reason, or a reason
+# that is not a plain code (that one is dropped, and the text stays generic).
+SCAN_REASON_MAX_LENGTH = 60
+SCAN_REASON_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
+SCAN_REASON_TEXT = {
+    "asm_scan_in_progress": "the scan is still running; its result is read on the next evaluation",
+    "asm_scan_retry_backoff": "the last scan produced no usable result, so a new scan has not started yet",
+    "asm_scan_shared_no_result": "the scan that was already running produced no usable result",
+    "asm_scan_max_duration_exceeded": "the scan ran past its time limit",
+}
+
+
+def scan_reason(data):
+    """The reason code of a scan reply that is not a result: a plain lower-case code of at most 60 characters,
+    else None (a successful scan, no reason, or a reason that is not a plain code)."""
+    if not isinstance(data, dict) or data.get("status") == "success":
+        return None
+    reason = data.get("reason")
+    if not isinstance(reason, str):
+        return None
+    reason = reason.strip().lower()
+    if not reason or len(reason) > SCAN_REASON_MAX_LENGTH:
+        return None
     for ch in reason:
-        if ch not in "abcdefghijklmnopqrstuvwxyz0123456789_":
-            return ""
-    return " (reason: " + reason + ")"
+        if ch not in SCAN_REASON_CHARS:
+            return None
+    return reason
+
+
+def scan_status_problem(status, domain, reason):
+    """The error text for a scan reply that is not a result."""
+    if reason is None:
+        return "Nuclei scan status: " + str(status) + " for " + str(domain)
+    if reason.startswith("asm_scan_"):
+        return ("Nuclei scan not evaluated (" + reason + "): "
+                + SCAN_REASON_TEXT.get(reason, "the scan did not produce a result"))
+    return "Nuclei scan status: " + str(status) + " (" + reason + ") for " + str(domain)
+
+
+def with_error_code(response, error_code):
+    """Label a reply with the reason code the Integration Service gave, when it gave one."""
+    if error_code:
+        response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
+# --- end scan reason -------------------------------------------------------------------------------------
 
 
 def scan_problem(data):
@@ -114,7 +154,7 @@ def scan_problem(data):
     domain = data.get("primaryDomain") or data.get("domain") or "unknown"
     status = data.get("status", "unknown")
     if status != "success":
-        return "Nuclei scan status: " + str(status) + " for " + str(domain) + scan_reason_suffix(data)
+        return scan_status_problem(status, domain, scan_reason(data))
     scanned = to_int(data.get("domainsScanned"))
     if scanned is None or scanned <= 0:
         return "Nuclei scanned zero hosts for " + str(domain)
@@ -159,16 +199,19 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: None}, validation=validation,
-                                   fail_reasons=["Input validation failed"])
+            reason = "Input validation failed: the scan response did not match its schema, so the count is unknown"
+            return create_response(result={criteriaKey: None}, validation=validation, api_errors=[reason],
+                                   fail_reasons=[reason])
         problem = scan_problem(data)
         domain = (data.get("primaryDomain") or data.get("domain") or "unknown") if isinstance(data, dict) else "unknown"
         summary = {"domain": domain,
                    "domainsScanned": to_int(data.get("domainsScanned")) if isinstance(data, dict) else None,
                    "templatesScanned": to_int(data.get("templatesScanned")) if isinstance(data, dict) else None}
         if problem:
-            return create_response(result={criteriaKey: None}, validation=validation, api_errors=[problem],
-                                   fail_reasons=[problem], input_summary=summary)
+            return with_error_code(
+                create_response(result={criteriaKey: None}, validation=validation, api_errors=[problem],
+                                fail_reasons=[problem], input_summary=summary),
+                scan_reason(data))
         findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
         discovered = to_int(data.get("totalDiscovered"))
         if discovered is None:
@@ -184,6 +227,7 @@ def transform(input):
             pass_reasons=[str(discovered) + " external host(s) discovered for " + str(domain)],
             input_summary=summary)
     except Exception as e:
+        reason = "Transformation error, so the count is unknown: " + str(e)
         return create_response(result={criteriaKey: None},
                                validation={"status": "error", "errors": [], "warnings": []},
-                               transformation_errors=[str(e)], fail_reasons=["Transformation error: " + str(e)])
+                               api_errors=[reason], transformation_errors=[str(e)], fail_reasons=[reason])
