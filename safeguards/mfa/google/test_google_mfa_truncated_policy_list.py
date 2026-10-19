@@ -61,13 +61,13 @@ def test_password_weak_policy_in_a_truncated_list_is_a_measured_false():
 def test_password_truncated_list_with_nothing_wrong_is_not_evaluated():
     body = page([NOISE, policy("security.password", STRONG, "orgUnits/a"), policy("security.password", STRONG, "orgUnits/b")])
     value, status, out = verdict(PASSWORD, body, "confirmPasswordPolicyEnforced")
-    assert (value, status) == (False, "error")
+    assert (value, status) == (None, "error")
     assert "truncated" in out["additionalInfo"]["dataCollection"]["errors"][0]
 
 
 def test_password_truncated_list_with_no_password_policy_is_not_evaluated():
-    assert verdict(PASSWORD, page([NOISE]), "confirmPasswordPolicyEnforced")[:2] == (False, "error")
-    assert verdict(PASSWORD, page([]), "confirmPasswordPolicyEnforced")[:2] == (False, "error")
+    assert verdict(PASSWORD, page([NOISE]), "confirmPasswordPolicyEnforced")[:2] == (None, "error")
+    assert verdict(PASSWORD, page([]), "confirmPasswordPolicyEnforced")[:2] == (None, "error")
 
 
 def test_password_complete_list_is_unchanged():
@@ -77,13 +77,13 @@ def test_password_complete_list_is_unchanged():
     value, status, out = verdict(PASSWORD, weak, "confirmPasswordPolicyEnforced")
     assert (value, status) == (False, "success")
     assert "truncated" not in out["additionalInfo"]["evaluation"]["failReasons"][0]
-    assert verdict(PASSWORD, page([NOISE], token=None), "confirmPasswordPolicyEnforced")[:2] == (False, "error")
+    assert verdict(PASSWORD, page([NOISE], token=None), "confirmPasswordPolicyEnforced")[:2] == (None, "error")
 
 
 def test_password_a_truncated_list_never_passes():
     for token in ("more", "x", "1"):
         body = page([policy("security.password", STRONG, "orgUnits/a")], token=token)
-        assert verdict(PASSWORD, json.dumps(body), "confirmPasswordPolicyEnforced")[:2] == (False, "error")
+        assert verdict(PASSWORD, json.dumps(body), "confirmPasswordPolicyEnforced")[:2] == (None, "error")
 
 
 def test_factors_sms_allowed_in_a_truncated_list_is_a_measured_false():
@@ -104,10 +104,10 @@ def test_factors_truncated_list_with_nothing_wrong_is_not_evaluated():
     body = page([policy("security.two_step_verification_enforcement_factor", {"allowedSignInFactorSet": "PASSKEY_ONLY"}, "orgUnits/a"),
                  policy("security.two_step_verification_enrollment", {"allowEnrollment": "True"}, "orgUnits/a")])
     value, status, out = verdict(FACTORS, body, "authTypesAllowed")
-    assert (value, status) == (False, "error")
+    assert (value, status) == (None, "error")
     assert "truncated" in out["additionalInfo"]["dataCollection"]["errors"][0]
-    assert verdict(FACTORS, page([NOISE]), "authTypesAllowed")[:2] == (False, "error")
-    assert verdict(FACTORS, page([]), "authTypesAllowed")[:2] == (False, "error")
+    assert verdict(FACTORS, page([NOISE]), "authTypesAllowed")[:2] == (None, "error")
+    assert verdict(FACTORS, page([]), "authTypesAllowed")[:2] == (None, "error")
 
 
 def test_factors_complete_list_is_unchanged():
@@ -117,13 +117,13 @@ def test_factors_complete_list_is_unchanged():
     value, status, out = verdict(FACTORS, bad, "authTypesAllowed")
     assert (value, status) == (False, "success")
     assert "truncated" not in out["additionalInfo"]["evaluation"]["failReasons"][0]
-    assert verdict(FACTORS, page([NOISE], token=None), "authTypesAllowed")[:2] == (False, "error")
+    assert verdict(FACTORS, page([NOISE], token=None), "authTypesAllowed")[:2] == (None, "error")
 
 
 def test_error_and_non_list_bodies_stay_not_evaluated_whatever_the_token():
     for module, key in ((PASSWORD, "confirmPasswordPolicyEnforced"), (FACTORS, "authTypesAllowed")):
         for body in ({}, None, "", "{}", {"error": {"code": 403, "message": "denied"}}, {"nextPageToken": "x"}, {"policies": "x"}):
-            assert verdict(module, body, key)[:2] == (False, "error"), (key, body)
+            assert verdict(module, body, key)[:2] == (None, "error"), (key, body)
 
 
 def test_a_weak_system_default_alone_does_not_settle_a_truncated_list():
@@ -132,10 +132,10 @@ def test_a_weak_system_default_alone_does_not_settle_a_truncated_list():
     system_weak = dict(policy("security.password", WEAK, "orgUnits/root"), type="SYSTEM")
     body = page([NOISE, system_weak, policy("security.password", STRONG, "orgUnits/root")])
     value, status, _ = verdict(PASSWORD, body, "confirmPasswordPolicyEnforced")
-    assert (value, status) == (False, "error")
+    assert (value, status) == (None, "error")
     system_factor = dict(policy("security.two_step_verification_enforcement_factor", {"allowedSignInFactorSet": "ALL"},
                                 "orgUnits/root"), type="SYSTEM")
     body = page([system_factor, policy("security.two_step_verification_enforcement_factor",
                                        {"allowedSignInFactorSet": "PASSKEY_ONLY"}, "orgUnits/root")])
     value, status, _ = verdict(FACTORS, body, "authTypesAllowed")
-    assert (value, status) == (False, "error")
+    assert (value, status) == (None, "error")
