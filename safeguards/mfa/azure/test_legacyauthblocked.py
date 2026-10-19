@@ -5,6 +5,9 @@ by none: coverage is per principal, not the intersection of exclusions; or outsi
 all users), capped at 20 plus "and N more". The verdict is
 unchanged. Fixtures are synthetic: zero-filled object ids, no customer data. Each case runs as plain Python and
 in the Token-Service sandbox replica. The duplicate copy under safeguards/86ded564-.../ must stay byte-identical.
+
+Tracker row 61: a built-in role is shown with its name (Microsoft's published role template ids are used as
+fixtures), and each exemption names the blocking policy that excludes it; the id lists in inputSummary are unchanged.
 """
 import copy
 import importlib.util
@@ -71,6 +74,12 @@ class LegacyAuthBlockedTests(unittest.TestCase):
 
     def reasons(self, res, kind):
         return res["additionalInfo"]["evaluation"][kind]
+
+    def first_reason(self, res):
+        # A block that leaves a directory role outside, or is scoped to one, reads not evaluated under the
+        # all-users coverage rule (#1301), so its named list is in dataCollection.errors, not passReasons.
+        ev = res["additionalInfo"]["evaluation"]
+        return (ev["passReasons"] or ev["failReasons"] or res["additionalInfo"]["dataCollection"]["errors"])[0]
 
     def test_duplicate_copy_is_identical(self):
         self.assertEqual(PATH.read_bytes(), DUPLICATE.read_bytes())
@@ -176,16 +185,68 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         res = self.run_t(body(policy(), policy(state="disabled", exclude_users=[oid(5)])))
         self.assertNotIn(oid(5), self.reasons(res, "passReasons")[0])
 
-    def test_error_input_keeps_the_original_failure_shape(self):
+    def test_error_input_is_not_evaluated(self):
+        # Entra MFA review (decision 16 Oct 2026): a body that is not a policy list was read as Failed before; a read that
+        # failed is not evidence, so it is Not evaluated (test_legacyauthblocked_not_evaluated.py has the cases).
         res = self.run_t(["not", "a", "dict"])
-        self.assertIs(res["transformedResponse"][KEY], False)
-        self.assertEqual(self.reasons(res, "failReasons")[0], "legacyAuthBlocked check failed")
+        self.assertIsNone(res["transformedResponse"][KEY])
+        self.assertEqual(self.reasons(res, "failReasons"), [])
+        self.assertEqual(res["additionalInfo"]["dataCollection"]["status"], "error")
 
     def test_string_input_and_non_string_ids_are_tolerated(self):
         import json
         p = policy(exclude_users=[oid(1), None, 5, ""])
         res = self.run_t(json.dumps(body(p)))
         self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 1)
+
+    def test_built_in_role_is_named_next_to_its_id(self):
+        # Template ids are Microsoft's published, tenant-independent built-in role ids.
+        global_admin = "62e90394-69f5-4237-9190-012177145e10"
+        res = self.run_t(body(policy(exclude_roles=[global_admin, oid(3)])))
+        first = self.first_reason(res)
+        self.assertIn("role:" + global_admin + " (Global Administrator; excluded by Block legacy authentication)", first)
+        self.assertIn("role:" + oid(3) + " (excluded by Block legacy authentication)", first)
+        self.assertNotIn(oid(3) + " (Global", first)
+        # Machine-readable lists keep bare ids.
+        summary = res["additionalInfo"]["transformation"]["inputSummary"]
+        self.assertIn("role:" + global_admin, summary["exemptPrincipalIds"])
+        self.assertNotIn("exemptPrincipalLabels", res["transformedResponse"])
+
+    def test_upper_case_role_template_id_is_still_named(self):
+        res = self.run_t(body(policy(exclude_roles=["62E90394-69F5-4237-9190-012177145E10"])))
+        self.assertIn("(Global Administrator;", self.first_reason(res))
+
+    def test_each_exemption_names_the_policies_that_exclude_it(self):
+        a = policy(exclude_users=[oid(1)])
+        a["displayName"] = "Block legacy auth A"
+        b = policy(exclude_users=[oid(1)])
+        b["displayName"] = "Block legacy auth B"
+        res = self.run_t(body(a, b))
+        first = self.reasons(res, "passReasons")[0]
+        self.assertIn("user:" + oid(1) + " (excluded by Block legacy auth A, Block legacy auth B)", first)
+
+    def test_more_than_two_excluding_policies_are_capped(self):
+        ps = []
+        for n in range(4):
+            p = policy(exclude_users=[oid(1)])
+            p["displayName"] = "P" + str(n)
+            ps.append(p)
+        first = self.reasons(self.run_t(body(*ps)), "passReasons")[0]
+        self.assertIn("(excluded by P0, P1 and 2 more)", first)
+
+    def test_long_policy_name_is_clipped(self):
+        p = policy(exclude_users=[oid(1)])
+        p["displayName"] = "N" * 300
+        first = self.reasons(self.run_t(body(p)), "passReasons")[0]
+        self.assertIn("N" * 60, first)
+        self.assertNotIn("N" * 61, first)
+
+    def test_scoped_block_names_built_in_roles_in_its_scope(self):
+        p = policy(include_users=[oid(7)])
+        p["conditions"]["users"]["includeRoles"] = ["194ae4cb-b126-40b2-bd5b-6091b380977d"]
+        first = self.first_reason(self.run_t(body(p)))
+        self.assertIn("role:194ae4cb-b126-40b2-bd5b-6091b380977d (Security Administrator)", first)
+        self.assertIn("user:" + oid(7), first)
 
     def test_overlong_identifier_is_truncated(self):
         res = self.run_t(body(policy(exclude_users=["x" * 500])))

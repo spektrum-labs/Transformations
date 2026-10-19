@@ -36,6 +36,21 @@ Including all locations and excluding trusted ones is not narrowing (same as ent
 All-users policy is set aside with NARROWED_REASON; like a risk-only policy it reaches only some sign-ins, so with
 nothing else counting the key reads False, not not-evaluated. A policy with no includeApplications list (Graph always
 returns one) is set aside with APPS_UNREAD_REASON and keeps the key not evaluated, never False.
+
+Entra MFA review (decision 16 Oct 2026; shipped live, no flag), two false failures fixed:
+- Microsoft MFA methods are Microsoft Authenticator, FIDO2, software OATH, Temporary Access Pass, hardware OATH
+  tokens and certificate-based authentication whose default mode is multi-factor
+  (authenticationModeConfiguration.x509CertificateAuthenticationDefaultMode "x509CertificateMultiFactor").
+  Single-factor certificate authentication is not. When the only Microsoft MFA methods are hardware OATH or
+  multi-factor certificates and an external method is enabled, the external-method rule still applies unless an
+  All-users policy counts, so the change never turns that Not evaluated into Failed.
+- A policy whose grant requires an authentication strength counts like the built-in "mfa" grant when every allowed
+  combination is multi-factor (STRENGTH_MFA_COMBINATIONS: the combinations of Microsoft's built-in "Multifactor
+  authentication" strength). With no allowedCombinations list, a built-in strength id (Multifactor, Passwordless or
+  Phishing-resistant MFA) or requirementsSatisfied "mfa" counts. A strength that allows a single-factor sign-in
+  (STRENGTH_SINGLE_FACTOR) does not count, as before. A strength that cannot be graded (no combinations, an unknown
+  id, or a combination not in either list) sets the policy aside, so the key reads not evaluated, never False.
+  A policy that also carries the built-in "mfa" grant is read exactly as before.
 """
 
 import json
@@ -116,6 +131,23 @@ GROUP_REASON = "targets groups, not all users"
 NARROWED_REASON = "applies only to some apps, platforms, client app types, locations or devices"
 APPS_UNREAD_REASON = "does not say which apps it applies to"
 MEMBERSHIP_KEYS = ("workforceUsers", "caPolicyGroups", "groupMembers")
+
+# Authentication strengths (Entra MFA review, see the header). Combinations are compared lower-cased, with the parts of a
+# multi-part combination sorted, so "password,softwareOath" and "softwareOath, password" match.
+STRENGTH_BUILTIN_MFA_IDS = ("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003",
+                            "00000000-0000-0000-0000-000000000004")
+STRENGTH_MFA_COMBINATIONS = (
+    "windowshelloforbusiness", "fido2", "x509certificatemultifactor", "devicebasedpush", "temporaryaccesspassonetime",
+    "temporaryaccesspassmultiuse", "microsoftauthenticatorpush,password", "password,softwareoath",
+    "hardwareoath,password", "password,sms", "password,voice", "federatedmultifactor",
+    "federatedsinglefactor,microsoftauthenticatorpush", "federatedsinglefactor,softwareoath",
+    "federatedsinglefactor,hardwareoath", "federatedsinglefactor,sms", "federatedsinglefactor,voice",
+)
+STRENGTH_SINGLE_FACTOR = ("password", "sms", "voice", "email", "x509certificatesinglefactor", "federatedsinglefactor",
+                          "qrcodepin")
+STRENGTH_UNKNOWN_REASON = "requires an authentication strength that cannot be graded"
+# Microsoft MFA methods added on 16 Oct 2026 (row 36); certificate-based authentication counts only in multi-factor mode.
+ADDED_MFA_METHOD_TYPES = ("hardwareoath",)
 
 
 def extract_input(input_data):
@@ -273,11 +305,48 @@ def present(value):
     return True
 
 
+def combination_key(value):
+    parts = [part.strip().lower() for part in str(value).split(",") if part.strip()]
+    return ",".join(sorted(parts))
+
+
+def strength_grade(grant):
+    """'' (no authentication strength), 'mfa' (every allowed combination is multi-factor), 'weak' (a single-factor
+    sign-in satisfies it) or 'unknown' (cannot be graded). See the header."""
+    strength = grant.get("authenticationStrength") if isinstance(grant, dict) else None
+    if not strength:
+        return ""
+    if not isinstance(strength, dict):
+        return "unknown"
+    combos = strength.get("allowedCombinations")
+    if isinstance(combos, list) and combos:
+        keys = [combination_key(c) for c in combos]
+        if any(k in STRENGTH_SINGLE_FACTOR for k in keys):
+            return "weak"
+        if all(k in STRENGTH_MFA_COMBINATIONS for k in keys):
+            return "mfa"
+        return "unknown"
+    satisfied = str(strength.get("requirementsSatisfied") or "").strip().lower()
+    if satisfied == "mfa":
+        return "mfa"
+    if satisfied == "none":
+        return "weak"
+    if combos is None and str(strength.get("id") or "").strip().lower() in STRENGTH_BUILTIN_MFA_IDS:
+        return "mfa"
+    return "unknown"
+
+
+def cba_multifactor(method):
+    mode = as_dict(method.get("authenticationModeConfiguration")).get("x509CertificateAuthenticationDefaultMode")
+    return str(mode or "").strip().lower() == "x509certificatemultifactor"
+
+
 def mfa_only_grant(policy):
-    """'mfa' is required: under operator OR no other control could satisfy the policy instead."""
+    """'mfa' (or an MFA-only authentication strength) is required: under operator OR no other control could satisfy
+    the policy instead."""
     grant = as_dict(policy.get("grantControls"))
     controls = lowered(grant.get("builtInControls"))
-    if "mfa" not in controls:
+    if "mfa" not in controls and strength_grade(grant) != "mfa":
         return False
     others = [c for c in controls if c != "mfa"] + lowered(grant.get("customAuthenticationFactors")) \
         + lowered(grant.get("termsOfUse"))
@@ -829,6 +898,7 @@ def transform(input):
 
         mfa_method_types = ['microsoftauthenticator', 'fido2', 'softwareoath', 'temporaryaccesspass']
         enabled_methods = []
+        added_methods = []
         external_methods = []
         other_member_methods = []
         guest_only_email = False
@@ -841,6 +911,10 @@ def transform(input):
                 external_methods.append(str(method.get('displayName') or method.get('id') or 'external method')[:60])
             elif str(method.get('id') or '').lower() in mfa_method_types:
                 enabled_methods.append(str(method.get('id')))
+            elif (str(method.get('id') or '').lower() in ADDED_MFA_METHOD_TYPES
+                    or (str(method.get('id') or '').lower() == 'x509certificate' and cba_multifactor(method))):
+                enabled_methods.append(str(method.get('id')))
+                added_methods.append(str(method.get('id')))
             elif (str(method.get('id') or '').lower() == 'email' and isinstance(method.get('includeTargets'), list)
                     and len(method.get('includeTargets')) == 0):
                 # Email OTP with no include targets reaches B2B guests only, not members.
@@ -861,7 +935,12 @@ def transform(input):
                 continue
             grant_controls = policy.get('grantControls') or {}
             built_in_controls = grant_controls.get('builtInControls') or []
-            if 'mfa' not in built_in_controls:
+            builtin_mfa = 'mfa' in built_in_controls
+            grade = "" if builtin_mfa else strength_grade(grant_controls)
+            if not builtin_mfa and grade not in ("mfa", "unknown"):
+                continue
+            if grade == "mfa" and not mfa_only_grant(policy):
+                # Under OR another control can satisfy the policy instead of the strength.
                 continue
 
             conditions = policy.get('conditions') or {}
@@ -878,6 +957,9 @@ def transform(input):
                     set_aside.append((short_name(policy.get('displayName')), why))
                     if why == GROUP_REASON and group_candidate(policy, conditions, users):
                         group_candidates.append((short_name(policy.get('displayName')), users))
+                    continue
+                if grade == "unknown":
+                    set_aside.append((short_name(policy.get('displayName')), STRENGTH_UNKNOWN_REASON))
                     continue
                 policies_enforcing_mfa_all_users.append(policy.get('displayName'))
                 mfa_user_conditions.append(users)
@@ -900,7 +982,9 @@ def transform(input):
         # 3. An external authentication method (for example Cisco Duo) enforces its own factors,
         # which Entra cannot see. When it stands in for every Microsoft MFA method, the check is
         # not evaluated; it is never a FAIL (J.J., 3 Oct 2026).
-        if not methods_available and external_methods:
+        classic_available = len(enabled_methods) > len(added_methods)
+        if (not classic_available and external_methods
+                and not (methods_available and mfa_enforced_for_users)):
             findings = []
             if mfa_enforced_for_users:
                 findings.append("Conditional Access policies requiring MFA for users: "
