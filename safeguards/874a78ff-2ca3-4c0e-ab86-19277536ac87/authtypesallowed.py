@@ -5,8 +5,8 @@ Category: Identity / Authentication
 
 Evaluates if only secure authentication types (FIDO2, Microsoft Authenticator) are allowed.
 Not evaluated (dataCollection error) when nothing is enabled in the policy, or when only secure
-types are enabled but policyMigrationState is not migrationComplete: the legacy per-user MFA and
-SSPR policies still apply then and cannot be read here.
+types are enabled but policyMigrationState is not migrationComplete or is not reported at all: the
+legacy per-user MFA and SSPR policies may still apply then and cannot be read here.
 """
 
 import json
@@ -187,7 +187,7 @@ def transform(input):
 
         # Pass if no insecure methods are enabled
         is_allowed = len(insecure_methods) == 0
-        migration = str(data.get('policyMigrationState') or '')
+        migration = str(data.get('policyMigrationState') or '').strip()
         summary = {"totalEnabledMethods": len(enabled_methods), "insecureMethods": len(insecure_methods),
                    "policyMigrationState": migration[:40]}
 
@@ -197,7 +197,8 @@ def transform(input):
         # the state is migrationComplete Microsoft still applies those legacy policies, which can
         # allow SMS, voice or other methods this endpoint cannot read. Either way: not evaluated.
         # An insecure method enabled here still fails in any state, because a method enabled in
-        # either policy can be used. A policy that carries no state reads as before.
+        # either policy can be used. A policy that reports no state (missing, null or empty) does
+        # not show the migration is complete either, so a clean list is not evaluated too.
         if is_allowed and not enabled_methods:
             reason = "No authentication method is enabled in the authentication methods policy"
             if migration:
@@ -207,7 +208,16 @@ def transform(input):
                 validation=validation, input_summary=summary,
                 api_errors=[reason + ": the methods members can use are not set by this policy, so it is "
                             "not evidence either way"])
-        if is_allowed and migration and migration.lower() != "migrationcomplete":
+        if is_allowed and not migration:
+            return create_response(
+                result={criteriaKey: False, "authTypes": []},
+                validation=validation, input_summary=summary,
+                api_errors=["Only secure authentication methods are enabled in the authentication methods "
+                            "policy (" + ", ".join(str(m['id'])[:60] for m in enabled_methods[:5]) + "), but "
+                            "the migration state was not reported (no policyMigrationState): the legacy "
+                            "per-user MFA and SSPR policies may still apply, may allow SMS, voice or other "
+                            "methods, and cannot be read here"])
+        if is_allowed and migration.lower() != "migrationcomplete":
             return create_response(
                 result={criteriaKey: False, "authTypes": []},
                 validation=validation, input_summary=summary,

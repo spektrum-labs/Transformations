@@ -16,17 +16,20 @@ def load_transformation(path=TRANSFORMATION_PATH):
     return module
 
 
-def policy(enabled):
+def policy(enabled, migration=None):
     """Graph GET /v1.0/policies/authenticationMethodsPolicy: a single object, not a list."""
     ids = ["Email", "Fido2", "MicrosoftAuthenticator", "QRCodePin", "Sms", "SoftwareOath",
            "TemporaryAccessPass", "VerifiableCredentials", "Voice", "X509Certificate"]
-    return {
+    body = {
         "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#policies/authenticationMethodsPolicy/$entity",
         "id": "authenticationMethodsPolicy",
         "authenticationMethodConfigurations": [
             {"id": i, "state": "enabled" if i in enabled else "disabled"} for i in ids
         ],
     }
+    if migration is not None:
+        body["policyMigrationState"] = migration
+    return body
 
 
 class AzureAuthTypesAllowedTests(unittest.TestCase):
@@ -44,7 +47,10 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
         self.assertEqual(self.verdict(policy({"Fido2", "MicrosoftAuthenticator", "Email"})), (False, "success"))
 
     def test_policy_object_with_only_strong_methods_is_evaluated_true(self):
-        self.assertEqual(self.verdict(policy({"Fido2", "MicrosoftAuthenticator", "SoftwareOath"})), (True, "success"))
+        strong = {"Fido2", "MicrosoftAuthenticator", "SoftwareOath"}
+        self.assertEqual(self.verdict(policy(strong, "migrationComplete")), (True, "success"))
+        # Decision 80: without a reported policyMigrationState the same clean list is not evaluated.
+        self.assertEqual(self.verdict(policy(strong)), (False, "error"))
 
     def test_no_evidence_fails_closed(self):
         for body in ({}, [], None,
