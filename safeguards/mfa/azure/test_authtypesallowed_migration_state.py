@@ -101,7 +101,7 @@ def test_a_clean_list_once_migrated_passes(path, state):
 @pytest.mark.parametrize("path", PATHS, ids=lambda p: p.parent.name)
 @pytest.mark.parametrize("state", NO_STATES, ids=state_id)
 def test_a_clean_list_with_no_state_reported_is_not_evaluated(path, state):
-    # Decision 80: a policy that reports no policyMigrationState (key missing, null or empty) does not
+    # A policy that reports no policyMigrationState (key missing, null or empty) does not
     # show the migration is complete, so it reads like a not-complete state rather than a pass.
     out = run(path, policy(["Fido2", "MicrosoftAuthenticator"], state))
     assert verdict(out) == (False, "error")

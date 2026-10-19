@@ -49,7 +49,7 @@ class AzureAuthTypesAllowedTests(unittest.TestCase):
     def test_policy_object_with_only_strong_methods_is_evaluated_true(self):
         strong = {"Fido2", "MicrosoftAuthenticator", "SoftwareOath"}
         self.assertEqual(self.verdict(policy(strong, "migrationComplete")), (True, "success"))
-        # Decision 80: without a reported policyMigrationState the same clean list is not evaluated.
+        # Without a reported policyMigrationState, the same clean list is not evaluated.
         self.assertEqual(self.verdict(policy(strong)), (False, "error"))
 
     def test_no_evidence_fails_closed(self):
