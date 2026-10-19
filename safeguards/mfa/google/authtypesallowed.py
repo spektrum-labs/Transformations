@@ -18,9 +18,13 @@ voice codes (anything but ALL), and no enrollment policy forbids 2-Step Verifica
 (allowEnrollment false leaves those users with a password only). An unknown factor-set value
 fails.
 
-Not measured (key false, dataCollection error): a Google error or missing scope, a body that is
-not a policy list, a list that still carries nextPageToken with no weak policy in the pages read,
-or a list with no 2-Step Verification factor policy.
+A factor policy that was read and allows SMS or voice codes, an unknown factor-set value, or an
+enrollment policy that forbids 2-Step Verification is false (a real finding).
+
+Not measured (key None, dataCollection error, so Token-Service shows it Not evaluated, never
+Failed): a Google error or missing scope, a body that is not JSON or not a policy list, a list
+that still carries nextPageToken with no weak policy in the pages read, a list with no 2-Step
+Verification factor policy, and this transform's own exception.
 
 A weak factor policy or a disabled enrollment already read settles the answer even when the list is
 truncated: the rule needs EVERY policy to pass, so an unread page cannot undo it. That case is a
@@ -32,6 +36,21 @@ that is isMFAEnforcedForUsers), or which factors users actually enrolled.
 
 import json
 from datetime import datetime
+
+#: The criteria this file answers. A None among them means "not measured", never "failed".
+NONE_MEANS_NOT_EVALUATED = ('authTypesAllowed',)
+
+
+def criteria_unmeasured(result):
+    """True when every criterion this file answers that the result carries is None.
+
+    Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status
+    is "error". The status is read per response, so it is set only when no criterion in the
+    result was measured; marking a partly measured result would hide the measured ones.
+    """
+    present = [k for k in NONE_MEANS_NOT_EVALUATED if k in result]
+    return len(present) > 0 and all(result[k] is None for k in present)
+
 
 CRITERIA_KEY = "authTypesAllowed"
 FACTOR_SETTING = "security.two_step_verification_enforcement_factor"
@@ -61,6 +80,12 @@ def extract_input(input_data):
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
+    # A None criterion was not measured. Token-Service grades None as FAILED unless
+    # dataCollection.status is "error", which needs a non-empty api_errors, so carry the
+    # reason across when the caller did not.
+    if not api_errors and isinstance(result, dict) and criteria_unmeasured(result):
+        api_errors = (list(fail_reasons or []) or list(transformation_errors or [])
+                      or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
@@ -124,7 +149,7 @@ def policy_scope(policy):
 
 
 def not_measured(reason, validation, summary=None):
-    return create_response(result={CRITERIA_KEY: False}, validation=validation, api_errors=[reason],
+    return create_response(result={CRITERIA_KEY: None}, validation=validation, api_errors=[reason],
                            fail_reasons=["Not measured: " + reason], input_summary=summary or {})
 
 
@@ -191,5 +216,5 @@ def transform(input):
                                              % (len(factor_sets), ", ".join(sorted(set(f["allowedSignInFactorSet"] for f in factor_sets))))],
                                input_summary=summary)
     except Exception as e:
-        return create_response(result={CRITERIA_KEY: False}, validation={"status": "error", "errors": [], "warnings": []},
+        return create_response(result={CRITERIA_KEY: None}, validation={"status": "error", "errors": [], "warnings": []},
                                transformation_errors=[str(e)], fail_reasons=["Transformation error: %s" % str(e)])
