@@ -1,0 +1,39 @@
+{
+  "name": "popImapSignInAccountCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of accounts with at least one successful POP or IMAP sign-in in the identity provider's sign-in log over the last 30 days; 0 only from a complete read.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "the accounts that appear in the tenant's Microsoft Entra ID interactive sign-in log for the last 30 days with clientAppUsed POP or IMAP; the value is the number of those accounts with at least one sign-in whose status.errorCode is 0",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete read (every page, no truncation marker, no next link left) of the tenant's sign-in log filtered to POP and IMAP for the last 30 days, every returned sign-in carrying a readable status.errorCode, with none of them successful; a refused, unlicensed or partial read is not evidence.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "compliant",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/mfa/azure/popimapsigninaccountcount.py (the Entra sign-in log read)",
+    "Microsoft Graph v1.0 List signIns (permission AuditLog.Read.All): https://learn.microsoft.com/en-us/graph/api/signin-list (doc-verified, not live-verified)",
+    "Microsoft Graph v1.0 signIn resource (clientAppUsed, status; Entra ID P1 or P2 licence needed): https://learn.microsoft.com/en-us/graph/api/resources/signin (doc-verified, not live-verified)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the Entra POP and IMAP sign-in transform can emit it (tracker row 61). Kept off every requirement."
+    }
+  ],
+  "notes": "Names the accounts that used POP or IMAP. An empty population from a complete read means no account used POP or IMAP, which is the compliant state. Interactive sign-ins only; per-mailbox POP and IMAP enabled state is not read."
+}
