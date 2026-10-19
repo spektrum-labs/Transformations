@@ -89,24 +89,40 @@ class FailClosed(unittest.TestCase):
         "validation failed": {"data": scan(), "validation": {"status": "failed", "errors": ["x"], "warnings": []}},
     }
 
-    def test_no_evidence_is_false_with_error(self):
+    # A scan that completed with counts that agree and no error but is older than the window is a proven
+    # negative: a graded False, with its reason as a fail reason and no error. Every other body measured nothing
+    # and is None (Not evaluated) with its error, including a missing, garbage or future timestamp and a seed-only
+    # scan (a swallowed subfinder failure looks the same, so it is not a proven negative).
+    MEASURED_FALSE = {
+        "stale scan",
+    }
+
+    def test_no_evidence_is_none_and_a_proven_negative_is_a_graded_false(self):
         for label, body in self.BODIES.items():
             with self.subTest(body=label):
                 out = run(copy.deepcopy(body))
-                self.assertIs(out["transformedResponse"][KEY], False)
-                self.assertEqual(out["transformedResponse"], {KEY: False})
-                self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+                expected = False if label in self.MEASURED_FALSE else None
+                self.assertIs(out["transformedResponse"][KEY], expected)
+                self.assertEqual(out["transformedResponse"], {KEY: expected})
+                if expected is None:
+                    self.assertEqual(out["additionalInfo"]["transformation"]["status"], "error")
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+                    self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+                else:
+                    self.assertEqual(out["additionalInfo"]["transformation"]["status"], "success")
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["errors"], [])
                 self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
                 self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
 
     def test_sibling_failed_scan_battery(self):
         for body in ASM.FAILED_SCANS:
             with self.subTest(body=str(body)[:60]):
-                self.assertIs(value(copy.deepcopy(body)), False)
+                self.assertIsNone(value(copy.deepcopy(body)))
 
     def test_seed_only_names_the_discovery_failure(self):
-        errors = run(seed_only())["additionalInfo"]["dataCollection"]["errors"]
-        self.assertTrue(any("no host beyond the seed" in e for e in errors))
+        reasons = run(seed_only())["additionalInfo"]["evaluation"]["failReasons"]
+        self.assertTrue(any("no host beyond the seed" in r for r in reasons))
 
 
 class Discovered(unittest.TestCase):
@@ -139,7 +155,8 @@ class Discovered(unittest.TestCase):
 
     def test_flips_on_the_same_shape(self):
         self.assertIs(value(scan()), True)
-        self.assertIs(value(seed_only()), False)
+        self.assertIs(value(scan(timestamp=(datetime.utcnow() - timedelta(days=3)).isoformat())), False)
+        self.assertIsNone(value(seed_only()))
 
     def test_schema_version_and_sections(self):
         out = run(scan())
