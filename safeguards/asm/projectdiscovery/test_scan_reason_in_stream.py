@@ -3,8 +3,8 @@
 Integration-Service answers {"status": "error", "reason": "asm_scan_in_progress" | "asm_scan_retry_backoff" |
 ...} while a ProjectDiscovery scan has no stored result. These transforms used to write only
 "Nuclei scan status: error", so every such check read as an unexplained failure. Each transform now
-appends the reason token to that same text (the prefix is unchanged) and still answers not-true with a
-dataCollection error, so Token-Service stores the check as Unevaluated. Synthetic data only.
+names the reason token in that error, passes it on as dataCollection.errorCode, and still answers not-true
+with a dataCollection error, so Token-Service stores the check as Unevaluated. Synthetic data only.
 """
 import importlib.util
 import os
@@ -47,8 +47,8 @@ class ScanReasonInStream(unittest.TestCase):
                     self.assertEqual(collection["status"], "error")
                     self.assertEqual(len(collection["errors"]), 1)
                     text = collection["errors"][0]
-                    self.assertTrue(text.startswith("Nuclei scan status: error"), text)
-                    self.assertTrue(text.endswith("(reason: " + reason + ")"), text)
+                    self.assertIn("(" + reason + ")", text)
+                    self.assertEqual(collection.get("errorCode"), reason)
 
     def test_a_scan_with_no_result_is_never_a_pass(self):
         for name in TRANSFORMS:
@@ -76,11 +76,10 @@ class ScanReasonInStream(unittest.TestCase):
                     _, collection = run(name, dict(IN_PROGRESS, reason=reason))
                     text = collection["errors"][0]
                     if isinstance(reason, str) and reason.strip().lower() == "asm_scan_in_progress":
-                        self.assertTrue(text.endswith("(reason: asm_scan_in_progress)"), text)
-                    elif reason == 7:
-                        self.assertTrue(text.endswith("(reason: 7)"), text)
+                        self.assertIn("(asm_scan_in_progress)", text)
+                        self.assertEqual(collection.get("errorCode"), "asm_scan_in_progress")
                     else:
-                        self.assertNotIn("reason", text)
+                        self.assertNotIn("errorCode", collection)
                         self.assertNotIn("\n", text)
 
 
