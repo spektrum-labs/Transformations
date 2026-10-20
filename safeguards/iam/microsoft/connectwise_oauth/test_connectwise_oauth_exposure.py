@@ -1,9 +1,14 @@
 """ConnectWise multitenant OAuth app abuse (October 2026): exposure and indicator checks.
 
 The contract these tests pin:
-- the presence read decides exposure; a missing, refused, errored, paged or unrecognised
-  service-principal feed is Not evaluated (None AND dataCollection.status "error"), never
-  "not exposed";
+- the presence read and the apps' sign-ins decide exposure: a present app, or one that signed in since
+  13 Oct (as itself or for a user), is Exposed; a missing, refused, errored, paged or unrecognised
+  service-principal feed, or an app sign-in read that is not whole inside log retention, is Not
+  evaluated (None AND dataCollection.status "error"), never "not exposed";
+- Integration-Service #1798 day-slices the directory audit log and the apps' delegated sign-ins: every
+  slice key must be present and whole (paginationStats false), and each log's retention proof must show
+  an entry at or before 13 Oct; otherwise the clean answer is Not evaluated, while evidence in any slice
+  still counts. The old unsliced directoryAudits key is read under the same rules;
 - a present and enabled ConnectWise service principal is Exposed; a high-risk grant
   (Directory.ReadWrite.All and peers, or a privileged directory role) raises the risk level;
   an unreadable grant feed for a present app leaves the risk level "unknown", never "standard";
@@ -16,6 +21,7 @@ indicator IP address and the user agents are the vendor's and Microsoft's publis
 """
 import importlib.util
 import pathlib
+from datetime import date, timedelta
 
 import pytest
 
@@ -80,8 +86,35 @@ def audit(activity, target_id, when="2026-10-15T10:00:00Z", by_app=None, by_sp=N
 STEP_403 = {"stepError": True, "statusCode": 403, "errorSummary": "Insufficient privileges to complete the operation."}
 
 
+def slice_suffixes():
+    """Integration-Service #1798: one bounded slice per UTC day from 15 Oct to 13 Nov 2026, then one from 14 Nov."""
+    days = [date(2026, 10, 15) + timedelta(days=n) for n in range(30)]
+    return [day.strftime("%Y%m%d") for day in days] + ["from20261114"]
+
+
+AUDIT_KEYS = tuple("directoryAudits_" + suffix for suffix in slice_suffixes())
+USER_KEYS = tuple("userSignInsByApp_" + suffix for suffix in slice_suffixes())
+AUDIT_DAY = "directoryAudits_20261015"
+USER_DAY = "userSignInsByApp_20261016"
+AUDIT_PROBE = "directoryAuditsBeforeWindow"
+USER_PROBE = "userSignInsBeforeWindow"
+
+
+def retained():
+    """Retention proofs whose newest entry at or before the start of the reads is older than 13 Oct 2026."""
+    return {USER_PROBE: graph({"id": "probe-sign-in", "createdDateTime": "2026-10-12T23:40:00Z"}),
+            AUDIT_PROBE: graph({"id": "probe-audit", "activityDateTime": "2026-10-12T21:05:00.1234567Z"})}
+
+
+def audits(*entries):
+    """Directory audit records in one day slice (the body keeps every other slice whole and empty)."""
+    return {AUDIT_DAY: list(entries)}
+
+
 def clean(**overrides):
-    """A tenant where both apps are absent and every feed read whole with nothing in it."""
+    """A tenant where every app is absent and every feed and slice read whole with nothing in it, both logs shown
+    to reach back before 13 Oct. paginationStats in overrides is merged into the slices' entries."""
+    stats = {}
     body = {
         "servicePrincipals": graph(),
         "cwBackupAppRoles": {"stepError": True, "statusCode": 404, "errorSummary": "Resource does not exist"},
@@ -96,8 +129,14 @@ def clean(**overrides):
         "spSignInsByApp": graph(),
         "spSignInsFromIndicatorIp": graph(),
         "userSignInsFromIndicatorIp": graph(),
-        "directoryAudits": graph(audit("Add service principal credentials", OTHER_SP)),
     }
+    for key in AUDIT_KEYS + USER_KEYS:
+        body[key] = []
+        stats[key] = {"paginationTruncated": False}
+    body[AUDIT_DAY] = [audit("Add service principal credentials", OTHER_SP)]
+    body.update(retained())
+    stats.update(overrides.pop("paginationStats", {}))
+    body["paginationStats"] = stats
     body.update(overrides)
     return body
 
@@ -278,14 +317,14 @@ def test_sign_in_before_the_window_is_not_an_indicator():
 
 
 def test_credential_added_to_connectwise_service_principal_is_an_indicator():
-    body = exposed_backup(directoryAudits=graph(audit("Add service principal credentials", BACKUP_SP)))
+    body = exposed_backup(**audits(audit("Add service principal credentials", BACKUP_SP)))
     _, indicators = run_both(body)
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
 
 
 def test_credentials_added_to_another_app_by_a_connectwise_app_is_an_indicator():
     activity = "Update application – Certificates and secrets management "
-    body = exposed_backup(directoryAudits=graph(audit(activity, OTHER_SP, by_app=TEAMS_APP)))
+    body = exposed_backup(**audits(audit(activity, OTHER_SP, by_app=TEAMS_APP)))
     _, indicators = run_both(body)
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
 
@@ -293,7 +332,7 @@ def test_credentials_added_to_another_app_by_a_connectwise_app_is_an_indicator()
 def test_role_added_by_connectwise_service_principal_is_an_indicator():
     entry = audit("Add member to role", TEAMS_SP, by_sp=TEAMS_SP)
     entry["category"] = "RoleManagement"
-    body = clean(servicePrincipals=graph(sp(TEAMS_APP, TEAMS_SP)), cwTeamsAppRoles=graph(), directoryAudits=graph(entry))
+    body = clean(servicePrincipals=graph(sp(TEAMS_APP, TEAMS_SP)), cwTeamsAppRoles=graph(), **audits(entry))
     _, indicators = run_both(body)
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
 
@@ -304,7 +343,7 @@ def test_audit_by_a_removed_connectwise_app_named_only_by_display_name_is_an_ind
     removed_sp = "11111111-aaaa-4aaa-8aaa-000000000009"
     entry = audit("Add service principal credentials", OTHER_SP, by_sp=removed_sp)
     entry["initiatedBy"]["app"]["displayName"] = "ConnectWise Cloud Backup"
-    _, indicators = run_both(clean(directoryAudits=graph(entry)))
+    _, indicators = run_both(clean(**audits(entry)))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     assert value(indicators, "nameOnlyMatches") == 1
 
@@ -312,16 +351,25 @@ def test_audit_by_a_removed_connectwise_app_named_only_by_display_name_is_an_ind
 def test_audit_by_an_unrelated_app_with_a_similar_vendor_name_is_not_an_indicator():
     entry = audit("Add service principal credentials", OTHER_SP, by_sp="11111111-aaaa-4aaa-8aaa-000000000009")
     entry["initiatedBy"]["app"]["displayName"] = "ConnectWise Automate"
-    _, indicators = run_both(clean(directoryAudits=graph(entry)))
+    _, indicators = run_both(clean(**audits(entry)))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
 
 
 def test_indicator_found_even_when_the_app_was_already_removed():
+    # The app's own sign-in in the window is also exposure evidence (Integration-Service #1798), so a removed app
+    # that signed in since 13 Oct is Exposed (risk unknown), not free of exposure.
     body = clean(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)))
     exposure, indicators = run_both(body)
+    assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    assert value(exposure, "connectWiseVerdict") == "Indicators found"
+    assert value(exposure, "connectWiseAppsSignedIn") == ["ConnectWise Cloud Backup (formerly SkyKick Backup)"]
+    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
+    # an indicator from another app (not a ConnectWise sign-in) leaves exposure clean
+    other = clean(userSignInsFromIndicatorIp=graph(sign_in("de8bc8b5-d9f9-48b1-a8ad-b748da725064", IOC_IP,
+                                                           kind="interactiveUser")))
+    exposure, _ = run_both(other)
     assert value(exposure, "isFreeOfConnectWiseAppExposure") is True
     assert value(exposure, "connectWiseVerdict") == "Indicators found"
-    assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
 
 
 def test_unreadable_sign_ins_leave_indicators_not_evaluated():
@@ -334,12 +382,12 @@ def test_unreadable_sign_ins_leave_indicators_not_evaluated():
 
 
 def test_unreadable_audits_leave_indicators_not_evaluated():
-    _, indicators = run_both(exposed_backup(directoryAudits=STEP_403))
+    _, indicators = run_both(exposed_backup(**{AUDIT_DAY: STEP_403}))
     assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
 
 
 def test_an_indicator_in_a_readable_feed_counts_when_another_feed_failed():
-    body = exposed_backup(spSignInsByApp=STEP_403, directoryAudits=graph(audit("Add service principal credentials", BACKUP_SP)))
+    body = exposed_backup(spSignInsByApp=STEP_403, **audits(audit("Add service principal credentials", BACKUP_SP)))
     _, indicators = run_both(body)
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     assert_measured(indicators)
@@ -370,7 +418,7 @@ def test_unreadable_alerts_do_not_block_but_are_reported():
 def test_unread_alerts_are_named_on_every_indicator_outcome():
     # Decision 18 Oct: alerts stay optional, but no finding may imply Defender was covered.
     found = exposed_backup(securityAlerts=STEP_403, spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)))
-    not_evaluated = exposed_backup(securityAlerts=STEP_403, directoryAudits=STEP_403)
+    not_evaluated = exposed_backup(securityAlerts=STEP_403, **{AUDIT_DAY: STEP_403})
     for body in (found, not_evaluated):
         _, indicators = run_both(body)
         reasons = " ".join(indicators["additionalInfo"]["evaluation"]["failReasons"])
@@ -412,13 +460,13 @@ def test_both_files_agree_on_every_fixture():
     bodies = [clean(), exposed_backup(), exposed_backup(cwBackupAppRoles=graph(app_role(DIRECTORY_READWRITE_ALL))),
               clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP, enabled=False))),
               exposed_backup(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP))),
-              exposed_backup(directoryAudits=STEP_403),
-              clean(directoryAudits=graph(audit("Add service principal credentials", OTHER_SP,
+              exposed_backup(**{AUDIT_DAY: STEP_403}),
+              clean(**audits(audit("Add service principal credentials", OTHER_SP,
                                                 target_name="SkyKick Backup")))] + NO_EVIDENCE
     for body in bodies:
         exposure, indicators = run_both(body)
-        for key in ("connectWiseVerdict", "connectWiseRiskLevel", "connectWiseAppsPresent", "indicatorsFound",
-                    "nameOnlyMatches"):
+        for key in ("connectWiseVerdict", "connectWiseRiskLevel", "connectWiseAppsPresent", "connectWiseAppsSignedIn",
+                    "indicatorsFound", "nameOnlyMatches"):
             assert value(exposure, key) == value(indicators, key), (key, body)
 
 
@@ -516,8 +564,8 @@ def test_indicator_on_a_paged_feed_still_counts():
     exposure, indicators = run_both(exposed_backup(spSignInsFromIndicatorIp=paged))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     assert value(exposure, "connectWiseVerdict") == "Indicators found"
-    body = exposed_backup(directoryAudits=graph(audit("Add service principal credentials", BACKUP_SP)),
-                          paginationStats={"directoryAudits": {"paginationTruncated": True}})
+    body = exposed_backup(**audits(audit("Add service principal credentials", BACKUP_SP)),
+                          paginationStats={AUDIT_DAY: {"paginationTruncated": True}})
     _, indicators = run_both(body)
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
 
@@ -532,10 +580,12 @@ def test_audit_by_connectwise_sp_id_counts_when_the_presence_read_failed():
     # The SP id is learned from the app's own sign-ins, so the audit match does not need the presence feed.
     body = clean(servicePrincipals=STEP_403,
                  spSignInsByApp=graph(sign_in(BACKUP_APP, "203.0.113.7", sp_id=BACKUP_SP)),
-                 directoryAudits=graph(audit("Add member to role", OTHER_SP, by_sp=BACKUP_SP)))
+                 **audits(audit("Add member to role", OTHER_SP, by_sp=BACKUP_SP)))
     exposure, indicators = run_both(body)
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
-    assert_not_measured(exposure, "isFreeOfConnectWiseAppExposure")
+    # the app's sign-in is exposure evidence even though the presence read failed
+    assert value(exposure, "isFreeOfConnectWiseAppExposure") is False
+    assert value(exposure, "connectWiseRiskLevel") == "unknown"
     assert value(exposure, "connectWiseVerdict") == "Indicators found"
 
 
@@ -565,7 +615,7 @@ def test_credential_changes_by_or_on_other_connectwise_and_skykick_apps_are_not_
     for name in OTHER_VENDOR_APPS:
         for entry in (by_named_app(name), on_named_app(name),
                       by_named_app(name, "Update application - Certificates and secrets management")):
-            exposure, indicators = run_both(clean(directoryAudits=graph(entry)))
+            exposure, indicators = run_both(clean(**audits(entry)))
             assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True, name
             assert value(exposure, "connectWiseVerdict") == "Not exposed", name
             assert value(indicators, "nameOnlyMatches") == 0, name
@@ -577,7 +627,7 @@ def test_published_names_match_exactly_after_normalising_and_are_tagged_name_onl
                 "ConnectWise Cloud Management-MS Teams", "SkyKick Cloud Manager - MS Teams", " SkyKick Backup ")
     for name in variants:
         for entry in (by_named_app(name), on_named_app(name)):
-            exposure, indicators = run_both(clean(directoryAudits=graph(entry)))
+            exposure, indicators = run_both(clean(**audits(entry)))
             assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False, name
             for out in (exposure, indicators):
                 assert value(out, "connectWiseVerdict") == "Indicators found", name
@@ -589,7 +639,7 @@ def test_published_names_match_exactly_after_normalising_and_are_tagged_name_onl
 def test_name_only_change_that_is_not_a_credential_change_on_a_named_target_is_not_an_indicator():
     # A role or grant change whose only link is a target named like the app is not one of the published
     # indicators (the old code did not flag it either); only credential changes on it are.
-    _, indicators = run_both(clean(directoryAudits=graph(on_named_app("ConnectWise Cloud Backup", "Add member to role"))))
+    _, indicators = run_both(clean(**audits(on_named_app("ConnectWise Cloud Backup", "Add member to role"))))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is True
 
 
@@ -604,7 +654,7 @@ def test_id_matches_are_unchanged_and_never_tagged_name_only():
                            (on_id, "Credentials changed on a ConnectWise service principal")):
         body = clean(servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP), sp(TEAMS_APP, TEAMS_SP)),
                      cwBackupAppRoles=graph(), cwBackupDelegatedGrants=graph(), cwTeamsAppRoles=graph(),
-                     cwTeamsDelegatedGrants=graph(), directoryAudits=graph(entry))
+                     cwTeamsDelegatedGrants=graph(), **audits(entry))
         exposure, indicators = run_both(body)
         assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
         assert value(indicators, "nameOnlyMatches") == 0 and value(exposure, "nameOnlyMatches") == 0
@@ -614,7 +664,7 @@ def test_id_matches_are_unchanged_and_never_tagged_name_only():
 
 def test_name_only_and_id_matches_are_counted_apart():
     body = clean(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP)),
-                 directoryAudits=graph(by_named_app("SkyKick Backup")))
+                 **audits(by_named_app("SkyKick Backup")))
     exposure, indicators = run_both(body)
     for out in (exposure, indicators):
         assert value(out, "indicatorsFound") == 2 and value(out, "nameOnlyMatches") == 1
@@ -696,7 +746,7 @@ def test_new_app_unreadable_grants_leave_risk_unknown(app_id):
 @pytest.mark.parametrize("app_id", list(NEW_APPS))
 def test_indicators_by_app_id_for_each_new_app(app_id):
     entry = audit("Add service principal credentials", OTHER_SP, by_app=app_id)
-    _, indicators = run_both(clean(directoryAudits=graph(entry)))
+    _, indicators = run_both(clean(**audits(entry)))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     assert value(indicators, "nameOnlyMatches") == 0
     hit = sign_in(app_id, "203.0.113.7", agent="python-requests/2.31.0", sp_id=NEW_SP)
@@ -706,7 +756,7 @@ def test_indicators_by_app_id_for_each_new_app(app_id):
     # the app's own sign-ins teach its service principal id, so a later audit entry by that id matches
     later = audit("Add member to role", OTHER_SP, by_sp=NEW_SP)
     _, indicators = run_both(clean(spSignInsByApp=graph(sign_in(app_id, "203.0.113.7", sp_id=NEW_SP)),
-                                   directoryAudits=graph(later)))
+                                   **audits(later)))
     assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
     assert value(indicators, "nameOnlyMatches") == 0
 
@@ -715,7 +765,7 @@ def test_indicators_by_app_id_for_each_new_app(app_id):
                                                                      "connectwise cloud management – ms graph"])
 def test_name_only_for_each_new_app_is_tagged(name):
     for entry in (by_named_app(name), on_named_app(name)):
-        _, indicators = run_both(clean(directoryAudits=graph(entry)))
+        _, indicators = run_both(clean(**audits(entry)))
         assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False, name
         assert value(indicators, "nameOnlyMatches") == 1, name
 
@@ -780,10 +830,10 @@ def test_window_starts_13_oct_for_audit_changes_and_sign_ins():
     for when, counts in (("2026-10-13T00:00:00Z", True), ("2026-10-14T08:00:00Z", True),
                          ("2026-10-12T23:59:59Z", False)):
         changed = audit("Add service principal credentials", OTHER_SP, when=when, by_app=BACKUP_APP)
-        _, indicators = run_both(clean(directoryAudits=graph(changed)))
+        _, indicators = run_both(clean(**audits(changed)))
         assert (value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False) is counts, when
         role = audit("Add member to role", OTHER_SP, when=when, by_app=TEAMS_APP)
-        _, indicators = run_both(clean(directoryAudits=graph(role)))
+        _, indicators = run_both(clean(**audits(role)))
         assert (value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False) is counts, when
         ip_hit = sign_in(BACKUP_APP, IOC_IP, when=when)
         _, indicators = run_both(clean(spSignInsFromIndicatorIp=graph(ip_hit)))
@@ -798,7 +848,8 @@ def test_once_13_oct_is_past_retention_a_clean_read_is_never_clean():
         text = reasons(indicators)
         assert "13 Oct 2026" in text and "retention" in text
         assert indicators["additionalInfo"]["transformation"]["inputSummary"]["feeds"]["logRetention"] != "ok"
-        # exposure does not depend on the log window, and an indicator found still counts
+        # exposure does not depend on the clock (its sign-in reads are gated by the retention proofs in the body),
+        # and an indicator found still counts
         assert value(exposure, "isFreeOfConnectWiseAppExposure") is True
         _, indicators = run_both(clean(spSignInsFromIndicatorIp=graph(sign_in(BACKUP_APP, IOC_IP))))
         assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
@@ -828,7 +879,7 @@ def test_credential_add_on_an_unknown_sp_is_not_clean_when_the_presence_read_fai
     # Without it, a credential add on a ConnectWise SP with no published target name cannot be ruled out.
     target = UNKNOWN_SP
     for presence in UNREAD_PRESENCE:
-        body = presence_unread_body(presence, directoryAudits=graph(
+        body = presence_unread_body(presence, **audits(
             audit("Add service principal credentials", target, target_name=None)))
         exposure, indicators = run_both(body)
         assert_not_measured(indicators, "isFreeOfConnectWiseCompromiseIndicators")
@@ -850,3 +901,288 @@ def test_an_indicator_still_counts_when_the_presence_read_failed():
         _, indicators = run_both(body)
         assert value(indicators, "isFreeOfConnectWiseCompromiseIndicators") is False
         assert_measured(indicators)
+
+
+# ---- Integration-Service #1798: day-sliced audit and delegated sign-in reads, retention proofs
+
+INDICATOR_KEY = "isFreeOfConnectWiseCompromiseIndicators"
+EXPOSURE_KEY = "isFreeOfConnectWiseAppExposure"
+DELEGATED = "de8bc8b5-d9f9-48b1-a8ad-b748da725064"  # an unrelated first-party client app id
+
+
+def delegated_sign_in(app_id, ip="203.0.113.7", sign_in_id="si-delegated-1", when="2026-10-16T09:30:00Z", agent=""):
+    return {"id": sign_in_id, "appId": app_id, "ipAddress": ip, "createdDateTime": when, "userAgent": agent,
+            "isInteractive": False, "signInEventTypes": ["nonInteractiveUser"], "status": {"errorCode": 0},
+            "userPrincipalName": "user@example.com"}
+
+
+def capped(key):
+    return {"paginationStats": {key: {"paginationTruncated": True}}, "paginationTruncated": True}
+
+
+def test_slice_keys_are_the_31_keys_1798_writes():
+    for module in (EXPOSURE, INDICATORS):
+        assert tuple(module.AUDIT_SLICE_KEYS) == AUDIT_KEYS and tuple(module.USER_SLICE_KEYS) == USER_KEYS
+    assert len(AUDIT_KEYS) == 31 and AUDIT_KEYS[0] == "directoryAudits_20261015"
+    assert AUDIT_KEYS[29] == "directoryAudits_20261113" and AUDIT_KEYS[30] == "directoryAudits_from20261114"
+    assert USER_KEYS[0] == "userSignInsByApp_20261015" and USER_KEYS[-1] == "userSignInsByApp_from20261114"
+
+
+def test_whole_slices_with_retained_logs_read_clean():
+    exposure, indicators = run_both(clean())
+    assert value(exposure, EXPOSURE_KEY) is True and value(indicators, INDICATOR_KEY) is True
+    assert value(exposure, "connectWiseAppsSignedIn") == []
+    feeds = indicators["additionalInfo"]["transformation"]["inputSummary"]["feeds"]
+    assert feeds["directoryAudits"] == "ok" and feeds["userSignInsByApp"] == "ok"
+    assert feeds[USER_PROBE] == "ok" and feeds[AUDIT_PROBE] == "ok"
+
+
+@pytest.mark.parametrize("key", [AUDIT_KEYS[0], AUDIT_KEYS[17], AUDIT_KEYS[-1]])
+def test_a_missing_errored_or_capped_audit_slice_leaves_indicators_not_evaluated(key):
+    missing = clean()
+    del missing[key]
+    unreported = clean()
+    del unreported["paginationStats"][key]
+    for body in (missing, clean(**{key: STEP_403}), clean(**{key: {"stepError": True, "statusCode": 500}}),
+                 clean(**capped(key)), clean(**{key: {"value": [], "@odata.nextLink": "https://graph.example/n"}}),
+                 unreported, clean(**{key: "not a list"})):
+        exposure, indicators = run_both(body)
+        assert_not_measured(indicators, INDICATOR_KEY)
+        assert key in reasons(indicators), reasons(indicators)
+        # the audit log is not an exposure source: the apps are still shown absent and unused
+        assert value(exposure, EXPOSURE_KEY) is True
+        assert value(exposure, "connectWiseVerdict") == "Not exposed"
+
+
+@pytest.mark.parametrize("key", [USER_KEYS[0], USER_KEYS[9], USER_KEYS[-1]])
+def test_a_missing_errored_or_capped_user_slice_is_not_evaluated_never_not_exposed(key):
+    missing = clean()
+    del missing[key]
+    for body in (missing, clean(**{key: STEP_403}), clean(**capped(key)),
+                 clean(**{key: {"value": [], "@odata.nextLink": "https://graph.example/n"}})):
+        exposure, indicators = run_both(body)
+        assert_not_measured(exposure, EXPOSURE_KEY)
+        assert_not_measured(indicators, INDICATOR_KEY)
+        for out in (exposure, indicators):
+            assert value(out, "connectWiseVerdict") == "Not evaluated"
+            assert value(out, "connectWiseRiskLevel") == "unknown"
+        assert key in reasons(exposure), reasons(exposure)
+
+
+def test_an_unexplained_top_level_truncation_makes_every_feed_partial():
+    body = clean(paginationTruncated=True)
+    exposure, indicators = run_both(body)
+    assert_not_measured(exposure, EXPOSURE_KEY)
+    assert_not_measured(indicators, INDICATOR_KEY)
+    # explained by the optional alert feed: the slices are still whole
+    body = clean(securityAlerts=graph(), **capped("securityAlerts"))
+    exposure, indicators = run_both(body)
+    assert value(exposure, EXPOSURE_KEY) is True and value(indicators, INDICATOR_KEY) is True
+
+
+RETENTION_GAPS = (None, graph(), STEP_403, {"stepError": True, "statusCode": 500}, "garbage",
+                  # what #1798's proof (at or before 15 Oct) returns for a tenant active on 14 Oct: no proof for 13 Oct
+                  "inside")
+
+
+def proof(kind, field, gap):
+    if gap == "inside":
+        return graph({"id": "probe-new", field: "2026-10-14T18:00:00Z"})
+    return gap
+
+
+@pytest.mark.parametrize("gap", RETENTION_GAPS)
+def test_a_sign_in_retention_proof_that_is_missing_empty_refused_failed_or_too_new_is_not_evaluated(gap):
+    body = clean(**{USER_PROBE: proof("user", "createdDateTime", gap)})
+    if gap is None:
+        del body[USER_PROBE]
+    exposure, indicators = run_both(body)
+    assert_not_measured(exposure, EXPOSURE_KEY)
+    assert_not_measured(indicators, INDICATOR_KEY)
+    assert USER_PROBE in reasons(indicators) and USER_PROBE in reasons(exposure)
+
+
+@pytest.mark.parametrize("gap", RETENTION_GAPS)
+def test_an_audit_retention_proof_that_is_missing_empty_refused_failed_or_too_new_is_not_evaluated(gap):
+    body = clean(**{AUDIT_PROBE: proof("audit", "activityDateTime", gap)})
+    if gap is None:
+        del body[AUDIT_PROBE]
+    exposure, indicators = run_both(body)
+    assert_not_measured(indicators, INDICATOR_KEY)
+    assert AUDIT_PROBE in reasons(indicators)
+    assert value(exposure, EXPOSURE_KEY) is True
+
+
+def test_the_sign_in_proof_gates_the_unsliced_service_principal_sign_in_feeds():
+    # every sign-in feed whole and empty, but the log cannot be shown to reach back to the window: an empty
+    # service-principal read could be a read past retention, so it proves nothing
+    body = clean(**{USER_PROBE: graph()})
+    for key in ("spSignInsByApp", "spSignInsFromIndicatorIp", "userSignInsFromIndicatorIp"):
+        assert body[key] == graph()
+    _, indicators = run_both(body)
+    assert_not_measured(indicators, INDICATOR_KEY)
+    # a proof entry exactly at the window start counts
+    _, indicators = run_both(clean(**{USER_PROBE: graph({"id": "p", "createdDateTime": "2026-10-13T00:00:00Z"})}))
+    assert value(indicators, INDICATOR_KEY) is True
+
+
+def test_a_delegated_sign_in_by_an_app_from_an_ordinary_ip_is_exposed():
+    # Graph logs a delegated token's use as a user sign-in whose appId is the client app (#1798). The app has no
+    # service principal now, no indicator is in it, and it is still Exposed: it had access in the window.
+    for app_id in (BACKUP_APP, TEAMS_APP, "412dcf96-176d-4b3a-a1b0-4981ad66971e"):
+        body = clean(**{USER_DAY: [delegated_sign_in(app_id)]})
+        exposure, indicators = run_both(body)
+        assert value(exposure, EXPOSURE_KEY) is False, app_id
+        assert_measured(exposure)
+        for out in (exposure, indicators):
+            assert value(out, "connectWiseVerdict") == "Exposed"
+            assert value(out, "connectWiseRiskLevel") == "unknown"
+            assert value(out, "connectWiseAppsPresent") == []
+            assert len(value(out, "connectWiseAppsSignedIn")) == 1
+        assert value(indicators, INDICATOR_KEY) is True
+        assert "no service principal here now" in reasons(exposure)
+
+
+def test_a_service_principal_sign_in_by_a_removed_app_is_exposed_the_same_way():
+    body = clean(spSignInsByApp=graph(sign_in(TEAMS_APP, "203.0.113.7", sp_id=TEAMS_SP)))
+    exposure, _ = run_both(body)
+    assert value(exposure, EXPOSURE_KEY) is False
+    assert value(exposure, "connectWiseAppsSignedIn") == ["ConnectWise Cloud Management - MS Teams"]
+
+
+def test_a_delegated_sign_in_by_a_present_app_keeps_its_risk_and_names_the_use():
+    body = exposed_backup(**{USER_DAY: [delegated_sign_in(BACKUP_APP)]})
+    exposure, _ = run_both(body)
+    assert value(exposure, "connectWiseRiskLevel") == "standard"
+    assert "signed in to this tenant 1 time(s)" in reasons(exposure)
+    assert "no service principal here now" not in reasons(exposure)
+
+
+def test_a_delegated_sign_in_by_another_app_is_not_exposure():
+    exposure, indicators = run_both(clean(**{USER_DAY: [delegated_sign_in(DELEGATED)]}))
+    assert value(exposure, EXPOSURE_KEY) is True and value(indicators, INDICATOR_KEY) is True
+
+
+def test_a_delegated_sign_in_with_an_indicator_is_an_indicator():
+    by_ip = clean(**{USER_DAY: [delegated_sign_in(BACKUP_APP, ip=IOC_IP)]})
+    by_agent = clean(**{USER_DAY: [delegated_sign_in(TEAMS_APP, agent="python-requests/2.34.2")]})
+    for body in (by_ip, by_agent):
+        exposure, indicators = run_both(body)
+        assert value(indicators, INDICATOR_KEY) is False
+        assert value(exposure, EXPOSURE_KEY) is False
+        assert value(exposure, "connectWiseVerdict") == "Indicators found"
+
+
+def test_evidence_in_a_partial_slice_still_counts():
+    # an indicator in a capped audit slice, with another audit slice refused and the audit proof missing
+    entry = audit("Add service principal credentials", OTHER_SP, by_app=BACKUP_APP, when="2026-10-21T03:00:00Z")
+    entry["id"] = "audit-partial-1"
+    body = clean(**{AUDIT_KEYS[6]: [entry], AUDIT_KEYS[7]: STEP_403})
+    body.update(capped(AUDIT_KEYS[6]))
+    body["paginationStats"] = dict(clean()["paginationStats"], **capped(AUDIT_KEYS[6])["paginationStats"])
+    del body[AUDIT_PROBE]
+    exposure, indicators = run_both(body)
+    assert value(indicators, INDICATOR_KEY) is False
+    assert_measured(indicators)
+    assert value(exposure, "connectWiseVerdict") == "Indicators found"
+    # a delegated sign-in in a capped user slice, the sign-in proof refused: still Exposed
+    body = clean(**{USER_KEYS[3]: {"value": [delegated_sign_in(BACKUP_APP)], "@odata.nextLink": "https://graph.example/n"},
+                    USER_PROBE: STEP_403})
+    exposure, indicators = run_both(body)
+    assert value(exposure, EXPOSURE_KEY) is False and value(exposure, "connectWiseVerdict") == "Exposed"
+    assert_not_measured(indicators, INDICATOR_KEY)
+
+
+def test_records_at_a_slice_boundary_are_counted_once():
+    midnight = audit("Add service principal credentials", OTHER_SP, by_app=BACKUP_APP, when="2026-10-16T00:00:00Z")
+    body = clean(**{AUDIT_KEYS[0]: [midnight], AUDIT_KEYS[1]: [dict(midnight)]})
+    _, indicators = run_both(body)
+    assert value(indicators, "indicatorsFound") == 1
+    same = delegated_sign_in(TEAMS_APP, when="2026-10-17T00:00:00Z")
+    exposure, _ = run_both(clean(**{USER_KEYS[1]: [same], USER_KEYS[2]: [dict(same)]}))
+    assert "signed in to this tenant 1 time(s)" in reasons(exposure)
+    # different ids are different records
+    other = dict(same, id="si-delegated-2")
+    exposure, _ = run_both(clean(**{USER_KEYS[1]: [same], USER_KEYS[2]: [other]}))
+    assert "signed in to this tenant 2 time(s)" in reasons(exposure)
+
+
+def test_extra_slices_with_the_prefix_are_read_under_the_same_rules():
+    # a reader that also slices 13-14 Oct: an indicator there counts, and a refused extra slice is a gap
+    entry = audit("Add member to role", OTHER_SP, by_app=TEAMS_APP, when="2026-10-13T08:00:00Z")
+    entry["id"] = "audit-extra-1"
+    body = clean(directoryAudits_20261013=[entry], paginationStats={"directoryAudits_20261013": {"paginationTruncated": False}})
+    _, indicators = run_both(body)
+    assert value(indicators, INDICATOR_KEY) is False
+    body = clean(directoryAudits_20261014=STEP_403)
+    _, indicators = run_both(body)
+    assert_not_measured(indicators, INDICATOR_KEY)
+    assert "directoryAudits_20261014" in reasons(indicators)
+    body = clean(userSignInsByApp_20261014=[], paginationStats={"userSignInsByApp_20261014": {"paginationTruncated": False}})
+    exposure, indicators = run_both(body)
+    assert value(exposure, EXPOSURE_KEY) is True and value(indicators, INDICATOR_KEY) is True
+
+
+def legacy_body(feed, stats=False, proofs=True, **overrides):
+    """A response stored before the slicing: one directoryAudits feed, no audit slices."""
+    body = clean(**overrides)
+    for key in AUDIT_KEYS:
+        del body[key]
+        del body["paginationStats"][key]
+    body["directoryAudits"] = feed
+    if stats is not None:
+        body["paginationStats"]["directoryAudits"] = {"paginationTruncated": stats}
+    if not proofs:
+        del body[AUDIT_PROBE]
+    return body
+
+
+def test_the_old_unsliced_audit_key_is_still_read_under_the_same_rules():
+    exposure, indicators = run_both(legacy_body(graph(audit("Add service principal credentials", OTHER_SP))))
+    assert value(indicators, INDICATOR_KEY) is True and value(exposure, EXPOSURE_KEY) is True
+    for body in (legacy_body(graph(), stats=None), legacy_body(graph(), stats=True), legacy_body(STEP_403),
+                 legacy_body({"value": [], "@odata.nextLink": "https://graph.example/n"}),
+                 legacy_body(graph(), proofs=False)):
+        _, indicators = run_both(body)
+        assert_not_measured(indicators, INDICATOR_KEY)
+    # evidence in it counts, even capped and without a proof
+    hit = audit("Add service principal credentials", BACKUP_SP)
+    _, indicators = run_both(legacy_body(graph(hit), stats=True, proofs=False,
+                                         servicePrincipals=graph(sp(BACKUP_APP, BACKUP_SP))))
+    assert value(indicators, INDICATOR_KEY) is False
+    # neither audit source at all is missing, not clean
+    body = legacy_body(graph())
+    del body["directoryAudits"]
+    _, indicators = run_both(body)
+    assert_not_measured(indicators, INDICATOR_KEY)
+
+
+def test_with_slices_present_the_old_key_adds_evidence_only():
+    hit = audit("Add member to role", OTHER_SP, by_app=BACKUP_APP)
+    _, indicators = run_both(clean(directoryAudits=graph(hit)))
+    assert value(indicators, INDICATOR_KEY) is False
+    # a refused old key beside whole slices does not make the sliced log partial
+    _, indicators = run_both(clean(directoryAudits=STEP_403))
+    assert value(indicators, INDICATOR_KEY) is True
+
+
+def test_a_1798_two_app_body_is_never_clean():
+    # #1798 today: two apps' per-app feeds only, and its proofs ask for the newest entry at or before 15 Oct
+    body = clean(**{USER_PROBE: proof("user", "createdDateTime", "inside"),
+                    AUDIT_PROBE: proof("audit", "activityDateTime", "inside")})
+    for _, role_feed, _ in NEW_APPS.values():
+        del body[role_feed]
+    exposure, indicators = run_both(body)
+    assert_not_measured(exposure, EXPOSURE_KEY)
+    assert_not_measured(indicators, INDICATOR_KEY)
+
+
+def test_both_files_agree_on_the_sliced_fixtures():
+    bodies = [clean(**{USER_DAY: [delegated_sign_in(BACKUP_APP)]}), clean(**{AUDIT_KEYS[4]: STEP_403}),
+              clean(**{USER_PROBE: graph()}), legacy_body(graph()), clean(paginationTruncated=True),
+              clean(**{USER_DAY: [delegated_sign_in(TEAMS_APP, ip=IOC_IP)]})]
+    for body in bodies:
+        exposure, indicators = run_both(body)
+        for key in ("connectWiseVerdict", "connectWiseRiskLevel", "connectWiseAppsPresent", "connectWiseAppsSignedIn",
+                    "indicatorsFound", "nameOnlyMatches"):
+            assert value(exposure, key) == value(indicators, key), (key, body)
