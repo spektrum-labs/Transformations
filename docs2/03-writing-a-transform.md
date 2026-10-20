@@ -11,7 +11,7 @@
 - **Return the enriched envelope**, not the legacy bare dict. 534 of main's 803 transforms use the envelope; the other 269 are a frozen legacy generation you must never copy from.
 - **The filename is the URL.** Integration-Service mints `.../{srn}.lower()/{criteriakey}.lower().py`; a camelCase or snake_case filename is unreachable via the default minted URL ([02 — execution contract](02-execution-contract.md), gotcha on case sensitivity).
 - **Nothing checks your work before production.** No CI on any branch, `local_tester.py` runs full CPython (not the sandbox), and a merge to `main` is an instant deploy ([13 — release and branches](13-release-and-branches.md)). The sandbox checklist below is the only gate, and you are it.
-- **Fail closed, with reasons.** The best files in the corpus return `False` plus a human-readable `failReasons` entry when data is missing — the worst return `True` because the API answered at all (anti-pattern gallery below).
+- **Fail closed, with reasons.** When data is missing, the best files in the corpus return the criterion as `None` with `api_errors` set, so `dataCollection.status` is `"error"` and Token-Service records it as not evaluated, plus a human-readable `failReasons` entry; the worst return `True` because the API answered at all (anti-pattern gallery below).
 - **A wrong criteria key is worse than a crash.** A crash becomes `isEvaluated: False` (a task, no gap); a misspelled key is *measured* against the wrong value and can create a false gap (`TS-main:src/utils/evaluate/evaluate.py:2339-2360`, via [02](02-execution-contract.md)).
 
 The gauntlet your file must survive on every single evaluation:
@@ -205,7 +205,7 @@ return json.loads(input)
 
 165 bare `except:` occurrences across 83 main files (clusters: `encryption/microsoft/*`, `siem/blumira/*`). Bare excepts swallow the evidence — a transform that ate a `TypeError` in parsing reports a confident `False` with no reason attached.
 
-**The fix**: exactly one outer `except Exception as e:` returning `create_response(result={CRITERIA_KEY: False}, transformation_errors=[str(e)], fail_reasons=[...])`; inner handlers catch specific types only. That outer catch-all is universal in the corpus (977 occurrences) and correct — it's the *inner* bare excepts that destroy diagnosability.
+**The fix**: exactly one outer `except Exception as e:` returning `create_response(result={CRITERIA_KEY: None}, transformation_errors=[str(e)], api_errors=[...], fail_reasons=[...])` (the `api_errors` entry is what makes the evaluator record it as not evaluated; `transformation_errors` alone is never read there); inner handlers catch specific types only. That outer catch-all is universal in the corpus (977 occurrences) and correct — it's the *inner* bare excepts that destroy diagnosability.
 
 ## Filenames and keys: casing is load-bearing
 
@@ -229,7 +229,7 @@ The numbered flow, then the same loop as a diagram. Assume the criteria key is `
 2. **Name the file** `ismfaenforcedforusers.py` — the criteria key, lowercased, no underscores.
 3. **Start from a modern envelope file**: copy the structure of `main:safeguards/compliancemanagement/knowbe4/phishingclickrate.py` (standard helpers) and the logic discipline of `main:safeguards/cloudsecurity/awssecurityhub/isguarddutyenabled.py`. Strip phishingclickrate's `strptime` date parsing. Never start from a legacy bare-dict file.
 4. **Inline the helpers**: `extract_input` (the dominant variant, verbatim) and `create_response`, editing only the embedded `transformationId`/`vendor`/`category` metadata. Add a module-level `CRITERIA_KEY = "isMFAEnforcedForUsers"` constant and use it everywhere the key appears.
-5. **Write the logic fail-closed**: type-guard every access (`if not isinstance(x, dict): continue`), default every uncertain branch to `False`, and give every verdict a human-readable `passReasons`/`failReasons` entry plus a `recommendations` entry on failure.
+5. **Write the logic fail-closed**: type-guard every access (`if not isinstance(x, dict): continue`), return `False` only from a body that shows the control absent and `None` with `api_errors` (not evaluated) from one that cannot answer, and give every verdict a human-readable `passReasons`/`failReasons` entry plus a `recommendations` entry on failure.
 6. **Hand-write the schema sidecar** at `safeguards/mfa/acme/schemas/ismfaenforcedforusers.py` — a `IsmfaenforcedforusersInput(BaseModel)` with `Optional` fields and `extra = "allow"` (template at `main:CONTRIBUTING.md`, "Schema Validation"). Don't rely on `generate_schemas.py`: its recursive discovery is dead code and its sweep hardcodes three 2025-era paths, so it will never see your new vendor dir (`main:generate_schemas.py:14-29, 271, 276`). Schemas may import `pydantic`/`typing` freely — they execute *outside* the sandbox.
 7. **Test locally**: `pip install requests pydantic` (undocumented; `requests` is imported unconditionally even for local files), then `python local_tester.py safeguards/mfa/acme/ismfaenforcedforusers.py saved_response.json`. There is no stdin mode despite `main:CONTRIBUTING.md:413-414`. Cover CONTRIBUTING's six cases: happy path, failing, empty data, API error body, malformed JSON, legacy format. See [12 — local development](12-local-development.md).
 8. **Self-audit against the sandbox table above** — nothing in the toolchain does this for you, and this step is where every historical production breakage (ENG-463, beyondtrust-pra, commvault) would have been caught.
@@ -274,7 +274,7 @@ Walkthrough: the only human checkpoints are steps 2 and 4 of the diagram — the
 > **Don't trust the file you're copying from.** The corpus contradicts its own rules and survives: 9 files call banned `strptime`, 5 use banned dict `+=`, 1 has `nonlocal`, 269 are frozen-generation legacy, and one has been a syntax error in production for 7 months. "It's already on main" is not evidence that a pattern works — main is where broken patterns go to be silent. Start from the two named positive examples, nothing else.
 
 > [!WARNING]
-> **Every default is a verdict.** `data.get("items", [])` on an error payload means "zero findings" means *pass* (the tenable fail-open, above). Decide explicitly what an unexpected payload should score — the answer is almost always `False` with a fail reason naming what was missing.
+> **Every default is a verdict.** `data.get("items", [])` on an error payload means "zero findings" means *pass* (the tenable fail-open, above). Decide explicitly what an unexpected payload should score — the answer is almost always not evaluated: the criterion `None` with an `api_errors` entry naming what was missing, never a measured `False`.
 
 > [!NOTE]
 > **`print()` won't help you.** It runs in the sandbox but the output is discarded unread (PrintCollector; `stdout` returns empty — verified empirically). Route diagnostics through `additionalInfo` — `inputSummary`, reasons, and error lists are the only telemetry your transform has.
