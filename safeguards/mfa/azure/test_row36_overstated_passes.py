@@ -1,5 +1,5 @@
-"""Entra MFA review, overstated passes (for J.J.'s review before merge: these move some Met controls to Failed or
-Not evaluated).
+"""Entra MFA review, overstated passes (decision 18 Oct 2026: the verdict changes are accepted; these move some Met
+controls to Failed or Not evaluated). Section 4 holds the row 36B rules from the same decision.
 
 1. isMFAEnforcedForUsers (ismfaenforcedforusers.py): an "All users" MFA policy counts only when it applies to all
    cloud apps and is not narrowed by platform, client type, named locations or a device filter, the rule the
@@ -7,14 +7,14 @@ Not evaluated).
    else counting the key reads Failed (it reaches only some sign-ins, which is a measured gap, like a risk-only
    policy).
 2. legacyAuthBlocked (legacyauthblocked.py): a block counts only when the blocking policies together cover all
-   users, with at most two named accounts left outside (the break-glass limit isMFAEnforcedForUsers allows) and no
-   group, role or guest exclusion left uncovered. A block for named users only reads Failed; a block whose reach
+   users, with at most two named accounts or one group left outside (the break-glass limit, section 4) and no
+   role or guest exclusion left uncovered. A block for named users only reads Failed; a block whose reach
    depends on group or role membership, or that leaves more than two accounts or guests outside, reads Not
    evaluated (membership is not read here).
 3. isMFAConfiguredForSecurityAdmins (ismfaconfiguredforsecurityadmins.py): aligned with the remote-access and
    phishing-resistant checks. A policy narrowed by client app type, platform, a device filter or named locations
-   only does not count (Failed when no other policy covers the role). A policy that excludes a group, a directory
-   role, guests or more than two named accounts (in total across the counting policies) leaves coverage unproven:
+   only does not count (Failed when no other policy covers the role). A policy that excludes more than one group, a
+   directory role, guests or more than two named accounts (in total across the counting policies) leaves coverage unproven:
    Not evaluated, not Failed. Excluded locations (all locations minus trusted ones) and excluded apps other than the
    admin surface stay findings.
 
@@ -171,7 +171,7 @@ def test_legacy_block_for_named_users_only_fails(legacy):
 @pytest.mark.parametrize("kw", [
     pytest.param({"include_users": (), "include_groups": (G1,)}, id="group-scope"),
     pytest.param({"include_users": (), "include_roles": (ADMIN_ROLES[0],)}, id="role-scope"),
-    pytest.param({"excludeGroups": [G1]}, id="excludes-group"),
+    # One excluded group is break-glass under row 36B (c): see test_36b_c_*.
     pytest.param({"excludeRoles": [DIRECTORY_READERS]}, id="excludes-role"),
     pytest.param({"excludeUsers": ["GuestsOrExternalUsers"]}, id="excludes-guests-keyword"),
     pytest.param({"excludeGuestsOrExternalUsers": {"guestOrExternalUserTypes": "b2bCollaborationGuest"}},
@@ -230,7 +230,7 @@ def test_admins_narrowed_policy_does_not_count(admins, conditions, apps):
 
 
 @pytest.mark.parametrize("users", [
-    pytest.param({"excludeGroups": [G1]}, id="excludes-group"),
+    # One excluded group is break-glass under row 36B (c): see test_36b_c_*.
     pytest.param({"excludeRoles": [DIRECTORY_READERS]}, id="excludes-role"),
     pytest.param({"excludeUsers": ["GuestsOrExternalUsers"]}, id="excludes-guests-keyword"),
     pytest.param({"excludeGuestsOrExternalUsers": {"guestOrExternalUserTypes": "b2bCollaborationGuest"}},
@@ -265,7 +265,7 @@ def test_admins_location_and_app_exclusions_stay_findings(admins, conditions):
 
 
 def test_admins_a_proven_gap_still_fails_next_to_an_unproven_role(admins):
-    unproven = admin_policy("Some", include_roles=tuple(ADMIN_ROLES[:5]), excludeGroups=[G1])
+    unproven = admin_policy("Some", include_roles=tuple(ADMIN_ROLES[:5]), excludeGroups=[G1, G2])
     out = admins({"value": [unproven]})
     assert verdict(out, ADMIN_KEY) == (False, "success")
 
@@ -276,3 +276,195 @@ def test_mfa_all_users_policy_that_does_not_name_its_apps_is_not_evaluated(mfa):
     out = mfa(copy.deepcopy(mfa_body(p)))
     assert verdict(out, MFA_KEY) == (None, "error")
     assert "does not say which apps" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+
+
+# --- 4. Row 36B (decision 18 Oct 2026) ---------------------------------------------------------------------------------
+# (a) MFA for all users split across several narrowed All-users policies, none whole on its own: not evaluated (their
+#     union is not judged), never Met and never Failed. Policies that are all scoped to some apps stay Failed: no
+#     union of app lists reaches every app.
+# (b) An All-users MFA policy that excludes apps leaves those apps without MFA: with nothing else counting, Failed.
+# (c) Break-glass exclusions of at most 2 named accounts or 1 group (not both) are Met, and the reasons name them.
+#     More than that (3 accounts, 2 groups, or a group and an account) is not Met.
+# Trusted locations are unchanged (see the "do not narrow" and "stay findings" tests above).
+
+G2 = "c0000000-0000-0000-0000-000000000002"
+APP2 = "b0000000-0000-0000-0000-000000000002"
+
+
+def ca_conditions(policy, **conditions):
+    policy["conditions"].update(conditions)
+    return policy
+
+
+def excluding_apps(policy, apps):
+    policy["conditions"]["applications"]["excludeApplications"] = list(apps)
+    return policy
+
+
+SPLITS = [
+    pytest.param([ca_policy("Browser", conditions={"clientAppTypes": ["browser"]}),
+                  ca_policy("Clients", conditions={"clientAppTypes": ["mobileAppsAndDesktopClients"]})],
+                 id="client-types"),
+    pytest.param([ca_policy("Mobile", conditions={"platforms": {"includePlatforms": ["android", "iOS"]}}),
+                  ca_policy("Other platforms", conditions={"platforms": {"includePlatforms": ["all"],
+                                                                         "excludePlatforms": ["android", "iOS"]}})],
+                 id="platforms"),
+    pytest.param([excluding_apps(ca_policy("All but one app"), [APP]), ca_policy("That app", apps=(APP,))],
+                 id="apps"),
+]
+
+
+@pytest.mark.parametrize("policies", SPLITS)
+def test_36b_a_mfa_split_across_several_policies_is_not_evaluated(mfa, policies):
+    out = mfa(copy.deepcopy(mfa_body(*policies)))
+    assert verdict(out, MFA_KEY) == (None, "error")
+    errors = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "split across 2 policies" in errors
+    assert out["additionalInfo"]["evaluation"]["passReasons"] == []
+
+
+@pytest.mark.parametrize("policies", SPLITS)
+def test_36b_a_split_next_to_a_whole_policy_still_passes(mfa, policies):
+    out = mfa(copy.deepcopy(mfa_body(*(policies + [ca_policy("Whole")]))))
+    assert verdict(out, MFA_KEY) == (True, "success")
+    assert out["transformedResponse"]["policiesEnforcingMFAForUsers"] == ["Whole"]
+
+
+def test_36b_a_policies_that_are_all_app_scoped_stay_failed(mfa):
+    out = mfa(copy.deepcopy(mfa_body(ca_policy("One app", apps=(APP,)), ca_policy("Another app", apps=(APP2,)))))
+    assert verdict(out, MFA_KEY) == (False, "success")
+
+
+def test_36b_a_split_policies_with_exclusions_beyond_break_glass_stay_not_evaluated(mfa):
+    out = mfa(copy.deepcopy(mfa_body(ca_policy("Browser", conditions={"clientAppTypes": ["browser"]},
+                                               excludeUsers=[U1, U2, U3]),
+                                     ca_policy("Clients", conditions={"clientAppTypes": ["mobileAppsAndDesktopClients"]}))))
+    assert verdict(out, MFA_KEY) == (None, "error")
+
+
+@pytest.mark.parametrize("excluded", [[APP], [APP, APP2]])
+def test_36b_b_mfa_policy_that_excludes_apps_fails(mfa, excluded):
+    out = mfa(copy.deepcopy(mfa_body(excluding_apps(ca_policy("Excludes apps"), excluded))))
+    assert verdict(out, MFA_KEY) == (False, "success")
+    reasons = " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+    assert "Excludes apps" in reasons and "excludes some apps" in reasons
+
+
+def test_36b_b_app_exclusion_next_to_a_whole_policy_still_passes(mfa):
+    out = mfa(copy.deepcopy(mfa_body(excluding_apps(ca_policy("Excludes apps"), [APP]), ca_policy("Whole"))))
+    assert verdict(out, MFA_KEY) == (True, "success")
+
+
+@pytest.mark.parametrize("users,named", [
+    pytest.param({"excludeUsers": [U1]}, ["user:" + U1], id="one-account"),
+    pytest.param({"excludeUsers": [U1, U2]}, ["user:" + U1, "user:" + U2], id="two-accounts"),
+    pytest.param({"excludeGroups": [G1]}, ["group:" + G1], id="one-group"),
+])
+def test_36b_c_mfa_break_glass_exclusions_pass_and_are_named(mfa, users, named):
+    out = mfa(copy.deepcopy(mfa_body(ca_policy("All users", **users))))
+    assert verdict(out, MFA_KEY) == (True, "success")
+    reasons = " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+    for principal in named:
+        assert principal in reasons
+
+
+@pytest.mark.parametrize("policies", [
+    pytest.param([ca_policy("All users", excludeUsers=[U1, U2, U3])], id="three-accounts"),
+    pytest.param([ca_policy("All users", excludeGroups=[G1, G2])], id="two-groups"),
+    pytest.param([ca_policy("All users", excludeGroups=[G1], excludeUsers=[U1])], id="group-and-account"),
+    pytest.param([ca_policy("A", excludeGroups=[G1]), ca_policy("B", excludeGroups=[G2])], id="two-groups-in-total"),
+])
+def test_36b_c_mfa_exclusions_beyond_break_glass_are_not_met(mfa, policies):
+    out = mfa(copy.deepcopy(mfa_body(*policies)))
+    assert verdict(out, MFA_KEY) == (None, "error")
+
+
+def test_36b_c_mfa_break_glass_group_with_trusted_locations_excluded_still_passes(mfa):
+    p = ca_policy("All users", excludeGroups=[G1],
+                  conditions={"locations": {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}})
+    assert verdict(mfa(copy.deepcopy(mfa_body(p))), MFA_KEY) == (True, "success")
+
+
+@pytest.mark.parametrize("users,named", [
+    pytest.param({"excludeUsers": [U1, U2]}, ["user:" + U1, "user:" + U2], id="two-accounts"),
+    pytest.param({"excludeGroups": [G1]}, ["group:" + G1], id="one-group"),
+])
+def test_36b_c_legacy_break_glass_exclusions_pass_and_are_named(legacy, users, named):
+    out = legacy(legacy_body(block(**users)))
+    assert verdict(out, LEGACY_KEY) == (True, "success")
+    reasons = " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+    for principal in named:
+        assert principal in reasons
+
+
+@pytest.mark.parametrize("policies", [
+    pytest.param([block(excludeGroups=[G1, G2])], id="two-groups"),
+    pytest.param([block(excludeGroups=[G1], excludeUsers=[U1])], id="group-and-account"),
+    pytest.param([block("A", excludeGroups=[G1]), block("B", excludeGroups=[G2])], id="different-groups"),
+])
+def test_36b_c_legacy_exclusions_beyond_break_glass_are_not_met(legacy, policies):
+    assert verdict(legacy(legacy_body(*policies)), LEGACY_KEY) == (None, "error")
+
+
+def test_36b_c_legacy_one_group_excluded_by_both_blocks_passes(legacy):
+    out = legacy(legacy_body(block("A", excludeGroups=[G1]), block("B", excludeGroups=[G1])))
+    assert verdict(out, LEGACY_KEY) == (True, "success")
+    assert "group:" + G1 in " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+
+
+@pytest.mark.parametrize("users,named", [
+    pytest.param({"excludeUsers": [U1, U2]}, [U1, U2], id="two-accounts"),
+    pytest.param({"excludeGroups": [G1]}, [G1], id="one-group"),
+])
+def test_36b_c_admins_break_glass_exclusions_pass_and_are_named(admins, users, named):
+    out = admins({"value": [admin_policy(**users)]})
+    assert verdict(out, ADMIN_KEY) == (True, "success")
+    reasons = " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+    assert "break-glass" in reasons
+    for principal in named:
+        assert principal in reasons
+
+
+@pytest.mark.parametrize("policies", [
+    pytest.param([admin_policy(excludeGroups=[G1, G2])], id="two-groups"),
+    pytest.param([admin_policy(excludeGroups=[G1], excludeUsers=[U1])], id="group-and-account"),
+    pytest.param([admin_policy("A", include_roles=tuple(ADMIN_ROLES[:3]), excludeGroups=[G1]),
+                  admin_policy("B", include_roles=tuple(ADMIN_ROLES[3:]), excludeGroups=[G2])],
+                 id="two-groups-in-total"),
+    pytest.param([admin_policy("A", include_roles=tuple(ADMIN_ROLES[:3]), excludeGroups=[G1]),
+                  admin_policy("B", include_roles=tuple(ADMIN_ROLES[3:]), excludeUsers=[U1])],
+                 id="group-and-account-in-total"),
+])
+def test_36b_c_admins_exclusions_beyond_break_glass_are_not_met(admins, policies):
+    assert verdict(admins({"value": policies}), ADMIN_KEY) == (None, "error")
+
+
+def membership(members):
+    """The merged group-membership reads for G1, read whole (synthetic member ids)."""
+    return {"workforceUsers": {"value": [{"id": m, "accountEnabled": True, "userType": "Member"}
+                                         for m in [U1, U2, U3]]},
+            "caPolicyGroups": {"groupIds": [{"id": G1}]},
+            "groupMembers": [{"value": [{"id": m} for m in members]}]}
+
+
+@pytest.mark.parametrize("members,expected", [
+    pytest.param([U1, U2], True, id="two-members-is-break-glass"),
+    pytest.param([U1, U2, U3], None, id="three-members-is-not"),
+])
+def test_36b_c_mfa_excluded_group_read_with_more_than_two_members_is_not_break_glass(mfa, members, expected):
+    body = mfa_body(ca_policy("All users", excludeGroups=[G1]))
+    body.update(membership(members))
+    assert verdict(mfa(copy.deepcopy(body)), MFA_KEY)[0] is expected
+
+
+def test_36b_a_split_policies_that_all_exclude_the_same_app_fail(mfa):
+    # Rule (b) wins: the app is excluded by every all-apps policy and included by none, so it has no MFA.
+    out = mfa(copy.deepcopy(mfa_body(
+        excluding_apps(ca_policy("Browser", conditions={"clientAppTypes": ["browser"]}), [APP]),
+        excluding_apps(ca_policy("Clients", conditions={"clientAppTypes": ["mobileAppsAndDesktopClients"]}), [APP]))))
+    assert verdict(out, MFA_KEY) == (False, "success")
+
+
+def test_36b_c_legacy_different_groups_next_to_a_block_with_no_exclusion_pass(legacy):
+    out = legacy(legacy_body(block("A", excludeGroups=[G1]), block("B", excludeGroups=[G2]), block("C")))
+    assert verdict(out, LEGACY_KEY) == (True, "success")

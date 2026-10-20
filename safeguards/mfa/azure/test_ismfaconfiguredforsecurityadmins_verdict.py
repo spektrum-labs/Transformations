@@ -117,18 +117,26 @@ def pair(out):
     return out["transformedResponse"][KEY], out["additionalInfo"]["dataCollection"]["status"]
 
 
-# Row 36 (overstated passes): CA001 as Microsoft publishes it excludes one group (its break-glass group). Group
-# membership is not read, so an excluded group leaves coverage unproven, as in the remote-access and
-# phishing-resistant checks. The role, app and paging tests below use CA001 without that exclusion.
+# CA001 as Microsoft publishes it excludes one group (its break-glass group). Row 36B (c), decision 18 Oct 2026: one
+# excluded group is break-glass, so CA001 passes and the pass reason names the group; two groups, or a group and
+# named accounts, leave coverage unproven. The role, app and paging tests below use CA001 without that exclusion.
 CA001_NO_GROUP = copy.deepcopy(CA001)
 CA001_NO_GROUP["conditions"]["users"]["excludeGroups"] = []
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_microsoft_example_with_its_group_exclusion_is_not_evaluated(mode):
+def test_microsoft_example_with_its_break_glass_group_passes(mode):
     out = load(mode)(graph(CA001, CA008))
+    assert pair(out) == (True, "success")
+    assert "group:eedad040-3722-4bcb-bde5-bc7c857f4983" in " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_microsoft_example_with_a_second_excluded_group_is_not_evaluated(mode):
+    groups = ["eedad040-3722-4bcb-bde5-bc7c857f4983", "c0000000-0000-0000-0000-000000000001"]
+    out = load(mode)(graph(edited(CA001, conditions__users__excludeGroups=groups), CA008))
     assert pair(out) == (None, "error")
-    assert "1 excluded group(s)" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "2 excluded groups" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -265,7 +273,7 @@ def test_a_condition_the_strict_checks_allow_is_reported_and_does_not_change_the
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_microsoft_example_reports_its_own_group_exclusion(mode):
-    """CA001 as Microsoft publishes it excludes one group: the not-evaluated reason and the findings say so."""
+    """CA001 as Microsoft publishes it excludes one group: it passes (row 36B (c)) and the findings say so."""
     out = load(mode)(graph(CA001, CA008))
-    assert pair(out) == (None, "error")
-    assert "1 excluded group(s)" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert pair(out) == (True, "success")
+    assert "1 excluded group(s)" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
