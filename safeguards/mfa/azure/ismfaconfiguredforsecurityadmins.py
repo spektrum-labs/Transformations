@@ -12,7 +12,7 @@ The check passes only when every one of the six security admin roles is covered:
 a policy for one role says nothing about the other five.
 
 Reaching the administrative surface is not the same as reaching every admin
-sign-in. the Entra MFA review (overstated passes, for J.J.'s review) aligns this check
+sign-in. The Entra MFA review (overstated passes, decision 18 Oct 2026) aligns this check
 with the remote-access (entra_ca_mfa_coverage.py) and phishing-resistant
 (entra_ca_authstrength_phishing_resistant.py) checks:
 - a policy narrowed by client app types, platforms, a device filter, or named
@@ -25,6 +25,11 @@ with the remote-access (entra_ca_mfa_coverage.py) and phishing-resistant
 Excluded locations (all locations minus trusted ones, the remote-access rule)
 and excluded applications other than the admin surface do not change the
 verdict; they are named in additionalFindings (narrowing_conditions).
+
+Break-glass (row 36B (c), decision 18 Oct 2026): a counting policy may exclude
+at most MAX_BREAK_GLASS named accounts or one group (MAX_BREAK_GLASS_GROUPS),
+not both, and the same limit holds in total across the counting policies. The
+pass reason names the excluded accounts or group. More than that is None.
 
 API: GET /v1.0/identity/conditionalAccess/policies
 
@@ -269,6 +274,7 @@ ADMIN_APPS = ["All", "MicrosoftAdminPortals"]
 # Rejecting every exclusion would fail tenants whose admin policy is correct.
 ADMIN_SURFACE_EXCLUSIONS = ["all", "microsoftadminportals", "797f4846-ba00-4fd7-ba43-dac1f8f63013"]
 MAX_BREAK_GLASS = 2
+MAX_BREAK_GLASS_GROUPS = 1
 USER_KEYWORDS = ["all", "none", "guestsorexternalusers"]
 
 
@@ -343,23 +349,30 @@ def strict_narrowing(policy):
 
 
 def exclusion_problems(policy):
-    """(what the policy excludes beyond MAX_BREAK_GLASS named accounts, the named accounts it excludes)."""
+    """(what the policy excludes beyond break-glass, the named accounts it excludes, the groups it excludes).
+    Break-glass is at most MAX_BREAK_GLASS named accounts or MAX_BREAK_GLASS_GROUPS group, not both."""
     conditions = policy.get("conditions")
     users = conditions.get("users") if isinstance(conditions, dict) else None
     found = []
-    if listed(users, "excludeGroups"):
-        found.append(str(len(listed(users, "excludeGroups"))) + " excluded group(s)")
+    excluded = folded(listed(users, "excludeUsers"))
+    named = [v for v in excluded if v and v not in USER_KEYWORDS]
+    groups = [g for g in folded(listed(users, "excludeGroups")) if g]
+    if isinstance(users, dict) and users.get("excludeGroups") and not groups:
+        found.append("excluded groups that cannot be read")
+    if len(groups) > MAX_BREAK_GLASS_GROUPS:
+        found.append(str(len(groups)) + " excluded groups (more than " + str(MAX_BREAK_GLASS_GROUPS) + ")")
+    elif groups and named:
+        found.append("an excluded group and excluded accounts (break-glass is at most " + str(MAX_BREAK_GLASS)
+                     + " accounts or " + str(MAX_BREAK_GLASS_GROUPS) + " group)")
     if listed(users, "excludeRoles"):
         found.append(str(len(listed(users, "excludeRoles"))) + " excluded directory role(s)")
-    excluded = folded(listed(users, "excludeUsers"))
     if "guestsorexternalusers" in excluded or (isinstance(users, dict) and users.get("excludeGuestsOrExternalUsers")):
         found.append("excluded guests or external users")
     if "all" in excluded:
         found.append("all users excluded")
-    named = [v for v in excluded if v and v not in USER_KEYWORDS]
     if len(named) > MAX_BREAK_GLASS:
         found.append(str(len(named)) + " excluded accounts (more than " + str(MAX_BREAK_GLASS) + ")")
-    return found, named
+    return found, named, groups
 
 
 def policy_covers_admin_roles(policy):
@@ -446,6 +459,7 @@ def transform(input):
         unproven_policies = []
         unproven_ids = []
         excluded_accounts = []
+        excluded_groups = []
 
         for policy in policies:
             if not isinstance(policy, dict):
@@ -466,7 +480,7 @@ def transform(input):
                 if strict:
                     narrowed_out.append(name + " (" + "; ".join(strict) + ")")
                     continue
-                problems, named = exclusion_problems(policy)
+                problems, named, groups = exclusion_problems(policy)
                 if problems:
                     unproven_policies.append(name + " (" + "; ".join(problems) + ")")
                     for role_id in covered_roles:
@@ -476,6 +490,9 @@ def transform(input):
                 for account in named:
                     if account not in excluded_accounts:
                         excluded_accounts.append(account)
+                for group in groups:
+                    if group not in excluded_groups:
+                        excluded_groups.append(group)
                 matching_policies.append(name)
                 narrowing = narrowing_conditions(policy)
                 if narrowing:
@@ -492,8 +509,9 @@ def transform(input):
             return not_measured("Only a partial page of Conditional Access policies was returned and it does not "
                                 "cover every security admin role", validation)
         if uncovered and all(r in unproven_ids for r in SECURITY_ADMIN_ROLES if r not in covered_ids):
-            return not_measured("MFA policies reach " + ", ".join(uncovered) + " only with exclusions beyond "
-                                + str(MAX_BREAK_GLASS) + " named emergency-access accounts, so coverage cannot be "
+            return not_measured("MFA policies reach " + ", ".join(uncovered) + " only with exclusions beyond break-glass (at most "
+                                + str(MAX_BREAK_GLASS) + " named accounts or " + str(MAX_BREAK_GLASS_GROUPS)
+                                + " group), so coverage cannot be "
                                 "confirmed (group and role membership is not read): " + "; ".join(unproven_policies),
                                 validation)
         if not uncovered and len(excluded_accounts) > MAX_BREAK_GLASS:
@@ -501,6 +519,12 @@ def transform(input):
                                 + str(len(excluded_accounts)) + " named accounts in total, more than "
                                 + str(MAX_BREAK_GLASS) + " emergency-access accounts, so coverage cannot be confirmed",
                                 validation)
+        if not uncovered and (len(excluded_groups) > MAX_BREAK_GLASS_GROUPS or (excluded_groups and excluded_accounts)):
+            return not_measured("The policies that cover the security admin roles exclude "
+                                + str(len(excluded_groups)) + " group(s) and " + str(len(excluded_accounts))
+                                + " named account(s) in total, more than break-glass (at most " + str(MAX_BREAK_GLASS)
+                                + " accounts or " + str(MAX_BREAK_GLASS_GROUPS) + " group), so coverage cannot be "
+                                "confirmed (group membership is not read)", validation)
         is_configured = not uncovered
 
         if is_configured:
@@ -511,6 +535,11 @@ def transform(input):
             for pname in matching_policies:
                 pass_reasons.append("Policy: " + str(pname))
             pass_reasons.append("Covered roles: " + ", ".join(all_covered_roles))
+            if excluded_accounts or excluded_groups:
+                pass_reasons.append("Excluded as break-glass (at most " + str(MAX_BREAK_GLASS) + " accounts or "
+                                    + str(MAX_BREAK_GLASS_GROUPS) + " group): "
+                                    + name_list(["user:" + a[:64] for a in excluded_accounts]
+                                                + ["group:" + g[:64] for g in excluded_groups]))
         else:
             fail_reasons.append(
                 str(len(all_covered_roles)) + " of " + str(len(SECURITY_ADMIN_ROLES)) + " security admin roles "
@@ -533,8 +562,9 @@ def transform(input):
             )
         if unproven_policies:
             additional_findings.append(
-                "MFA policies for admins that do not count because their exclusions go beyond "
-                + str(MAX_BREAK_GLASS) + " named emergency-access accounts: " + "; ".join(unproven_policies)
+                "MFA policies for admins that do not count because their exclusions go beyond break-glass (at most "
+                + str(MAX_BREAK_GLASS) + " named accounts or " + str(MAX_BREAK_GLASS_GROUPS) + " group): "
+                + "; ".join(unproven_policies)
             )
         if narrowed_policies:
             additional_findings.append(
