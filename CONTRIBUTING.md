@@ -103,7 +103,7 @@ Require the response to carry a signal the transformation actually reads, and sa
 # The query must be shown to have run before its result can be read as evidence.
 if not (isinstance(data, dict) and isinstance(data.get("findings"), list)):
     return create_response(
-        result={criteriaKey: False},
+        result={criteriaKey: None},
         validation=validation,
         api_errors=["no findings collection in the response: the query cannot be "
                     "shown to have run, so a count of zero is not evidence"])
@@ -309,10 +309,12 @@ def transform(input):
 
         # 3. Handle validation failures
         if validation.get("status") == "failed":
+            reasons = validation.get("errors") or ["Input validation failed"]
             return create_response(
-                result={"isMFAEnforcedForUsers": False},
+                result={"isMFAEnforcedForUsers": None},
                 validation=validation,
-                fail_reasons=validation.get("errors", ["Input validation failed"])
+                api_errors=reasons,
+                fail_reasons=reasons
             )
 
         # 4. Apply business logic
@@ -331,14 +333,16 @@ def transform(input):
 
     except json.JSONDecodeError as e:
         return create_response(
-            result={"isMFAEnforcedForUsers": False},
+            result={"isMFAEnforcedForUsers": None},
             validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
+            api_errors=["Could not parse input as valid JSON"],
             fail_reasons=["Could not parse input as valid JSON"]
         )
     except Exception as e:
         return create_response(
-            result={"isMFAEnforcedForUsers": False},
+            result={"isMFAEnforcedForUsers": None},
             transformation_errors=[str(e)],
+            api_errors=[f"Transformation error: {str(e)}"],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
 ```
@@ -623,19 +627,23 @@ echo '{"users": [{"userId": "1", "mfaEnabled": true}]}' | python local_tester.py
 
 ### Test Cases to Cover
 
-Cases 3 to 7 have a **required answer**, not merely required coverage: the criterion
-must come back `False` (or `True` for an [inverted key](#the-fail-closed-rule)). Listing
-the case without asserting the answer is how the defects in the fail-closed section got
-in.
+Cases 3 to 6 have a **required answer**, not merely required coverage: a body that
+cannot answer the criterion must come back **not evaluated** -- the criterion `None`,
+with `additionalInfo.dataCollection.status == "error"` (pass the reason in
+`api_errors`), which Token-Service shows grey. A `False` there is graded as a measured
+failure of a control nobody measured; see
+[A None verdict must say it was not measured](#a-none-verdict-must-say-it-was-not-measured).
+Listing the case without asserting the answer is how the defects in the fail-closed
+section got in.
 
 | # | case | input | required answer |
 |---|---|---|---|
 | 1 | Happy path | valid input, control in place | `True` |
 | 2 | Failure case | valid input, control absent | `False` |
-| 3 | Empty data | `{}`, `None`, `"{}"` | **`False`** |
-| 4 | API error | an error envelope, with and without an HTTP status code | **`False`** |
-| 5 | Unrelated payload | `{"hello": "world"}`, `{"foo": {"bar": [1, 2, 3]}}` | **`False`** |
-| 6 | Malformed JSON | invalid input format | **`False`** or raise |
+| 3 | Empty data | `{}`, `None`, `"{}"` | **`None`**, dataCollection `error` |
+| 4 | API error | an error envelope, with and without an HTTP status code | **`None`**, dataCollection `error` |
+| 5 | Unrelated payload | `{"hello": "world"}`, `{"foo": {"bar": [1, 2, 3]}}` | **`None`**, dataCollection `error` |
+| 6 | Malformed JSON | invalid input format | **`None`**, dataCollection `error`, or raise |
 | 7 | Legacy format | input without enriched validation | as case 1 or 2 |
 
 Case 5 is easy to skip and was missing from this guide, and from the contract itself,
@@ -671,8 +679,9 @@ def transform(input):
         )
     except Exception as e:
         return create_response(
-            result={"isMFAEnforcedForUsers": False},
+            result={"isMFAEnforcedForUsers": None},
             transformation_errors=[str(e)],
+            api_errors=[f"Error: {str(e)}"],
             fail_reasons=[f"Error: {str(e)}"]
         )
 ```
@@ -696,7 +705,7 @@ Before submitting a transformation:
 - [ ] Returns `create_response()` with all required fields
 - [ ] Handles JSON parse errors gracefully
 - [ ] Handles unexpected exceptions gracefully **without returning the criterion satisfied**
-- [ ] Returns `False` for an empty body, an error envelope (with and without a status code), and an unrelated payload — see [The fail-closed rule](#the-fail-closed-rule)
+- [ ] Returns the criterion as `None` with `dataCollection.status` `"error"` (not evaluated), never `False`, for an empty body, an error envelope (with and without a status code), an unrelated payload, and its own `except` path — see [A None verdict must say it was not measured](#a-none-verdict-must-say-it-was-not-measured)
 - [ ] Has at least one input that makes the criterion return `False`
 - [ ] `python3 tools/check_fail_closed.py` and `python3 tools/check_discriminates.py` both exit 0
 - [ ] Uses camelCase for criteria keys
