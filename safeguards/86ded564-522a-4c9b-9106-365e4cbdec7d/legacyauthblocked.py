@@ -33,6 +33,21 @@ group or role scope when no blocking policy targets all users. Coverage is compu
 list them; group and role membership is not expanded. Microsoft Graph returns object ids, not names, so the
 reasons carry ids prefixed with their kind.
 
+Coverage (Entra MFA review, overstated passes, decision 18 Oct 2026): a block counts only when the blocking policies
+together reach all users. That needs a blocking policy that includes All users and does not exclude everyone, and,
+after crediting every principal another blocking policy includes, at most MAX_BREAK_GLASS named accounts or one group
+left outside (the break-glass limit, see below), no directory role left outside, and guests not excluded by every
+All-users block. Otherwise:
+- blocks that reach only named users (no All users, no group or role): False, the block misses everyone else;
+- blocks whose reach depends on group or role membership (scoped to groups or roles, or leaving a group, a role,
+  guests or more than MAX_BREAK_GLASS accounts outside): not evaluated (value None, dataCollection.status
+  "error"). Membership is not read here, so coverage cannot be confirmed either way.
+Break-glass (row 36B (c), decision 18 Oct 2026): instead of at most MAX_BREAK_GLASS named accounts, one group
+(MAX_BREAK_GLASS_GROUPS) may be left outside, with no named account and no role; the pass reason names it. Two
+All-users blocks that exclude different groups credit each other only by principal, and a member of both groups is
+outside both, so more than one distinct group excluded by All-users blocks and included by no block also reads not
+evaluated.
+
 Names from the payload (tracker row 61, no extra call): a directory role is a role TEMPLATE id that is the same in
 every tenant, so a built-in role is shown with its name (ROLE_NAMES, from Microsoft's "Microsoft Entra built-in
 roles" reference). Each named exemption also says which blocking policy excludes it, by the policy's displayName.
@@ -79,6 +94,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 MAX_NAMED = 20
+MAX_BREAK_GLASS = 2
+MAX_BREAK_GLASS_GROUPS = 1
 LEGACY_CLIENTS = ['exchangeActiveSync', 'other']
 EXCLUDE_FIELDS = [('excludeUsers', 'user'), ('excludeGroups', 'group'), ('excludeRoles', 'role')]
 INCLUDE_FIELDS = [('includeUsers', 'user'), ('includeGroups', 'group'), ('includeRoles', 'role')]
@@ -199,6 +216,69 @@ def policy_list(data):
     return policies, partial, ""
 
 
+def lowered(values):
+    return [str(v).strip().lower() for v in values] if isinstance(values, list) else []
+
+
+def block_coverage(legacy_block, all_users, scoped, exempt):
+    """("all", ""), ("named", reason) or ("unproven", reason) for the blocking policies together (see the header)."""
+    if not all_users:
+        if [x for x in scoped if x.startswith("group:") or x.startswith("role:")]:
+            return "unproven", ("the blocking policies target groups or directory roles, not all users, and their "
+                                "membership is not read")
+        return "named", "the blocking policies target named accounts only, not all users"
+    everyone_excluded = True
+    guests_inside = False
+    for p in legacy_block:
+        users = p.get('conditions', {}).get('users', {})
+        if not isinstance(users, dict) or "all" not in lowered(users.get('includeUsers')):
+            continue
+        excluded = lowered(users.get('excludeUsers'))
+        if "all" in excluded:
+            continue
+        everyone_excluded = False
+        if "guestsorexternalusers" not in excluded and not users.get('excludeGuestsOrExternalUsers'):
+            guests_inside = True
+    if everyone_excluded:
+        return "named", "every All-users blocking policy also excludes all users"
+    outside = []
+    if not guests_inside:
+        outside.append("guests or external users")
+    groups = [x for x in exempt if x.startswith("group:")]
+    roles = [x for x in exempt if x.startswith("role:")]
+    accounts = [x for x in exempt if x.startswith("user:")]
+    # A member of several excluded groups is outside every All-users block when each block excludes one of them and
+    # no block includes those groups: more than one such group is not break-glass.
+    included = set()
+    for p in legacy_block:
+        included = included | set(principals(as_dict(as_dict(p.get('conditions')).get('users')), INCLUDE_FIELDS))
+    uncredited = set()
+    for p in legacy_block:
+        users = as_dict(as_dict(p.get('conditions')).get('users'))
+        if "all" not in lowered(users.get('includeUsers')) or "all" in lowered(users.get('excludeUsers')):
+            continue
+        out_here = set(principals(users, [('excludeGroups', 'group')])) - included
+        if not out_here:
+            uncredited = set()
+            break
+        uncredited = uncredited | out_here
+    if len(groups) > MAX_BREAK_GLASS_GROUPS or (groups and accounts):
+        outside.append(str(len(groups)) + " group(s)" + (" and named accounts" if accounts else "")
+                       + " (break-glass is at most " + str(MAX_BREAK_GLASS) + " accounts or "
+                       + str(MAX_BREAK_GLASS_GROUPS) + " group)")
+    elif len(uncredited) > MAX_BREAK_GLASS_GROUPS:
+        outside.append("members of " + str(len(uncredited)) + " groups excluded by different All-users blocks "
+                       "(a member of more than one is outside every block)")
+    if roles:
+        outside.append(str(len(roles)) + " directory role(s)")
+    if len(accounts) > MAX_BREAK_GLASS:
+        outside.append(str(len(accounts)) + " named accounts (more than " + str(MAX_BREAK_GLASS)
+                       + " emergency-access accounts)")
+    if outside:
+        return "unproven", "the block leaves " + ", ".join(outside) + " outside every blocking policy"
+    return "all", ""
+
+
 def evaluate(data):
     """Core evaluation logic."""
     try:
@@ -257,6 +337,7 @@ def evaluate(data):
             if not all_users:
                 result["blockScope"] = sorted(scoped)
                 result["blockScopeLabels"] = [label(x) for x in sorted(scoped)]
+            result["coverage"] = block_coverage(legacy_block, all_users, scoped, exempt)
         return result
     except Exception as e:
         return {"legacyAuthBlocked": False, "error": str(e)}
@@ -322,7 +403,33 @@ def transform(input):
         scope_labels = eval_result.get("blockScopeLabels") or scope
         extra_fields = {k: v for k, v in eval_result.items()
                         if k not in [criteriaKey, "error", "exemptPrincipalIds", "blockScope",
-                                     "exemptPrincipalLabels", "blockScopeLabels"]}
+                                     "exemptPrincipalLabels", "blockScopeLabels", "coverage"]}
+        coverage, coverage_why = eval_result.get("coverage") or ("all", "")
+        if result_value and coverage != "all":
+            summary = {criteriaKey: None if coverage == "unproven" else False, **extra_fields,
+                       "exemptPrincipalIds": exempt[:MAX_NAMED]}
+            if scope is not None:
+                summary["blockScope"] = scope[:MAX_NAMED]
+            named = ""
+            if exempt or scope is not None:
+                named = "; named: " + (name_list(exempt_labels) if exempt else name_list(scope_labels or []) or "no one")
+            if coverage == "unproven":
+                return create_response(
+                    result={criteriaKey: None, **extra_fields},
+                    validation=validation,
+                    api_errors=["Legacy clients are blocked by " + str(extra_fields.get("blockingPolicies", 0))
+                                + " enabled Conditional Access policy(ies), but coverage of all users cannot be "
+                                "confirmed: " + coverage_why + named],
+                    input_summary=summary)
+            return create_response(
+                result={criteriaKey: False, **extra_fields},
+                validation=validation,
+                fail_reasons=[f"{criteriaKey} check failed: no enabled Conditional Access policy blocks legacy "
+                              "clients (POP, IMAP, SMTP AUTH, Exchange ActiveSync) for all users: " + coverage_why
+                              + named + ", so every other account can still use them"],
+                recommendations=["Target the legacy-authentication block at All users, excluding at most "
+                                 + str(MAX_BREAK_GLASS) + " documented break-glass accounts"],
+                input_summary=summary)
         summary = {criteriaKey: result_value, **extra_fields}
         if exempt:
             summary["exemptPrincipalIds"] = exempt[:MAX_NAMED]
