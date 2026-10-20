@@ -426,9 +426,8 @@ def list_gaps(gaps):
     return shown
 
 
-def assess(data):
-    """Everything both criteria need, from the merged feeds. Never raises on a well-formed dict."""
-    feeds = {}
+def assess_presence(data, feeds):
+    """The present apps from the presence read, and whether the reads cover all seven apps."""
     sps, state = read_feed(data, "servicePrincipals")
     feeds["servicePrincipals"] = state
     present = []
@@ -442,20 +441,16 @@ def assess(data):
             for record in shaped:
                 if lower(record.get("appId")) in CONNECTWISE_APPS:
                     present.append(record)
-    sp_ids = []
-    present_apps = []
-    for record in present:
-        present_apps.append(lower(record.get("appId")))
-        if isinstance(record.get("id"), str):
-            sp_ids.append(lower(record.get("id")))
-    enabled = [r for r in present if r.get("accountEnabled") is not False]
     scope_ok = True
     for app_id in APP_ROLE_FEEDS:
         if APP_ROLE_FEEDS[app_id][0] not in data:
             scope_ok = False
     feeds["appScope"] = "ok" if scope_ok else "missing feeds for some of the seven apps"
+    return present, presence_known, scope_ok
 
-    # Risk: app permissions, delegated grants and directory roles held by a present app.
+
+def assess_risk(data, feeds, enabled):
+    """(high, unknown_risk): app permissions, delegated grants and directory roles held by an enabled app."""
     high = []
     unknown_risk = False
     roles, roles_state = read_feed(data, "roleAssignments")
@@ -490,10 +485,14 @@ def assess(data):
                     high.append(name + " holds the directory role " + PRIVILEGED_ROLES[lower(item.get("roleDefinitionId"))])
         else:
             unknown_risk = True
+    return high, unknown_risk
 
-    # Sign-ins since the window start: the apps' own (service principal) sign-ins, their delegated (user)
-    # sign-ins, and every sign-in from the indicator IP. Deduped by id across the reads.
-    gaps = []
+
+def read_sign_ins(data, feeds, gaps):
+    """Sign-ins since the window start: the apps' own (service principal) sign-ins, their delegated (user)
+    sign-ins, and every sign-in from the indicator IP, deduped by id across the reads. Returns (sign_ins, by_app,
+    states); the states are those of spSignInsByApp, spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, the
+    delegated slices and the sign-in retention proof. Appends every unread one to gaps."""
     by_app, by_app_state = read_feed(data, "spSignInsByApp")
     by_ip, by_ip_state = read_feed(data, "spSignInsFromIndicatorIp")
     by_user_ip, by_user_ip_state = read_feed(data, "userSignInsFromIndicatorIp")
@@ -508,7 +507,8 @@ def assess(data):
                            ("userSignInsFromIndicatorIp", by_user_ip_state)):
         if key_state != "ok":
             gaps.append(key + ": " + key_state)
-    gaps = gaps + delegated_gaps
+    for gap in delegated_gaps:
+        gaps.append(gap)
     if sign_in_proof != "ok":
         gaps.append(USER_PROBE[0] + ": " + sign_in_proof)
     sign_ins = []
@@ -517,10 +517,14 @@ def assess(data):
     add_records(sign_ins, seen, by_ip)
     add_records(sign_ins, seen, by_user_ip)
     add_records(sign_ins, seen, delegated)
+    states = (by_app_state, by_ip_state, by_user_ip_state, delegated_state, sign_in_proof)
+    return sign_ins, by_app, states
 
-    # Use of an app in the window, as itself or for a user, is exposure evidence even when its service
-    # principal is gone now (Integration-Service #1798: Graph logs a delegated token's use as a user sign-in whose
-    # appId is the client app). "Not exposed" needs both app sign-in reads whole and the log to reach the window.
+
+def assess_usage(sign_ins, present_apps, presence_known):
+    """Use of an app in the window, as itself or for a user, is exposure evidence even when its service
+    principal is gone now (Integration-Service #1798: Graph logs a delegated token's use as a user sign-in whose
+    appId is the client app). Returns (used_names, used_absent, usage lines)."""
     used = {}
     for item in sign_ins:
         app_id = lower(item.get("appId"))
@@ -540,13 +544,16 @@ def assess(data):
             if presence_known:
                 line = line + ", although it has no service principal here now"
         usage.append(line)
-    usage_read = by_app_state == "ok" and delegated_state == "ok" and sign_in_proof == "ok"
+    return used_names, used_absent, usage
 
-    # Indicators of compromise since the window start.
-    indicators = []
-    name_only = []
-    # The apps' service principal ids, also from feeds other than the presence read, so an audit entry
-    # initiated by one still matches when the presence read failed.
+
+def known_sp_ids(data, present, by_app):
+    """The apps' service principal ids: from the presence read, and also from the apps' own sign-ins and their
+    per-app feeds, so an audit entry initiated by one still matches when the presence read failed."""
+    sp_ids = []
+    for record in present:
+        if isinstance(record.get("id"), str):
+            sp_ids.append(lower(record.get("id")))
     for item in by_app or []:
         if lower(item.get("appId")) in CONNECTWISE_APPS and lower(item.get("servicePrincipalId")):
             sp_ids.append(lower(item.get("servicePrincipalId")))
@@ -560,6 +567,11 @@ def assess(data):
         for item in grants or []:
             if lower(item.get("clientId")):
                 sp_ids.append(lower(item.get("clientId")))
+    return sp_ids
+
+
+def sign_in_indicators(sign_ins):
+    indicators = []
     for item in sign_ins:
         if not in_window(item.get("createdDateTime")):
             continue
@@ -573,13 +585,13 @@ def assess(data):
                 if agent.startswith(prefix):
                     indicators.append(CONNECTWISE_APPS[app_id] + " signed in with the indicator user agent " + agent)
                     break
-    audits, audits_state, audit_gaps = read_sliced(data, AUDIT_SLICE_KEYS, AUDIT_SLICE_PREFIX, LEGACY_AUDIT_KEY)
-    audit_proof = read_probe(data, AUDIT_PROBE)
-    feeds["directoryAudits"] = audits_state
-    feeds[AUDIT_PROBE[0]] = audit_proof
-    gaps = gaps + audit_gaps
-    if audit_proof != "ok":
-        gaps.append(AUDIT_PROBE[0] + ": " + audit_proof)
+    return indicators
+
+
+def audit_indicators(audits, sp_ids):
+    """(indicators, name_only) from the directory audit records."""
+    indicators = []
+    name_only = []
     for item in audits:
         if not in_window(item.get("activityDateTime")):
             continue
@@ -618,9 +630,11 @@ def assess(data):
             name_only.append(NAME_ONLY_PREFIX + "credentials changed on an app named '" + on_name + "' ('" + activity
                              + "') at " + when + ". It matched by display name only (no service principal id); "
                              "confirm in the audit entry that it is the ConnectWise app.")
-    indicators.extend(name_only)
-    alerts, alerts_state = read_feed(data, "securityAlerts")
-    feeds["securityAlerts"] = alerts_state
+    return indicators, name_only
+
+
+def alert_indicators(alerts):
+    indicators = []
     for item in alerts or []:
         if not in_window(item.get("createdDateTime")):
             continue
@@ -635,6 +649,53 @@ def assess(data):
                     hit = True
             if hit:
                 indicators.append("Defender alert '" + str(item.get("title")) + "' naming an indicator")
+    return indicators
+
+
+def risk_level(enabled, present, high, unknown_risk, used_absent, absence_known):
+    if enabled:
+        if high:
+            return "high"
+        if unknown_risk or used_absent:
+            return "unknown"
+        return "standard"
+    if used_absent:
+        return "unknown"
+    if present:
+        return "low"
+    return "none" if absence_known else "unknown"
+
+
+def assess(data):
+    """Everything both criteria need, from the merged feeds. Never raises on a well-formed dict."""
+    feeds = {}
+    gaps = []
+    present, presence_known, scope_ok = assess_presence(data, feeds)
+    present_apps = [lower(record.get("appId")) for record in present]
+    enabled = [r for r in present if r.get("accountEnabled") is not False]
+    high, unknown_risk = assess_risk(data, feeds, enabled)
+    sign_ins, by_app, states = read_sign_ins(data, feeds, gaps)
+    by_app_state, by_ip_state, by_user_ip_state, delegated_state, sign_in_proof = states
+    used_names, used_absent, usage = assess_usage(sign_ins, present_apps, presence_known)
+    # "Not exposed" needs both app sign-in reads whole and the sign-in log shown to reach the window.
+    usage_read = by_app_state == "ok" and delegated_state == "ok" and sign_in_proof == "ok"
+
+    # Indicators of compromise since the window start.
+    sp_ids = known_sp_ids(data, present, by_app)
+    indicators = sign_in_indicators(sign_ins)
+    audits, audits_state, audit_gaps = read_sliced(data, AUDIT_SLICE_KEYS, AUDIT_SLICE_PREFIX, LEGACY_AUDIT_KEY)
+    audit_proof = read_probe(data, AUDIT_PROBE)
+    feeds["directoryAudits"] = audits_state
+    feeds[AUDIT_PROBE[0]] = audit_proof
+    for gap in audit_gaps:
+        gaps.append(gap)
+    if audit_proof != "ok":
+        gaps.append(AUDIT_PROBE[0] + ": " + audit_proof)
+    by_audit, name_only = audit_indicators(audits, sp_ids)
+    indicators = indicators + by_audit + name_only
+    alerts, alerts_state = read_feed(data, "securityAlerts")
+    feeds["securityAlerts"] = alerts_state
+    indicators = indicators + alert_indicators(alerts)
     retention_ok = retention_covers_window()
     feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
     # The presence read is the only source of the apps' service-principal ids when they have no sign-ins, so
@@ -653,25 +714,13 @@ def assess(data):
     absence_known = presence_known and scope_ok and usage_read
     if indicators:
         verdict = "Indicators found"
-    elif present or used:
+    elif present or used_names:
         verdict = "Exposed"
     elif absence_known:
         verdict = "Not exposed"
     else:
         verdict = "Not evaluated"
-    if enabled:
-        if high:
-            risk = "high"
-        elif unknown_risk or used_absent:
-            risk = "unknown"
-        else:
-            risk = "standard"
-    elif used_absent:
-        risk = "unknown"
-    elif present:
-        risk = "low"
-    else:
-        risk = "none" if absence_known else "unknown"
+    risk = risk_level(enabled, present, high, unknown_risk, used_absent, absence_known)
     names = []
     for record in present:
         label = CONNECTWISE_APPS.get(lower(record.get("appId")), "")
