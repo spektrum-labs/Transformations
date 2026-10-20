@@ -1,0 +1,52 @@
+{
+  "name": "isFreeOfConnectWiseAppExposure",
+  "revision": 4,
+  "status": "proposed",
+  "definition": "True when the tenant's full service-principal list was read, the reads cover all seven ConnectWise apps, none of ConnectWise Cloud Backup (506e08f9-6e9a-4da4-942b-a099a03644ae), ConnectWise Cloud Management - MS Teams (24205314-2b89-4e07-a2a4-579e898a5640), ConnectWise Cloud Management (2399d300-6fca-4e6a-a686-399fefe75b83), ConnectWise Cloud Management - Exchange Online (b78f6a77-d4e5-46fb-87e5-d1648bd02519), ConnectWise Cloud Management - MS Graph (0de14c77-b9b0-4137-9360-34878a929827), ConnectWise Cloud Management - Partner Center (412dcf96-176d-4b3a-a1b0-4981ad66971e) and ConnectWise Cloud Management - SharePoint Online (b2b55f5b-7758-4719-8d8f-88ae172e6bdb) has a service principal in it, enabled or disabled, and none of them signed in (as itself or for a user) since 2026-10-13 in sign-in reads shown whole and inside log retention.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "service principals in one Microsoft Entra tenant whose appId is one of the seven ConnectWise apps in scope for the October 2026 advisory (J.J. 18 Oct 2026: the two named as abused and the five other Cloud Management apps whose ids Huntress and BleepingComputer publish)",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete, unpaged, error-free servicePrincipals read filtered by the seven appIds that returns no record for any of them; every app's per-app role feed present in the body (data or a stepError marker), so the reads are known to cover all seven apps; the apps' service-principal sign-in read and every day slice of their delegated user sign-ins (userSignInsByApp_YYYYMMDD from 15 Oct to 13 Nov 2026 and userSignInsByApp_from20261114) present, error-free and with paginationStats paginationTruncated false, with no sign-in by any of the seven apps since 2026-10-13; and the userSignInsBeforeWindow retention proof showing a user sign-in at or before 2026-10-13T00:00:00Z.",
+  "evidenceClass": "presence",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "compliant",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/iam/microsoft/connectwise_oauth/isfreeofconnectwiseappexposure.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-17",
+      "change": "Registered with the ConnectWise OAuth app exposure transform; proposed, no requirement reads it yet."
+    },
+    {
+      "revision": 2,
+      "date": "2026-10-18",
+      "change": "A present but disabled service principal now reads false (Exposed, risk low): it can be re-enabled and keeps its consent, grants and credentials, so the customer must remove it."
+    },
+    {
+      "revision": 3,
+      "date": "2026-10-18",
+      "change": "Scope widened from two to seven ConnectWise apps (J.J. 18 Oct 2026): any of the seven present reads false. True also needs every app's per-app role feed in the body; reads that cover fewer apps are Not evaluated."
+    },
+    {
+      "revision": 4,
+      "date": "2026-10-20",
+      "change": "Integration-Service #1798 reads: a sign-in by any of the seven apps since 13 Oct, as itself (service principal) or for a user (delegated), now reads false (Exposed) even when its service principal is gone; True also needs the service-principal sign-in read and every userSignInsByApp day slice whole (paginationStats false) and the userSignInsBeforeWindow retention proof to show an entry at or before 13 Oct. A missing, refused or capped slice, or an empty, refused, failed or later proof, is Not evaluated; a sign-in found in any slice still reads false."
+    }
+  ],
+  "notes": "Threat-specific (ConnectWise multitenant OAuth app abuse, Microsoft Threat Intelligence and Huntress, 16-17 Oct 2026). An empty filtered list is the measured answer 'none of the seven apps is present', so emptyPopulationMeans is compliant; a refused, errored or paged read is Not evaluated. A present but disabled service principal reads false (Exposed, risk low): it can be re-enabled and keeps its consent, grants and credentials. allowedCategories is empty until Integration-Service maps an RTA row; the intended home is Azure AD (One-Click). Since revision 3 a body from reads that cover only some of the seven apps (no per-app role feed for the others) is Not evaluated, so Integration-Service must widen its reads before an RTA row maps this key. Since revision 4 the apps' sign-ins are exposure evidence too, and a clean answer needs the sign-in log shown to reach 13 Oct, so once that day passes the tenant's sign-in log retention (12 Nov 2026 with P1/P2; tenants without P1/P2 get no sign-in reads) a tenant with no app present reads Not evaluated rather than true."
+}
