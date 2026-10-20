@@ -5,7 +5,7 @@ Vendor: Microsoft Entra ID  |  Category: Identity and Access Management
 Threat: abuse of ConnectWise multitenant OAuth apps (Microsoft Threat Intelligence and Huntress,
 16-17 Oct 2026). A threat actor used customers' existing consent to these apps to get tokens in
 customer tenants, ran Graph reconnaissance and added credentials to service principals. Scope: 7
-ConnectWise apps (J.J. 18 Oct 2026), app ids as published by Huntress and BleepingComputer:
+ConnectWise apps (decision 18 Oct 2026), app ids as published by Huntress and BleepingComputer:
   ConnectWise Cloud Backup (formerly SkyKick Backup)   appId 506e08f9-6e9a-4da4-942b-a099a03644ae
   ConnectWise Cloud Management - MS Teams              appId 24205314-2b89-4e07-a2a4-579e898a5640
   ConnectWise Cloud Management                         appId 2399d300-6fca-4e6a-a686-399fefe75b83
@@ -36,8 +36,9 @@ Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by
   spSignInsByApp            the apps' service-principal sign-ins
   userSignInsByApp_YYYYMMDD, userSignInsByApp_from20261114
                             the apps' delegated (interactive and non-interactive user) sign-ins, one key per
-                            UTC day from 15 Oct to 13 Nov 2026, then one from 14 Nov (Integration-Service #1798);
-                            each must be present with its paginationStats entry false
+                            UTC day from 13 Oct to 13 Nov 2026, then one from 14 Nov (Integration-Service #1798
+                            writes 15 Oct on; the 13 and 14 Oct slices are required too); each must be present
+                            with its paginationStats entry false
   userSignInsBeforeWindow   retention proof: the newest user sign-in at or before the start of the reads; the
                             sign-in reads count as whole only when it is at or before 13 Oct 2026
   spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, directoryAudits_*, directoryAuditsBeforeWindow,
@@ -67,7 +68,7 @@ KEY = "isFreeOfConnectWiseAppExposure"
 TRANSFORMATION_ID = "isfreeofconnectwiseappexposure"
 
 # ---- shared helper block: start (identical in both criterion files; a test pins it)
-# Scope: 7 ConnectWise apps (J.J. 18 Oct 2026). The two the advisories name as abused, then the five other Cloud
+# Scope: 7 ConnectWise apps (decision 18 Oct 2026). The two the advisories name as abused, then the five other Cloud
 # Management apps whose ids Huntress ("ConnectWise (SkyKick) Vendor Credentials Abused in M365 Attacks", 16-17 Oct)
 # and BleepingComputer (Oct 2026) publish, and which Huntress says to disable until they can be verified.
 CONNECTWISE_APPS = {
@@ -93,14 +94,16 @@ WINDOW_START_DT = datetime(2026, 10, 13)
 # sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
 # longer show the start of the activity, so "no indicators" is not evaluated.
 LOG_RETENTION_DAYS = 30
-# Integration-Service #1798 reads the directory audit log, and the seven apps' delegated (interactive and
-# non-interactive user) sign-ins, one bounded UTC day at a time from 15 Oct to 13 Nov 2026 and then from 14 Nov 2026
-# on, each under its own key with its own paginationStats entry: a slice at its page cap or refused cuts off only
-# itself. Every one of these keys must be in the body and read whole before a clean answer. Other keys with the same
-# prefix (a reader that also slices 13-14 Oct) are read too, under the same rules. Both slice bounds are inclusive, so
-# a record stamped at midnight is in two slices: records are deduped by id.
-FIRST_SLICE_DT = datetime(2026, 10, 15)
-DAY_SLICES = 30
+# The directory audit log, and the seven apps' delegated (interactive and non-interactive user) sign-ins, are read one
+# bounded UTC day at a time from 13 Oct to 13 Nov 2026 and then from 14 Nov 2026 on, each under its own key with its
+# own paginationStats entry: a slice at its page cap or refused cuts off only itself. Integration-Service #1798 writes
+# the slices from 15 Oct; the 13 and 14 Oct slices are required as well, because the window starts 13 Oct and the
+# password spray from the indicator IP ran 13-14 Oct, so a body that covers only 15 Oct on cannot show "none since
+# 13 Oct". Every one of these keys must be in the body and read whole before a clean answer. Other keys with the same
+# prefix are read too, under the same rules. Both slice bounds are inclusive, so a record stamped at midnight is in two
+# slices: records are deduped by id.
+FIRST_SLICE_DT = WINDOW_START_DT
+DAY_SLICES = 32
 TAIL_SLICE = "from20261114"
 AUDIT_SLICE_PREFIX = "directoryAudits_"
 USER_SLICE_PREFIX = "userSignInsByApp_"
@@ -123,6 +126,10 @@ LEGACY_AUDIT_KEY = "directoryAudits"
 # sign-in reads, which share the tenant's sign-in log retention.
 AUDIT_PROBE = ("directoryAuditsBeforeWindow", "activityDateTime")
 USER_PROBE = ("userSignInsBeforeWindow", "createdDateTime")
+# The unsliced dated reads (spSignInsByApp, spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, securityAlerts) carry
+# no trace of their filter start: the body holds the Graph value list and a paginationTruncated flag, and an empty read
+# from 15 Oct looks the same as one from 13 Oct. This file cannot check their start, so the reader must start them at
+# WINDOW_START. Only the slices (by key) and the retention proofs (by their entry's timestamp) are checked against it.
 # Microsoft Graph application permissions (app role ids, identical in every tenant) that let an app
 # take over a directory. Directory.ReadWrite.All is the one named in the advisory.
 HIGH_RISK_APP_ROLES = {
