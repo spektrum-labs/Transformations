@@ -5,10 +5,11 @@ The contract these tests pin:
   13 Oct (as itself or for a user), is Exposed; a missing, refused, errored, paged or unrecognised
   service-principal feed, or an app sign-in read that is not whole inside log retention, is Not
   evaluated (None AND dataCollection.status "error"), never "not exposed";
-- Integration-Service #1798 day-slices the directory audit log and the apps' delegated sign-ins: every
-  slice key must be present and whole (paginationStats false), and each log's retention proof must show
-  an entry at or before 13 Oct; otherwise the clean answer is Not evaluated, while evidence in any slice
-  still counts. The old unsliced directoryAudits key is read under the same rules;
+- the directory audit log and the apps' delegated sign-ins are day-sliced from 13 Oct (Integration-Service
+  #1798 writes 15 Oct on; the 13 and 14 Oct slices are required too): every slice key must be present and
+  whole (paginationStats false), and each log's retention proof must show an entry at or before 13 Oct;
+  otherwise the clean answer is Not evaluated, while evidence in any slice still counts. The old unsliced
+  directoryAudits key is read under the same rules;
 - a present and enabled ConnectWise service principal is Exposed; a high-risk grant
   (Directory.ReadWrite.All and peers, or a privileged directory role) raises the risk level;
   an unreadable grant feed for a present app leaves the risk level "unknown", never "standard";
@@ -87,9 +88,11 @@ STEP_403 = {"stepError": True, "statusCode": 403, "errorSummary": "Insufficient 
 
 
 def slice_suffixes():
-    """Integration-Service #1798: one bounded slice per UTC day from 15 Oct to 13 Nov 2026, then one from 14 Nov."""
-    days = [date(2026, 10, 15) + timedelta(days=n) for n in range(30)]
-    return [day.strftime("%Y%m%d") for day in days] + ["from20261114"]
+    """One bounded slice per UTC day from 13 Oct to 13 Nov 2026, then one from 14 Nov. Integration-Service #1798
+    writes 15 Oct onward; the 13 and 14 Oct slices (the advisory window start, and the indicator-IP activity) are
+    required too."""
+    days = [date(2026, 10, 13) + timedelta(days=n) for n in range(32)]
+    return [day.isoformat().replace("-", "") for day in days] + ["from20261114"]
 
 
 AUDIT_KEYS = tuple("directoryAudits_" + suffix for suffix in slice_suffixes())
@@ -920,12 +923,14 @@ def capped(key):
     return {"paginationStats": {key: {"paginationTruncated": True}}, "paginationTruncated": True}
 
 
-def test_slice_keys_are_the_31_keys_1798_writes():
+def test_slice_keys_are_the_33_required_keys_from_13_oct():
     for module in (EXPOSURE, INDICATORS):
         assert tuple(module.AUDIT_SLICE_KEYS) == AUDIT_KEYS and tuple(module.USER_SLICE_KEYS) == USER_KEYS
-    assert len(AUDIT_KEYS) == 31 and AUDIT_KEYS[0] == "directoryAudits_20261015"
-    assert AUDIT_KEYS[29] == "directoryAudits_20261113" and AUDIT_KEYS[30] == "directoryAudits_from20261114"
-    assert USER_KEYS[0] == "userSignInsByApp_20261015" and USER_KEYS[-1] == "userSignInsByApp_from20261114"
+    assert len(AUDIT_KEYS) == 33 and len(USER_KEYS) == 33
+    assert AUDIT_KEYS[:3] == ("directoryAudits_20261013", "directoryAudits_20261014", "directoryAudits_20261015")
+    assert USER_KEYS[:3] == ("userSignInsByApp_20261013", "userSignInsByApp_20261014", "userSignInsByApp_20261015")
+    assert AUDIT_KEYS[31] == "directoryAudits_20261113" and AUDIT_KEYS[32] == "directoryAudits_from20261114"
+    assert USER_KEYS[-1] == "userSignInsByApp_from20261114"
 
 
 def test_whole_slices_with_retained_logs_read_clean():
@@ -1095,30 +1100,31 @@ def test_evidence_in_a_partial_slice_still_counts():
 
 def test_records_at_a_slice_boundary_are_counted_once():
     midnight = audit("Add service principal credentials", OTHER_SP, by_app=BACKUP_APP, when="2026-10-16T00:00:00Z")
-    body = clean(**{AUDIT_KEYS[0]: [midnight], AUDIT_KEYS[1]: [dict(midnight)]})
+    body = clean(directoryAudits_20261015=[midnight], directoryAudits_20261016=[dict(midnight)])
     _, indicators = run_both(body)
     assert value(indicators, "indicatorsFound") == 1
     same = delegated_sign_in(TEAMS_APP, when="2026-10-17T00:00:00Z")
-    exposure, _ = run_both(clean(**{USER_KEYS[1]: [same], USER_KEYS[2]: [dict(same)]}))
+    exposure, _ = run_both(clean(userSignInsByApp_20261016=[same], userSignInsByApp_20261017=[dict(same)]))
     assert "signed in to this tenant 1 time(s)" in reasons(exposure)
     # different ids are different records
     other = dict(same, id="si-delegated-2")
-    exposure, _ = run_both(clean(**{USER_KEYS[1]: [same], USER_KEYS[2]: [other]}))
+    exposure, _ = run_both(clean(userSignInsByApp_20261016=[same], userSignInsByApp_20261017=[other]))
     assert "signed in to this tenant 2 time(s)" in reasons(exposure)
 
 
 def test_extra_slices_with_the_prefix_are_read_under_the_same_rules():
-    # a reader that also slices 13-14 Oct: an indicator there counts, and a refused extra slice is a gap
-    entry = audit("Add member to role", OTHER_SP, by_app=TEAMS_APP, when="2026-10-13T08:00:00Z")
+    # a reader that also slices a day before the window: a refused extra slice is a gap, a whole one is fine, and
+    # a record in it before 13 Oct is outside the window
+    entry = audit("Add member to role", OTHER_SP, by_app=TEAMS_APP, when="2026-10-12T08:00:00Z")
     entry["id"] = "audit-extra-1"
-    body = clean(directoryAudits_20261013=[entry], paginationStats={"directoryAudits_20261013": {"paginationTruncated": False}})
+    body = clean(directoryAudits_20261012=[entry], paginationStats={"directoryAudits_20261012": {"paginationTruncated": False}})
     _, indicators = run_both(body)
-    assert value(indicators, INDICATOR_KEY) is False
-    body = clean(directoryAudits_20261014=STEP_403)
+    assert value(indicators, INDICATOR_KEY) is True
+    body = clean(directoryAudits_20261012=STEP_403)
     _, indicators = run_both(body)
     assert_not_measured(indicators, INDICATOR_KEY)
-    assert "directoryAudits_20261014" in reasons(indicators)
-    body = clean(userSignInsByApp_20261014=[], paginationStats={"userSignInsByApp_20261014": {"paginationTruncated": False}})
+    assert "directoryAudits_20261012" in reasons(indicators)
+    body = clean(userSignInsByApp_20261012=[], paginationStats={"userSignInsByApp_20261012": {"paginationTruncated": False}})
     exposure, indicators = run_both(body)
     assert value(exposure, EXPOSURE_KEY) is True and value(indicators, INDICATOR_KEY) is True
 
@@ -1186,3 +1192,186 @@ def test_both_files_agree_on_the_sliced_fixtures():
         for key in ("connectWiseVerdict", "connectWiseRiskLevel", "connectWiseAppsPresent", "connectWiseAppsSignedIn",
                     "indicatorsFound", "nameOnlyMatches"):
             assert value(exposure, key) == value(indicators, key), (key, body)
+
+
+# ---- the 13 and 14 Oct slices are required: the advisory window starts 13 Oct and the indicator-IP activity ran
+# 13-14 Oct, so a body that only covers 15 Oct onward cannot show "none since 13 Oct"
+
+EARLY_AUDIT_KEYS = ("directoryAudits_20261013", "directoryAudits_20261014")
+EARLY_USER_KEYS = ("userSignInsByApp_20261013", "userSignInsByApp_20261014")
+EARLY_KEYS = EARLY_AUDIT_KEYS + EARLY_USER_KEYS
+
+
+def without(body, *keys):
+    for key in keys:
+        body.pop(key, None)
+        body["paginationStats"].pop(key, None)
+    return body
+
+
+def from_15_oct_only():
+    """Every 15 Oct+ slice and tail whole, both retention proofs fine, no 13 or 14 Oct slice (what #1798 writes)."""
+    return without(clean(), *EARLY_KEYS)
+
+
+def test_a_body_from_15_oct_on_without_the_13_and_14_oct_slices_is_never_clean():
+    body = from_15_oct_only()
+    for key in AUDIT_KEYS[2:] + USER_KEYS[2:]:
+        assert key in body and body["paginationStats"][key] == {"paginationTruncated": False}
+    assert body[USER_PROBE]["value"] and body[AUDIT_PROBE]["value"]
+    exposure, indicators = run_both(body)
+    assert_not_measured(exposure, EXPOSURE_KEY)
+    assert_not_measured(indicators, INDICATOR_KEY)
+    for out in (exposure, indicators):
+        assert value(out, "connectWiseVerdict") == "Not evaluated"
+        assert value(out, "connectWiseVerdict") != "Not exposed"
+        assert value(out, "connectWiseRiskLevel") == "unknown"
+    for key in EARLY_USER_KEYS:
+        assert key + ": missing" in reasons(exposure), reasons(exposure)
+    for key in EARLY_KEYS:
+        assert key + ": missing" in reasons(indicators), reasons(indicators)
+
+
+def early_gap(key, mode):
+    if mode == "missing":
+        return without(clean(), key)
+    if mode == "stepError":
+        return clean(**{key: STEP_403})
+    if mode == "stepError 500":
+        return clean(**{key: {"stepError": True, "statusCode": 500, "errorSummary": "Internal error"}})
+    if mode == "capped":
+        return clean(**capped(key))
+    if mode == "capped, entry only":
+        return clean(paginationStats={key: {"paginationTruncated": True}})
+    if mode == "nextLink":
+        return clean(**{key: {"value": [], "@odata.nextLink": "https://graph.example/n"}})
+    if mode == "no paginationStats entry":
+        body = clean()
+        del body["paginationStats"][key]
+        return body
+    if mode == "unexplained top-level truncation":
+        return clean(paginationTruncated=True)
+    raise ValueError(mode)
+
+
+EARLY_GAP_MODES = ("missing", "stepError", "stepError 500", "capped", "capped, entry only", "nextLink",
+                   "no paginationStats entry", "unexplained top-level truncation")
+
+
+@pytest.mark.parametrize("mode", EARLY_GAP_MODES)
+@pytest.mark.parametrize("key", EARLY_KEYS)
+def test_each_13_or_14_oct_slice_missing_failed_or_capped_is_not_evaluated(key, mode):
+    exposure, indicators = run_both(early_gap(key, mode))
+    assert_not_measured(indicators, INDICATOR_KEY)
+    assert value(indicators, INDICATOR_KEY) is not True
+    if mode != "unexplained top-level truncation":
+        assert key in reasons(indicators), reasons(indicators)
+    if key in EARLY_USER_KEYS:
+        # the delegated sign-ins decide exposure: never Not exposed
+        assert_not_measured(exposure, EXPOSURE_KEY)
+        for out in (exposure, indicators):
+            assert value(out, "connectWiseVerdict") == "Not evaluated"
+        if mode != "unexplained top-level truncation":
+            assert key in reasons(exposure), reasons(exposure)
+    elif mode != "unexplained top-level truncation":
+        # the audit log is not an exposure source: the apps are still shown absent and unused
+        assert value(exposure, EXPOSURE_KEY) is True
+
+
+def test_a_complete_body_including_13_and_14_oct_is_not_exposed_and_clean():
+    body = clean()
+    for key in EARLY_KEYS:
+        assert body[key] == [] and body["paginationStats"][key] == {"paginationTruncated": False}
+    exposure, indicators = run_both(body)
+    assert value(exposure, EXPOSURE_KEY) is True and value(indicators, INDICATOR_KEY) is True
+    assert_measured(exposure)
+    assert_measured(indicators)
+    for out in (exposure, indicators):
+        assert value(out, "connectWiseVerdict") == "Not exposed"
+        assert value(out, "connectWiseRiskLevel") == "none"
+        assert value(out, "indicatorsFound") == 0
+
+
+def test_an_indicator_in_the_13_oct_slice_is_indicators_found():
+    by_app = audit("Add service principal credentials", OTHER_SP, by_app=BACKUP_APP, when="2026-10-13T06:00:00Z")
+    by_app["id"] = "audit-13-oct-1"
+    from_ip = delegated_sign_in(TEAMS_APP, ip=IOC_IP, sign_in_id="si-13-oct-1", when="2026-10-13T22:10:00Z")
+    for body in (clean(directoryAudits_20261013=[by_app]), clean(userSignInsByApp_20261013=[from_ip])):
+        exposure, indicators = run_both(body)
+        assert value(indicators, INDICATOR_KEY) is False
+        assert_measured(indicators)
+        for out in (exposure, indicators):
+            assert value(out, "connectWiseVerdict") == "Indicators found"
+            assert value(out, "indicatorsFound") == 1
+    # the delegated sign-in on 13 Oct is also use of the app: Exposed
+    exposure, _ = run_both(clean(userSignInsByApp_20261013=[from_ip]))
+    assert value(exposure, EXPOSURE_KEY) is False
+    assert value(exposure, "connectWiseAppsSignedIn") == ["ConnectWise Cloud Management - MS Teams"]
+    # evidence in a 13 Oct slice still counts when that slice is capped and the 14 Oct slice is refused
+    body = clean(directoryAudits_20261013=[by_app], directoryAudits_20261014=STEP_403,
+                 **capped("directoryAudits_20261013"))
+    exposure, indicators = run_both(body)
+    assert value(indicators, INDICATOR_KEY) is False
+    assert value(exposure, "connectWiseVerdict") == "Indicators found"
+
+
+def test_a_delegated_sign_in_on_14_oct_is_exposure():
+    used = delegated_sign_in(BACKUP_APP, sign_in_id="si-14-oct-1", when="2026-10-14T11:00:00Z")
+    exposure, indicators = run_both(clean(userSignInsByApp_20261014=[used]))
+    assert value(exposure, EXPOSURE_KEY) is False
+    assert value(exposure, "connectWiseVerdict") == "Exposed"
+    assert value(indicators, INDICATOR_KEY) is True
+
+
+def test_the_unsliced_reads_keep_the_single_key_rules():
+    # the old single directoryAudits key is still read when no audit slice is in the body, 13 and 14 Oct included
+    _, indicators = run_both(legacy_body(graph()))
+    assert value(indicators, INDICATOR_KEY) is True
+    # one 13 Oct audit slice beside the old key makes the body sliced: the other slices are then required
+    body = legacy_body(graph())
+    body["directoryAudits_20261013"] = []
+    body["paginationStats"]["directoryAudits_20261013"] = {"paginationTruncated": False}
+    _, indicators = run_both(body)
+    assert_not_measured(indicators, INDICATOR_KEY)
+
+
+# ---- the same transforms under the production RestrictedPython executor (tools/restricted_sandbox.py)
+
+def sandboxed(name):
+    spec = importlib.util.spec_from_file_location("cw_restricted_sandbox", HERE.parents[3] / "tools" / "restricted_sandbox.py")
+    sandbox = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sandbox)
+    source = (HERE / (name + ".py")).read_text()
+    namespace = sandbox.load(source, name + ".py")
+    from datetime import datetime as _dt
+    namespace["today"] = lambda: _dt(2026, 11, 1)
+    return namespace
+
+
+def test_both_transforms_run_in_the_restricted_sandbox_with_the_same_answers():
+    for name in FILES:
+        assert "strftime" not in (HERE / (name + ".py")).read_text(), name
+    clean_body = clean()
+    hit = audit("Add service principal credentials", OTHER_SP, by_app=BACKUP_APP, when="2026-10-13T06:00:00Z")
+    used = delegated_sign_in(TEAMS_APP, ip=IOC_IP, sign_in_id="si-13-oct-2", when="2026-10-13T22:10:00Z")
+    bodies = {
+        "complete": (clean_body, True),
+        "from 15 Oct only": (from_15_oct_only(), None),
+        "13 Oct audit slice refused": (clean(directoryAudits_20261013=STEP_403), "audit"),
+        "14 Oct user slice capped": (clean(**capped("userSignInsByApp_20261014")), None),
+        "app sign-in from the indicator IP on 13 Oct": (clean(userSignInsByApp_20261013=[used]), False),
+        "audit indicator on 13 Oct": (clean(directoryAudits_20261013=[hit]), "audit hit"),
+    }
+    for name, key in FILES.items():
+        namespace = sandboxed(name)
+        plain = EXPOSURE if name == "isfreeofconnectwiseappexposure" else INDICATORS
+        for label, (body, expected) in bodies.items():
+            out = namespace["transform"](body)
+            assert out["transformedResponse"] == plain.transform(body)["transformedResponse"], (name, label)
+            got = out["transformedResponse"][key]
+            if expected == "audit":
+                expected = True if key == EXPOSURE_KEY else None
+            if expected == "audit hit":
+                assert out["transformedResponse"]["connectWiseVerdict"] == "Indicators found", (name, label)
+                expected = got if key == EXPOSURE_KEY else False
+            assert got is expected, (name, label, out["transformedResponse"])

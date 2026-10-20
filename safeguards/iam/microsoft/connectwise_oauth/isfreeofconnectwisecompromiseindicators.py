@@ -38,15 +38,16 @@ Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by
                             cannot be combined in one filter)
   userSignInsByApp_YYYYMMDD, userSignInsByApp_from20261114
                             the apps' delegated (interactive and non-interactive user) sign-ins, one bounded read
-                            per UTC day from 15 Oct to 13 Nov 2026, then one from 14 Nov
+                            per UTC day from 13 Oct to 13 Nov 2026, then one from 14 Nov (Integration-Service #1798
+                            writes 15 Oct on; the 13 and 14 Oct slices are required too)
   userSignInsBeforeWindow   retention proof for the sign-in log ($top=1, newest user sign-in at or before the start
                             of the reads); it gates every sign-in feed above
                             (AuditLog.Read.All plus Directory.Read.All; sign-in logs need Entra ID P1 or P2)
   directoryAudits_YYYYMMDD, directoryAudits_from20261114
                             GET /v1.0/auditLogs/directoryAudits?$filter=activityDateTime ge D and activityDateTime le D+1,
-                            one per UTC day, then one from 14 Nov (AuditLog.Read.All; category is not a documented
-                            filter, so this file picks the activities). Responses stored before the slicing carry one
-                            directoryAudits feed instead, read under the same rules.
+                            one per UTC day from 13 Oct, then one from 14 Nov (AuditLog.Read.All; category is not a
+                            documented filter, so this file picks the activities). Responses stored before the slicing
+                            carry one directoryAudits feed instead, read under the same rules.
   directoryAuditsBeforeWindow retention proof for the audit log ($top=1)
   securityAlerts            GET /v1.0/security/alerts_v2?$filter=createdDateTime ge ...   (optional)
   plus the presence and grant feeds the sibling file reads, so both files report one verdict.
@@ -96,14 +97,16 @@ WINDOW_START_DT = datetime(2026, 10, 13)
 # sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
 # longer show the start of the activity, so "no indicators" is not evaluated.
 LOG_RETENTION_DAYS = 30
-# Integration-Service #1798 reads the directory audit log, and the seven apps' delegated (interactive and
-# non-interactive user) sign-ins, one bounded UTC day at a time from 15 Oct to 13 Nov 2026 and then from 14 Nov 2026
-# on, each under its own key with its own paginationStats entry: a slice at its page cap or refused cuts off only
-# itself. Every one of these keys must be in the body and read whole before a clean answer. Other keys with the same
-# prefix (a reader that also slices 13-14 Oct) are read too, under the same rules. Both slice bounds are inclusive, so
-# a record stamped at midnight is in two slices: records are deduped by id.
-FIRST_SLICE_DT = datetime(2026, 10, 15)
-DAY_SLICES = 30
+# The directory audit log, and the seven apps' delegated (interactive and non-interactive user) sign-ins, are read one
+# bounded UTC day at a time from 13 Oct to 13 Nov 2026 and then from 14 Nov 2026 on, each under its own key with its
+# own paginationStats entry: a slice at its page cap or refused cuts off only itself. Integration-Service #1798 writes
+# the slices from 15 Oct; the 13 and 14 Oct slices are required as well, because the window starts 13 Oct and the
+# password spray from the indicator IP ran 13-14 Oct, so a body that covers only 15 Oct on cannot show "none since
+# 13 Oct". Every one of these keys must be in the body and read whole before a clean answer. Other keys with the same
+# prefix are read too, under the same rules. Both slice bounds are inclusive, so a record stamped at midnight is in two
+# slices: records are deduped by id.
+FIRST_SLICE_DT = WINDOW_START_DT
+DAY_SLICES = 32
 TAIL_SLICE = "from20261114"
 AUDIT_SLICE_PREFIX = "directoryAudits_"
 USER_SLICE_PREFIX = "userSignInsByApp_"
@@ -126,6 +129,10 @@ LEGACY_AUDIT_KEY = "directoryAudits"
 # sign-in reads, which share the tenant's sign-in log retention.
 AUDIT_PROBE = ("directoryAuditsBeforeWindow", "activityDateTime")
 USER_PROBE = ("userSignInsBeforeWindow", "createdDateTime")
+# The unsliced dated reads (spSignInsByApp, spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, securityAlerts) carry
+# no trace of their filter start: the body holds the Graph value list and a paginationTruncated flag, and an empty read
+# from 15 Oct looks the same as one from 13 Oct. This file cannot check their start, so the reader must start them at
+# WINDOW_START. Only the slices (by key) and the retention proofs (by their entry's timestamp) are checked against it.
 # Microsoft Graph application permissions (app role ids, identical in every tenant) that let an app
 # take over a directory. Directory.ReadWrite.All is the one named in the advisory.
 HIGH_RISK_APP_ROLES = {
