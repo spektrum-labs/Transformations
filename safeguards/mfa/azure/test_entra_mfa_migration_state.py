@@ -35,7 +35,9 @@ DUO = {"@odata.type": "#microsoft.graph.externalAuthenticationMethodConfiguratio
 ALL_USERS_MFA = {"displayName": "Require MFA for everyone", "state": "enabled",
                  "grantControls": {"builtInControls": ["mfa"], "operator": "OR"},
                  "conditions": {"users": {"includeUsers": ["All"], "excludeUsers": [], "includeGroups": [],
-                                          "excludeGroups": [], "includeRoles": [], "excludeRoles": []}}}
+                                          "excludeGroups": [], "includeRoles": [], "excludeRoles": []},
+                                "applications": {"includeApplications": ["All"], "excludeApplications": []},
+                                "clientAppTypes": ["all"]}}
 
 
 def methods(enabled, state, extra=()):

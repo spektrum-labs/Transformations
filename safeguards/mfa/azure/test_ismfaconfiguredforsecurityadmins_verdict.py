@@ -117,9 +117,31 @@ def pair(out):
     return out["transformedResponse"][KEY], out["additionalInfo"]["dataCollection"]["status"]
 
 
+# CA001 as Microsoft publishes it excludes one group (its break-glass group). Row 36B (c), decision 18 Oct 2026: one
+# excluded group is break-glass, so CA001 passes and the pass reason names the group; two groups, or a group and
+# named accounts, leave coverage unproven. The role, app and paging tests below use CA001 without that exclusion.
+CA001_NO_GROUP = copy.deepcopy(CA001)
+CA001_NO_GROUP["conditions"]["users"]["excludeGroups"] = []
+
+
 @pytest.mark.parametrize("mode", MODES)
-def test_microsoft_example_passes(mode):
+def test_microsoft_example_with_its_break_glass_group_passes(mode):
     out = load(mode)(graph(CA001, CA008))
+    assert pair(out) == (True, "success")
+    assert "group:eedad040-3722-4bcb-bde5-bc7c857f4983" in " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_microsoft_example_with_a_second_excluded_group_is_not_evaluated(mode):
+    groups = ["eedad040-3722-4bcb-bde5-bc7c857f4983", "c0000000-0000-0000-0000-000000000001"]
+    out = load(mode)(graph(edited(CA001, conditions__users__excludeGroups=groups), CA008))
+    assert pair(out) == (None, "error")
+    assert "2 excluded groups" in " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_microsoft_example_without_the_group_exclusion_passes(mode):
+    out = load(mode)(graph(CA001_NO_GROUP, CA008))
     assert pair(out) == (True, "success")
     assert len(out["transformedResponse"]["coveredRoles"]) == 6
 
@@ -127,7 +149,7 @@ def test_microsoft_example_passes(mode):
 @pytest.mark.parametrize("mode", MODES)
 def test_privileged_authentication_administrator_left_out_fails(mode):
     roles = [r for r in CA001["conditions"]["users"]["includeRoles"] if r != PRIV_AUTH_ADMIN]
-    out = load(mode)(graph(edited(CA001, conditions__users__includeRoles=roles), CA008))
+    out = load(mode)(graph(edited(CA001_NO_GROUP, conditions__users__includeRoles=roles), CA008))
     assert pair(out) == (False, "success")
     assert out["additionalInfo"]["evaluation"]["failReasons"][0].endswith(
         "not covered: Privileged Authentication Administrator")
@@ -150,13 +172,13 @@ def test_a_policy_not_enforced_does_not_count(mode, state):
 @pytest.mark.parametrize("apps,expected", [(["All"], True), (["MicrosoftAdminPortals"], True),
                                            (["00000002-0000-0ff1-ce00-000000000000"], False)])
 def test_policy_must_apply_to_every_app_or_the_admin_portals(mode, apps, expected):
-    out = load(mode)(graph(edited(CA001, conditions__applications__includeApplications=apps)))
+    out = load(mode)(graph(edited(CA001_NO_GROUP, conditions__applications__includeApplications=apps)))
     assert pair(out) == (expected, "success")
 
 
 @pytest.mark.parametrize("mode", MODES)
 def test_partial_page_that_covers_every_role_still_passes(mode):
-    assert pair(load(mode)(graph(CA001, next_link=True))) == (True, "success")
+    assert pair(load(mode)(graph(CA001_NO_GROUP, next_link=True))) == (True, "success")
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -212,7 +234,7 @@ def test_a_policy_that_exempts_the_administrative_surface_does_not_count(mode, e
 def test_an_exclusion_that_leaves_the_admin_surface_alone_still_counts(mode):
     """The other half of the rule: rejecting every exclusion would fail a tenant whose admin policy is
     correct and merely carves out one line-of-business app."""
-    out = load(mode)(graph(edited(CA001, conditions__applications__excludeApplications=[LOB_APP]), CA008))
+    out = load(mode)(graph(edited(CA001_NO_GROUP, conditions__applications__excludeApplications=[LOB_APP]), CA008))
     assert pair(out) == (True, "success")
     assert "1 excluded application(s)" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
 
@@ -220,16 +242,29 @@ def test_an_exclusion_that_leaves_the_admin_surface_alone_still_counts(mode):
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("change,expected", [
     ({"conditions__clientAppTypes": ["exchangeActiveSync"]}, "client app types exchangeactivesync"),
-    ({"conditions__platforms": {"includePlatforms": ["iOS"], "excludePlatforms": []}}, "platforms ios"),
+    ({"conditions__platforms": {"includePlatforms": ["iOS"], "excludePlatforms": []}}, "platforms"),
     ({"conditions__locations": {"includeLocations": ["4cf7f419-2b1f-4b94-8e9c-f0b2a6ebc33f"],
                                 "excludeLocations": []}}, "named locations only"),
+], ids=["client-app-types", "platforms", "locations"])
+def test_a_narrowing_condition_means_the_policy_does_not_count(mode, change, expected):
+    """Row 36 (overstated passes): a policy limited to one client app type, platform or named location asks for
+    MFA on only part of admin sign-ins. These used to be findings only; like the remote-access and
+    phishing-resistant checks, the policy now does not count, and a role nothing else covers fails."""
+    out = load(mode)(graph(edited(CA001_NO_GROUP, **change)))
+    assert pair(out) == (False, "success")
+    findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
+    assert expected in findings
+    assert "reach only some sign-ins" in findings
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("change,expected", [
     ({"conditions__users__excludeUsers": ["breakglass-1", "breakglass-2"]}, "2 excluded user(s)"),
-], ids=["client-app-types", "platforms", "locations", "exclude-users"])
-def test_a_narrowing_condition_is_reported_and_does_not_change_the_verdict(mode, change, expected):
-    """A policy limited to one client app type, platform or named location asks for MFA on only part of admin
-    sign-ins. The defaults carry the same shape and excluding the break-glass accounts is Microsoft's own
-    advice, so these are named rather than judged."""
-    out = load(mode)(graph(edited(CA001, **change)))
+    ({"conditions__locations": {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}},
+     "1 excluded location(s)"),
+], ids=["two-break-glass-accounts", "trusted-locations-excluded"])
+def test_a_condition_the_strict_checks_allow_is_reported_and_does_not_change_the_verdict(mode, change, expected):
+    out = load(mode)(graph(edited(CA001_NO_GROUP, **change)))
     assert pair(out) == (True, "success")
     findings = " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])
     assert expected in findings
@@ -238,7 +273,7 @@ def test_a_narrowing_condition_is_reported_and_does_not_change_the_verdict(mode,
 
 @pytest.mark.parametrize("mode", MODES)
 def test_the_microsoft_example_reports_its_own_group_exclusion(mode):
-    """CA001 as Microsoft publishes it excludes one group, so the finding is there on the passing path too."""
+    """CA001 as Microsoft publishes it excludes one group: it passes (row 36B (c)) and the findings say so."""
     out = load(mode)(graph(CA001, CA008))
     assert pair(out) == (True, "success")
     assert "1 excluded group(s)" in " ".join(out["additionalInfo"]["evaluation"]["additionalFindings"])

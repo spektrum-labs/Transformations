@@ -169,10 +169,17 @@ def test_strength_that_cannot_be_graded_is_not_evaluated(tx, s):
 
 
 def test_strength_policy_excluding_a_group_is_set_aside_not_failed(tx):
-    p = policy(grant=strength_grant(strength(combinations=MULTIFACTOR_COMBINATIONS)), excludeGroups=[G1])
+    # Row 36B (c), decision 18 Oct 2026: one excluded group is break-glass, so two groups are needed to set it aside.
+    p = policy(grant=strength_grant(strength(combinations=MULTIFACTOR_COMBINATIONS)),
+               excludeGroups=[G1, "c0000000-0000-0000-0000-000000000002"])
     value, out = run(tx, body(p))
     assert value is None
-    assert "excludes a group" in errors(out)
+    assert "excludes more than 1 group" in errors(out)
+
+
+def test_strength_policy_excluding_one_break_glass_group_counts(tx):
+    p = policy(grant=strength_grant(strength(combinations=MULTIFACTOR_COMBINATIONS)), excludeGroups=[G1])
+    assert run(tx, body(p))[0] is True
 
 
 def test_strength_policy_firing_only_on_risk_does_not_count(tx):
