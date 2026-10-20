@@ -14,12 +14,17 @@ ConnectWise apps (J.J. 18 Oct 2026), app ids as published by Huntress and Bleepi
   ConnectWise Cloud Management - Partner Center        appId 412dcf96-176d-4b3a-a1b0-4981ad66971e
   ConnectWise Cloud Management - SharePoint Online     appId b2b55f5b-7758-4719-8d8f-88ae172e6bdb
 The first two are the ones the advisories name as abused; Huntress says to disable the others until
-they can be verified. Each app counts the same way (presence, grants, roles and indicators).
+they can be verified. Each app counts the same way (presence, grants, roles, sign-ins and indicators).
 
 Criterion: True when the tenant's service-principal list was read, the reads cover all seven apps,
-and none of them has a service principal in it. False when any app is present (Exposed). A present but disabled service principal
-is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps its consent, grants and
-credentials, so the fail reason tells the customer to remove it, not just leave it disabled.
+none of them has a service principal in it, and the apps' sign-in reads (service principal, and the
+delegated user sign-ins of every day slice) were read whole over a log that still reaches 13 Oct 2026,
+with no sign-in by any of them since then. False when any app is present, or signed in since 13 Oct
+(as itself or for a user) even if its service principal is gone now (Exposed). A present but disabled
+service principal is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps its
+consent, grants and credentials, so the fail reason tells the customer to remove it, not just leave it
+disabled. An app that signed in but has no service principal now is Exposed at risk unknown: what it
+could reach then cannot be read now.
 
 Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by both criteria), merged Graph reads:
   servicePrincipals         GET /v1.0/servicePrincipals?$filter=appId in (...)          (Application.Read.All or Directory.Read.All)
@@ -28,24 +33,35 @@ Data source: Integration-Service workflow getConnectWiseOAuthEvidence (shared by
                             Every app's role feed must be in the body (data or a stepError marker, for example
                             404 when the app is absent); otherwise absence is Not evaluated.
   roleAssignments           GET /v1.0/roleManagement/directory/roleAssignments           (RoleManagement.Read.Directory or Directory.Read.All)
-  spSignInsByApp, spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, directoryAudits, securityAlerts
-                            (see the sibling file)
+  spSignInsByApp            the apps' service-principal sign-ins
+  userSignInsByApp_YYYYMMDD, userSignInsByApp_from20261114
+                            the apps' delegated (interactive and non-interactive user) sign-ins, one key per
+                            UTC day from 15 Oct to 13 Nov 2026, then one from 14 Nov (Integration-Service #1798);
+                            each must be present with its paginationStats entry false
+  userSignInsBeforeWindow   retention proof: the newest user sign-in at or before the start of the reads; the
+                            sign-in reads count as whole only when it is at or before 13 Oct 2026
+  spSignInsFromIndicatorIp, userSignInsFromIndicatorIp, directoryAudits_*, directoryAuditsBeforeWindow,
+  securityAlerts            (see the sibling file)
 Every step runs with continueOnError, so a refused read arrives as {"stepError": true, ...}.
 
 Verdict fields (identical in both criterion files):
-  connectWiseVerdict     Not evaluated | Not exposed | Exposed | Indicators found
-  connectWiseRiskLevel   high (Directory.ReadWrite.All or a peer permission, or a privileged
-                         directory role such as Global Administrator) | standard | unknown (a
-                         grant, delegated-grant or role feed for an enabled app could not be read) |
-                         low (present, but every present app is disabled) | none
-  indicatorsFound        indicators found since 13 Oct 2026
-  nameOnlyMatches        how many of them matched the apps by exact display name only (no app or service
-                         principal id): still indicators, but each needs confirmation before any action
-Not evaluated (None and dataCollection.status "error"): the service-principal feed is missing,
-refused, errored, paged or unrecognised. A failed read is never "not exposed".
+  connectWiseVerdict       Not evaluated | Not exposed | Exposed | Indicators found
+  connectWiseRiskLevel     high (Directory.ReadWrite.All or a peer permission, or a privileged
+                           directory role such as Global Administrator) | standard | unknown (a
+                           grant, delegated-grant or role feed for an enabled app could not be read,
+                           or an app signed in but has no service principal now) |
+                           low (present, but every present app is disabled) | none
+  connectWiseAppsSignedIn  the apps that signed in since 13 Oct 2026 (as themselves or for a user)
+  indicatorsFound          indicators found since 13 Oct 2026
+  nameOnlyMatches          how many of them matched the apps by exact display name only (no app or service
+                           principal id): still indicators, but each needs confirmation before any action
+Not evaluated (None and dataCollection.status "error"): no app present or signed in, and the
+service-principal feed is missing, refused, errored, paged or unrecognised, the reads do not cover all
+seven apps, or a sign-in read the "no sign-in" answer needs is missing, refused, errored, paged or not
+proven inside log retention. A failed read is never "not exposed"; evidence found still counts.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 KEY = "isFreeOfConnectWiseAppExposure"
 TRANSFORMATION_ID = "isfreeofconnectwiseappexposure"
@@ -77,6 +93,36 @@ WINDOW_START_DT = datetime(2026, 10, 13)
 # sign-in reads succeed keeps 30 days). Once the window start is older than that, a clean read can no
 # longer show the start of the activity, so "no indicators" is not evaluated.
 LOG_RETENTION_DAYS = 30
+# Integration-Service #1798 reads the directory audit log, and the seven apps' delegated (interactive and
+# non-interactive user) sign-ins, one bounded UTC day at a time from 15 Oct to 13 Nov 2026 and then from 14 Nov 2026
+# on, each under its own key with its own paginationStats entry: a slice at its page cap or refused cuts off only
+# itself. Every one of these keys must be in the body and read whole before a clean answer. Other keys with the same
+# prefix (a reader that also slices 13-14 Oct) are read too, under the same rules. Both slice bounds are inclusive, so
+# a record stamped at midnight is in two slices: records are deduped by id.
+FIRST_SLICE_DT = datetime(2026, 10, 15)
+DAY_SLICES = 30
+TAIL_SLICE = "from20261114"
+AUDIT_SLICE_PREFIX = "directoryAudits_"
+USER_SLICE_PREFIX = "userSignInsByApp_"
+AUDIT_SLICE_KEYS = []
+USER_SLICE_KEYS = []
+for slice_day in range(DAY_SLICES):
+    slice_suffix = (FIRST_SLICE_DT + timedelta(days=slice_day)).date().isoformat().replace("-", "")
+    AUDIT_SLICE_KEYS.append(AUDIT_SLICE_PREFIX + slice_suffix)
+    USER_SLICE_KEYS.append(USER_SLICE_PREFIX + slice_suffix)
+AUDIT_SLICE_KEYS.append(AUDIT_SLICE_PREFIX + TAIL_SLICE)
+USER_SLICE_KEYS.append(USER_SLICE_PREFIX + TAIL_SLICE)
+# Responses stored before the slicing carry one unsliced directoryAudits feed. It is still read, under the same
+# rules: whole only with its paginationStats entry false and the audit retention proof below.
+LEGACY_AUDIT_KEY = "directoryAudits"
+# Retention proofs (key, timestamp field): one record each, the newest entry at or before the start of the reads.
+# Graph answers a day past the tenant's log retention with an empty 200, the same as a clean day, so the slices of
+# a log read whole only when its proof shows an entry at or before WINDOW_START (13 Oct). Then the log still holds
+# data older than every day judged, and nothing it holds after that entry and before the proof's bound is missed.
+# An empty, refused, failed or later entry proves nothing. The sign-in proof (user sign-ins) also gates the unsliced
+# sign-in reads, which share the tenant's sign-in log retention.
+AUDIT_PROBE = ("directoryAuditsBeforeWindow", "activityDateTime")
+USER_PROBE = ("userSignInsBeforeWindow", "createdDateTime")
 # Microsoft Graph application permissions (app role ids, identical in every tenant) that let an app
 # take over a directory. Directory.ReadWrite.All is the one named in the advisory.
 HIGH_RISK_APP_ROLES = {
@@ -148,6 +194,8 @@ CONNECTWISE_APP_NAMES = (
     "connectwise cloud management - sharepoint online", "skykick cloud manager",
 )
 NAME_ONLY_PREFIX = "Name only, needs confirmation before any action: "
+# How many unread feeds a reason names before it says how many more there are.
+GAPS_SHOWN = 6
 
 
 def create_response(result, pass_reasons=None, fail_reasons=None, input_summary=None, api_errors=None,
@@ -228,6 +276,20 @@ def unwrap(data):
     return data if isinstance(data, dict) else None
 
 
+def truncation_unexplained(data):
+    """True when the body says a read was cut off (top-level paginationTruncated) but no paginationStats entry
+    says which one: every feed is then treated as partial."""
+    if data.get("paginationTruncated") is not True:
+        return False
+    stats = data.get("paginationStats")
+    if isinstance(stats, dict):
+        for key in stats:
+            entry = stats[key]
+            if isinstance(entry, dict) and entry.get("paginationTruncated") is True:
+                return False
+    return True
+
+
 def read_feed(data, key):
     """(records, state) for one merged Graph feed. state is ok, missing, error or paged. records is a list
     when state is ok or paged (a paged list is partial: an indicator in it counts, its absence proves
@@ -238,6 +300,8 @@ def read_feed(data, key):
     state = "ok"
     stats = data.get("paginationStats")
     if isinstance(stats, dict) and isinstance(stats.get(key), dict) and stats[key].get("paginationTruncated") is True:
+        state = "paged"
+    if truncation_unexplained(data):
         state = "paged"
     if isinstance(feed, list):
         records = feed
@@ -257,6 +321,108 @@ def read_feed(data, key):
     return records, state
 
 
+def pagination_reported_whole(data, key):
+    """True only when the key's paginationStats entry says paginationTruncated false. Integration-Service writes
+    that entry for every reportPagination step, so a missing entry means the reader cannot say the read was whole."""
+    stats = data.get("paginationStats")
+    entry = stats.get(key) if isinstance(stats, dict) else None
+    return isinstance(entry, dict) and entry.get("paginationTruncated") is False
+
+
+def add_records(merged, seen, records):
+    """Append records to merged, skipping a record whose id was already added (slice bounds overlap at midnight,
+    and the same sign-in can be in two reads)."""
+    for record in records or []:
+        record_id = record.get("id")
+        if isinstance(record_id, str) and record_id:
+            if record_id in seen:
+                continue
+            seen[record_id] = True
+        merged.append(record)
+
+
+STATE_RANK = {"ok": 0, "paged": 1, "missing": 2, "error": 3}
+
+
+def read_sliced(data, required, prefix, legacy_key=""):
+    """(records, state, gaps) for one day-sliced log. records merges every readable slice, deduped by id (records
+    from a partial or failed slice still count as evidence). state is ok only when every required slice, and every
+    other slice with the prefix, is present and read whole with its paginationStats entry false; otherwise the worst
+    of paged, missing and error. gaps names each slice that is not whole. A body with no slice at all is read from
+    legacy_key (responses stored before the slicing) under the same rules."""
+    keys = []
+    for key in required:
+        keys.append(key)
+    extra = []
+    for key in data:
+        if isinstance(key, str) and key.startswith(prefix) and key not in keys:
+            extra.append(key)
+    keys = keys + sorted(extra)
+    sliced = False
+    for key in keys:
+        if key in data:
+            sliced = True
+    merged = []
+    seen = {}
+    gaps = []
+    has_legacy = bool(legacy_key) and legacy_key in data
+    if has_legacy:
+        records, state = read_feed(data, legacy_key)
+        add_records(merged, seen, records)
+        if not sliced:
+            if state == "ok" and not pagination_reported_whole(data, legacy_key):
+                state = "paged"
+            if state != "ok":
+                gaps.append(legacy_key + ": " + state)
+    if not sliced and not has_legacy:
+        return merged, "missing", [prefix + "*: missing"]
+    if sliced:
+        for key in keys:
+            records, state = read_feed(data, key)
+            if state == "ok" and not pagination_reported_whole(data, key):
+                state = "paged"
+            add_records(merged, seen, records)
+            if state != "ok":
+                gaps.append(key + ": " + state)
+    worst = "ok"
+    for gap in gaps:
+        state = gap.rsplit(": ", 1)[1]
+        if STATE_RANK.get(state, 3) > STATE_RANK[worst]:
+            worst = state if state in STATE_RANK else "error"
+    return merged, worst, gaps
+
+
+def read_probe(data, probe):
+    """ok when the retention proof shows an entry at or before WINDOW_START; else missing, error, empty or
+    "after the window start" (each proves nothing about the slices)."""
+    key, field = probe
+    feed = data.get(key)
+    if feed is None:
+        return "missing"
+    if isinstance(feed, dict):
+        if feed.get("stepError") or feed.get("error") or feed.get("errors"):
+            return "error"
+        records = feed.get("value")
+    else:
+        records = feed
+    if not isinstance(records, list):
+        return "error"
+    if not records:
+        return "empty"
+    for record in records:
+        stamp = record.get(field) if isinstance(record, dict) else None
+        if isinstance(stamp, str) and len(stamp) >= 19 and stamp[:19] <= WINDOW_START:
+            return "ok"
+    return "after the window start"
+
+
+def list_gaps(gaps):
+    shown = "; ".join(gaps[:GAPS_SHOWN])
+    if len(gaps) > GAPS_SHOWN:
+        shown = shown + "; and " + str(len(gaps) - GAPS_SHOWN) + " more"
+    return shown
+
+
 def assess(data):
     """Everything both criteria need, from the merged feeds. Never raises on a well-formed dict."""
     feeds = {}
@@ -274,7 +440,9 @@ def assess(data):
                 if lower(record.get("appId")) in CONNECTWISE_APPS:
                     present.append(record)
     sp_ids = []
+    present_apps = []
     for record in present:
+        present_apps.append(lower(record.get("appId")))
         if isinstance(record.get("id"), str):
             sp_ids.append(lower(record.get("id")))
     enabled = [r for r in present if r.get("accountEnabled") is not False]
@@ -320,16 +488,60 @@ def assess(data):
         else:
             unknown_risk = True
 
-    # Indicators of compromise since the window start.
-    indicators = []
-    name_only = []
+    # Sign-ins since the window start: the apps' own (service principal) sign-ins, their delegated (user)
+    # sign-ins, and every sign-in from the indicator IP. Deduped by id across the reads.
+    gaps = []
     by_app, by_app_state = read_feed(data, "spSignInsByApp")
     by_ip, by_ip_state = read_feed(data, "spSignInsFromIndicatorIp")
     by_user_ip, by_user_ip_state = read_feed(data, "userSignInsFromIndicatorIp")
+    delegated, delegated_state, delegated_gaps = read_sliced(data, USER_SLICE_KEYS, USER_SLICE_PREFIX)
+    sign_in_proof = read_probe(data, USER_PROBE)
     feeds["spSignInsByApp"] = by_app_state
     feeds["spSignInsFromIndicatorIp"] = by_ip_state
     feeds["userSignInsFromIndicatorIp"] = by_user_ip_state
-    sign_ins = (by_app or []) + (by_ip or []) + (by_user_ip or [])
+    feeds["userSignInsByApp"] = delegated_state
+    feeds[USER_PROBE[0]] = sign_in_proof
+    for key, key_state in (("spSignInsByApp", by_app_state), ("spSignInsFromIndicatorIp", by_ip_state),
+                           ("userSignInsFromIndicatorIp", by_user_ip_state)):
+        if key_state != "ok":
+            gaps.append(key + ": " + key_state)
+    gaps = gaps + delegated_gaps
+    if sign_in_proof != "ok":
+        gaps.append(USER_PROBE[0] + ": " + sign_in_proof)
+    sign_ins = []
+    seen = {}
+    add_records(sign_ins, seen, by_app)
+    add_records(sign_ins, seen, by_ip)
+    add_records(sign_ins, seen, by_user_ip)
+    add_records(sign_ins, seen, delegated)
+
+    # Use of an app in the window, as itself or for a user, is exposure evidence even when its service
+    # principal is gone now (Integration-Service #1798: Graph logs a delegated token's use as a user sign-in whose
+    # appId is the client app). "Not exposed" needs both app sign-in reads whole and the log to reach the window.
+    used = {}
+    for item in sign_ins:
+        app_id = lower(item.get("appId"))
+        if app_id in CONNECTWISE_APPS and in_window(item.get("createdDateTime")):
+            used[app_id] = used.get(app_id, 0) + 1
+    used_names = []
+    used_absent = []
+    usage = []
+    for app_id in CONNECTWISE_APPS:
+        if app_id not in used:
+            continue
+        used_names.append(CONNECTWISE_APPS[app_id])
+        line = (CONNECTWISE_APPS[app_id] + " signed in to this tenant " + str(used[app_id])
+                + " time(s) since 13 Oct 2026 (as itself or for a user)")
+        if app_id not in present_apps:
+            used_absent.append(app_id)
+            if presence_known:
+                line = line + ", although it has no service principal here now"
+        usage.append(line)
+    usage_read = by_app_state == "ok" and delegated_state == "ok" and sign_in_proof == "ok"
+
+    # Indicators of compromise since the window start.
+    indicators = []
+    name_only = []
     # The apps' service principal ids, also from feeds other than the presence read, so an audit entry
     # initiated by one still matches when the presence read failed.
     for item in by_app or []:
@@ -358,9 +570,14 @@ def assess(data):
                 if agent.startswith(prefix):
                     indicators.append(CONNECTWISE_APPS[app_id] + " signed in with the indicator user agent " + agent)
                     break
-    audits, audits_state = read_feed(data, "directoryAudits")
+    audits, audits_state, audit_gaps = read_sliced(data, AUDIT_SLICE_KEYS, AUDIT_SLICE_PREFIX, LEGACY_AUDIT_KEY)
+    audit_proof = read_probe(data, AUDIT_PROBE)
     feeds["directoryAudits"] = audits_state
-    for item in audits or []:
+    feeds[AUDIT_PROBE[0]] = audit_proof
+    gaps = gaps + audit_gaps
+    if audit_proof != "ok":
+        gaps.append(AUDIT_PROBE[0] + ": " + audit_proof)
+    for item in audits:
         if not in_window(item.get("activityDateTime")):
             continue
         activity = norm_activity(item.get("activityDisplayName"))
@@ -419,31 +636,39 @@ def assess(data):
     feeds["logRetention"] = "ok" if retention_ok else "window older than " + str(LOG_RETENTION_DAYS) + " days"
     # The presence read is the only source of the apps' service-principal ids when they have no sign-ins, so
     # without it a credential add on a ConnectWise service principal cannot be ruled out.
-    indicators_read = (presence_known and by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
-                       and audits_state == "ok" and retention_ok and scope_ok)
+    sign_ins_read = (by_app_state == "ok" and by_ip_state == "ok" and by_user_ip_state == "ok"
+                     and delegated_state == "ok" and sign_in_proof == "ok")
+    audits_read = audits_state == "ok" and audit_proof == "ok"
+    indicators_read = presence_known and sign_ins_read and audits_read and retention_ok and scope_ok
+    usage_gaps = []
+    for gap in gaps:
+        if gap.startswith("spSignInsByApp:") or gap.startswith(USER_SLICE_PREFIX) or gap.startswith(USER_PROBE[0]):
+            usage_gaps.append(gap)
 
     # A present but disabled app is Exposed at risk low (decision 18 Oct 2026): it can be re-enabled and keeps
     # its consent, grants and credentials, so the customer must remove it, not just leave it disabled.
-    absence_known = presence_known and scope_ok
+    absence_known = presence_known and scope_ok and usage_read
     if indicators:
         verdict = "Indicators found"
-    elif presence_known and present:
+    elif present or used:
         verdict = "Exposed"
     elif absence_known:
         verdict = "Not exposed"
     else:
         verdict = "Not evaluated"
-    if not enabled:
-        if present:
-            risk = "low"
+    if enabled:
+        if high:
+            risk = "high"
+        elif unknown_risk or used_absent:
+            risk = "unknown"
         else:
-            risk = "none" if absence_known else "unknown"
-    elif high:
-        risk = "high"
-    elif unknown_risk:
+            risk = "standard"
+    elif used_absent:
         risk = "unknown"
+    elif present:
+        risk = "low"
     else:
-        risk = "standard"
+        risk = "none" if absence_known else "unknown"
     names = []
     for record in present:
         label = CONNECTWISE_APPS.get(lower(record.get("appId")), "")
@@ -451,8 +676,10 @@ def assess(data):
             label = label + " (disabled)"
         names.append(label)
     return {
-        "presenceKnown": presence_known, "absenceKnown": absence_known, "scopeOk": scope_ok, "present": present, "enabled": enabled, "names": names,
-        "high": high, "risk": risk, "indicators": indicators, "indicatorsRead": indicators_read,
+        "presenceKnown": presence_known, "absenceKnown": absence_known, "scopeOk": scope_ok, "present": present,
+        "enabled": enabled, "names": names, "high": high, "risk": risk, "unknownRisk": unknown_risk,
+        "used": used_names, "usedAbsent": used_absent, "usage": usage, "usageRead": usage_read,
+        "usageGaps": usage_gaps, "indicators": indicators, "indicatorsRead": indicators_read, "gaps": gaps,
         "nameOnly": len(name_only),
         "alertsState": alerts_state, "verdict": verdict, "feeds": feeds,
         "retentionOk": retention_ok,
@@ -464,6 +691,7 @@ def summary_fields(found):
         "connectWiseVerdict": found["verdict"],
         "connectWiseRiskLevel": found["risk"],
         "connectWiseAppsPresent": found["names"],
+        "connectWiseAppsSignedIn": found["used"],
         "indicatorsFound": len(found["indicators"]),
         "nameOnlyMatches": found["nameOnly"],
     }
@@ -475,9 +703,10 @@ def not_measured(reason, found=None, transformation_errors=None):
         result.update(summary_fields(found))
     else:
         result.update({"connectWiseVerdict": "Not evaluated", "connectWiseRiskLevel": "unknown",
-                       "connectWiseAppsPresent": [], "indicatorsFound": 0, "nameOnlyMatches": 0})
+                       "connectWiseAppsPresent": [], "connectWiseAppsSignedIn": [], "indicatorsFound": 0,
+                       "nameOnlyMatches": 0})
     summary = {"feeds": found["feeds"]} if found is not None else {}
-    findings = found["indicators"] + found["high"] if found is not None else []
+    findings = found["indicators"] + found["usage"] + found["high"] if found is not None else []
     return create_response(result, fail_reasons=[reason], api_errors=[reason], input_summary=summary,
                            transformation_errors=transformation_errors, findings=findings)
 # ---- shared helper block: end
@@ -489,29 +718,45 @@ def transform(input):
         if data is None:
             return not_measured("No Microsoft Graph feeds in the response; exposure is not evaluated.")
         found = assess(data)
+        summary = {"feeds": found["feeds"]}
+        findings = found["indicators"] + found["usage"] + found["high"]
+        if found["present"] or found["used"]:
+            result = {KEY: False}
+            result.update(summary_fields(found))
+            reasons = []
+            if found["enabled"]:
+                reasons.append("Enabled in this tenant: " + ", ".join(found["names"]))
+                reasons = reasons + found["high"]
+            elif found["present"]:
+                reasons.append("Present but disabled: " + ", ".join(found["names"]))
+                reasons.append("A disabled app can be re-enabled and keeps its consent, grants and credentials. "
+                               "Remove it: delete its service principal and revoke its consent; do not just leave "
+                               "it disabled.")
+            reasons = reasons + found["usage"]
+            if found["usedAbsent"]:
+                reasons.append("An app that signed in during the advisory window has no service principal in the "
+                               "presence read now, so what it could reach then cannot be read; risk level unknown. "
+                               "Review its sign-ins and the directory audit log since 13 Oct 2026.")
+            if found["enabled"] and found["unknownRisk"] and not found["high"]:
+                reasons.append("The app's permissions or directory roles could not be read; risk level unknown.")
+            return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
         if not found["presenceKnown"]:
             return not_measured("The service-principal list could not be read whole ("
                                 + found["feeds"].get("servicePrincipals", "missing")
                                 + "); exposure is not evaluated. Grant Application.Read.All or Directory.Read.All.", found)
-        if not found["present"] and not found["absenceKnown"]:
+        if not found["scopeOk"]:
             return not_measured("No ConnectWise app was found, but " + SCOPE_NOTE + "; exposure is not evaluated.",
                                 found)
-        result = {KEY: not found["present"]}
+        if not found["usageRead"]:
+            return not_measured("No ConnectWise app has a service principal now, but the apps' sign-in reads "
+                                "(service principal and delegated user sign-ins since 13 Oct 2026) were not read "
+                                "whole inside log retention (" + list_gaps(found["usageGaps"]) + "), so use of an "
+                                "app that was since removed cannot be ruled out; exposure is not evaluated. Needs "
+                                "AuditLog.Read.All, and Entra ID P1 or P2 for sign-in logs.", found)
+        result = {KEY: True}
         result.update(summary_fields(found))
-        summary = {"feeds": found["feeds"]}
-        findings = found["indicators"] + found["high"]
-        if found["enabled"]:
-            reasons = ["Enabled in this tenant: " + ", ".join(found["names"])]
-            reasons = reasons + found["high"]
-            if found["risk"] == "unknown":
-                reasons.append("The app's permissions or directory roles could not be read; risk level unknown.")
-            return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
-        if found["present"]:
-            reasons = ["Present but disabled: " + ", ".join(found["names"]),
-                       "A disabled app can be re-enabled and keeps its consent, grants and credentials. Remove it: "
-                       "delete its service principal and revoke its consent; do not just leave it disabled."]
-            return create_response(result, fail_reasons=reasons, input_summary=summary, findings=findings)
-        reasons = ["None of the seven ConnectWise apps has a service principal in this tenant."]
+        reasons = ["None of the seven ConnectWise apps has a service principal in this tenant, and none signed in "
+                   "(as itself or for a user) since 13 Oct 2026."]
         return create_response(result, pass_reasons=reasons, input_summary=summary, findings=findings)
     except Exception as e:
         return not_measured("The Microsoft Graph feeds could not be read; exposure is not evaluated.",
