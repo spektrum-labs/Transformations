@@ -194,7 +194,11 @@ def test_membership_false_only_when_a_member_is_reached_by_no_mfa_policy():
             reached = set(members[0]) if not shape["conditions"]["users"]["includeUsers"] else set(U)
             if value is False:
                 assert base is False or set(U) - reached
-            if base is True:
+            if base is True and shape["conditions"]["users"].get("excludeGroups") and len(members[0]) > 2:
+                # Row 36B (c), decision 18 Oct 2026: one excluded group is break-glass (True) until its member list,
+                # read whole, holds more than two accounts. Then it is not break-glass and the key is never True.
+                assert value is not True
+            elif base is True:
                 assert value is True
 
 

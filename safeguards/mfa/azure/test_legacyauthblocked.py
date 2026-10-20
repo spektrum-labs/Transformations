@@ -75,6 +75,12 @@ class LegacyAuthBlockedTests(unittest.TestCase):
     def reasons(self, res, kind):
         return res["additionalInfo"]["evaluation"][kind]
 
+    def first_reason(self, res):
+        # A block that leaves a directory role outside, or is scoped to one, reads not evaluated under the
+        # all-users coverage rule (#1301), so its named list is in dataCollection.errors, not passReasons.
+        ev = res["additionalInfo"]["evaluation"]
+        return (ev["passReasons"] or ev["failReasons"] or res["additionalInfo"]["dataCollection"]["errors"])[0]
+
     def test_duplicate_copy_is_identical(self):
         self.assertEqual(PATH.read_bytes(), DUPLICATE.read_bytes())
 
@@ -87,32 +93,44 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         self.assertNotIn("excluded", first)
         self.assertEqual(res["additionalInfo"]["evaluation"]["recommendations"], [])
 
+    def errors(self, res):
+        return " ".join(res["additionalInfo"]["dataCollection"]["errors"])
+
     def test_exclusions_are_named_in_the_first_reason(self):
+        # Row 36 (overstated passes): a group or role left outside every block means coverage of all users cannot be
+        # confirmed, so the key is not evaluated (was True); the names move to the not-evaluated reason.
         res = self.run_t(body(policy(exclude_users=[oid(1)], exclude_groups=[oid(2)], exclude_roles=[oid(3)])))
-        self.assertIs(res["transformedResponse"][KEY], True)
-        first = self.reasons(res, "passReasons")[0]
-        self.assertIn("3 account(s), group(s) or role(s) not covered by any", first)
+        self.assertIsNone(res["transformedResponse"][KEY])
+        first = self.errors(res)
+        self.assertIn("coverage of all users cannot be confirmed", first)
         for ident in ["user:" + oid(1), "group:" + oid(2), "role:" + oid(3)]:
             self.assertIn(ident, first)
         self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 3)
         self.assertNotIn("exemptPrincipalIds", res["transformedResponse"])
         self.assertEqual(len(res["additionalInfo"]["transformation"]["inputSummary"]["exemptPrincipalIds"]), 3)
+
+    def test_up_to_two_excluded_accounts_still_pass_and_are_named(self):
+        res = self.run_t(body(policy(exclude_users=[oid(1), oid(2)])))
+        self.assertIs(res["transformedResponse"][KEY], True)
+        first = self.reasons(res, "passReasons")[0]
+        self.assertIn("2 account(s), group(s) or role(s) not covered by any", first)
         self.assertTrue(res["additionalInfo"]["evaluation"]["recommendations"])
 
     def test_names_capped_at_twenty_and_n_more(self):
         excluded = [oid(i) for i in range(100, 125)]
         res = self.run_t(body(policy(exclude_users=excluded)))
-        first = self.reasons(res, "passReasons")[0]
-        self.assertIn("25 account(s)", first)
+        self.assertIsNone(res["transformedResponse"][KEY])  # row 36: more than two accounts outside
+        first = self.errors(res)
+        self.assertIn("25 named accounts", first)
         self.assertIn("and 5 more", first)
         self.assertEqual(first.count("user:"), 20)
         self.assertEqual(len(res["additionalInfo"]["transformation"]["inputSummary"]["exemptPrincipalIds"]), 20)
 
     def test_exactly_twenty_has_no_more_suffix(self):
         res = self.run_t(body(policy(exclude_users=[oid(i) for i in range(20)])))
-        first = self.reasons(res, "passReasons")[0]
+        first = self.errors(res)
         self.assertEqual(first.count("user:"), 20)
-        self.assertNotIn("more", first)
+        self.assertNotIn(" more", first)
 
     def test_account_excluded_from_one_policy_but_caught_by_another_is_not_named(self):
         res = self.run_t(body(policy(exclude_users=[oid(1), oid(2)]), policy(exclude_users=[oid(2)])))
@@ -138,16 +156,19 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         self.assertEqual(res["transformedResponse"]["exemptPrincipals"], 0)
 
     def test_scoped_block_excluding_its_own_include_is_named(self):
+        # Row 36: a block for named accounts only does not cover all users, so the key is False (was True).
         res = self.run_t(body(policy(include_users=[oid(7)], exclude_users=[oid(7)])))
-        first = self.reasons(res, "passReasons")[0]
-        self.assertIn("1 account(s)", first)
-        self.assertIn("user:" + oid(7), first.split("can still use them:")[1])
+        self.assertIs(res["transformedResponse"][KEY], False)
+        first = self.reasons(res, "failReasons")[0]
+        self.assertIn("named accounts only", first)
+        self.assertIn("user:" + oid(7), first)
 
     def test_scoped_block_names_its_scope(self):
+        # Row 36: a block scoped to a group reaches only its members, which are not read: not evaluated (was True).
         res = self.run_t(body(policy(include_users=[oid(7)], include_groups=[oid(8)])))
-        self.assertIs(res["transformedResponse"][KEY], True)
-        first = self.reasons(res, "passReasons")[0]
-        self.assertIn("no blocking policy targets all users", first)
+        self.assertIsNone(res["transformedResponse"][KEY])
+        first = self.errors(res)
+        self.assertIn("target groups or directory roles, not all users", first)
         self.assertIn("user:" + oid(7), first)
         self.assertIn("group:" + oid(8), first)
 
@@ -182,7 +203,7 @@ class LegacyAuthBlockedTests(unittest.TestCase):
         # Template ids are Microsoft's published, tenant-independent built-in role ids.
         global_admin = "62e90394-69f5-4237-9190-012177145e10"
         res = self.run_t(body(policy(exclude_roles=[global_admin, oid(3)])))
-        first = self.reasons(res, "passReasons")[0]
+        first = self.first_reason(res)
         self.assertIn("role:" + global_admin + " (Global Administrator; excluded by Block legacy authentication)", first)
         self.assertIn("role:" + oid(3) + " (excluded by Block legacy authentication)", first)
         self.assertNotIn(oid(3) + " (Global", first)
@@ -193,7 +214,7 @@ class LegacyAuthBlockedTests(unittest.TestCase):
 
     def test_upper_case_role_template_id_is_still_named(self):
         res = self.run_t(body(policy(exclude_roles=["62E90394-69F5-4237-9190-012177145E10"])))
-        self.assertIn("(Global Administrator;", self.reasons(res, "passReasons")[0])
+        self.assertIn("(Global Administrator;", self.first_reason(res))
 
     def test_each_exemption_names_the_policies_that_exclude_it(self):
         a = policy(exclude_users=[oid(1)])
@@ -223,7 +244,7 @@ class LegacyAuthBlockedTests(unittest.TestCase):
     def test_scoped_block_names_built_in_roles_in_its_scope(self):
         p = policy(include_users=[oid(7)])
         p["conditions"]["users"]["includeRoles"] = ["194ae4cb-b126-40b2-bd5b-6091b380977d"]
-        first = self.reasons(self.run_t(body(p)), "passReasons")[0]
+        first = self.first_reason(self.run_t(body(p)))
         self.assertIn("role:194ae4cb-b126-40b2-bd5b-6091b380977d (Security Administrator)", first)
         self.assertIn("user:" + oid(7), first)
 
