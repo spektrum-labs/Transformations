@@ -4,7 +4,7 @@ Vendor: Microsoft Entra ID  |  Category: Identity and Access Management
 
 Threat: abuse of the ConnectWise Cloud Backup (506e08f9-6e9a-4da4-942b-a099a03644ae) and
 ConnectWise Cloud Management - MS Teams (24205314-2b89-4e07-a2a4-579e898a5640) multitenant OAuth
-apps, from 15 Oct 2026. Scope: 7 ConnectWise apps (J.J. 18 Oct 2026): these two and the five other
+apps, from 15 Oct 2026. Scope: 7 ConnectWise apps (decision 18 Oct 2026): these two and the five other
 Cloud Management apps listed in isfreeofconnectwiseappexposure.py beside this file.
 
 Criterion: True when the service-principal (presence) feed, every sign-in feed and every directory-audit
@@ -71,7 +71,7 @@ KEY = "isFreeOfConnectWiseCompromiseIndicators"
 TRANSFORMATION_ID = "isfreeofconnectwisecompromiseindicators"
 
 # ---- shared helper block: start (identical in both criterion files; a test pins it)
-# Scope: 7 ConnectWise apps (J.J. 18 Oct 2026). The two the advisories name as abused, then the five other Cloud
+# Scope: 7 ConnectWise apps (decision 18 Oct 2026). The two the advisories name as abused, then the five other Cloud
 # Management apps whose ids Huntress ("ConnectWise (SkyKick) Vendor Credentials Abused in M365 Attacks", 16-17 Oct)
 # and BleepingComputer (Oct 2026) publish, and which Huntress says to disable until they can be verified.
 CONNECTWISE_APPS = {

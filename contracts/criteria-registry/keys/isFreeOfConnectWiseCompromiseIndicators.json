@@ -35,7 +35,7 @@
     {
       "revision": 2,
       "date": "2026-10-18",
-      "change": "Scope widened from two to seven ConnectWise apps (J.J. 18 Oct 2026); names match exactly (no vendor substring) and name-only matches are tagged; a clean read also needs every app's per-app role feed, so reads that cover fewer apps are Not evaluated. Evidence text corrected to the three sign-in reads."
+      "change": "Scope widened from two to seven ConnectWise apps (decision 18 Oct 2026); names match exactly (no vendor substring) and name-only matches are tagged; a clean read also needs every app's per-app role feed, so reads that cover fewer apps are Not evaluated. Evidence text corrected to the three sign-in reads."
     },
     {
       "revision": 3,

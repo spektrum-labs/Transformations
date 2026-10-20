@@ -687,7 +687,7 @@ def test_clean_and_not_evaluated_outcomes_report_zero_name_only_matches():
             assert value(out, "nameOnlyMatches") == 0
 
 
-# ---- scope: 7 ConnectWise apps (J.J. 18 Oct). App ids and names as published by Huntress and BleepingComputer.
+# ---- scope: 7 ConnectWise apps (decision 18 Oct 2026). App ids and names as published by Huntress and BleepingComputer.
 
 NEW_APPS = {
     "2399d300-6fca-4e6a-a686-399fefe75b83": ("ConnectWise Cloud Management", "cwMgmtAppRoles", "cwMgmtDelegatedGrants"),
