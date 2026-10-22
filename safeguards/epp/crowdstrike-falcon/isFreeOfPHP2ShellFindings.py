@@ -9,7 +9,8 @@ Input: getSpotlightPHP2ShellVulnerabilities, GET /spotlight/combined/vulnerabili
 cve.id:['CVE-2026-109618','CVE-2026-109619'] and facet=cve and facet=host_info, with NO status filter, so open,
 reopened, closed and expired records all come back. IS pages it on meta.pagination.after (cursor, page size 5000,
 at most 20 pages, the same paging as getSpotlightVulnerabilitiesCombined), merges the pages into `resources` and
-keeps meta.pagination with the vendor's `total` (`truncated` when maxPages stopped it). One record is one
+keeps meta.pagination with the vendor's `total` (`truncated` when maxPages stopped it; the envelope may also
+carry `paginationTruncated`). One record is one
 vulnerability on one asset.
 
 Vendor reference (CrowdStrike's published API reference, developer.crowdstrike.com, Spotlight Vulnerabilities
@@ -308,7 +309,8 @@ def read_problem(data, resources, total):
         return "The response is not a Spotlight vulnerabilities envelope (resources list and meta.pagination)."
     if total is None:
         return "Spotlight meta.pagination.total is missing or not a count, so a complete read cannot be shown."
-    if is_true(pagination.get("truncated")) or is_true(meta.get("truncated")) or is_true(data.get("truncated")):
+    if is_true(pagination.get("truncated")) or is_true(meta.get("truncated")) or is_true(data.get("truncated")) \
+            or is_true(data.get("paginationTruncated")):
         return ("Read stopped at the page limit (" + str(len(resources)) + " of " + str(total)
                 + " records); a partial read is not scored.")
     if len(resources) != total:

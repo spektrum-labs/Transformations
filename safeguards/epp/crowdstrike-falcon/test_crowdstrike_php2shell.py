@@ -201,6 +201,7 @@ def test_partial_capped_or_inconsistent_reads_are_not_evaluated():
         "fewer records than total": body([rec(1)], total=2),
         "more records than total": body([rec(1), rec(2)], total=1),
         "truncated by the page cap": body([rec(1)], truncated=True),
+        "envelope paginationTruncated": dict(body([rec(1)]), paginationTruncated=True),
         "truncated flag on meta": dict(body([rec(1)]), meta={"pagination": {"total": 1}, "truncated": "true"}),
         "total missing": dict(body([rec(1)]), meta={"pagination": {}}),
         "total null": dict(body([rec(1)]), meta={"pagination": {"total": None}}),
