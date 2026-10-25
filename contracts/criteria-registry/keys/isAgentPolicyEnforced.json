@@ -1,0 +1,40 @@
+{
+  "name": "isAgentPolicyEnforced",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every Tracekit bundle in the window verified intact and its verify report shows no tool call run against a deny or unapproved hold, no unresolved held call, no signed gap, tamper or approval-mismatch record, no observer gap, no fail-open class and no unreconciled call.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "Tracekit evidence bundles (.tkb) the customer pushed in the evaluation window, each verified by Integration-Service",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "Every bundle verified intact and none of the verifier lines policy, held calls, gaps, observers, fail-open classes or coverage warned or failed. It shows decisions were honoured, not that the policy would stop every harmful call.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Artificial Intelligence"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/artificial-intelligence/tracekit/isAgentPolicyEnforced.py",
+    "https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verdicts.md"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-25",
+      "change": "Registered with the Tracekit agent evidence transforms; proposed, no requirement reads it yet."
+    }
+  ],
+  "notes": "Input is Integration-Service's summary of `tracekit verify --json` (tracekit-ai 1.4.2) per bundle (src/services/tracekit_evidence.py), not a vendor API response. The trust config is Spektrum's, never the uploader's. No integration answers this key yet, so no RTA row maps it."
+}
