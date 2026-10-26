@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "Tracekit evidence bundles (.tkb) the customer pushed in the evaluation window, each verified by Integration-Service",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "Every bundle verified intact and none of the verifier lines policy, held calls, gaps, observers, fail-open classes or coverage warned or failed. It shows decisions were honoured, not that the policy would stop every harmful call.",
+  "evidenceRequiredForTrue": "Every bundle verified intact, none of the verifier lines policy, held calls, gaps, observers, fail-open classes or coverage warned or failed, and the coverage and fail-open classes lines (which every v2 report carries) passed. A failed or warning line outside tracekit-ai 1.4.2's vocabulary is not measured. It shows decisions were honoured, not that the policy would stop every harmful call.",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,

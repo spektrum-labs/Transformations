@@ -27,6 +27,7 @@ def bundle(integrity="verified", assurance="witnessed", isolation=None, failed=N
     return {"bundleSha256": sha * 64, "verifiedAt": "2026-10-25T00:00:00Z", "verifierVersion": "1.4.2",
             "exitCode": 0 if integrity in ("verified", "open") else 1, "integrity": integrity,
             "assurance": assurance, "isolation": isolation, "runCount": sum(isolation.values()),
+            "passedChecks": ["coverage", "fail-open classes", "signatures"] if integrity in ("verified", "open") else [],
             "failedChecks": failed or [], "warningChecks": warned or []}
 
 
@@ -108,3 +109,30 @@ def test_wrapped_and_string_input(key):
 def test_truncated_window_is_not_measured(key):
     assert run(key, {"truncated": True, "bundles": [bundle()]}) == (None, "error")
     assert run(key, {"truncated": False, "bundles": [bundle()]}) == (True, "success")
+
+
+@pytest.mark.parametrize("key", KEYS)
+@pytest.mark.parametrize("payload", [
+    {"bundles": [bundle(warned=["held_calls"])]},                          # a name 1.4.2 never reports
+    {"bundles": [bundle(failed=["Held calls"])]},
+    {"bundles": [dict(bundle(), exitCode=1)]},                             # verified with a failing exit
+    {"bundles": [dict(bundle(), exitCode=True)]},
+    {"bundles": [dict(bundle(), passedChecks="coverage")]},
+    {"bundles": [{k: v for k, v in bundle().items() if k != "passedChecks"}]},
+    {"truncated": "true", "bundles": [bundle()]},
+    {"truncated": 1, "bundles": [bundle()]},
+])
+def test_unknown_vocabulary_and_inconsistent_summaries_are_not_measured(key, payload):
+    assert run(key, payload) == (None, "error")
+
+
+@pytest.mark.parametrize("missing", ["coverage", "fail-open classes"])
+def test_policy_needs_the_lines_every_report_carries(missing):
+    b = bundle()
+    b["passedChecks"] = [c for c in b["passedChecks"] if c != missing]
+    assert run("isAgentPolicyEnforced", {"bundles": [b]}) == (False, "success")
+    assert run("isAgentEvidenceIntegrityVerified", {"bundles": [b]}) == (True, "success")
+
+
+def test_a_missing_truncated_field_is_read_as_not_truncated():
+    assert run("isAgentEvidenceIntegrityVerified", {"bundles": [bundle()]}) == (True, "success")

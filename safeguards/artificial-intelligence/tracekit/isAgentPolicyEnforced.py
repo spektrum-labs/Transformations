@@ -13,15 +13,17 @@ the summaries of the bundles in the evaluation window:
                  "integrity": "verified" | "open" | "failed" | "unverifiable" | "unusable",
                  "assurance": "dev" | "local" | "witnessed" | "witnessed+monitored" | "none",
                  "isolation": {"same-user" | "separate-user" | "remote" | "unknown": runs}, "runCount",
-                 "failedChecks": [...], "warningChecks": [...]}]}
+                 "passedChecks": [...], "failedChecks": [...], "warningChecks": [...]}]}
 Verifier vocabulary: https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verdicts.md
 
 Every criterion needs EVERY bundle in the window to have verified intact: a record that failed, could not be
 verified, or belongs to a run that never closed shows nothing, so one such bundle makes the criterion false.
-Fails closed: an error body, no bundles, a bundle summary missing a field, or a window marked truncated
-(more failing bundles than Integration-Service returns) returns None (not measured).
+Fails closed: an error body, no bundles, a bundle summary missing a field, a verified summary with a non-zero exit
+code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window not marked
+"truncated": false (more failing bundles than Integration-Service returns) returns None (not measured).
   isAgentPolicyEnforced = true when every bundle verified intact and none of the verifier lines
-  policy, held calls, gaps, observers, fail-open classes or coverage warned or failed.
+  policy, held calls, gaps, observers, fail-open classes or coverage warned or failed, and its
+  coverage and fail-open classes lines passed.
 Policy rules match text and tool names; this shows the decisions were honoured, not that the policy would stop every harmful call.
 """
 import json
@@ -94,6 +96,17 @@ def load(input):
 
 
 INTEGRITY_VALUES = ["verified", "open", "failed", "unverifiable", "unusable"]
+# Every line tracekit-ai 1.4.2's v2 verifier can report (tracekit/verify/v2.py). A failed or
+# warning line outside it comes from a verifier these criteria were not written against.
+KNOWN_CHECKS = ["approvals by agents", "approvals by people", "args source", "break-glass approvals",
+                "bundle readable", "bundle structure", "checkpoint", "constraints", "content vault",
+                "coverage", "coverage matrix", "external decisions", "fail-open classes", "findings",
+                "findings counted", "format bridge", "gaps", "gateway amendments", "harness", "held calls",
+                "incident policies", "incidents", "inclusion", "isolation", "key assurance", "keys",
+                "log tail", "manifest", "monitor", "not interpreted", "observers", "openshell policy",
+                "policy", "policy snapshot", "principals", "rekor anchor", "replay runs", "reviews",
+                "reviews counted", "revocations", "run chain", "run parts", "run-set", "signatures",
+                "tenant-level gaps", "tiers", "trust config", "witness quorum"]
 ASSURANCE_VALUES = ["dev", "local", "witnessed", "witnessed+monitored", "none"]
 
 
@@ -111,11 +124,21 @@ def bundle_summary(item):
     assurance = item.get("assurance")
     isolation = item.get("isolation")
     runs = as_count(item.get("runCount"))
+    exit_code = as_count(item.get("exitCode"))
+    passed = item.get("passedChecks")
     failed = item.get("failedChecks")
     warned = item.get("warningChecks")
     if integrity not in INTEGRITY_VALUES or assurance not in ASSURANCE_VALUES or runs is None:
         return None
-    if not isinstance(isolation, dict) or not isinstance(failed, list) or not isinstance(warned, list):
+    if exit_code is None or (integrity in ["verified", "open"] and exit_code != 0):
+        return None
+    for names in [passed, failed, warned]:
+        if not isinstance(names, list):
+            return None
+    for name in failed + warned:
+        if name not in KNOWN_CHECKS:
+            return None
+    if not isinstance(isolation, dict):
         return None
     counts = {}
     for label in isolation:
@@ -126,7 +149,8 @@ def bundle_summary(item):
     if sum(counts.values()) != runs:
         return None
     return {"integrity": integrity, "assurance": assurance, "isolation": counts, "runCount": runs,
-            "failedChecks": [str(c) for c in failed], "warningChecks": [str(c) for c in warned]}
+            "passedChecks": [str(c) for c in passed], "failedChecks": [str(c) for c in failed],
+            "warningChecks": [str(c) for c in warned]}
 
 
 def bundles_of(data):
@@ -146,11 +170,16 @@ def intact(bundle):
 
 
 POLICY_CHECKS = ["policy", "held calls", "gaps", "observers", "fail-open classes", "coverage"]
+# Lines every v2 report carries: a report without them shows nothing about policy.
+ALWAYS_REPORTED = ["coverage", "fail-open classes"]
 
 
 def meets(bundle):
     for name in POLICY_CHECKS:
         if name in bundle["warningChecks"] or name in bundle["failedChecks"]:
+            return False
+    for name in ALWAYS_REPORTED:
+        if name not in bundle["passedChecks"]:
             return False
     return True
 
@@ -167,7 +196,7 @@ def transform(input):
         data, validation = load(input)
         if is_error_body(data):
             return not_measured("The Tracekit evidence summary returned an error", validation)
-        if isinstance(data, dict) and data.get("truncated") is True:
+        if isinstance(data, dict) and data.get("truncated", False) is not False:
             return not_measured("More failing Tracekit bundles were received than the window holds", validation)
         bundles = bundles_of(data)
         if bundles is None:
