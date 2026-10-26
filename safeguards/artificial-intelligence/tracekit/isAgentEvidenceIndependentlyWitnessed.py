@@ -19,8 +19,9 @@ Verifier vocabulary: https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verd
 Every criterion needs EVERY bundle in the window to have verified intact: a record that failed, could not be
 verified, or belongs to a run that never closed shows nothing, so one such bundle makes the criterion false.
 Fails closed: an error body, no bundles, a bundle summary missing a field, a verified summary with a non-zero exit
-code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window not marked
-"truncated": false (more failing bundles than Integration-Service returns) returns None (not measured).
+code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window whose
+"truncated" is present and not false (more failing bundles than Integration-Service returns) returns None
+(not measured). A window without "truncated" is read as complete.
   isAgentEvidenceIndependentlyWitnessed = true when every bundle verified intact with assurance
   witnessed or witnessed+monitored.
 Spektrum's trust config classes any witness the customer runs as operator, so only a witness outside the customer's control lifts a run above local. Records after the last cosigned checkpoint are not covered by the witness.

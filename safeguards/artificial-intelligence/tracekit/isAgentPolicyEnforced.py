@@ -19,8 +19,9 @@ Verifier vocabulary: https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verd
 Every criterion needs EVERY bundle in the window to have verified intact: a record that failed, could not be
 verified, or belongs to a run that never closed shows nothing, so one such bundle makes the criterion false.
 Fails closed: an error body, no bundles, a bundle summary missing a field, a verified summary with a non-zero exit
-code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window not marked
-"truncated": false (more failing bundles than Integration-Service returns) returns None (not measured).
+code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window whose
+"truncated" is present and not false (more failing bundles than Integration-Service returns) returns None
+(not measured). A window without "truncated" is read as complete.
   isAgentPolicyEnforced = true when every bundle verified intact and none of the verifier lines
   policy, held calls, gaps, observers, fail-open classes or coverage warned or failed, and its
   coverage and fail-open classes lines passed.

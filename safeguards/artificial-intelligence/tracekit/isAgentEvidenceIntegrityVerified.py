@@ -19,8 +19,9 @@ Verifier vocabulary: https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verd
 Every criterion needs EVERY bundle in the window to have verified intact: a record that failed, could not be
 verified, or belongs to a run that never closed shows nothing, so one such bundle makes the criterion false.
 Fails closed: an error body, no bundles, a bundle summary missing a field, a verified summary with a non-zero exit
-code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window not marked
-"truncated": false (more failing bundles than Integration-Service returns) returns None (not measured).
+code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window whose
+"truncated" is present and not false (more failing bundles than Integration-Service returns) returns None
+(not measured). A window without "truncated" is read as complete.
   isAgentEvidenceIntegrityVerified = true when every bundle verified intact.
 Intact is not complete: a verified run proves the record was not altered, not that every action the agent took was captured.
 """
