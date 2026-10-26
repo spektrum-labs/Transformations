@@ -9,7 +9,7 @@ The customer pushes the bundles their Tracekit signer exported; Integration-Serv
 (src/services/tracekit_evidence.py) runs `tracekit verify --json` (tracekit-ai 1.4.2) on each one against the trust
 config Spektrum pinned when the customer connected, keeps a summary and discards the bundle. This transform reads
 the summaries of the bundles in the evaluation window:
-  {"bundles": [{"bundleSha256", "verifiedAt", "verifierVersion", "exitCode",
+  {"truncated": false, "bundles": [{"bundleSha256", "verifiedAt", "verifierVersion", "exitCode",
                  "integrity": "verified" | "open" | "failed" | "unverifiable" | "unusable",
                  "assurance": "dev" | "local" | "witnessed" | "witnessed+monitored" | "none",
                  "isolation": {"same-user" | "separate-user" | "remote" | "unknown": runs}, "runCount",
@@ -18,7 +18,8 @@ Verifier vocabulary: https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verd
 
 Every criterion needs EVERY bundle in the window to have verified intact: a record that failed, could not be
 verified, or belongs to a run that never closed shows nothing, so one such bundle makes the criterion false.
-Fails closed: an error body, no bundles, or a bundle summary missing a field returns None (not measured).
+Fails closed: an error body, no bundles, a bundle summary missing a field, or a window marked truncated
+(more failing bundles than Integration-Service returns) returns None (not measured).
   isAgentEvidenceIndependentlyWitnessed = true when every bundle verified intact with assurance
   witnessed or witnessed+monitored.
 Spektrum's trust config classes any witness the customer runs as operator, so only a witness outside the customer's control lifts a run above local. Records after the last cosigned checkpoint are not covered by the witness.
@@ -163,6 +164,8 @@ def transform(input):
         data, validation = load(input)
         if is_error_body(data):
             return not_measured("The Tracekit evidence summary returned an error", validation)
+        if isinstance(data, dict) and data.get("truncated") is True:
+            return not_measured("More failing Tracekit bundles were received than the window holds", validation)
         bundles = bundles_of(data)
         if bundles is None:
             return not_measured("No well-formed Tracekit bundle summaries were provided", validation)

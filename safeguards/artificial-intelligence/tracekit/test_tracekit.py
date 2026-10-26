@@ -102,3 +102,9 @@ def test_wrapped_and_string_input(key):
     assert run(key, payload) == (True, "success")
     assert run(key, json.dumps(payload)) == (True, "success")
     assert run(key, json.dumps(payload).encode("utf-8")) == (True, "success")
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_truncated_window_is_not_measured(key):
+    assert run(key, {"truncated": True, "bundles": [bundle()]}) == (None, "error")
+    assert run(key, {"truncated": False, "bundles": [bundle()]}) == (True, "success")
