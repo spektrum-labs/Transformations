@@ -4,7 +4,18 @@ Vendor: DNSFilter
 Category: Network Security / DNS Logging
 
 Validates that DNS query logging is enabled for audit and threat analysis.
-Checks the total_queries traffic report endpoint for query log data.
+
+Reads GET /v1/traffic_reports/total_requests (the Integration-Service method
+getQueryLogs, windowed to the last 7 days). DNSFilter has no logging on/off
+switch and keeps query logs for 9 days, so the measured fact is whether the
+organisation produced DNS traffic in the window. The vendor body is
+{"data": {"organization_ids": [...], "values": [{"bucket": ..., "total": N, ...}]}};
+Token-Service strips the `data` wrapper before calling transform (codeexecutor
+_parse_api_response_for_transformer navigates response/result/apiResponse/Output/data),
+so the transform reads `values` at the top level and, for a raw body, under `data`.
+The query count is the sum of values[].total. A body without that report (error
+envelope, empty, unrelated) is not measured: the criterion is None with a
+dataCollection error, never a False.
 """
 
 import json
@@ -67,6 +78,43 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def report_values(data):
+    """The `values` bucket list of a total_requests report, or None when the body is not one.
+
+    Token-Service hands the transform the report with its `data` wrapper already removed, so
+    `values` is normally at the top level; a raw vendor body still carries it under `data`."""
+    if not isinstance(data, dict):
+        return None
+    values = data.get("values")
+    if values is None and isinstance(data.get("data"), dict):
+        values = data["data"].get("values")
+    return values if isinstance(values, list) else None
+
+
+def kind_of(value):
+    """A plain word for a value's type; the sandbox forbids `__name__`."""
+    for kind, name in ((dict, "object"), (list, "list"), (str, "string"), (bool, "boolean"),
+                       (int, "number"), (float, "number")):
+        if isinstance(value, kind):
+            return name
+    return "null" if value is None else "unknown"
+
+
+def why_unreadable(data):
+    if not isinstance(data, dict):
+        return f"body is {kind_of(data)}, not an object"
+    if not data:
+        return "body is empty"
+    for key in ("error", "errors", "message"):
+        if key in data:
+            detail = data[key]
+            status = data.get("status_code") or data.get("statusCode") or data.get("status")
+            return f"vendor error{f' (HTTP {status})' if status else ''}: {str(detail)[:200]}"
+    if "values" not in data and "data" not in data:
+        return "body is not a traffic report (keys: " + ", ".join(sorted(map(str, data))[:10]) + ")"
+    return "`values` is missing or is not a list of report buckets"
+
+
 def transform(input):
     criteriaKey = "isDNSLoggingEnabled"
 
@@ -80,8 +128,9 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None, "totalQueries": None},
                 validation=validation,
+                api_errors=["Input validation failed: " + "; ".join(str(e) for e in validation.get("errors", []) or ["schema rejected the body"])],
                 fail_reasons=["Input validation failed"]
             )
 
@@ -90,43 +139,30 @@ def transform(input):
         recommendations = []
         additional_findings = []
 
-        logging_enabled = False
-        total_queries = 0
+        values = report_values(data)
+        if values is None:
+            why = why_unreadable(data)
+            return create_response(
+                result={criteriaKey: None, "totalQueries": None},
+                validation=validation,
+                api_errors=[f"DNSFilter did not return a total_requests traffic report: {why}"],
+                fail_reasons=["DNS query volume could not be measured"],
+                recommendations=["Re-run the check; if it persists, confirm the DNSFilter API key can read traffic reports"],
+                input_summary={"bodyKeys": sorted(data)[:10] if isinstance(data, dict) else kind_of(data)}
+            )
 
-        if isinstance(data, dict):
-            # Check for total query count in traffic report
-            total_queries = data.get('total_queries', data.get('totalQueries',
-                           data.get('total', data.get('count', 0))))
-
-            # Check for query log entries
-            queries = data.get('queries', data.get('data', data.get('logs', [])))
-            if isinstance(queries, list) and len(queries) > 0:
-                logging_enabled = True
-                total_queries = total_queries or len(queries)
-
-            # A positive query count indicates logging is active
-            if isinstance(total_queries, (int, float)) and total_queries > 0:
-                logging_enabled = True
-
-            # Check for explicit logging configuration flags
-            logging_config = data.get('logging_enabled', data.get('loggingEnabled',
-                            data.get('query_logging', data.get('queryLogging', None))))
-            if logging_config is not None:
-                logging_enabled = bool(logging_config)
-
-        elif isinstance(data, list) and len(data) > 0:
-            # Direct list of query logs
-            logging_enabled = True
-            total_queries = len(data)
+        total_queries = sum(
+            v["total"] for v in values
+            if isinstance(v, dict) and isinstance(v.get("total"), (int, float)) and not isinstance(v.get("total"), bool)
+        )
+        total_queries = int(total_queries)
+        logging_enabled = total_queries > 0
 
         if logging_enabled:
-            reason = "DNS query logging is enabled"
-            if total_queries > 0:
-                reason += f" ({total_queries} queries recorded)"
-            pass_reasons.append(reason)
+            pass_reasons.append(f"DNSFilter recorded {total_queries} DNS queries in the report window; query logs are retained")
         else:
-            fail_reasons.append("DNS query logging does not appear to be enabled")
-            recommendations.append("Enable DNS query logging in DNSFilter for audit and threat analysis")
+            fail_reasons.append("DNSFilter recorded no DNS queries in the report window, so there is nothing in the query log")
+            recommendations.append("Confirm DNSFilter networks or roaming clients are deployed and resolving through DNSFilter; query logs are kept automatically once traffic flows")
 
         return create_response(
             result={
@@ -139,14 +175,16 @@ def transform(input):
             recommendations=recommendations,
             additional_findings=additional_findings,
             input_summary={
-                "totalQueries": total_queries
+                "totalQueries": total_queries,
+                "buckets": len(values)
             }
         )
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None, "totalQueries": None},
             validation={"status": "error", "errors": [], "warnings": []},
+            api_errors=[f"Transformation error: {str(e)}"],
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
