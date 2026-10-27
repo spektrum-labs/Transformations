@@ -2,16 +2,15 @@
 
 [dd-watch] 2026-10-27: every prod DNSFilter customer failed this criterion. The Integration-Service
 definition called a traffic report that does not exist, and this transform looked for keys
-(total_queries, queries, logging_enabled) that /v1/traffic_reports/total_requests never returns. The
-vendor answers {"data": {"organization_ids": [...], "values": [{"bucket": ..., "total": N, ...}]}}
-with one bucket per day (bucket_size auto) over the requested window. DNSFilter has no logging on/off
-switch and keeps query logs for 9 days, so the measured fact is "the organisation produced DNS traffic
-in the window": the sum of data.values[].total.
+(total_queries, queries, logging_enabled) that /v1/traffic_reports/total_requests never returns.
+See isdnsloggingenabled.py for the report shape and what is measured.
 """
 import importlib.util
 import json
 import unittest
 from pathlib import Path
+
+import types
 
 try:
     import RestrictedPython  # noqa: F401  the production sandbox replica needs it
@@ -44,9 +43,7 @@ def bucket(day, total, **extra):
 
 
 def report(*totals):
-    """The report as Token-Service hands it over: codeexecutor._parse_api_response_for_transformer has
-    already stripped the vendor's top-level `data` wrapper (it navigates response/result/apiResponse/
-    Output/data), so the TrafficReportsTotalRequests fields sit at the top level."""
+    """The report as Token-Service hands it over, its `data` wrapper already stripped."""
     return {"organization_ids": [4242], "organization_names": ["Example Org"],
             "network_ids": [], "network_names": [],
             "values": [bucket(20 + i, t) for i, t in enumerate(totals)]}
@@ -160,11 +157,13 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
                 self.assertIn("2 of 2 report bucket(s) carry no numeric `total`", out["additionalInfo"]["dataCollection"]["errors"][0])
 
     # 3-5. Bodies that prove nothing are not measured.
-    def not_measured(self, out):
+    def not_measured(self, out, raised=False):
         self.assertIsNone(self.verdict(out))
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
         self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
         self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+        if not raised:  # the diagnostic itself must not have raised (a sandbox NameError lands here)
+            self.assertEqual(out["additionalInfo"]["transformation"]["errors"], [])
 
     def test_empty_bodies_are_not_measured(self):
         for body in ({}, "{}", None, {"data": {}}, {"data": None}, {"organization_ids": [1]}):
@@ -190,6 +189,23 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.not_measured(self.t.transform(body))
 
+    def test_the_not_measured_diagnostics_say_why(self):
+        cases = {
+            "unrelated": ({"hello": "world"}, "body is not a traffic report (keys: hello)"),
+            "org only": ({"organization_ids": [1]}, "keys: organization_ids"),
+            "values not a list": ({"values": "many"}, "`values` is missing or is not a list"),
+            "list": ([1, 2], "body is list, not an object"),
+            "empty": ({}, "body is empty"),
+            "error": ({"status_code": 403, "error": "Forbidden"}, "vendor error (HTTP 403): Forbidden"),
+            "no totals": ({"values": [{"total": None}]}, "1 of 1 report bucket(s) carry no numeric `total`"),
+            "no buckets": ({"values": []}, "no buckets for the window"),
+        }
+        for name, (body, expected) in cases.items():
+            with self.subTest(case=name):
+                out = self.t.transform(body)
+                self.not_measured(out)
+                self.assertIn(expected, out["additionalInfo"]["dataCollection"]["errors"][0])
+
     def test_failed_validation_is_not_measured(self):
         out = self.t.transform(enriched({"hello": "world"}, status="failed"))
         self.not_measured(out)
@@ -197,8 +213,7 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
     # 6. Malformed input.
     def test_malformed_json_is_not_measured(self):
         out = self.t.transform("{not json")
-        self.assertIsNone(self.verdict(out))
-        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        self.not_measured(out, raised=True)
         self.assertTrue(out["additionalInfo"]["transformation"]["errors"])
 
     def test_the_output_contract_is_unchanged(self):
@@ -222,38 +237,16 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_SANDBOX, "RestrictedPython not installed")
-class IsDnsLoggingEnabledInTheProductionSandboxTests(unittest.TestCase):
-    """The same verdicts where production runs the file: tools/restricted_sandbox.py replicates the
+class IsDnsLoggingEnabledInTheProductionSandboxTests(IsDnsLoggingEnabledTests):
+    """Every case above, run where production runs the file: tools/restricted_sandbox.py replicates the
     Token-Service sandbox, whose builtins lack map() and whose attribute rules forbid `__name__`, so a
-    transform can pass every CPython test and still raise NameError on the diagnostic path."""
+    transform can pass every CPython test and still raise NameError on a diagnostic path."""
 
     @classmethod
     def setUpClass(cls):
         sandbox = load(HERE.parents[2] / "tools" / "restricted_sandbox.py", "dnsfilter_restricted_sandbox")
-        cls.loaded = sandbox.load((HERE / "isdnsloggingenabled.py").read_text(), "isdnsloggingenabled.py")
-
-    def test_traffic_proves_logging_in_the_sandbox(self):
-        out = self.loaded["transform"](enriched(report(1200, 0, 77)))
-        self.assertTrue(out["transformedResponse"]["isDNSLoggingEnabled"])
-        self.assertEqual(out["transformedResponse"]["totalQueries"], 1277)
-        self.assertEqual(out["additionalInfo"]["transformation"]["errors"], [])
-
-    def test_the_not_measured_diagnostics_render_in_the_sandbox(self):
-        cases = {
-            "unrelated": ({"hello": "world"}, "body is not a traffic report (keys: hello)"),
-            "org only": ({"organization_ids": [1]}, "keys: organization_ids"),
-            "values not a list": ({"values": "many"}, "`values` is missing or is not a list"),
-            "list": ([1, 2], "body is list, not an object"),
-            "error": ({"status_code": 403, "error": "Forbidden"}, "vendor error (HTTP 403): Forbidden"),
-            "no totals": ({"values": [{"total": None}]}, "1 of 1 report bucket(s) carry no numeric `total`"),
-            "no buckets": ({"values": []}, "no buckets for the window"),
-        }
-        for name, (body, expected) in cases.items():
-            with self.subTest(case=name):
-                out = self.loaded["transform"](body)
-                self.assertIsNone(out["transformedResponse"]["isDNSLoggingEnabled"])
-                self.assertEqual(out["additionalInfo"]["transformation"]["errors"], [], "the diagnostic raised")
-                self.assertIn(expected, out["additionalInfo"]["dataCollection"]["errors"][0])
+        loaded = sandbox.load((HERE / "isdnsloggingenabled.py").read_text(), "isdnsloggingenabled.py")
+        cls.t = types.SimpleNamespace(transform=loaded["transform"])
 
 
 if __name__ == "__main__":

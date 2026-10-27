@@ -5,17 +5,19 @@ Category: Network Security / DNS Logging
 
 Validates that DNS query logging is enabled for audit and threat analysis.
 
-Reads GET /v1/traffic_reports/total_requests (the Integration-Service method
-getQueryLogs, windowed to the last 7 days). DNSFilter has no logging on/off
-switch and keeps query logs for 9 days, so the measured fact is whether the
-organisation produced DNS traffic in the window. The vendor body is
-{"data": {"organization_ids": [...], "values": [{"bucket": ..., "total": N, ...}]}};
-Token-Service strips the `data` wrapper before calling transform (codeexecutor
-_parse_api_response_for_transformer navigates response/result/apiResponse/Output/data),
-so the transform reads `values` at the top level and, for a raw body, under `data`.
-The query count is the sum of values[].total. A body without that report (error
-envelope, empty, unrelated) is not measured: the criterion is None with a
-dataCollection error, never a False.
+Reads GET /v1/traffic_reports/total_requests (Integration-Service method getQueryLogs,
+windowed to the last 7 days). DNSFilter has no logging on/off switch and keeps query
+logs for 9 days, so the measured fact is whether the organisation produced DNS traffic
+in the window: the sum of values[].total over the report's day buckets. The vendor body
+is {"data": {"organization_ids": [...], "values": [{"bucket": ..., "total": N, ...}]}};
+Token-Service strips the `data` wrapper before validating and calling transform
+(codeexecutor._parse_api_response_for_transformer navigates response/result/apiResponse/
+Output/data), so `values` is read at the top level and, for a raw body, under `data`.
+A body with no report, no buckets, or zero traffic next to buckets that carry no numeric
+total is not measured: the criterion is None with a dataCollection error, never a False.
+
+Runs in Token-Service's RestrictedPython sandbox: no map(), no names starting with `_`,
+no `__name__`; the file is fetched by URL and must stay self-contained.
 """
 
 import json
@@ -79,10 +81,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def report_of(data):
-    """The total_requests report object (the dict that carries `values`), or None when the body has none.
-
-    Token-Service hands the transform the report with its `data` wrapper already removed, so
-    `values` is normally at the top level; a raw vendor body still carries it under `data`."""
+    """The report dict that carries `values`: the body itself, or its `data` for a raw vendor body."""
     if not isinstance(data, dict):
         return None
     if isinstance(data.get("values"), list):
@@ -94,12 +93,14 @@ def report_of(data):
 
 
 def kind_of(value):
-    """A plain word for a value's type; the sandbox forbids `__name__`."""
-    for kind, name in ((dict, "object"), (list, "list"), (str, "string"), (bool, "boolean"),
-                       (int, "number"), (float, "number")):
-        if isinstance(value, kind):
-            return name
-    return "null" if value is None else "unknown"
+    """A plain word for a value's type, for diagnostics."""
+    return {dict: "object", list: "list", str: "string", bool: "boolean", int: "number", float: "number",
+            type(None): "null"}.get(type(value), "unknown")
+
+
+def body_keys(data):
+    """The first ten keys of a body, for diagnostics."""
+    return ", ".join(sorted(str(k) for k in data)[:10])
 
 
 def why_unreadable(data):
@@ -108,7 +109,11 @@ def why_unreadable(data):
     if not data:
         return "body is empty"
     status = data.get("status_code") or data.get("statusCode") or data.get("status")
-    http = f" (HTTP {status})" if str(status).isdigit() and str(status) != "0" else (f" (status={status})" if status else "")
+    http = ""
+    if str(status).isdigit() and str(status) != "0":
+        http = f" (HTTP {status})"
+    elif status:
+        http = f" (status={status})"
     for key in ("error", "errors"):
         if key in data:
             return f"vendor error{http}: {str(data[key])[:200]}"
@@ -117,11 +122,6 @@ def why_unreadable(data):
     if "values" not in data and "data" not in data:
         return f"body is not a traffic report (keys: {body_keys(data)})"
     return "`values` is missing or is not a list of report buckets"
-
-
-def body_keys(data):
-    """The first few keys of a body, for the not-measured diagnostic (no map(): not a sandbox builtin)."""
-    return ", ".join(sorted(str(k) for k in data)[:10])
 
 
 def bucket_total(bucket):
@@ -134,6 +134,18 @@ def bucket_total(bucket):
 
 def transform(input):
     criteriaKey = "isDNSLoggingEnabled"
+    validation = {"status": "error", "errors": [], "warnings": []}
+
+    def not_measured(reason, recommendation=None, input_summary=None, transformation_errors=None):
+        return create_response(
+            result={criteriaKey: None, "totalQueries": None},
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=["DNS query volume could not be measured"],
+            recommendations=[recommendation] if recommendation else [],
+            input_summary=input_summary,
+            transformation_errors=transformation_errors
+        )
 
     try:
         if isinstance(input, str):
@@ -144,27 +156,15 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: None, "totalQueries": None},
-                validation=validation,
-                api_errors=["Input validation failed: " + "; ".join(str(e) for e in validation.get("errors", []) or ["schema rejected the body"])],
-                fail_reasons=["Input validation failed"]
-            )
-
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
+            errors = validation.get("errors", []) or ["schema rejected the body"]
+            return not_measured("Input validation failed: " + "; ".join(str(e) for e in errors))
 
         report = report_of(data)
         if report is None:
-            why = why_unreadable(data)
-            return create_response(
-                result={criteriaKey: None, "totalQueries": None},
-                validation=validation,
-                api_errors=[f"DNSFilter did not return a total_requests traffic report: {why}"],
-                fail_reasons=["DNS query volume could not be measured"],
-                recommendations=["Re-run the check; if it persists, confirm the DNSFilter API key can read traffic reports"],
-                input_summary={"bodyKeys": body_keys(data) if isinstance(data, dict) else kind_of(data)}
+            return not_measured(
+                f"DNSFilter did not return a total_requests traffic report: {why_unreadable(data)}",
+                "Re-run the check; if it persists, confirm the DNSFilter API key can read traffic reports",
+                {"bodyKeys": body_keys(data)} if isinstance(data, dict) else {}
             )
 
         values = report["values"]
@@ -175,45 +175,24 @@ def transform(input):
         if not logging_enabled and (not values or unmeasured):
             # No traffic seen, but the window was not fully read: no buckets came back, or some carry
             # no numeric `total`. That cannot say "no DNS logs"; it says the report was not measured.
-            why = (f"the report returned no buckets for the window" if not values
+            why = ("the report returned no buckets for the window" if not values
                    else f"{unmeasured} of {len(values)} report bucket(s) carry no numeric `total`")
-            return create_response(
-                result={criteriaKey: None, "totalQueries": None},
-                validation=validation,
-                api_errors=[f"DNSFilter total_requests report could not be measured: {why}"],
-                fail_reasons=["DNS query volume could not be measured"],
-                recommendations=["Re-run the check; if it persists, confirm the organisation has networks or roaming clients and that the DNSFilter report format is unchanged"],
-                input_summary={"buckets": len(values), "unmeasuredBuckets": unmeasured, "bodyKeys": body_keys(report)}
+            return not_measured(
+                f"DNSFilter total_requests report could not be measured: {why}",
+                "Re-run the check; if it persists, confirm the organisation has networks or roaming clients and that the DNSFilter report format is unchanged",
+                {"buckets": len(values), "unmeasuredBuckets": unmeasured, "bodyKeys": body_keys(report)}
             )
         total_queries = int(total_queries)
 
-        if logging_enabled:
-            pass_reasons.append(f"DNSFilter recorded {total_queries} DNS queries in the report window; query logs are retained")
-        else:
-            fail_reasons.append("DNSFilter recorded no DNS queries in the report window, so there is nothing in the query log")
-            recommendations.append("Confirm DNSFilter networks or roaming clients are deployed and resolving through DNSFilter; query logs are kept automatically once traffic flows")
-
         return create_response(
-            result={
-                criteriaKey: logging_enabled,
-                "totalQueries": total_queries
-            },
+            result={criteriaKey: logging_enabled, "totalQueries": total_queries},
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={
-                "totalQueries": total_queries,
-                "buckets": len(values),
-                "unmeasuredBuckets": unmeasured
-            }
+            pass_reasons=[f"DNSFilter recorded {total_queries} DNS queries in the report window; query logs are retained"] if logging_enabled else [],
+            fail_reasons=[] if logging_enabled else ["DNSFilter recorded no DNS queries in the report window, so there is nothing in the query log"],
+            recommendations=[] if logging_enabled else ["Confirm DNSFilter networks or roaming clients are deployed and resolving through DNSFilter; query logs are kept automatically once traffic flows"],
+            input_summary={"totalQueries": total_queries, "buckets": len(values), "unmeasuredBuckets": unmeasured}
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: None, "totalQueries": None},
-            validation={"status": "error", "errors": [], "warnings": []},
-            api_errors=[f"Transformation error: {str(e)}"],
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        validation = {"status": "error", "errors": [], "warnings": []}
+        return not_measured(f"Transformation error: {str(e)}", transformation_errors=[str(e)])
