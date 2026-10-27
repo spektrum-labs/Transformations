@@ -93,9 +93,12 @@ def report_of(data):
 
 
 def kind_of(value):
-    """A plain word for a value's type, for diagnostics."""
-    return {dict: "object", list: "list", str: "string", bool: "boolean", int: "number", float: "number",
-            type(None): "null"}.get(type(value), "unknown")
+    """A plain word for a value's type, for diagnostics (bool before int: True is an int)."""
+    for kind, name in ((bool, "boolean"), (dict, "object"), (list, "list"), (str, "string"), (int, "number"),
+                       (float, "number")):
+        if isinstance(value, kind):
+            return name
+    return "null" if value is None else "unknown"
 
 
 def body_keys(data):
@@ -125,16 +128,18 @@ def why_unreadable(data):
 
 
 def bucket_total(bucket):
-    """A bucket's numeric `total`, or None when it is missing, null, a string, a bool or negative."""
+    """A bucket's `total` as a non-negative whole number, or None when it is missing, null, a string,
+    a bool, negative, fractional or not finite (the vendor types it as an integer count)."""
     total = bucket.get("total") if isinstance(bucket, dict) else None
-    if isinstance(total, bool) or not isinstance(total, (int, float)) or total < 0:
+    if isinstance(total, bool) or not isinstance(total, (int, float)):
         return None
-    return total
+    if isinstance(total, float) and (total != total or total in (float("inf"), float("-inf")) or total != int(total)):
+        return None
+    return None if total < 0 else int(total)
 
 
 def transform(input):
     criteriaKey = "isDNSLoggingEnabled"
-    validation = {"status": "error", "errors": [], "warnings": []}
 
     def not_measured(reason, recommendation=None, input_summary=None, transformation_errors=None):
         return create_response(
@@ -182,14 +187,13 @@ def transform(input):
                 "Re-run the check; if it persists, confirm the organisation has networks or roaming clients and that the DNSFilter report format is unchanged",
                 {"buckets": len(values), "unmeasuredBuckets": unmeasured, "bodyKeys": body_keys(report)}
             )
-        total_queries = int(total_queries)
-
         return create_response(
             result={criteriaKey: logging_enabled, "totalQueries": total_queries},
             validation=validation,
             pass_reasons=[f"DNSFilter recorded {total_queries} DNS queries in the report window; query logs are retained"] if logging_enabled else [],
             fail_reasons=[] if logging_enabled else ["DNSFilter recorded no DNS queries in the report window, so there is nothing in the query log"],
             recommendations=[] if logging_enabled else ["Confirm DNSFilter networks or roaming clients are deployed and resolving through DNSFilter; query logs are kept automatically once traffic flows"],
+            additional_findings=[f"{unmeasured} of {len(values)} report bucket(s) carry no numeric `total` and were not counted"] if unmeasured else [],
             input_summary={"totalQueries": total_queries, "buckets": len(values), "unmeasuredBuckets": unmeasured}
         )
 

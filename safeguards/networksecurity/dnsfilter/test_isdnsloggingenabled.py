@@ -114,6 +114,8 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
         self.assertTrue(self.verdict(out))
         self.assertEqual(out["transformedResponse"]["totalQueries"], 10)
         self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unmeasuredBuckets"], 1)
+        self.assertEqual(out["additionalInfo"]["evaluation"]["additionalFindings"],
+                         ["1 of 2 report bucket(s) carry no numeric `total` and were not counted"])
 
     def test_no_traffic_with_an_unreadable_bucket_is_not_measured(self):
         """One readable zero bucket next to unreadable ones cannot prove the whole window was empty."""
@@ -124,12 +126,17 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
         self.not_measured(out)
         self.assertIn("2 of 3 report bucket(s)", out["additionalInfo"]["dataCollection"]["errors"][0])
 
-    def test_fractional_totals_count_as_traffic(self):
-        body = report(0, 0)
-        body["values"][0]["total"] = 0.4
-        body["values"][1]["total"] = 0.4
-        out = self.t.transform(enriched(body))
-        self.assertTrue(self.verdict(out))
+    def test_totals_that_are_not_whole_finite_counts_are_not_measured(self):
+        """The vendor types `total` as an integer; a fraction, NaN or infinity is a format change, not traffic."""
+        for bad in (0.4, float("nan"), float("inf"), -1):
+            with self.subTest(total=bad):
+                body = report(0)
+                body["values"][0]["total"] = bad
+                out = self.t.transform(enriched(body))
+                self.not_measured(out)
+        body = report(3)
+        body["values"][0]["total"] = 3.0  # a whole float is a count
+        self.assertEqual(self.t.transform(enriched(body))["transformedResponse"]["totalQueries"], 3)
 
     def test_the_diagnostic_names_the_reports_own_keys_under_a_data_wrapper(self):
         out = self.t.transform({"data": {"organization_ids": [1], "values": [{"total": None}]}})
