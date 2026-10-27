@@ -104,10 +104,40 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
         self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
         self.assertTrue(out["additionalInfo"]["evaluation"]["recommendations"])
 
-    def test_an_empty_values_list_fails(self):
+    def test_an_empty_values_list_is_not_measured(self):
+        """A 7-day report always has day buckets; none at all means the window was not read, not "no traffic"."""
         out = self.t.transform(enriched({"organization_ids": [1], "values": []}))
-        self.assertIs(self.verdict(out), False)
-        self.assertEqual(out["transformedResponse"]["totalQueries"], 0)
+        self.not_measured(out)
+        self.assertIn("no buckets", out["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_traffic_with_some_unreadable_buckets_still_passes_and_says_so(self):
+        body = report(10, 4)
+        body["values"][1]["total"] = "4"
+        out = self.t.transform(enriched(body))
+        self.assertTrue(self.verdict(out))
+        self.assertEqual(out["transformedResponse"]["totalQueries"], 10)
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unmeasuredBuckets"], 1)
+
+    def test_no_traffic_with_an_unreadable_bucket_is_not_measured(self):
+        """One readable zero bucket next to unreadable ones cannot prove the whole window was empty."""
+        body = report(0, 0, 0)
+        body["values"][0]["total"] = None
+        body["values"][1]["total"] = -5
+        out = self.t.transform(enriched(body))
+        self.not_measured(out)
+        self.assertIn("2 of 3 report bucket(s)", out["additionalInfo"]["dataCollection"]["errors"][0])
+
+    def test_fractional_totals_count_as_traffic(self):
+        body = report(0, 0)
+        body["values"][0]["total"] = 0.4
+        body["values"][1]["total"] = 0.4
+        out = self.t.transform(enriched(body))
+        self.assertTrue(self.verdict(out))
+
+    def test_the_diagnostic_names_the_reports_own_keys_under_a_data_wrapper(self):
+        out = self.t.transform({"data": {"organization_ids": [1], "values": [{"total": None}]}})
+        self.not_measured(out)
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["bodyKeys"], "organization_ids, values")
 
     def test_the_vendor_is_not_believed_about_sub_totals_only(self):
         """Only `total` counts; a bucket whose `total` is missing or null adds nothing."""
@@ -127,7 +157,7 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
                     value["total"] = t
                 out = self.t.transform(enriched(body))
                 self.not_measured(out)
-                self.assertIn("none carries a numeric `total`", out["additionalInfo"]["dataCollection"]["errors"][0])
+                self.assertIn("2 of 2 report bucket(s) carry no numeric `total`", out["additionalInfo"]["dataCollection"]["errors"][0])
 
     # 3-5. Bodies that prove nothing are not measured.
     def not_measured(self, out):
@@ -150,8 +180,9 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
     def test_the_error_diagnostic_quotes_a_numeric_status_as_http_and_a_word_as_status(self):
         err = lambda body: self.t.transform(body)["additionalInfo"]["dataCollection"]["errors"][0]
         self.assertIn("vendor error (HTTP 404): Not Found", err({"status_code": 404, "error": "Not Found"}))
-        self.assertIn("vendor error (status=error): boom", err({"status": "error", "message": "boom"}))
+        self.assertIn("vendor message (status=error) and no report: boom", err({"status": "error", "message": "boom"}))
         self.assertIn("vendor error: Not Authorized", err({"error": "Not Authorized"}))
+        self.assertIn("vendor error: x", err({"status": 0, "error": "x"}))
 
     def test_an_unrelated_payload_is_not_measured(self):
         for body in ({"hello": "world"}, {"foo": {"bar": [1, 2, 3]}}, {"data": [{"id": 1}, {"id": 2}]},
@@ -214,7 +245,8 @@ class IsDnsLoggingEnabledInTheProductionSandboxTests(unittest.TestCase):
             "values not a list": ({"values": "many"}, "`values` is missing or is not a list"),
             "list": ([1, 2], "body is list, not an object"),
             "error": ({"status_code": 403, "error": "Forbidden"}, "vendor error (HTTP 403): Forbidden"),
-            "no totals": ({"values": [{"total": None}]}, "none carries a numeric `total`"),
+            "no totals": ({"values": [{"total": None}]}, "1 of 1 report bucket(s) carry no numeric `total`"),
+            "no buckets": ({"values": []}, "no buckets for the window"),
         }
         for name, (body, expected) in cases.items():
             with self.subTest(case=name):

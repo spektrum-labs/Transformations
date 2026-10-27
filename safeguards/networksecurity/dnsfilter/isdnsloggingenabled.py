@@ -78,17 +78,19 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def report_values(data):
-    """The `values` bucket list of a total_requests report, or None when the body is not one.
+def report_of(data):
+    """The total_requests report object (the dict that carries `values`), or None when the body has none.
 
     Token-Service hands the transform the report with its `data` wrapper already removed, so
     `values` is normally at the top level; a raw vendor body still carries it under `data`."""
     if not isinstance(data, dict):
         return None
-    values = data.get("values")
-    if values is None and isinstance(data.get("data"), dict):
-        values = data["data"].get("values")
-    return values if isinstance(values, list) else None
+    if isinstance(data.get("values"), list):
+        return data
+    inner = data.get("data")
+    if isinstance(inner, dict) and isinstance(inner.get("values"), list):
+        return inner
+    return None
 
 
 def kind_of(value):
@@ -105,12 +107,13 @@ def why_unreadable(data):
         return f"body is {kind_of(data)}, not an object"
     if not data:
         return "body is empty"
-    for key in ("error", "errors", "message"):
+    status = data.get("status_code") or data.get("statusCode") or data.get("status")
+    http = f" (HTTP {status})" if str(status).isdigit() and str(status) != "0" else (f" (status={status})" if status else "")
+    for key in ("error", "errors"):
         if key in data:
-            detail = data[key]
-            status = data.get("status_code") or data.get("statusCode") or data.get("status")
-            http = f" (HTTP {status})" if str(status).isdigit() else (f" (status={status})" if status else "")
-            return f"vendor error{http}: {str(detail)[:200]}"
+            return f"vendor error{http}: {str(data[key])[:200]}"
+    if "message" in data:
+        return f"vendor message{http} and no report: {str(data['message'])[:200]}"
     if "values" not in data and "data" not in data:
         return f"body is not a traffic report (keys: {body_keys(data)})"
     return "`values` is missing or is not a list of report buckets"
@@ -122,9 +125,9 @@ def body_keys(data):
 
 
 def bucket_total(bucket):
-    """A bucket's numeric `total`, or None when it is missing, null, a string or a bool."""
+    """A bucket's numeric `total`, or None when it is missing, null, a string, a bool or negative."""
     total = bucket.get("total") if isinstance(bucket, dict) else None
-    if isinstance(total, bool) or not isinstance(total, (int, float)):
+    if isinstance(total, bool) or not isinstance(total, (int, float)) or total < 0:
         return None
     return total
 
@@ -152,8 +155,8 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        values = report_values(data)
-        if values is None:
+        report = report_of(data)
+        if report is None:
             why = why_unreadable(data)
             return create_response(
                 result={criteriaKey: None, "totalQueries": None},
@@ -164,18 +167,25 @@ def transform(input):
                 input_summary={"bodyKeys": body_keys(data) if isinstance(data, dict) else kind_of(data)}
             )
 
+        values = report["values"]
         totals = [t for t in (bucket_total(v) for v in values) if t is not None]
-        if values and not totals:
+        unmeasured = len(values) - len(totals)
+        total_queries = sum(totals)
+        logging_enabled = total_queries > 0
+        if not logging_enabled and (not values or unmeasured):
+            # No traffic seen, but the window was not fully read: no buckets came back, or some carry
+            # no numeric `total`. That cannot say "no DNS logs"; it says the report was not measured.
+            why = (f"the report returned no buckets for the window" if not values
+                   else f"{unmeasured} of {len(values)} report bucket(s) carry no numeric `total`")
             return create_response(
                 result={criteriaKey: None, "totalQueries": None},
                 validation=validation,
-                api_errors=[f"DNSFilter returned {len(values)} report bucket(s) but none carries a numeric `total`"],
+                api_errors=[f"DNSFilter total_requests report could not be measured: {why}"],
                 fail_reasons=["DNS query volume could not be measured"],
-                recommendations=["Re-run the check; if it persists, the DNSFilter report format has changed"],
-                input_summary={"buckets": len(values), "bodyKeys": body_keys(data)}
+                recommendations=["Re-run the check; if it persists, confirm the organisation has networks or roaming clients and that the DNSFilter report format is unchanged"],
+                input_summary={"buckets": len(values), "unmeasuredBuckets": unmeasured, "bodyKeys": body_keys(report)}
             )
-        total_queries = int(sum(totals))
-        logging_enabled = total_queries > 0
+        total_queries = int(total_queries)
 
         if logging_enabled:
             pass_reasons.append(f"DNSFilter recorded {total_queries} DNS queries in the report window; query logs are retained")
@@ -194,7 +204,8 @@ def transform(input):
             recommendations=recommendations,
             input_summary={
                 "totalQueries": total_queries,
-                "buckets": len(values)
+                "buckets": len(values),
+                "unmeasuredBuckets": unmeasured
             }
         )
 
