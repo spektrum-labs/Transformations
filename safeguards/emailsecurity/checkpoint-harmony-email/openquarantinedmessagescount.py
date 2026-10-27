@@ -207,7 +207,7 @@ def transform_unmarked(input):
             return create_response(None, fail_reasons=[reason], api_errors=[reason],
                                    input_summary=dict(summary, recordsNumberUnreadable=True))
         if total is None or lower_bound:
-            reason = ("The response is paged and carries no recordsNumber above the page; the count is "
+            reason = ("The response is paged and carries no recordsNumber at or above the page; the count is "
                       "unreadable")
             return create_response(None, fail_reasons=[reason], api_errors=[reason], input_summary=summary)
         summary["pendingRestoreRequests"] = total
