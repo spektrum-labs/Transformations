@@ -14,6 +14,12 @@ import unittest
 from pathlib import Path
 
 try:
+    import RestrictedPython  # noqa: F401  the production sandbox replica needs it
+    HAVE_SANDBOX = True
+except ImportError:
+    HAVE_SANDBOX = False
+
+try:
     from pydantic import BaseModel
 except ImportError:  # the schema check is skipped where pydantic is absent, as the local tester does
     BaseModel = None
@@ -112,6 +118,17 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
         self.assertTrue(self.verdict(out))
         self.assertEqual(out["transformedResponse"]["totalQueries"], 10)
 
+    def test_buckets_with_no_numeric_total_are_not_measured(self):
+        """A report whose totals are all null, missing or strings cannot say there was no traffic."""
+        for totals in ([None, None], ["1200", "980"], [True, False]):
+            with self.subTest(totals=totals):
+                body = report(0, 0)
+                for value, t in zip(body["values"], totals):
+                    value["total"] = t
+                out = self.t.transform(enriched(body))
+                self.not_measured(out)
+                self.assertIn("none carries a numeric `total`", out["additionalInfo"]["dataCollection"]["errors"][0])
+
     # 3-5. Bodies that prove nothing are not measured.
     def not_measured(self, out):
         self.assertIsNone(self.verdict(out))
@@ -129,6 +146,12 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
                      {"errors": [{"detail": "Record not found"}]}):
             with self.subTest(body=body):
                 self.not_measured(self.t.transform(body))
+
+    def test_the_error_diagnostic_quotes_a_numeric_status_as_http_and_a_word_as_status(self):
+        err = lambda body: self.t.transform(body)["additionalInfo"]["dataCollection"]["errors"][0]
+        self.assertIn("vendor error (HTTP 404): Not Found", err({"status_code": 404, "error": "Not Found"}))
+        self.assertIn("vendor error (status=error): boom", err({"status": "error", "message": "boom"}))
+        self.assertIn("vendor error: Not Authorized", err({"error": "Not Authorized"}))
 
     def test_an_unrelated_payload_is_not_measured(self):
         for body in ({"hello": "world"}, {"foo": {"bar": [1, 2, 3]}}, {"data": [{"id": 1}, {"id": 2}]},
@@ -165,6 +188,40 @@ class IsDnsLoggingEnabledTests(unittest.TestCase):
         raw = schema.IsdnsloggingenabledInput.model_validate(total_requests(12, 0, 3)).model_dump()
         self.assertEqual(sum(v["total"] for v in raw["data"]["values"]), 15)
         schema.IsdnsloggingenabledInput.model_validate({"error": "Not Authorized"})
+
+
+@unittest.skipUnless(HAVE_SANDBOX, "RestrictedPython not installed")
+class IsDnsLoggingEnabledInTheProductionSandboxTests(unittest.TestCase):
+    """The same verdicts where production runs the file: tools/restricted_sandbox.py replicates the
+    Token-Service sandbox, whose builtins lack map() and whose attribute rules forbid `__name__`, so a
+    transform can pass every CPython test and still raise NameError on the diagnostic path."""
+
+    @classmethod
+    def setUpClass(cls):
+        sandbox = load(HERE.parents[2] / "tools" / "restricted_sandbox.py", "dnsfilter_restricted_sandbox")
+        cls.loaded = sandbox.load((HERE / "isdnsloggingenabled.py").read_text(), "isdnsloggingenabled.py")
+
+    def test_traffic_proves_logging_in_the_sandbox(self):
+        out = self.loaded["transform"](enriched(report(1200, 0, 77)))
+        self.assertTrue(out["transformedResponse"]["isDNSLoggingEnabled"])
+        self.assertEqual(out["transformedResponse"]["totalQueries"], 1277)
+        self.assertEqual(out["additionalInfo"]["transformation"]["errors"], [])
+
+    def test_the_not_measured_diagnostics_render_in_the_sandbox(self):
+        cases = {
+            "unrelated": ({"hello": "world"}, "body is not a traffic report (keys: hello)"),
+            "org only": ({"organization_ids": [1]}, "keys: organization_ids"),
+            "values not a list": ({"values": "many"}, "`values` is missing or is not a list"),
+            "list": ([1, 2], "body is list, not an object"),
+            "error": ({"status_code": 403, "error": "Forbidden"}, "vendor error (HTTP 403): Forbidden"),
+            "no totals": ({"values": [{"total": None}]}, "none carries a numeric `total`"),
+        }
+        for name, (body, expected) in cases.items():
+            with self.subTest(case=name):
+                out = self.loaded["transform"](body)
+                self.assertIsNone(out["transformedResponse"]["isDNSLoggingEnabled"])
+                self.assertEqual(out["additionalInfo"]["transformation"]["errors"], [], "the diagnostic raised")
+                self.assertIn(expected, out["additionalInfo"]["dataCollection"]["errors"][0])
 
 
 if __name__ == "__main__":

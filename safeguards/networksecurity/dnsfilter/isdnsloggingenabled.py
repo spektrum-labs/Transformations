@@ -109,10 +109,24 @@ def why_unreadable(data):
         if key in data:
             detail = data[key]
             status = data.get("status_code") or data.get("statusCode") or data.get("status")
-            return f"vendor error{f' (HTTP {status})' if status else ''}: {str(detail)[:200]}"
+            http = f" (HTTP {status})" if str(status).isdigit() else (f" (status={status})" if status else "")
+            return f"vendor error{http}: {str(detail)[:200]}"
     if "values" not in data and "data" not in data:
-        return "body is not a traffic report (keys: " + ", ".join(sorted(map(str, data))[:10]) + ")"
+        return f"body is not a traffic report (keys: {body_keys(data)})"
     return "`values` is missing or is not a list of report buckets"
+
+
+def body_keys(data):
+    """The first few keys of a body, for the not-measured diagnostic (no map(): not a sandbox builtin)."""
+    return ", ".join(sorted(str(k) for k in data)[:10])
+
+
+def bucket_total(bucket):
+    """A bucket's numeric `total`, or None when it is missing, null, a string or a bool."""
+    total = bucket.get("total") if isinstance(bucket, dict) else None
+    if isinstance(total, bool) or not isinstance(total, (int, float)):
+        return None
+    return total
 
 
 def transform(input):
@@ -137,7 +151,6 @@ def transform(input):
         pass_reasons = []
         fail_reasons = []
         recommendations = []
-        additional_findings = []
 
         values = report_values(data)
         if values is None:
@@ -148,14 +161,20 @@ def transform(input):
                 api_errors=[f"DNSFilter did not return a total_requests traffic report: {why}"],
                 fail_reasons=["DNS query volume could not be measured"],
                 recommendations=["Re-run the check; if it persists, confirm the DNSFilter API key can read traffic reports"],
-                input_summary={"bodyKeys": sorted(data)[:10] if isinstance(data, dict) else kind_of(data)}
+                input_summary={"bodyKeys": body_keys(data) if isinstance(data, dict) else kind_of(data)}
             )
 
-        total_queries = sum(
-            v["total"] for v in values
-            if isinstance(v, dict) and isinstance(v.get("total"), (int, float)) and not isinstance(v.get("total"), bool)
-        )
-        total_queries = int(total_queries)
+        totals = [t for t in (bucket_total(v) for v in values) if t is not None]
+        if values and not totals:
+            return create_response(
+                result={criteriaKey: None, "totalQueries": None},
+                validation=validation,
+                api_errors=[f"DNSFilter returned {len(values)} report bucket(s) but none carries a numeric `total`"],
+                fail_reasons=["DNS query volume could not be measured"],
+                recommendations=["Re-run the check; if it persists, the DNSFilter report format has changed"],
+                input_summary={"buckets": len(values), "bodyKeys": body_keys(data)}
+            )
+        total_queries = int(sum(totals))
         logging_enabled = total_queries > 0
 
         if logging_enabled:
@@ -173,7 +192,6 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            additional_findings=additional_findings,
             input_summary={
                 "totalQueries": total_queries,
                 "buckets": len(values)
