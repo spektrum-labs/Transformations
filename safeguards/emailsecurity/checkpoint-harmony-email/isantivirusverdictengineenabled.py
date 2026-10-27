@@ -308,7 +308,7 @@ def transform(input):
             return create_response(False, fail_reasons=["The entity search returned no email with attachments in the "
                                    "last 7 days, so the antivirus engine's verdicts are not evidenced"], input_summary=summary)
         return create_response(False, fail_reasons=["None of the " + str(len(entities)) + " email(s) with attachments "
-                               "carries an antivirus verdict (entitySecurityResult.av empty)"], input_summary=summary)
+                               "carries an antivirus verdict (security result av empty)"], input_summary=summary)
     except Exception as e:
         return not_measured("The response could not be processed; nothing is measured.",
                             transformation_errors=[str(e)])
