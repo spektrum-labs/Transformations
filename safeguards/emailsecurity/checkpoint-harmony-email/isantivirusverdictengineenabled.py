@@ -4,11 +4,11 @@ Vendor: Check Point Harmony Email & Collaboration (Infinity Portal API)
 Method: searchAttachmentEmails (POST /app/hec-api/v1.0/search/query, office365_emails_email, attachmentCount > 0, last 7 days)
 
 True when at least one email entity with attachments returned by the entity search carries an
-antivirus result: entitySecurityResults.av is a non-empty list with a verdict, or
-entitySecurityResults.combinedVerdict.av is set (API reference, Get the Details of a Specific
+antivirus result: entitySecurityResult.av is a non-empty list with a verdict, or
+entitySecurityResult.combinedVerdict.av is set (API reference, Get the Details of a Specific
 Entity: combinedVerdict.av = Antivirus verdict). Entities without an av result, or no entity with
-attachments in the window, read false. Field names are from the API reference; no live payload of
-this method has been captured yet.
+attachments in the window, read false. The field name entitySecurityResult was measured on a live
+payload (27 Oct 2026); the API reference spells it entitySecurityResults, and both are read.
 Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised:
 it proves nothing, so it is never reported as False. A readable answer that lists nothing keeps the
 verdict described above.
@@ -145,7 +145,10 @@ def transform(input):
         """"more" when the response says records remain beyond this page: a scrollId that is not
         empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
         "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
-        is complete. "" when the page is complete. Anything but "" cannot prove an absence."""
+        is complete. "" when the page is complete. Anything but "" cannot prove an absence.
+        A live search answer carries a scrollId on its last page too, so a page whose recordsNumber
+        equals its length still reads "more" here: deliberately conservative (None, never a false
+        verdict), left for a follow-up that changes every presence check together."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
             token = holder.get("scrollId")
@@ -212,6 +215,14 @@ def transform(input):
                 return None, False
         return value, True
 
+    def security_result(entity):
+        """The entity's security-result block under either spelling: entitySecurityResult (what the
+        live search API returns) or entitySecurityResults (the API reference). A present key wins
+        even when empty, so a blank singular is not masked by a stale plural."""
+        if "entitySecurityResult" in entity:
+            return entity.get("entitySecurityResult")
+        return entity.get("entitySecurityResults")
+
     def read_object(value):
         """(object, readable): a dict, or JSON text holding one. A missing, blank or "None" value and
         an empty list are readable and empty (None); any other value is not readable."""
@@ -271,7 +282,9 @@ def transform(input):
         verdicts = {}
         for e in records:
             info, info_ok = read_object(e.get("entityInfo"))
-            results, results_ok = read_object(e.get("entitySecurityResults"))
+            # The live search API names the block entitySecurityResult (singular, measured on a real
+            # tenant 27 Oct 2026); the API reference and older fixtures spell it entitySecurityResults.
+            results, results_ok = read_object(security_result(e))
             if not (info_ok and results_ok):
                 unreadable = unreadable + 1
                 continue
@@ -286,7 +299,7 @@ def transform(input):
                    "avVerdicts": verdicts, "windowDays": 7}
         if scanned:
             return create_response(True, pass_reasons=[str(len(scanned)) + " of " + str(len(entities)) + " email(s) with "
-                                   "attachments carry a Check Point antivirus verdict (entitySecurityResults.av)"],
+                                   "attachments carry a Check Point antivirus verdict (security result av)"],
                                    input_summary=summary)
         partial = more_pages(body)
         if partial or unreadable:
@@ -295,7 +308,7 @@ def transform(input):
             return create_response(False, fail_reasons=["The entity search returned no email with attachments in the "
                                    "last 7 days, so the antivirus engine's verdicts are not evidenced"], input_summary=summary)
         return create_response(False, fail_reasons=["None of the " + str(len(entities)) + " email(s) with attachments "
-                               "carries an antivirus verdict (entitySecurityResults.av empty)"], input_summary=summary)
+                               "carries an antivirus verdict (entitySecurityResult.av empty)"], input_summary=summary)
     except Exception as e:
         return not_measured("The response could not be processed; nothing is measured.",
                             transformation_errors=[str(e)])

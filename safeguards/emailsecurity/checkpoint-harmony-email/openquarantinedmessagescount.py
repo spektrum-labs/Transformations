@@ -8,11 +8,12 @@ neither restored nor declined (entityPayload.isRestoreRequested / isRestored / i
 API reference, Additional Response Parameters for Email). The count is responseEnvelope.recordsNumber
 (total matches; measured on live event queries, where it reads 10000 against a 100-record page), or
 the page length when the page is complete. When a scrollId says more pages remain, the count is the
-vendor's recordsNumber only if that total is larger than the page; otherwise the page length is only a
-lower bound and the count is None. An entry that is not an object cannot be read and is never
+vendor's recordsNumber when that total is at least the page length (a total equal to the page means the
+page is complete; HEC sends a scrollId on every page, the last one included); a total below the page is
+only a lower bound and the count is None. An entry that is not an object cannot be read and is never
 skipped: the count is None. If any returned entity does not match the filter, the
-vendor did not apply it and the count is unreadable: None, which fails the check. No live payload
-of this method has been captured yet.
+vendor did not apply it and the count is unreadable: None, which fails the check. Paging behaviour
+and field names were measured on a live payload (27 Oct 2026).
 Fails closed: an empty, error or unrecognised body proves nothing.
 """
 
@@ -182,8 +183,9 @@ def transform_unmarked(input):
         paged = bool(text(env.get("scrollId")) or text(body.get("scrollId")))
         if total is None and not paged:
             total = len(records)
-        # a next-page token with a total that is not above the page: the page is only a lower bound
-        lower_bound = paged and total is not None and total <= len(body["responseData"])
+        # a next-page token with a total below the page: the page is only a lower bound. A total equal to
+        # the page is a complete page: HEC returns a scrollId on the last page too (live, 27 Oct 2026).
+        lower_bound = paged and total is not None and total < len(body["responseData"])
         if total is not None and total < len(records):
             total = len(records)
         summary = {"entitiesOnFirstPage": len(records), "recordsNumber": "" if total_unreadable else raw_total,
