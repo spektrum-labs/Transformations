@@ -34,10 +34,12 @@ def load(path, name):
 
 
 def bucket(day, total, **extra):
-    """One TrafficReportsTotalRequestsResult bucket, every field the vendor documents."""
-    row = {"network_id": None, "network_name": None, "bucket": f"2026-10-{day:02d}T00:00:00Z",
-           "policies": [], "policies_names": [], "scheduled_policies": [], "scheduled_policies_names": [],
-           "total": total, "total_networks": total, "total_proxies": 0, "total_agents": 0}
+    """One daily bucket, shaped as the live report returned it on 2026-10-28 (synthetic numbers): a
+    space-separated bucket timestamp, `scheduled_policies_names` null, the roaming-agent count carrying the
+    total, and no `network_id` / `network_name` keys even though the vendor document lists them."""
+    row = {"bucket": f"2026-10-{day:02d} 00:00:00", "policies": [1001], "policies_names": ["Default"],
+           "scheduled_policies": [], "scheduled_policies_names": None,
+           "total": total, "total_networks": 0, "total_proxies": 0, "total_agents": total}
     row.update(extra)
     return row
 
