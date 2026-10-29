@@ -91,7 +91,9 @@ def transform(input):
         # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
         # 2xx body -- including one describing the control as OFF -- satisfied this
         # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
+        default_value = cato_licence(data)
+        if default_value is None:
+            default_value = affirmative_signal(data)
 
         if isinstance(data, dict) and 'errors' in data:
             default_value = False
@@ -124,6 +126,39 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
+
+
+def not_expired(stamp):
+    """True when `stamp` is absent or in the future; an unreadable stamp is not evidence."""
+    if stamp in (None, ""):
+        return True
+    try:
+        end = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return end.replace(tzinfo=None) > datetime.utcnow()
+
+
+def cato_licence(data):
+    """Verdict from Cato's licensing body, or None when the body is not that shape.
+
+    The licence call answers {"licensing": {"licensingInfo": {"licenses": [{"sku", "status",
+    "expirationDate", ...}]}}}, optionally under one "data" wrapper. affirmative_signal knows
+    none of those keys, so a tenant with every licence ACTIVE read False. True when at least one
+    licence is ACTIVE and unexpired; an empty list or only lapsed ones is False.
+    """
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    info = ((data or {}).get("licensing") or {}).get("licensingInfo") if isinstance(data, dict) else None
+    licenses = info.get("licenses") if isinstance(info, dict) else None
+    if not isinstance(licenses, list):
+        return None
+    return any(
+        isinstance(item, dict)
+        and str(item.get("status", "")).strip().upper() == "ACTIVE"
+        and not_expired(item.get("expirationDate"))
+        for item in licenses
+    )
 
 
 def affirmative_signal(data):
