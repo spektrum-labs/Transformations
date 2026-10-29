@@ -10,6 +10,16 @@ A capped scan (more hosts discovered than scanned, the ASM host cap) that found 
 finding returns None for both keys with the coverage reason in dataCollection.errors: zero findings on a
 partial estate is not proof of no findings in scope, so Token-Service reads it as Unevaluated, never a pass. A capped scan
 that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
+
+Unresponsive surface (29 Oct 2026): the Integration Service lists hosts whose scan batches time out or
+error under ``unresponsiveHosts`` (asm_scan_reuse section 11), each with its consecutive failed scans
+(``consecutiveTimeouts``) and whether a continuation already retried it (``retried``). A host that has
+failed on two consecutive scans, or that failed again on its retry, is not unscanned surface: it does not
+answer the scanner, and the Integration Service stops retrying it inside the window. When every host the
+scan did not cover is such a host, the scan is complete for the hosts that answer: the keys are evaluated on
+them and the unresponsive hosts are named in passReasons and inputSummary. A first failure the continuation
+will still retry keeps the partial rule (None), naming the hosts that will be retried. A host-capped scan,
+or one whose missing hosts are not all unresponsive, keeps the partial rule as before.
 one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
 scan), so a response is only ever read for the key whose severity it scanned.
 
@@ -86,6 +96,49 @@ def to_int(value):
         return int(str(value).strip())
     except (TypeError, ValueError):
         return None
+
+
+CHRONIC_AFTER_FAILURES = 2  # asm_scan_reuse.CHRONIC_AFTER_FAILURES: failed scans after which a host is written off
+NAMED_HOSTS = 10            # how many unresponsive hosts a reason line names
+
+
+def is_true(value):
+    return value is True or str(value).strip().lower() == "true"
+
+
+def unresponsive_hosts(data):
+    """(written_off, pending): the hosts the Integration Service lists as unresponsive, split into those
+    it has stopped retrying inside the window (failed on CHRONIC_AFTER_FAILURES consecutive scans, or
+    retried by a continuation and failed again) and those a continuation will still retry."""
+    written_off = []
+    pending = []
+    for host in data.get("unresponsiveHosts") or []:
+        if not isinstance(host, dict):
+            continue
+        name = str(host.get("domain") or "unknown")
+        failures = to_int(host.get("consecutiveTimeouts")) or 0
+        if failures >= CHRONIC_AFTER_FAILURES or is_true(host.get("retried")):
+            written_off.append(name)
+        else:
+            pending.append(name)
+    return written_off, pending
+
+
+def unresponsive_surface(data, written_off, pending):
+    """True when the scan covered every discovered host that answers: the only hosts it did not scan
+    are written-off unresponsive ones. Such a scan is complete for the surface that exists."""
+    if pending or not written_off:
+        return False
+    scanned = to_int(data.get("domainsScanned"))
+    discovered = to_int(data.get("totalDiscovered"))
+    if scanned is None or discovered is None or scanned <= 0:
+        return False
+    return scanned + len(written_off) >= discovered
+
+
+def named(hosts):
+    shown = ", ".join(hosts[:NAMED_HOSTS])
+    return shown + (" and " + str(len(hosts) - NAMED_HOSTS) + " more" if len(hosts) > NAMED_HOSTS else "")
 
 
 def capped_note(data):
@@ -385,8 +438,21 @@ def transform(input):
         no_high = high_count == 0
 
         capped = capped_note(data)
+        written_off, pending = unresponsive_hosts(data)
+        complete_for_surface = bool(capped) and unresponsive_surface(data, written_off, pending)
+        coverage_note = None
+        if complete_for_surface:
+            # The hosts not scanned do not answer the scanner on repeated attempts: they are unresponsive
+            # surface, not unscanned surface, so the keys are evaluated on the hosts that answered.
+            coverage_note = (str(len(written_off)) + " of " + str(to_int(data.get("totalDiscovered")))
+                             + " discovered host(s) of " + str(domain) + " did not answer repeated scans and "
+                             + "are counted as unresponsive surface, not as unscanned: " + named(written_off))
+            capped = None
         if capped and no_critical and no_high:
             reason = capped + "; zero critical or high findings on a partial scan is not proof of no findings in scope"
+            if pending:
+                reason += ("; " + str(len(pending)) + " host(s) did not answer this scan and will be retried: "
+                           + named(pending))
             return create_response(
                 result={"noCriticalFindings": None, "noHighFindings": None, "domain": domain},
                 validation=validation,
@@ -395,6 +461,7 @@ def transform(input):
                 input_summary={"domain": domain, "scanStatus": scan_status, "totalFindings": total_findings,
                                "domainsScanned": to_int(data.get("domainsScanned")),
                                "totalDiscovered": to_int(data.get("totalDiscovered")),
+                               "unresponsiveHostsPending": pending[:20], "unresponsiveHosts": written_off[:20],
                                "criticalCount": critical_count, "highCount": high_count}
             )
 
@@ -413,6 +480,8 @@ def transform(input):
 
         if capped:
             fail_reasons.append(capped)
+        if coverage_note:
+            pass_reasons.append(coverage_note)
 
         if medium_count > 0 or low_count > 0:
             pass_reasons.append(f"Additional findings: {medium_count} medium, {low_count} low, {info_count} info")
@@ -428,6 +497,10 @@ def transform(input):
                 "totalFindings": total_findings,
                 "domain": domain
             }
+        if coverage_note:
+            result["domainsScanned"] = to_int(data.get("domainsScanned"))
+            result["totalDiscovered"] = to_int(data.get("totalDiscovered"))
+            result["unresponsiveHosts"] = written_off[:20]
         # Per criterion: each key lists only the findings that make that key fail, and only when it fails.
         by_key = {}
         if critical_findings:
