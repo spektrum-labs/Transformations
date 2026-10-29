@@ -1,11 +1,13 @@
-"""noCriticalFindings / noHighFindings (asm/projectdiscovery/nuclei_transform.py): a host that does not
-answer the scanner is unresponsive surface, not unscanned surface.
+"""noCriticalFindings / noHighFindings (asm/projectdiscovery/nuclei_transform.py): a host whose scans time out on
+two consecutive nightlies is excluded from the surface the keys are evaluated on.
 
 Before 29 Oct 2026 any scan with fewer hosts scanned than discovered was a partial, and a clean partial was
 Not evaluated. On an estate with one host that times out on every scan (Beacon, apis.*) the critical check
-could never be evaluated. The Integration Service already names such hosts in ``unresponsiveHosts`` with
-their consecutive failures and whether its continuation retried them. SYNTHETIC bodies in that shape. Each
-case runs as plain Python and in the Token-Service sandbox replica when it is installed.
+could never be evaluated. The Integration Service names such hosts in ``unresponsiveHosts`` with a reason
+and their consecutive failures. Only two consecutive ``scan_timed_out`` failures exclude a host; IS's
+``retried`` flag is a retry-budget marker (set on continuation errors, non-rediscovery and refusals too) and
+is not read. SYNTHETIC bodies in IS's stored shape. Each case runs as plain Python and in the Token-Service
+sandbox replica when it is installed.
 """
 import copy
 import importlib.util
@@ -35,22 +37,24 @@ def run(body):
     return load_code(SOURCE, "nuclei_transform.py")["transform"](copy.deepcopy(body))
 
 
-def host(name, failures=1, retried=False):
-    h = {"domain": name, "status": "unresponsive", "reason": "scan_timed_out",
-         "consecutiveTimeouts": failures, "findingsCount": 0}
+def host(name, failures=1, reason="scan_timed_out", retried=False):
+    h = {"domain": name, "status": "unresponsive", "reason": reason, "consecutiveTimeouts": failures, "findingsCount": 0}
     if retried:
         h["retried"] = True
     return h
 
 
-def body(scanned=180, discovered=181, unresponsive=(), findings=(), capped=True):
-    return {
+def body(scanned=180, discovered=181, unresponsive=(), findings=(), capped=True, results=None, **extra):
+    b = {
         "status": "success", "primaryDomain": "beacon.test", "domain": "beacon.test",
         "total": len(findings), "findings": list(findings),
-        "domainResults": [{"domain": f"h{i}.beacon.test", "status": "success", "findingsCount": 0} for i in range(scanned)],
+        "domainResults": [{"domain": f"h{i}.beacon.test", "status": "success", "findingsCount": 0} for i in range(scanned)]
+        if results is None else results,
         "domainsScanned": scanned, "totalDiscovered": discovered, "domainsCapped": capped,
         "unresponsiveHosts": list(unresponsive), "errors": [],
     }
+    b.update(extra)
+    return b
 
 
 def keys(out):
@@ -63,23 +67,21 @@ def reasons(out):
     return ev["passReasons"], ev["failReasons"], out["additionalInfo"]["dataCollection"]["errors"]
 
 
-def test_a_host_that_failed_two_consecutive_scans_is_unresponsive_surface_and_the_rest_is_evaluated():
+def test_two_consecutive_timeouts_exclude_the_host_and_the_rest_is_evaluated():
     out = run(body(unresponsive=[host("apis.beacon.test", failures=2)]))
     assert keys(out) == (True, True)
     passes, fails, errors = reasons(out)
     assert errors == [] and fails == []
-    note = [p for p in passes if "unresponsive surface" in p]
-    assert len(note) == 1 and "1 of 181" in note[0] and "apis.beacon.test" in note[0]
+    note = [p for p in passes if "excluded from the surface evaluated" in p]
+    assert len(note) == 1 and "scans of 1 of 181" in note[0] and "timed out on repeated attempts" in note[0]
+    assert "apis.beacon.test" in note[0] and "did not answer" not in note[0]
     assert out["transformedResponse"]["unresponsiveHosts"] == ["apis.beacon.test"]
-    assert out["transformedResponse"]["domainsScanned"] == 180
+    assert out["transformedResponse"]["domainsScanned"] == 180 and out["transformedResponse"]["totalDiscovered"] == 181
+    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+    assert summary["unresponsiveHosts"] == ["apis.beacon.test"] and summary["totalDiscovered"] == 181
 
 
-def test_a_host_the_continuation_retried_and_lost_again_is_written_off_the_same_day():
-    out = run(body(unresponsive=[host("apis.beacon.test", failures=1, retried=True)]))
-    assert keys(out) == (True, True)
-
-
-def test_a_first_failure_the_continuation_will_retry_keeps_the_partial_rule_and_names_the_host():
+def test_a_first_failure_keeps_the_partial_rule_and_names_the_host_as_to_be_retried():
     out = run(body(unresponsive=[host("apis.beacon.test", failures=1)]))
     assert keys(out) == (None, None)
     _passes, fails, errors = reasons(out)
@@ -88,10 +90,22 @@ def test_a_first_failure_the_continuation_will_retry_keeps_the_partial_rule_and_
     assert out["additionalInfo"]["transformation"]["inputSummary"]["unresponsiveHostsPending"] == ["apis.beacon.test"]
 
 
-def test_a_mix_of_written_off_and_pending_hosts_still_waits_for_the_retry():
+def test_retried_is_not_evidence_a_refused_continuation_at_count_one_stays_grey():
+    """IS sets ``retried`` when the continuation failed on the host, but also when it ran out without reaching
+    it or was refused over the ceiling (a systemic failure): a count-1 host stays pending whatever the flag."""
+    assert keys(run(body(unresponsive=[host("apis.beacon.test", failures=1, retried=True)]))) == (None, None)
+
+
+def test_a_scanner_error_never_excludes_a_host_whatever_the_count():
+    out = run(body(unresponsive=[host("apis.beacon.test", failures=3, reason="scan_error")]))
+    assert keys(out) == (None, None)
+    assert "will be retried: apis.beacon.test" in reasons(out)[2][0]
+
+
+def test_a_mix_of_excluded_and_pending_hosts_still_waits_for_the_retry():
     out = run(body(scanned=179, unresponsive=[host("a.beacon.test", 2), host("b.beacon.test", 1)]))
     assert keys(out) == (None, None)
-    assert "b.beacon.test" in reasons(out)[2][0] and "a.beacon.test" not in reasons(out)[2][0].split("retried")[1]
+    assert "will be retried: b.beacon.test" in reasons(out)[2][0]
 
 
 def test_a_host_capped_scan_without_unresponsive_hosts_is_still_a_partial():
@@ -100,29 +114,60 @@ def test_a_host_capped_scan_without_unresponsive_hosts_is_still_a_partial():
     assert "Only 25 of 181" in reasons(out)[2][0]
 
 
-def test_unresponsive_hosts_do_not_explain_a_wider_gap():
-    # 178 scanned + 1 written off = 179 < 181: two hosts are simply unscanned.
-    out = run(body(scanned=178, unresponsive=[host("apis.beacon.test", 2)]))
-    assert keys(out) == (None, None)
+def test_the_arithmetic_must_be_exact():
+    # 178 scanned + 1 excluded = 179 < 181: two hosts are simply unscanned.
+    assert keys(run(body(scanned=178, unresponsive=[host("apis.beacon.test", 2)]))) == (None, None)
+    # 180 scanned + 2 excluded = 182 > 181: the list claims more than the gap.
+    assert keys(run(body(scanned=180, unresponsive=[host("a.beacon.test", 2), host("b.beacon.test", 2)]))) == (None, None)
+    # domainsScanned says 180 but domainResults holds 179 rows: the counts do not agree.
+    rows = [{"domain": f"h{i}.beacon.test", "status": "success"} for i in range(179)]
+    assert keys(run(body(scanned=180, unresponsive=[host("apis.beacon.test", 2)], results=rows))) == (None, None)
 
 
-def test_a_finding_on_an_answering_host_still_fails_with_the_unresponsive_host_named():
+def test_a_duplicated_host_counts_once():
+    out = run(body(unresponsive=[host("apis.beacon.test", 2), host("apis.beacon.test", 2)]))
+    assert keys(out) == (True, True)
+    assert out["transformedResponse"]["unresponsiveHosts"] == ["apis.beacon.test"]
+    # ...and two listings of one host do not explain a two-host gap.
+    assert keys(run(body(scanned=179, unresponsive=[host("apis.beacon.test", 2), host("apis.beacon.test", 2)]))) == (None, None)
+
+
+def test_a_host_that_is_also_in_domain_results_explains_nothing():
+    assert keys(run(body(unresponsive=[host("h0.beacon.test", 2)]))) == (None, None)
+
+
+def test_an_entry_without_a_host_name_or_a_malformed_list_explains_nothing():
+    assert keys(run(body(unresponsive=[{"status": "unresponsive", "consecutiveTimeouts": 2}]))) == (None, None)
+    assert keys(run(body(unresponsive=[host("", 2)]))) == (None, None)
+    assert keys(run(body(unresponsive=[host("apis.beacon.test", 2), "not-a-dict"]))) == (None, None)
+    assert keys(run(body(unresponsive="apis.beacon.test"))) == (None, None)
+
+
+def test_a_time_limited_scan_is_never_evaluated_on_exclusions():
+    assert keys(run(body(unresponsive=[host("apis.beacon.test", 2)], scanTimeLimited=True))) == (None, None)
+
+
+def test_a_finding_on_a_scanned_host_still_fails_with_the_excluded_host_named():
     finding = {"info": {"severity": "high", "name": "Exposed panel"}, "host": "h1.beacon.test"}
     out = run(body(unresponsive=[host("apis.beacon.test", 2)], findings=[finding]))
     assert keys(out) == (True, False)
     passes, fails, _errors = reasons(out)
     assert any("1 high severity finding" in f for f in fails)
-    assert any("unresponsive surface" in p for p in passes)
+    assert any("excluded from the surface evaluated" in p for p in passes)
 
 
-def test_more_than_ten_hosts_are_counted_not_listed():
+def test_more_than_ten_hosts_are_counted_not_listed_and_names_are_bounded():
     hosts = [host(f"u{i}.beacon.test", 2) for i in range(12)]
     out = run(body(scanned=169, unresponsive=hosts))
     assert keys(out) == (True, True)
-    note = [p for p in reasons(out)[0] if "unresponsive surface" in p][0]
-    assert "12 of 181" in note and "and 2 more" in note and "u11.beacon.test" not in note
+    note = [p for p in reasons(out)[0] if "excluded from the surface evaluated" in p][0]
+    assert "scans of 12 of 181" in note and "and 2 more" in note and "u11.beacon.test" not in note
+    long_name = "x" * 400 + ".beacon.test"
+    out = run(body(unresponsive=[host(long_name, 2)]))
+    assert keys(out) == (True, True)
+    assert len(out["transformedResponse"]["unresponsiveHosts"][0]) == 253
 
 
-def test_an_unscanned_body_is_never_evaluated_on_unresponsive_hosts_alone():
+def test_an_unscanned_body_is_never_evaluated_on_excluded_hosts_alone():
     out = run(body(scanned=0, discovered=2, unresponsive=[host("a.beacon.test", 2), host("b.beacon.test", 2)]))
     assert keys(out) == (None, None)
