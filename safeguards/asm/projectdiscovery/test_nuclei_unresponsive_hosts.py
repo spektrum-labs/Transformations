@@ -1,5 +1,5 @@
 """noCriticalFindings / noHighFindings (asm/projectdiscovery/nuclei_transform.py): a host whose scans time out on
-two consecutive nightlies is excluded from the surface the keys are evaluated on.
+two consecutive runs (timing out on the latest) is excluded from the surface the keys are evaluated on.
 
 Before 29 Oct 2026 any scan with fewer hosts scanned than discovered was a partial, and a clean partial was
 Not evaluated. On an estate with one host that times out on every scan (Beacon, apis.*) the critical check
@@ -73,7 +73,7 @@ def test_two_consecutive_timeouts_exclude_the_host_and_the_rest_is_evaluated():
     passes, fails, errors = reasons(out)
     assert errors == [] and fails == []
     note = [p for p in passes if "excluded from the surface evaluated" in p]
-    assert len(note) == 1 and "scans of 1 of 181" in note[0] and "timed out on repeated attempts" in note[0]
+    assert len(note) == 1 and "scans of 1 of 181" in note[0] and "failed on two consecutive runs, timing out on the latest" in note[0]
     assert "apis.beacon.test" in note[0] and "did not answer" not in note[0]
     assert out["transformedResponse"]["unresponsiveHosts"] == ["apis.beacon.test"]
     assert out["transformedResponse"]["domainsScanned"] == 180 and out["transformedResponse"]["totalDiscovered"] == 181
@@ -132,6 +132,22 @@ def test_a_duplicated_host_counts_once():
     assert keys(run(body(scanned=179, unresponsive=[host("apis.beacon.test", 2), host("apis.beacon.test", 2)]))) == (None, None)
 
 
+def test_a_missing_or_malformed_domain_results_keeps_the_partial_rule():
+    """Without the per-host list the overlap and arithmetic checks cannot be made (IS's
+    _honest_unresponsive_partial refuses a non-list too): 3 of 4 scanned with one host at count 2 stays grey."""
+    b = body(scanned=3, discovered=4, unresponsive=[host("a.beacon.test", 2)])
+    del b["domainResults"]
+    assert keys(run(b)) == (None, None)
+    b = body(scanned=3, discovered=4, unresponsive=[host("a.beacon.test", 2)])
+    b["domainResults"] = "3 hosts"
+    assert keys(run(b)) == (None, None)
+    b = body(scanned=3, discovered=4, unresponsive=[host("a.beacon.test", 2)])
+    b["domainResults"] = None
+    assert keys(run(b)) == (None, None)
+    # ...and the same body with the list present evaluates.
+    assert keys(run(body(scanned=3, discovered=4, unresponsive=[host("a.beacon.test", 2)]))) == (True, True)
+
+
 def test_a_host_that_is_also_in_domain_results_explains_nothing():
     assert keys(run(body(unresponsive=[host("h0.beacon.test", 2)]))) == (None, None)
 
@@ -158,14 +174,30 @@ def test_a_finding_on_a_scanned_host_still_fails_with_the_excluded_host_named():
 
 def test_more_than_ten_hosts_are_counted_not_listed_and_names_are_bounded():
     hosts = [host(f"u{i}.beacon.test", 2) for i in range(12)]
-    out = run(body(scanned=169, unresponsive=hosts))
+    out = run(body(scanned=108, discovered=120, unresponsive=hosts))   # 12 of 120: at the 10% ceiling
     assert keys(out) == (True, True)
     note = [p for p in reasons(out)[0] if "excluded from the surface evaluated" in p][0]
-    assert "scans of 12 of 181" in note and "and 2 more" in note and "u11.beacon.test" not in note
+    assert "scans of 12 of 120" in note and "and 2 more" in note and "u11.beacon.test" not in note
     long_name = "x" * 400 + ".beacon.test"
     out = run(body(unresponsive=[host(long_name, 2)]))
     assert keys(out) == (True, True)
     assert len(out["transformedResponse"]["unresponsiveHosts"][0]) == 253
+
+
+def test_the_excluded_share_is_bounded_like_the_integration_services_ceiling():
+    """One scanned host and 180 chronic timeouts is not a clean 181-host estate: past 10% of the discovered
+    hosts (one always allowed) the gap is the scanner's, the network's or a blackhole, and the partial rule
+    stands, saying so."""
+    many = [host(f"u{i}.beacon.test", 2) for i in range(180)]
+    out = run(body(scanned=1, discovered=181, unresponsive=many))
+    assert keys(out) == (None, None)
+    assert "180 host(s) have failed on repeated scans, more than the 18 this estate may exclude" in reasons(out)[2][0]
+    # 19 of 181 is over the ceiling (18); 18 is at it.
+    assert keys(run(body(scanned=162, discovered=181, unresponsive=[host(f"u{i}.beacon.test", 2) for i in range(19)]))) == (None, None)
+    assert keys(run(body(scanned=163, discovered=181, unresponsive=[host(f"u{i}.beacon.test", 2) for i in range(18)]))) == (True, True)
+    # A small estate may still exclude one host.
+    assert keys(run(body(scanned=4, discovered=5, unresponsive=[host("a.beacon.test", 2)]))) == (True, True)
+    assert keys(run(body(scanned=3, discovered=5, unresponsive=[host("a.beacon.test", 2), host("b.beacon.test", 2)]))) == (None, None)
 
 
 def test_an_unscanned_body_is_never_evaluated_on_excluded_hosts_alone():

@@ -10,22 +10,6 @@ A capped scan (more hosts discovered than scanned, the ASM host cap) that found 
 finding returns None for both keys with the coverage reason in dataCollection.errors: zero findings on a
 partial estate is not proof of no findings in scope, so Token-Service reads it as Unevaluated, never a pass. A capped scan
 that did find a critical or high finding still fails, with the coverage named in failReasons. Each row reads
-
-Unresponsive surface (29 Oct 2026): the Integration Service lists hosts whose scan batches timed out or
-errored under ``unresponsiveHosts`` (asm_scan_reuse section 11), each with ``reason`` (``scan_timed_out``:
-the scanner's batch hit its own time limit on that host; ``scan_error``: the scanner errored) and its
-consecutive failed scans (``consecutiveTimeouts``, which only advances a refresh apart, so 2 means two
-nightlies). A host whose scans timed out on two consecutive nightlies is excluded from the surface the keys
-are evaluated on: when every host the scan did not cover is such a host, and the arithmetic is exact (the
-scanned count equals the hosts in ``domainResults`` and, with the excluded hosts, the discovered count; the
-scan was not cut short by its time limit), the keys are evaluated on the hosts that were scanned and the
-excluded hosts are named in passReasons, the result and inputSummary. Anything else keeps the partial rule
-(None): a first failure (the continuation retries it), a ``scan_error`` host, a host both listed and scanned,
-an entry without a host name, a time-limited scan, a host-capped scan, or a gap the excluded hosts do not
-explain. The entry's ``retried`` flag is NOT read: IS sets it as a retry-budget marker when a continuation
-reported the host failed again, but also when the continuation ran out without reaching it or added
-nothing storable (including a refusal over the unresponsive ceiling, a systemic failure), so it is not
-evidence of a second observed timeout.
 one key from a single-severity scan (noCriticalFindings from the critical scan, noHighFindings from the high
 scan), so a response is only ever read for the key whose severity it scanned.
 
@@ -34,6 +18,25 @@ asm_scan_retry_backoff) returns None for both keys, and the reason is passed on 
 a scan that is still running is not mistaken for a failed one. Every error path returns None with the reason
 in dataCollection.errors, never False: any other reason, no reason, a malformed reason, an input that failed
 validation, a scan with zero or failed hosts, and an exception inside the transform.
+
+Unresponsive surface (29 Oct 2026): the Integration Service lists hosts whose scan batches failed under
+``unresponsiveHosts`` (asm_scan_reuse section 11), each with the ``reason`` of its latest failure
+(``scan_timed_out``: the scanner's batch hit its own time limit on that host; ``scan_error``: the scanner
+errored) and ``consecutiveTimeouts``, which counts timed-out and errored batches together and only advances
+a refresh apart, so 2 means two runs at least a nightly apart. A host that failed on two consecutive runs and
+timed out on the latest is excluded from the surface the keys are evaluated on: when every host the scan did
+not cover is such a host, there are few of them (MAX_EXCLUDED_PERCENT of the discovered hosts, one always
+allowed, the Integration Service's own unresponsive ceiling: past it the gap is the scanner's, the network's
+or a deliberate blackhole), and the arithmetic is exact (``domainResults`` is a list whose length is the
+scanned count and, with the excluded hosts, equals the discovered count; the scan was not cut short by its
+time limit), the keys are evaluated on the hosts that were scanned and the excluded hosts are named in
+passReasons, the result and inputSummary. Anything else keeps the partial rule (None): a first failure (the
+continuation retries it), a host whose latest failure was a ``scan_error``, a host both listed and scanned,
+an entry without a host name, a missing or malformed ``domainResults``, a time-limited scan, a host-capped
+scan, too many excluded hosts, or a gap the excluded hosts do not explain. The entry's ``retried`` flag is
+NOT read: IS sets it as a retry-budget marker when a continuation reported the host failed again, but also
+when the continuation ran out without reaching it or added nothing storable (including a refusal over the
+unresponsive ceiling, a systemic failure), so it is not evidence of a second observed failure.
 """
 
 import json
@@ -105,6 +108,10 @@ def to_int(value):
 
 
 CHRONIC_AFTER_FAILURES = 2  # asm_scan_reuse.CHRONIC_AFTER_FAILURES: consecutive nightlies after which a host is excluded
+# The most of an estate that may be excluded for the rest to be evaluated: the Integration Service's own
+# unresponsive ceiling (ASM_SCAN_UNRESPONSIVE_MAX_PERCENT, 10%, one host always allowed). Past it the gap is
+# the scanner's or the network's, or a deliberate blackhole, not a few hosts that never answer.
+MAX_EXCLUDED_PERCENT = 10
 EXCLUDABLE_REASON = "scan_timed_out"  # the scanner's batch timed out on the host; scan_error hosts are never excluded
 NAMED_HOSTS = 10            # how many hosts a reason line names
 HOST_NAME_MAX = 253         # a DNS name's maximum length; longer values are cut
@@ -137,10 +144,12 @@ def scanned_domains(data):
 def unresponsive_hosts(data):
     """(excluded, pending, unexplained): the hosts the Integration Service lists as unresponsive.
 
-    excluded: unique names whose scans timed out (reason scan_timed_out) on CHRONIC_AFTER_FAILURES
-    consecutive scans and that domainResults does not also account for. pending: every other named host
-    (a first failure, a scan_error host, a host that is also in domainResults). unexplained: entries with no
-    usable host name; they explain no part of the gap, so the surface rule fails."""
+    excluded: unique names that failed on CHRONIC_AFTER_FAILURES consecutive runs (IS counts timed-out and
+    errored batches together) and timed out on the latest (reason scan_timed_out), and that domainResults
+    does not also account for. pending: every other named host (a first failure, a host whose latest failure
+    was a scan_error, a host that is also in domainResults). unexplained: entries with no usable host name;
+    they explain no part of the gap, so the surface rule fails. A name listed twice is kept once, on its
+    first listing (IS never emits duplicates; the dedupe is defensive)."""
     excluded = []
     pending = []
     unexplained = 0
@@ -164,9 +173,15 @@ def unresponsive_hosts(data):
     return excluded, pending, unexplained
 
 
+def excluded_allowed(discovered):
+    """How many of ``discovered`` hosts may be excluded (MAX_EXCLUDED_PERCENT; at least one)."""
+    return max(1, discovered * MAX_EXCLUDED_PERCENT // 100)
+
+
 def unresponsive_surface(data, excluded, pending, unexplained):
-    """True when the scan covered every discovered host whose scans do not time out: the only hosts it did
-    not scan are the excluded ones, the counts agree exactly, and the scan was not cut short."""
+    """True when the scan covered every discovered host that the scanner can reach: the only hosts it did
+    not scan are the excluded ones, there are few of them (``excluded_allowed``), ``domainResults`` is a list
+    whose length is the scanned count, the counts agree exactly, and the scan was not cut short."""
     if pending or unexplained or not excluded:
         return False
     if is_true(data.get("scanTimeLimited")):
@@ -175,8 +190,12 @@ def unresponsive_surface(data, excluded, pending, unexplained):
     discovered = to_int(data.get("totalDiscovered"))
     if scanned is None or discovered is None or scanned <= 0:
         return False
+    if len(excluded) > excluded_allowed(discovered):
+        return False
     results = data.get("domainResults")
-    if isinstance(results, list) and scanned != len(results):
+    if not isinstance(results, list) or scanned != len(results):
+        # No per-host list, or one that disagrees with the count: the overlap and arithmetic checks cannot
+        # be made, so the partial rule stands (IS's own _honest_unresponsive_partial refuses a non-list too).
         return False
     return scanned + len(excluded) == discovered
 
@@ -487,17 +506,21 @@ def transform(input):
         complete_for_surface = bool(capped) and unresponsive_surface(data, excluded, pending, unexplained)
         coverage_note = None
         if complete_for_surface:
-            # Scans of the hosts not covered timed out on two consecutive nightlies: they are excluded from
-            # the surface the keys are evaluated on, which is every other discovered host.
+            # The hosts not covered failed on two consecutive runs and timed out on the latest: they are
+            # excluded from the surface the keys are evaluated on, which is every other discovered host.
             coverage_note = ("scans of " + str(len(excluded)) + " of " + str(to_int(data.get("totalDiscovered")))
-                             + " discovered host(s) of " + str(domain) + " timed out on repeated attempts and are "
-                             + "excluded from the surface evaluated: " + named(excluded))
+                             + " discovered host(s) of " + str(domain) + " failed on two consecutive runs, timing "
+                             + "out on the latest, and are excluded from the surface evaluated: " + named(excluded))
             capped = None
         if capped and no_critical and no_high:
             reason = capped + "; zero critical or high findings on a partial scan is not proof of no findings in scope"
             if pending:
                 reason += ("; " + str(len(pending)) + " host(s) failed this scan and will be retried: "
                            + named(pending))
+            discovered = to_int(data.get("totalDiscovered"))
+            if excluded and discovered is not None and len(excluded) > excluded_allowed(discovered):
+                reason += ("; " + str(len(excluded)) + " host(s) have failed on repeated scans, more than the "
+                           + str(excluded_allowed(discovered)) + " this estate may exclude")
             return create_response(
                 result={"noCriticalFindings": None, "noHighFindings": None, "domain": domain},
                 validation=validation,
