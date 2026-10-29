@@ -3,7 +3,7 @@
 Percentage (0-100, rounded down) of private buckets with Object Lock enabled.
 
 Reads fileLockConfiguration.value.isFileLockEnabled from b2_list_buckets (native API v4); needs the
-readBucketRetentions capability. The population is the private buckets (allPrivate and snapshot), since
+readBucketRetentions capability. The population is the private buckets (allPrivate, snapshot and restricted), since
 a public bucket is not a backup target. Rounded down so 99.5 never reads as 100. No private bucket, or a
 private bucket the key cannot read, is not evaluated.
 """
@@ -213,7 +213,7 @@ def respond(value, validation, problem=None, pass_reasons=None, fail_reasons=Non
     )
 
 
-PRIVATE_TYPES = ("allPrivate", "snapshot")
+PRIVATE_TYPES = ("allPrivate", "snapshot", "restricted")
 
 
 def evaluate(input):
@@ -247,11 +247,13 @@ def evaluate(input):
         return respond(percentage, validation,
                        fail_reasons=[str(len(unlocked)) + " of " + str(len(private)) + " private bucket(s) have no "
                                      "Object Lock: " + names(unlocked) + "."],
-                       recommendations=["Object Lock can only be enabled on a bucket at creation or by Backblaze "
-                                        "support; move backups to Object Lock buckets."],
+                       recommendations=["Enable Object Lock on these buckets (Bucket Settings in the Backblaze web "
+                                        "console) and set a default retention so new backups are protected."],
                        summary=summary)
     return respond(percentage, validation,
-                   pass_reasons=["All " + str(len(private)) + " private bucket(s) have Object Lock enabled."],
+                   pass_reasons=["All " + str(len(private)) + " private bucket(s) have Object Lock enabled. "
+                                 "Coverage counts Object Lock being on; whether each bucket also has a default "
+                                 "retention is checked by isBackupImmutable."],
                    summary=summary)
 
 

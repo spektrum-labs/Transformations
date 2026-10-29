@@ -159,6 +159,14 @@ def test_private_buckets_pass_and_a_public_one_fails(run):
     assert run(k, buckets(bucket("backups", OWN_A), bucket("odd", OWN_B, kind="futureType"))) == (None, "error")
 
 
+def test_a_restricted_bucket_counts_as_private(run):
+    # bucketTypes ["all"] lists "restricted" buckets; they are private, not an unknown type.
+    k = "isArchivedDataAccessRestricted"
+    assert run(k, buckets(bucket("backups", OWN_A), bucket("vault", OWN_B, kind="restricted"))) == (True, "success")
+    assert run(k, buckets(bucket("vault", OWN_A, kind="restricted"), bucket("site", OWN_B, kind="allPublic"))) == (
+        False, "success")
+
+
 # ---- encryption ---------------------------------------------------------------------------
 
 def test_encryption_reads_the_effective_default(run):
@@ -226,6 +234,19 @@ def test_object_lock_coverage_is_a_floor_over_private_buckets(run):
     assert run(k, buckets(bucket("a", OWN_A), bucket("b", OWN_B))) == (0, "success")
     assert run(k, buckets(bucket("site", OWN_A, kind="allPublic", lock="bare"))) == (None, "error")
     assert run(k, buckets(bucket("a", OWN_A, lock="bare"), bucket("b", OWN_B, lock=False))) == (None, "error")
+
+
+def test_object_lock_coverage_counts_restricted_buckets(run):
+    k = "objectLockCoveragePercentage"
+    assert run(k, buckets(bucket("a", OWN_A, lock="bare"), bucket("vault", OWN_B, kind="restricted"))) == (
+        50, "success")
+
+
+def test_replication_to_a_restricted_sibling_is_inside_the_account(run):
+    # With every bucket type listed, a same-account "restricted" destination is one of our own buckets.
+    k = "isCrossAccountBackupEnabled"
+    assert run(k, buckets(bucket("a", OWN_A, replicate_to=[OWN_B]), bucket("vault", OWN_B, kind="restricted"))) == (
+        False, "success")
 
 
 # ---- replication --------------------------------------------------------------------------

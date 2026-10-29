@@ -2,9 +2,11 @@
 
 True when no bucket in the account is public.
 
-Reads b2_list_buckets (native API v4). Backblaze lists allPublic, allPrivate and snapshot buckets by
-default; allPublic means anyone can download the files. True only when every listed bucket is
-allPrivate or snapshot. Any allPublic bucket is False. A bucket type Backblaze does not document as
+Reads b2_list_buckets (native API v4), called with bucketTypes ["all"] so every bucket type is listed
+(by default Backblaze leaves some out); allPublic means anyone can download the files. True only when
+every listed bucket is allPrivate, snapshot or restricted (restricted is a private bucket whose access is
+narrowed further). Any allPublic bucket is False. The integration refuses a key limited to some buckets,
+so the list is the whole account. A bucket type Backblaze does not document as
 private, an empty bucket list or an error body is not evaluated.
 """
 
@@ -172,7 +174,7 @@ def respond(value, validation, problem=None, pass_reasons=None, fail_reasons=Non
     )
 
 
-PRIVATE_TYPES = ("allPrivate", "snapshot")
+PRIVATE_TYPES = ("allPrivate", "snapshot", "restricted")
 
 
 def evaluate(input):
@@ -195,7 +197,7 @@ def evaluate(input):
                        "Backblaze reported bucket type(s) it does not document as private: " + names(unknown) + ".",
                        summary=summary)
     return respond(True, validation,
-                   pass_reasons=["All " + str(len(buckets)) + " bucket(s) are private (allPrivate or snapshot)."],
+                   pass_reasons=["All " + str(len(buckets)) + " bucket(s) are private (allPrivate, snapshot or restricted)."],
                    summary=summary)
 
 

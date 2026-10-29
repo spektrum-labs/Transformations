@@ -4,8 +4,9 @@ True when an enabled replication rule copies a bucket to a bucket outside this a
 
 Reads replicationConfiguration.asReplicationSource.replicationRules from b2_list_buckets (native API v4);
 needs the readBucketReplications capability. The destination counts as outside the account when its
-bucket id is not one of the account's listed buckets, so the key must see every bucket (no bucket
-restriction). No such rule is False when every bucket was readable, and not evaluated when some were not.
+bucket id is not one of the account's listed buckets, so the list must be the whole account: the
+integration calls b2_list_buckets with bucketTypes ["all"] (the default leaves restricted buckets out)
+and refuses a key limited to some buckets at authorization. No such rule is False when every bucket was readable, and not evaluated when some were not.
 """
 
 
