@@ -181,7 +181,8 @@ def excluded_allowed(discovered):
 def unresponsive_surface(data, excluded, pending, unexplained):
     """True when the scan covered every discovered host that the scanner can reach: the only hosts it did
     not scan are the excluded ones, there are few of them (``excluded_allowed``), ``domainResults`` is a list
-    whose length is the scanned count, the counts agree exactly, and the scan was not cut short."""
+    of uniquely named hosts whose length is the scanned count, the counts agree exactly, and the scan was
+    not cut short."""
     if pending or unexplained or not excluded:
         return False
     if is_true(data.get("scanTimeLimited")):
@@ -193,9 +194,10 @@ def unresponsive_surface(data, excluded, pending, unexplained):
     if len(excluded) > excluded_allowed(discovered):
         return False
     results = data.get("domainResults")
-    if not isinstance(results, list) or scanned != len(results):
-        # No per-host list, or one that disagrees with the count: the overlap and arithmetic checks cannot
-        # be made, so the partial rule stands (IS's own _honest_unresponsive_partial refuses a non-list too).
+    if not isinstance(results, list) or scanned != len(results) or scanned != len(scanned_domains(data)):
+        # No per-host list, one that disagrees with the count, or one whose host names are not unique: the
+        # overlap and arithmetic checks cannot be made, so the partial rule stands (IS's own
+        # _honest_unresponsive_partial refuses a non-list too).
         return False
     return scanned + len(excluded) == discovered
 

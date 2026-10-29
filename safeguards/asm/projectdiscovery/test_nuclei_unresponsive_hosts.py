@@ -146,6 +146,11 @@ def test_a_missing_or_malformed_domain_results_keeps_the_partial_rule():
     assert keys(run(b)) == (None, None)
     # ...and the same body with the list present evaluates.
     assert keys(run(body(scanned=3, discovered=4, unresponsive=[host("a.beacon.test", 2)]))) == (True, True)
+    # The list's host names must be unique: nine rows all named x do not account for nine hosts.
+    rows = [{"domain": "x.beacon.test", "status": "success"} for _ in range(9)]
+    assert keys(run(body(scanned=9, discovered=10, unresponsive=[host("a.beacon.test", 2)], results=rows))) == (None, None)
+    rows = [{"domain": "x.beacon.test", "status": "success"}, {"domain": "", "status": "success"}, {"status": "success"}]
+    assert keys(run(body(scanned=3, discovered=4, unresponsive=[host("a.beacon.test", 2)], results=rows))) == (None, None)
 
 
 def test_a_host_that_is_also_in_domain_results_explains_nothing():
