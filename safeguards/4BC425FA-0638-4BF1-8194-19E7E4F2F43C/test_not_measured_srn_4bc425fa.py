@@ -174,8 +174,10 @@ class NotMeasuredIsNotEvaluated(unittest.TestCase):
         self.assert_measured("is_backup_tested", "isBackupTested", lookup([]), False)
 
     def test_license_status(self):
-        self.assert_measured("confirmedlicensepurchased", "confirmedLicensePurchased", {"result": {"licensePurchased": True}}, True)
-        self.assert_measured("confirmedlicensepurchased", "confirmedLicensePurchased", {"result": {"licensePurchased": False}}, False)
+        # AWS reports no licence for AWS Backup; the connector synthesises licensePurchased from an RDS
+        # describe call, so neither value is licence evidence and the check is never graded (#1227).
+        self.assert_unmeasured("confirmedlicensepurchased", "confirmedLicensePurchased", {"result": {"licensePurchased": True}})
+        self.assert_unmeasured("confirmedlicensepurchased", "confirmedLicensePurchased", {"result": {"licensePurchased": False}})
 
     def test_saml_providers(self):
         def providers(valid_until):
