@@ -1,0 +1,40 @@
+{
+  "name": "isGeoRedundant",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Backup data is copied to storage in a geographically separate region.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the backup storage the integration lists, with its replication and region settings",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A listing that shows a copy of the backup data held in a region other than the primary.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/isgeoredundant.py",
+    "Backblaze B2 native API reference, b2_list_buckets: https://www.backblaze.com/apidocs/b2-list-buckets"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms. Other backup integrations already emit this key; their meaning is not yet validated against this entry."
+    }
+  ],
+  "notes": "Backblaze B2: never True from the source account's read alone; all buckets in an account share one region and a destination in another account's region is not visible. No outbound replication is False."
+}

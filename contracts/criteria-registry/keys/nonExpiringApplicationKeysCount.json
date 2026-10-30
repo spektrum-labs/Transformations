@@ -1,0 +1,40 @@
+{
+  "name": "nonExpiringApplicationKeysCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Number of the account's application keys that never expire.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "the application keys the storage account lists (the master key is not listed)",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "Not applicable: a count. A value is reported only from a complete key list (no further page) that lists at least one key.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/nonexpiringapplicationkeyscount.py",
+    "Backblaze B2 native API reference, b2_list_keys: https://www.backblaze.com/apidocs/b2-list-keys"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms, its first implementation."
+    }
+  ],
+  "notes": "Backblaze B2: expirationTimestamp null. The account's master application key is not returned by b2_list_keys."
+}
