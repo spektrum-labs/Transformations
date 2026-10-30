@@ -1,0 +1,41 @@
+{
+  "name": "isEncryptionKeyManaged",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "every active project or workspace on the AI platform encrypts its data with a customer-managed key held in the customer's own KMS, not only vendor-managed encryption.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the active (not archived) projects or workspaces in one organization on the AI platform, read in full",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the organization's active projects or workspaces (every page) in which each one names a customer-managed key; a null or empty key id makes the answer false, and a missing key field is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Artificial Intelligence"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/artificial-intelligence/openai/isencryptionkeymanaged.py (Project.external_key_id)",
+    "OpenAI OpenAPI spec, Project.external_key_id: https://github.com/openai/openai-openapi",
+    "safeguards/artificial-intelligence/anthropic/isencryptionkeymanaged.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-27",
+      "change": "Registered so the OpenAI transform can emit it; the Anthropic transform already emitted it unregistered."
+    }
+  ],
+  "notes": "OpenAI reports the key as external_key_id on each project (Enterprise Key Management). The check reads that a key is named, not that the KMS grant is healthy. Whether the Anthropic implementation measures the same thing was not reviewed."
+}
