@@ -159,10 +159,12 @@ def test_private_buckets_pass_and_a_public_one_fails(run):
     assert run(k, buckets(bucket("backups", OWN_A), bucket("odd", OWN_B, kind="futureType"))) == (None, "error")
 
 
-def test_a_restricted_bucket_counts_as_private(run):
-    # bucketTypes ["all"] lists "restricted" buckets; they are private, not an unknown type.
+def test_a_restricted_bucket_is_not_assumed_private(run):
+    # bucketTypes ["all"] lists "restricted" and "shared" buckets, but Backblaze does not document who can read
+    # them, so they are not evaluated; a public bucket alongside still fails.
     k = "isArchivedDataAccessRestricted"
-    assert run(k, buckets(bucket("backups", OWN_A), bucket("vault", OWN_B, kind="restricted"))) == (True, "success")
+    for kind in ("restricted", "shared"):
+        assert run(k, buckets(bucket("backups", OWN_A), bucket("vault", OWN_B, kind=kind))) == (None, "error")
     assert run(k, buckets(bucket("vault", OWN_A, kind="restricted"), bucket("site", OWN_B, kind="allPublic"))) == (
         False, "success")
 
@@ -236,10 +238,12 @@ def test_object_lock_coverage_is_a_floor_over_private_buckets(run):
     assert run(k, buckets(bucket("a", OWN_A, lock="bare"), bucket("b", OWN_B, lock=False))) == (None, "error")
 
 
-def test_object_lock_coverage_counts_restricted_buckets(run):
+def test_object_lock_coverage_is_not_evaluated_with_an_undocumented_bucket_type(run):
+    # Without knowing whether a restricted bucket is private, the population is unknown.
     k = "objectLockCoveragePercentage"
-    assert run(k, buckets(bucket("a", OWN_A, lock="bare"), bucket("vault", OWN_B, kind="restricted"))) == (
-        50, "success")
+    for kind in ("restricted", "shared", "futureType"):
+        assert run(k, buckets(bucket("a", OWN_A, lock="bare"), bucket("vault", OWN_B, kind=kind))) == (
+            None, "error")
 
 
 def test_replication_to_a_restricted_sibling_is_inside_the_account(run):

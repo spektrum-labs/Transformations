@@ -3,8 +3,9 @@
 Percentage (0-100, rounded down) of private buckets with Object Lock enabled.
 
 Reads fileLockConfiguration.value.isFileLockEnabled from b2_list_buckets (native API v4); needs the
-readBucketRetentions capability. The population is the private buckets (allPrivate, snapshot and restricted), since
-a public bucket is not a backup target. Rounded down so 99.5 never reads as 100. No private bucket, or a
+readBucketRetentions capability. The population is the private buckets (allPrivate and snapshot), since
+a public bucket is not a backup target. A bucket type the reference does not define (restricted, shared or a
+new one) leaves the population unknown, so the check is not evaluated. Rounded down so 99.5 never reads as 100. No private bucket, or a
 private bucket the key cannot read, is not evaluated.
 """
 
@@ -213,13 +214,20 @@ def respond(value, validation, problem=None, pass_reasons=None, fail_reasons=Non
     )
 
 
-PRIVATE_TYPES = ("allPrivate", "snapshot", "restricted")
+PRIVATE_TYPES = ("allPrivate", "snapshot")
 
 
 def evaluate(input):
     buckets, validation, problem = read_buckets(input)
     if problem:
         return respond(None, validation, problem)
+    unknown = [bucket_label(b) + " (" + str(b.get("bucketType")) + ")" for b in buckets
+               if b.get("bucketType") != "allPublic" and b.get("bucketType") not in PRIVATE_TYPES]
+    if unknown:
+        return respond(None, validation,
+                       "Backblaze reported bucket type(s) it does not document as private or public: " +
+                       names(unknown) + ".",
+                       summary={"totalBuckets": len(buckets), "unrecognisedBuckets": len(unknown)})
     private = [b for b in buckets if b.get("bucketType") in PRIVATE_TYPES]
     if not private:
         return respond(None, validation, "The account has no private buckets, so there is nothing to cover.",
