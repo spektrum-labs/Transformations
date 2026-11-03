@@ -127,3 +127,22 @@ def test_a_scan_with_nothing_missing_is_unchanged(name):
     out = run(name, body(scanned=182, discovered=182, capped=False))
     assert value(name, out) == 0
     assert not any("excluded" in p for p in out["additionalInfo"]["evaluation"]["passReasons"])
+
+
+def kev_critical(host_name):
+    """A synthetic live critical KEV finding with a high EPSS percentile: it counts for every critical key."""
+    return {
+        "template-id": "CVE-2021-44228", "host": host_name, "matched-at": "https://" + host_name + "/",
+        "matcher-status": True, "type": "http",
+        "info": {"name": "Synthetic KEV", "severity": "critical", "tags": ["cve", "kev"],
+                 "classification": {"cve-id": ["cve-2021-44228"], "epss-score": 0.9, "epss-percentile": 0.99}},
+    }
+
+
+@pytest.mark.parametrize("name", ["knownexploitedvulncount", "epsshighriskcriticalvulncount", "criticalvulnerabilitycount"])
+def test_a_finding_on_a_covered_surface_is_counted_and_the_exclusion_is_named(name):
+    out = run(name, body(unresponsive=[host("apis.example.test", failures=2)], findings=[kev_critical("h1.example.test")]))
+    assert value(name, out) == 1
+    ev = out["additionalInfo"]["evaluation"]
+    assert not any(p.startswith("Only ") for p in ev["failReasons"])
+    assert any("excluded from the surface evaluated" in p for p in ev["passReasons"])
