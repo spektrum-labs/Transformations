@@ -3,8 +3,21 @@ Transformation: isDNSPolicyConfigured
 Vendor: DNSFilter
 Category: Network Security / Policy Configuration
 
-Ensures that DNS filtering policies are configured with appropriate category blocks.
-Checks the policies endpoint for configured filtering policies.
+Passes when at least one live DNSFilter policy actually filters: it blocks one or more content
+categories (`blacklist_categories`), or it is allow-list-only (`allow_list_only`).
+
+Reads GET /v1/policies?organization_id=... (Integration-Service method getPolicies). The body is
+JSON:API: {"data": [{"id": ..., "type": "policies", "attributes": {...}}], "links": {...}}.
+Token-Service strips the `data` wrapper before calling transform, so the policy list usually
+arrives as a bare list; a raw body keeps it under `data`. Policy fields sit under `attributes`.
+The previous version read `blocked_categories` at the top level of each policy, a field the
+API never returns, and then passed any organisation that had a policy at all.
+
+A policy with `deleted_at` set is not counted. A body with no readable policy list, or a list
+with no live policy, is not measured (None with a dataCollection error): every DNSFilter network
+must point at a policy, so an empty list says the read did not see it, not that none exists.
+
+Runs in Token-Service's RestrictedPython sandbox: no map(), no names starting with `_`.
 """
 
 import json
@@ -67,8 +80,53 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def policies_of(data):
+    """The policy list: the body itself, or its `data` / `policies` list for a raw body. None when absent."""
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("data", "policies"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    return None
+
+
+def attributes_of(policy):
+    """A policy's fields: under `attributes` (JSON:API), or the policy itself when already flattened."""
+    if not isinstance(policy, dict):
+        return None
+    attributes = policy.get("attributes")
+    return attributes if isinstance(attributes, dict) else policy
+
+
+def why_unreadable(data):
+    if not isinstance(data, (dict, list)):
+        return "body is " + ("null" if data is None else "not an object or a list")
+    if isinstance(data, dict):
+        if not data:
+            return "body is empty"
+        for key in ("error", "errors", "message"):
+            if key in data:
+                return f"vendor {key}: {str(data[key])[:200]}"
+        return "body is not a policy list (keys: " + ", ".join(sorted(str(k) for k in data)[:10]) + ")"
+    return "the policy list is empty"
+
+
 def transform(input):
     criteriaKey = "isDNSPolicyConfigured"
+    validation = {"status": "unknown", "errors": [], "warnings": []}
+
+    def not_measured(reason, input_summary=None, transformation_errors=None):
+        return create_response(
+            result={criteriaKey: None, "totalPolicies": None, "policiesWithBlocks": None,
+                    "totalBlockedCategories": None},
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=["DNSFilter policies could not be read"],
+            recommendations=["Re-run the check; if it persists, confirm the DNSFilter API key can read the organisation's policies"],
+            input_summary=input_summary,
+            transformation_errors=transformation_errors
+        )
 
     try:
         if isinstance(input, str):
@@ -79,99 +137,75 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
-            )
+            errors = validation.get("errors", []) or ["schema rejected the body"]
+            return not_measured("Input validation failed: " + "; ".join(str(e) for e in errors))
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-        additional_findings = []
+        policies = policies_of(data)
+        if not policies:
+            return not_measured(f"DNSFilter returned no readable policy list: {why_unreadable(data if policies is None else [])}")
 
-        policy_configured = False
-        total_policies = 0
-        policies_with_blocks = 0
-        total_blocked_categories = 0
+        live = 0
+        deleted = 0
+        unreadable = 0
+        with_blocks = 0
+        allow_list_only = 0
+        blocked_categories = 0
+        best_name = None
+        best_count = -1
+        for policy in policies:
+            attributes = attributes_of(policy)
+            if attributes is None:
+                unreadable += 1
+                continue
+            if attributes.get("deleted_at"):
+                deleted += 1
+                continue
+            live += 1
+            categories = attributes.get("blacklist_categories")
+            allow_only = attributes.get("allow_list_only") is True
+            if not isinstance(categories, list) and not allow_only:
+                unreadable += 1
+                continue
+            count = len(categories) if isinstance(categories, list) else 0
+            if allow_only:
+                allow_list_only += 1
+            if count > 0 or allow_only:
+                with_blocks += 1
+                blocked_categories += count
+                if count > best_count:
+                    best_count = count
+                    best_name = attributes.get("name")
 
-        policies = []
+        summary = {"totalPolicies": live, "deletedPolicies": deleted, "unreadablePolicies": unreadable,
+                   "policiesWithBlocks": with_blocks, "allowListOnlyPolicies": allow_list_only,
+                   "totalBlockedCategories": blocked_categories}
+        result = {criteriaKey: with_blocks > 0, "totalPolicies": live, "policiesWithBlocks": with_blocks,
+                  "totalBlockedCategories": blocked_categories}
 
-        if isinstance(data, dict):
-            if 'policies' in data and isinstance(data['policies'], list):
-                policies = data['policies']
-            elif 'data' in data and isinstance(data['data'], list):
-                policies = data['data']
-        elif isinstance(data, list):
-            policies = data
+        if with_blocks > 0:
+            reason = f"{with_blocks} of {live} live DNSFilter policies filter traffic"
+            if best_count > 0:
+                reason += f"; the strictest ({best_name or 'unnamed'}) blocks {best_count} content categories"
+            if allow_list_only:
+                reason += f"; {allow_list_only} allow-list-only"
+            findings = [f"{unreadable} policy record(s) carry no readable category list and were not counted"] if unreadable else []
+            return create_response(result=result, validation=validation, pass_reasons=[reason],
+                                   additional_findings=findings, input_summary=summary)
 
-        total_policies = len(policies)
-
-        if total_policies > 0:
-            for policy in policies:
-                if isinstance(policy, dict):
-                    # Check for blocked categories
-                    blocked_categories = policy.get('blocked_categories', policy.get('blockedCategories', []))
-                    category_settings = policy.get('category_settings', policy.get('categorySettings', {}))
-                    block_list = policy.get('block_list', policy.get('blockList', []))
-
-                    has_blocks = False
-                    if isinstance(blocked_categories, list) and len(blocked_categories) > 0:
-                        has_blocks = True
-                        total_blocked_categories += len(blocked_categories)
-                    elif isinstance(category_settings, dict) and len(category_settings) > 0:
-                        has_blocks = True
-                        total_blocked_categories += len(category_settings)
-                    elif isinstance(block_list, list) and len(block_list) > 0:
-                        has_blocks = True
-                        total_blocked_categories += len(block_list)
-
-                    if has_blocks:
-                        policies_with_blocks += 1
-
-            # Policies exist - consider configured even without explicit block lists
-            # as policies may use default blocking rules
-            policy_configured = True
-
-            if policies_with_blocks > 0:
-                pass_reasons.append(
-                    f"DNS policies configured with category blocks "
-                    f"({policies_with_blocks} of {total_policies} policies have explicit blocks, "
-                    f"{total_blocked_categories} total blocked categories)"
-                )
-            else:
-                pass_reasons.append(f"DNS policies configured ({total_policies} policies found)")
-                additional_findings.append(
-                    "No explicit category blocks detected in policies - "
-                    "policies may be using default blocking rules"
-                )
-        else:
-            fail_reasons.append("No DNS filtering policies configured")
-            recommendations.append("Configure DNS filtering policies with appropriate category blocks in DNSFilter")
+        if live == 0 or unreadable:
+            # A False needs every live policy read: one we could not read might be the one that filters.
+            why = ("every policy returned is deleted" if live == 0 and not unreadable
+                   else f"{unreadable} policy record(s) carry no readable category list")
+            return not_measured(f"DNSFilter policies could not be measured: {why}", input_summary=summary)
 
         return create_response(
-            result={
-                criteriaKey: policy_configured,
-                "totalPolicies": total_policies,
-                "policiesWithBlocks": policies_with_blocks,
-                "totalBlockedCategories": total_blocked_categories
-            },
+            result=result,
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            additional_findings=additional_findings,
-            input_summary={
-                "totalPolicies": total_policies,
-                "policiesWithBlocks": policies_with_blocks,
-                "totalBlockedCategories": total_blocked_categories
-            }
+            fail_reasons=[f"None of the {live} live DNSFilter policies blocks a content category or is allow-list-only, so DNS filtering blocks nothing by category"],
+            recommendations=["In DNSFilter, block at least the security categories (malware, phishing, botnet, cryptomining, newly seen domains) in the policy your networks and roaming clients use"],
+            input_summary=summary
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+        validation = {"status": "error", "errors": [], "warnings": []}
+        return not_measured(f"Transformation error: {str(e)}", transformation_errors=[str(e)])
