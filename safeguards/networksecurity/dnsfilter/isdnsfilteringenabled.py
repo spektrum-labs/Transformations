@@ -93,12 +93,23 @@ def networks_of(data):
     return None
 
 
+NETWORK_FIELDS = ("name", "policy_id", "ip_count")
+
+
 def attributes_of(network):
-    """A network's fields: under `attributes` (JSON:API), or the network itself when already flattened."""
+    """A network's fields, or None when the record does not show it is a network: a JSON:API record must
+    be typed `networks` and carry `attributes`; a flattened one needs an `id` and a network field. An
+    empty dict or an error object is not a network, so it can never make the criterion True."""
     if not isinstance(network, dict):
         return None
     attributes = network.get("attributes")
-    return attributes if isinstance(attributes, dict) else network
+    if "type" in network or attributes is not None:
+        if network.get("type") != "networks" or not isinstance(attributes, dict):
+            return None
+        return attributes
+    if network.get("id") is None or not any(field in network for field in NETWORK_FIELDS):
+        return None
+    return network
 
 
 def why_unreadable(data):
