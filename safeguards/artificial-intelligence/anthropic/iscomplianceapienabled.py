@@ -1,9 +1,10 @@
 """
 Transformation: isComplianceAPIEnabled
 Vendor: Anthropic  |  Category: Artificial Intelligence
-Product: Claude
-Evaluates: Ensures the organization's Compliance API Activity Feed is recording and readable, providing a six-year audit trail.
-API Source: listComplianceActivities
+Products: Claude, Claude Compliance API
+Evaluates: The organization's Compliance API Activity Feed is enabled and readable,
+providing a six-year audit trail.
+API Source: listComplianceActivities (GET /v1/compliance/activities?limit=1)
 """
 import json
 from datetime import datetime
@@ -11,12 +12,9 @@ from datetime import datetime
 
 def extract_input(input_data):
     """Extract data and validation from input, handling enriched + legacy formats."""
-    # Decode a JSON string or bytes BEFORE inspecting shape. Without this a str body
-    # matches no branch here, stays a str, and every caller's `isinstance(data, dict)`
-    # test fails -- so a perfectly good response is read as "nothing came back" and the
-    # criterion is answered from an empty shape. CLAUDE.md's `_parse_input` pattern makes
-    # str, bytes and dict equivalent everywhere else in this repo; this family did not.
-    # A string that is not JSON raises into each transform's existing handler: fail closed.
+    # Decode a JSON string or bytes BEFORE inspecting shape, so str, bytes and dict
+    # inputs are read the same way. A string that is not JSON raises into transform()'s
+    # handler, which reports the criterion as not evaluated.
     if isinstance(input_data, (str, bytes)):
         if isinstance(input_data, bytes):
             input_data = input_data.decode("utf-8")
@@ -90,44 +88,61 @@ METADATA = {
     "category": "Artificial Intelligence",
 }
 
-
 # Unique sentinel. object() is unavailable in the RestrictedPython sandbox
 # Token-Service runs transforms in, so a fresh list is used instead: a list
 # literal is never interned, which keeps the "is MISSING" identity checks valid.
 MISSING = ["__missing__"]
 
+# ANSWER CONTRACT. True only when the vendor data was read and shows the control.
+# False only when the vendor data was read and shows the control is absent.
+# None in every other case (refused call, empty or unreadable body, missing row,
+# exception). Each None path also sets dataCollection.status to "error" (through
+# api_errors), which Token-Service reports as not evaluated rather than failed:
+# nothing was looked at, so nothing is claimed either way.
+UNKNOWN = None
+
 # HTTP status -> why the call was refused. These are NOT posture findings: they mean
-# the credential or tenancy cannot reach the endpoint, so the control is UNKNOWN
-# rather than absent. Anthropic's compliance org-data endpoints (settings, groups,
-# organizations, users) accept only a Compliance Access Key (sk-ant-api01-...)
-# created in claude.ai; an Admin API key (sk-ant-admin01-...) gets 403, and a
-# standalone Claude Console organization can reach the Activity Feed only.
+# the credential or tenancy cannot reach the endpoint, so the control is UNKNOWN.
+# Anthropic's Compliance API takes a Compliance Access Key (sk-ant-api01-...) created
+# in claude.ai > Organization settings > API. The organization and settings endpoints
+# need the read:compliance_org_data scope; the Activity Feed needs
+# read:compliance_activities. Scopes are fixed when a key is created.
 REFUSAL_REASONS = {
+    400: ("the vendor rejected the request",
+          "If the message says the Compliance API is not enabled, the primary owner enables it "
+          "at claude.ai > Organization settings > API."),
     401: ("the credential was rejected",
-          "Confirm the key is an admin-class key and has not been revoked or expired."),
-    403: ("this organization's credential is not permitted to call the endpoint",
-          "This endpoint requires a Compliance Access Key (sk-ant-api01-...) created in "
-          "claude.ai > Organization settings > API with the read:org_audit scope. An Admin "
-          "API key (sk-ant-admin01-...) from Claude Console returns 403 here. A standalone "
-          "Claude Console organization cannot read these settings at all - treat this "
-          "criterion as not applicable for that tenant rather than failed."),
+          "Confirm the Compliance Access Key has not been deleted. Deleting a key takes effect "
+          "on the next request."),
+    403: ("the credential is not permitted to call the endpoint",
+          "Create a Compliance Access Key in claude.ai > Organization settings > API with the "
+          "read:compliance_org_data and read:compliance_activities scopes. Scopes cannot be "
+          "added to an existing key. An Admin API key (sk-ant-admin01-...) reaches the Activity "
+          "Feed only and returns 403 on the settings endpoint."),
     404: ("the endpoint or organization was not found",
-          "Check the Organization ID. The compliance endpoints take a compliance "
-          "organization uuid from GET /v1/compliance/organizations, which is a different "
-          "value from the Console organization id shown at "
-          "platform.claude.com/settings/organization."),
+          "Check the Organization ID: it is the uuid returned by GET /v1/compliance/organizations, "
+          "and it must be a linked organization, not the parent organization. If every request "
+          "returns 404, the settings endpoint is not yet enabled for this parent organization."),
     429: ("the vendor rate-limited the call",
-          "Compliance endpoints allow 600 requests/minute per parent organization. Retry."),
+          "The Compliance API allows 600 requests per minute per parent organization. Retry."),
 }
 
 
 def detect_refusal(data):
-    """Return (status, why, fix) when the payload is an error envelope, else None."""
+    """Return (status, why, fix) when the payload is an error envelope, else None.
+
+    Two envelope shapes reach a transform: the generic one (error / errorType /
+    status == "Error" with statusCode) and Integration-Service's vendor relay
+    ({"integrationName", "errorMessage", "vendorStatus", "vendorError", ...}).
+    """
     if not isinstance(data, dict):
         return None
-    if not (data.get("error") or data.get("errorType") or data.get("status") == "Error"):
+    relay_status = data.get("vendorStatus")
+    is_relay = "errorMessage" in data or relay_status is not None
+    is_generic = bool(data.get("error") or data.get("errorType") or data.get("status") == "Error")
+    if not (is_relay or is_generic):
         return None
-    status = data.get("statusCode") or data.get("status_code")
+    status = relay_status if relay_status is not None else (data.get("statusCode") or data.get("status_code"))
     try:
         status = int(status)
     except (TypeError, ValueError):
@@ -135,95 +150,109 @@ def detect_refusal(data):
     why, fix = REFUSAL_REASONS.get(status, (
         "the vendor call did not succeed",
         "Inspect the integration method response for the underlying error."))
-    detail = data.get("message") or data.get("errorMessage") or ""
+    detail = data.get("errorMessage") or data.get("message") or ""
+    if not detail and isinstance(data.get("error"), dict):
+        detail = data["error"].get("message") or ""
     if detail:
         why = why + " (" + str(detail) + ")"
     return status, why, fix
 
 
-def as_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "yes", "1", "enabled", "on")
-    return bool(value)
+NOT_ENABLED_TEXT = "compliance api is not enabled"
 
 
-def settings_map(data):
-    """Reduce the effective-settings rows to {name: value}.
+def api_not_enabled(data):
+    """True when the vendor answered 400 "Compliance API is not enabled for this organization".
 
-    A setting this organization's administrators cannot change is omitted from
-    the response entirely, so a missing name means "not controllable here",
-    never "off". Callers must distinguish absent from False, which is why this
-    returns a plain dict and callers use the _MISSING sentinel.
+    Anthropic returns that body on every Compliance API endpoint until the primary owner
+    enables the API, and again after an administrator turns it off. Unlike a 401, 403 or
+    404 it is a statement about the organization, not about Spektrum's credential.
     """
-    rows = None
+    if not isinstance(data, dict):
+        return False
+    status = data.get("vendorStatus")
+    if status is None:
+        status = data.get("statusCode") or data.get("status_code")
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        return False
+    if status != 400:
+        return False
+    parts = [data.get("errorMessage"), data.get("message"), data.get("vendorError"), data.get("error")]
+    text = " ".join([json.dumps(p) if isinstance(p, (dict, list)) else str(p or "") for p in parts]).lower()
+    return NOT_ENABLED_TEXT in text
+
+
+def unknown_response(validation, reason, recommendation, input_summary):
+    """Not evaluated: the value is None and dataCollection.status is "error"."""
+    return create_response(
+        result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
+        validation=validation,
+        fail_reasons=[reason],
+        recommendations=[recommendation],
+        input_summary=input_summary,
+        metadata=METADATA,
+        api_errors=[reason],
+    )
+
+
+def refusal_response(validation, data, what):
+    refusal = detect_refusal(data)
+    if not refusal:
+        return None
+    status, why, fix = refusal
+    return unknown_response(
+        validation,
+        "The " + what + " could not be read because " + why +
+        ". This is a connectivity or credential-scope result, not a finding about the "
+        "organization, so the control is not evaluated.",
+        fix,
+        {"endpointReachable": False, "httpStatus": status},
+    )
+
+
+def activity_items(data):
+    """The Activity Feed records as a list, or None when the body holds no list."""
     if isinstance(data, list):
-        rows = data
-    elif isinstance(data, dict):
-        for key in ("data", "settings"):
+        return data
+    if isinstance(data, dict):
+        for key in ("data", "activities"):
             if isinstance(data.get(key), list):
-                rows = data[key]
-                break
-    if rows is None:
-        rows = []
-    out = {}
-    for row in rows:
-        if isinstance(row, dict) and row.get("name") is not None:
-            out[row["name"]] = row.get("value", MISSING)
-    return out
+                return data[key]
+    return None
 
 
 def evaluate(input):
     data, validation = extract_input(input)
     # Token-Service navigates into the response's "data" key (codeexecutor
     # navigation_keys), so this transform usually receives the bare navigated
-    # value. Accept that, the returnSpec-mapped dict, and the raw API body so
-    # the same file works in the live pipeline and in direct/local testing.
-    refusal = detect_refusal(data)
-    if refusal:
-        refusal_status, refusal_why, refusal_fix = refusal
+    # value. Accept that, the returnSpec-mapped dict, and the raw API body.
+    if api_not_enabled(data):
         return create_response(
-            result={"isComplianceAPIEnabled": False, "endpointReachable": False, "httpStatus": refusal_status},
+            result={"isComplianceAPIEnabled": False, "evaluable": True},
             validation=validation,
             fail_reasons=[
-                "The vendor call did not return data because " + refusal_why +
-                ". This is a connectivity or credential-scope result, not a finding about "
-                "the organization's configuration - the control's real state is unknown."
+                "Anthropic answered that the Compliance API is not enabled for this organization, "
+                "so no audit trail of Claude activity is being recorded."
             ],
-            recommendations=[refusal_fix],
-            input_summary={"endpointReachable": False, "httpStatus": refusal_status},
+            recommendations=["The primary owner enables the Compliance API at claude.ai > Organization settings > API."],
+            input_summary={"endpointReachable": True, "httpStatus": 400},
             metadata=METADATA,
         )
+    refused = refusal_response(validation, data, "Compliance API Activity Feed")
+    if refused:
+        return refused
 
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        items = data.get("data")
-        if not isinstance(items, list):
-            items = data.get("activities")
-    else:
-        items = None
-    if not isinstance(items, list):
-        items = []
-
+    items = activity_items(data)
     if not items:
-        return create_response(
-            result={"isComplianceAPIEnabled": False, "activityCount": 0,
-                    "mostRecentActivityAt": None, "mostRecentActivityType": None},
-            validation=validation,
-            fail_reasons=[
-                "The Compliance API Activity Feed returned no records, so no audit trail could be "
-                "read for this organization. Activities are queryable within one minute of "
-                "occurring, so an empty feed on an active tenant indicates the Compliance API is "
-                "not enabled or the key lacks the read:compliance_activities scope."
-            ],
-            recommendations=[
-                "Confirm the Compliance API is enabled for the parent organization and that the key "
-                "carries read:compliance_activities or read:org_audit."
-            ],
-            input_summary={"activityCount": 0},
-            metadata=METADATA,
+        return unknown_response(
+            validation,
+            "The Activity Feed returned no records, so it could not be shown that the Compliance "
+            "API is recording for this organization. An empty page is not evidence either way.",
+            "Confirm the Compliance API is enabled at claude.ai > Organization settings > API and "
+            "that the key carries read:compliance_activities, then re-run the evaluation.",
+            {"activityCount": 0},
         )
 
     newest = items[0] if isinstance(items[0], dict) else {}
@@ -233,6 +262,7 @@ def evaluate(input):
     return create_response(
         result={
             "isComplianceAPIEnabled": True,
+            "evaluable": True,
             "activityCount": len(items),
             "mostRecentActivityAt": created_at,
             "mostRecentActivityType": activity_type,
@@ -257,11 +287,13 @@ def transform(input):
     try:
         return evaluate(input)
     except Exception as exc:  # never raise into the pipeline
+        message = "Transformation raised an unexpected error, so the control is not evaluated: " + str(exc)
         return create_response(
-            result={"isComplianceAPIEnabled": False},
+            result={"isComplianceAPIEnabled": UNKNOWN, "evaluable": False},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(exc)],
-            fail_reasons=["Transformation raised an unexpected error: " + str(exc)],
+            api_errors=[message],
+            fail_reasons=[message],
             recommendations=["Report this to the Spektrum integrations team with the raw API response."],
             metadata=METADATA,
         )
