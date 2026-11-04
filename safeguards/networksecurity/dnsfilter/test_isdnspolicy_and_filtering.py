@@ -222,6 +222,18 @@ class IsDnsFilteringEnabledTests(NotMeasured, unittest.TestCase):
     def test_an_unreadable_record_with_no_live_network_is_not_measured(self):
         self.not_measured(self.t.transform(["garbage", network(1, deleted_at="2026-01-01T00:00:00Z")]))
 
+    def test_records_that_are_not_networks_never_pass(self):
+        """Review finding: any dict used to count as a live network, so `[{}]` passed."""
+        for body in ([{}], [{"foo": 1}], [{"type": "errors", "detail": "x"}],
+                     [{"type": "errors", "attributes": {"name": "x"}}], [{"id": "1", "type": "networks"}],
+                     {"data": [{"code": "E1", "detail": "boom"}]}):
+            with self.subTest(body=body):
+                self.not_measured(self.t.transform(body))
+
+    def test_a_flattened_network_needs_an_id_and_a_network_field(self):
+        self.assertIs(self.verdict(self.t.transform([{"id": "1", "name": "Site", "ip_count": 0}])), True)
+        self.not_measured(self.t.transform([{"name": "Site"}]))
+
     def test_odd_ip_counts_are_not_counted(self):
         bad = [network(1), network(2), network(3)]
         bad[0]["attributes"]["ip_count"] = "5"
