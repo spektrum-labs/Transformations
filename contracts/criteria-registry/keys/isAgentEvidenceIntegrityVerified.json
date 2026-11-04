@@ -1,0 +1,40 @@
+{
+  "name": "isAgentEvidenceIntegrityVerified",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every Tracekit evidence bundle received in the evaluation window verified intact against the signer keys Spektrum pinned when the customer connected: Integrity VERIFIED, no failed verifier check, at least one run.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "Tracekit evidence bundles (.tkb) the customer pushed in the evaluation window, each verified by Integration-Service",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "At least one bundle in the window, and every bundle verified intact. A run that never closed, a failed check or an unverifiable bundle is false. Intact is not complete: it does not show that every agent action was captured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Artificial Intelligence"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/artificial-intelligence/tracekit/isAgentEvidenceIntegrityVerified.py",
+    "https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verdicts.md"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-25",
+      "change": "Registered with the Tracekit agent evidence transforms; proposed, no requirement reads it yet."
+    }
+  ],
+  "notes": "Input is Integration-Service's summary of `tracekit verify --json` (tracekit-ai 1.4.2) per bundle (src/services/tracekit_evidence.py), not a vendor API response. The trust config is Spektrum's, never the uploader's. No integration answers this key yet, so no RTA row maps it."
+}
