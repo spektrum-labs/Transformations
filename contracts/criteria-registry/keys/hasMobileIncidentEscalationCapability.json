@@ -1,0 +1,37 @@
+{
+  "name": "hasMobileIncidentEscalationCapability",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the vendor's own escalation configuration shows at least one escalation group that pages its members by a mobile method (SMS, phone, voice or push), not email alone.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the escalation groups the connected managed-detection tenant lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "At least one escalation group whose delivery methods include a mobile method (proof even on a partial read), or a complete read of at least one group none of which has one (False). No group, an error or refused answer, or a partial read with no mobile method is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/mdr/critical-start/hasMobileIncidentEscalationCapability.py (Critical Start ZTAP, GET /api/1.5/groups/, Group.delivery_methods; vendor client: github.com/demisto/content Packs/ZeroTrustAnalyticsPlatform)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-05",
+      "change": "Registered so the Critical Start transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}
