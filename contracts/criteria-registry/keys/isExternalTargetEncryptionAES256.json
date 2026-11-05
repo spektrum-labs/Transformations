@@ -1,0 +1,40 @@
+{
+  "name": "isExternalTargetEncryptionAES256",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Every external backup target encrypts stored data at rest with AES-256.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the external backup storage targets the integration lists, with their encryption settings",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A target listing in which every target's at-rest encryption algorithm reads AES256.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/isexternaltargetencryptionaes256.py",
+    "Backblaze B2 native API reference, b2_list_buckets: https://www.backblaze.com/apidocs/b2-list-buckets"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms. Other backup integrations already emit this key; their meaning is not yet validated against this entry."
+    }
+  ],
+  "notes": "Backblaze B2: defaultServerSideEncryption.value.algorithm == AES256 on every bucket; needs the readBucketEncryption capability."
+}
