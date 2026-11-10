@@ -103,6 +103,24 @@ def test_ticketing_true_false_none(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_ticketing_needs_a_subscriber_in_any_group(mode):
+    name = "hasActiveIncidentTicketing"
+    empty_named = incident(group="Tier 1", default=False, subs=0)
+    assert run(name, ts(incidents([empty_named] * 2)), mode)[0] is False                      # non-default group, nobody subscribed
+    no_flag = incident(group="Tier 1", subs=0)
+    del no_flag["assigned_group"]["is_default"]
+    assert run(name, ts(incidents([no_flag])), mode)[0] is False                              # is_default missing, nobody subscribed
+    flag_str = incident(group="Default", subs=0)
+    flag_str["assigned_group"]["is_default"] = "true"
+    assert run(name, ts(incidents([flag_str])), mode)[0] is False                             # non-boolean is_default, nobody subscribed
+    slim = incident(group="Tier 1")
+    del slim["assigned_group"]["subscriptions"]
+    value, status, _ = run(name, ts(incidents([slim, empty_named])), mode)
+    assert value is None and status == "error"                                                # subscriptions not shown: not measured
+    assert run(name, ts(incidents([slim, incident()])), mode)[0] is True                      # one subscribed group still proves it
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_multi_source_true_false_none(mode):
     name = "hasMultiSourceTelemetryIntegration"
     assert run(name, ts(incidents([incident("Proofpoint"), incident("Microsoft Sentinel")])), mode)[0] is True

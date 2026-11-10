@@ -2,12 +2,12 @@
   "name": "hasActiveIncidentTicketing",
   "revision": 2,
   "status": "proposed",
-  "definition": "True when the vendor's own incident records show incidents are routed to a connected ticketing (PSA) system.",
+  "definition": "True when the vendor's own incident records show incidents are routed to a ticketing path that reaches an owner: a connected ticketing (PSA) system, or, where the MDR's own incident queue is the ticketing system, an escalation group with at least one subscriber.",
   "valueType": "boolean",
   "unit": "none",
   "population": "the incident reports the connected managed-detection tenant lists",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "At least one incident report that carries a ticket id from the connected ticketing system (proof even on a partial read), or a complete read of at least one report none of which carries one (False). No incident report, an error or refused answer, or a partial read with no ticket id is not measured. Where the MDR's own queue is the ticketing system, an incident routed to an escalation group counts as ticketed.",
+  "evidenceRequiredForTrue": "At least one incident report that carries a ticket id from the connected ticketing system (proof even on a partial read), or a complete read of at least one report none of which carries one (False). No incident report, an error or refused answer, or a partial read with no ticket id is not measured. Where the MDR's own queue is the ticketing system, an incident routed to an escalation group with at least one subscriber counts as ticketed; a group with no subscribers does not, and a group whose subscriptions are not in the body is not measured.",
   "evidenceClass": "configured",
   "notMeasured": {
     "value": null,
@@ -36,7 +36,7 @@
     {
       "revision": 2,
       "date": "2026-11-05",
-      "change": "Added the Critical Start implementation (ZTAP incidents routed to an owned escalation group: non-default, or default with subscribers); evidence wording widened to the MDR's own queue, meaning unchanged."
+      "change": "Meaning widened: True no longer requires a PSA. Added the Critical Start implementation, where True means a ZTAP incident is routed to an escalation group with at least one subscriber, with no PSA connection required. Huntress True still means a PSA ticket id, so values from the two vendors are not comparable; a requirement that needs PSA routing should not rely on this key for Critical Start."
     }
   ],
   "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
