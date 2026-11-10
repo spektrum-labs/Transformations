@@ -4,8 +4,10 @@ Minutes from an alert's creation (datetime_created) to Critical Start's SOC hand
 organization (datetime_org_assigned), averaged over the incidents the SOC actually monitors. Incidents marked
 monitored_by "not_monitored" (tuning) or "customer" are not SOC-verified, and incidents the platform auto-routed
 (is_autorouted) were assigned by a rule, not an analyst, so both are left out: counting them would report the
-auto-router's speed, not the analysts'. No analyst-handled incident with both timestamps, an error body or no
-incidents at all is not measured (None).
+auto-router's speed, not the analysts'. A SOC-monitored incident with no organization-assignment time yet is
+pending, and one with an unreadable or negative interval is skipped; both are counted and reported, and when they
+outnumber the measured incidents the mean would describe a flattering minority, so it is not measured (None).
+No analyst-handled incident with both timestamps, an error body or no incidents at all is not measured (None).
 """
 import json
 from datetime import datetime
@@ -183,24 +185,39 @@ def transform(input):
             return not_measured(key, "Critical Start returned no incidents, so there is no acknowledgment time to measure.", validation)
         monitored = [i for i in incidents if soc_monitored(i)]
         minutes = []
+        pending = 0
+        skipped = 0
         for i in monitored:
+            if i.get("datetime_org_assigned") in (None, ""):
+                pending += 1
+                continue
             created = parse_time(i.get("datetime_created"))
             acked = parse_time(i.get("datetime_org_assigned"))
             if created is not None and acked is not None and acked >= created:
                 minutes.append((acked - created).total_seconds() / 60.0)
+            else:
+                skipped += 1
         if not minutes:
             unmonitored = len(incidents) - len(monitored)
             return not_measured(key, "None of the " + str(len(incidents)) + " Critical Start incidents read is SOC-monitored with both a creation and an "
-                                "organization-assignment time (" + str(unmonitored) + " are not monitored by Critical Start or were auto-routed by a rule, e.g. still in tuning); "
+                                "organization-assignment time (" + str(unmonitored) + " are not monitored by Critical Start or were auto-routed by a rule, e.g. still in tuning; "
+                                + str(pending) + " are still pending hand-over; " + str(skipped) + " have unreadable or negative times); "
                                 "the SOC's acknowledgment time cannot be measured.", validation)
+        if pending + skipped > len(minutes):
+            return not_measured(key, "Only " + str(len(minutes)) + " of the " + str(len(monitored)) + " SOC-monitored Critical Start incidents read have a usable "
+                                "hand-over time (" + str(pending) + " still pending, " + str(skipped) + " with unreadable or negative times); a mean over that "
+                                "minority would hide the slowest incidents, so it is not measured.", validation)
         mean = round(sum(minutes) / len(minutes), 2)
         text = ("Critical Start's SOC handed " + str(len(minutes)) + " monitored incidents to the organization in a mean of " + str(mean)
-                + " minutes after creation (" + str(len(incidents)) + " incidents read).")
+                + " minutes after creation (" + str(len(incidents)) + " incidents read; " + str(pending) + " monitored incidents still pending hand-over, "
+                + str(skipped) + " skipped for unreadable or negative times" + ("" if complete else "; partial read of the incident list") + ").")
         return create_response(
-            result={key: mean, "incidentsRead": len(incidents), "analystHandledIncidents": len(monitored), "measuredIncidents": len(minutes)},
+            result={key: mean, "incidentsRead": len(incidents), "analystHandledIncidents": len(monitored), "measuredIncidents": len(minutes),
+                    "pendingIncidents": pending, "skippedIncidents": skipped, "completeRead": complete},
             validation=validation,
             pass_reasons=[text],
             input_summary={"incidentsRead": len(incidents), "analystHandledIncidents": len(monitored), "measuredIncidents": len(minutes),
+                           "pendingIncidents": pending, "skippedIncidents": skipped,
                            "completeRead": complete, "maxMinutes": round(max(minutes), 2)},
             metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
         )

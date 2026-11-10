@@ -149,6 +149,21 @@ def test_ack_minutes_measures_only_soc_monitored(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_ack_minutes_counts_pending_and_skipped(mode):
+    name = "meanTimeToVerificationAckMinutesCount"
+    fast = incident(monitored="criticalstart", created="2026-11-05T10:00:00Z", assigned="2026-11-05T10:05:00Z")
+    pending = incident(monitored="criticalstart", created="2026-11-05T11:00:00Z", assigned=None)
+    backwards = incident(monitored="criticalstart", created="2026-11-05T12:00:00Z", assigned="2026-11-05T11:00:00Z")
+    value, status, _ = run(name, ts(incidents([fast, fast, pending, pending, pending])), mode)
+    assert value is None and status == "error"                                    # 2 measured of 5 monitored: not measured
+    value, status, _ = run(name, ts(incidents([fast, pending, backwards])), mode)
+    assert value is None and status == "error"                                    # skipped intervals count against the sample too
+    value, status, out = run(name, ts(incidents([fast, fast, pending])), mode)
+    assert value == 5.0 and status == "success"
+    assert out["transformedResponse"]["pendingIncidents"] == 1 and out["transformedResponse"]["skippedIncidents"] == 0
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_mobile_escalation_true_false_none(mode):
     name = "hasMobileIncidentEscalationCapability"
     assert run(name, ts(groups([group(("email",)), group(("email", "sms"), "High")])), mode)[0] is True
