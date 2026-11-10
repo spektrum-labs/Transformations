@@ -1,11 +1,12 @@
 """Transformation: hasActiveIncidentTicketing - Critical Start MDR (ZTAP), GET {serverUrl}/api/1.5/incidents/ (getIncidents).
 
 ZTAP is the MDR's own incident queue. An incident is "ticketed" when it has been routed to one of the
-organization's escalation groups (assigned_group) that is a real notification path: a non-default group, or the
-default group with at least one subscriber. ZTAP auto-routes every incident to some group, so a bare default
-group with nobody subscribed is a queue, not a ticket. One such incident proves routing, even on a partial read.
-False only on a complete read of at least one incident where none is routed to an owned group. No incidents, an error body or a
-partial read without a routed incident is not measured (None).
+organization's escalation groups (assigned_group) that is a real notification path: a named group with at least one
+subscriber, whether or not it is the default group. ZTAP auto-routes every incident to some group, so a group with
+nobody subscribed is a queue, not a ticket. One such incident proves routing, even on a partial read.
+False only on a complete read of at least one incident where none is routed to a subscribed group and every assigned
+group shows its subscriptions list. No incidents, an error body, a group without a subscriptions list, or a partial
+read without a routed incident is not measured (None).
 """
 import json
 from datetime import datetime
@@ -162,20 +163,23 @@ def parse_time(value):
 
 
 def subscribers(group):
+    """Subscriber count, or None when the group carries no subscriptions list (not shown either way)."""
     subs = group.get("subscriptions")
-    return len([s for s in subs if isinstance(s, dict)]) if isinstance(subs, list) else 0
+    return len([s for s in subs if isinstance(s, dict)]) if isinstance(subs, list) else None
 
 
 def routed(incident):
+    """True when routed to a named group with a subscriber, False when it is not, None when the body cannot show it."""
     group = incident.get("assigned_group")
     if not isinstance(group, dict):
         return False
     name = group.get("name")
     if not (isinstance(name, str) and name.strip()):
         return False
-    if group.get("is_default") is True and subscribers(group) == 0:
-        return False
-    return True
+    count = subscribers(group)
+    if count is None:
+        return None
+    return count > 0
 
 
 def transform(input):
@@ -187,14 +191,19 @@ def transform(input):
             return not_measured(key, problem, validation)
         if not incidents:
             return not_measured(key, "Critical Start returned no incidents, so there is no incident to show routed to an escalation group.", validation)
-        ticketed = [i for i in incidents if routed(i)]
+        states = [routed(i) for i in incidents]
+        ticketed = [i for i, state in zip(incidents, states) if state is True]
+        unknown = len([state for state in states if state is None])
         if ticketed:
             text = (str(len(ticketed)) + " of " + str(len(incidents)) + " Critical Start incidents read are routed to an escalation group, "
-                    "so incidents are tracked as owned tickets with a notification path (a non-default group, or the default group with subscribers).")
+                    "so incidents are tracked as owned tickets with a notification path (a group with at least one subscriber).")
             ok = True
+        elif unknown:
+            return not_measured(key, str(unknown) + " of the " + str(len(incidents)) + " Critical Start incidents read are assigned to a group whose "
+                                "subscriptions are not in the response, and none is routed to a subscribed group; the notification path cannot be shown.", validation)
         elif complete:
-            text = ("None of the " + str(len(incidents)) + " Critical Start incidents is routed to an owned escalation group (only the default group with no "
-                    "subscribers), so incidents are queued but not ticketed to anyone.")
+            text = ("None of the " + str(len(incidents)) + " Critical Start incidents is routed to an escalation group with a subscriber (no group, or "
+                    "only groups nobody is subscribed to), so incidents are queued but not ticketed to anyone.")
             ok = False
         else:
             return not_measured(key, "Only part of the incident list was read and none of it is routed to a group; "
@@ -204,7 +213,7 @@ def transform(input):
             validation=validation,
             pass_reasons=[text] if ok else [],
             fail_reasons=[] if ok else [text],
-            recommendations=[] if ok else ["Assign ZTAP escalation groups so incidents are routed to an owner (ZTAP > Organization > Escalation groups)."],
+            recommendations=[] if ok else ["Assign ZTAP escalation groups with at least one subscriber so incidents are routed to an owner (ZTAP > Organization > Escalation groups)."],
             input_summary={"incidentsRead": len(incidents), "routedIncidents": len(ticketed), "completeRead": complete},
             metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
         )
