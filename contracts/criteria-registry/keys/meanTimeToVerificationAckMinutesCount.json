@@ -7,7 +7,7 @@
   "unit": "minutes",
   "population": "the SOC-monitored incidents the connected managed-detection tenant lists that carry both a creation and an organization-assignment time",
   "polarity": "lower_is_better",
-  "evidenceRequiredForTrue": "At least one SOC-monitored incident with both timestamps. Incidents the MDR marks as not monitored (tuning) or customer-monitored, and incidents the platform auto-routed by rule (is_autorouted), are excluded, because their assignment time is the auto-router's, not an analyst's. No such incident, no incidents, or an error or refused answer is not measured.",
+  "evidenceRequiredForTrue": "At least one SOC-monitored incident with both timestamps. Incidents the MDR marks as not monitored (tuning) or customer-monitored, and incidents the platform auto-routed by rule (is_autorouted), are excluded, because their assignment time is the auto-router's, not an analyst's. SOC-monitored incidents with no organization-assignment time yet (pending) or with an unreadable or negative interval (skipped) are counted and reported; when they outnumber the measured incidents the mean is not measured. No such incident, no incidents, or an error or refused answer is not measured.",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,
