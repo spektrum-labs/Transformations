@@ -7,7 +7,7 @@ Evaluates if the license has been purchased for the Firewall.
 """
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 
 def extract_input(input_data):
@@ -56,7 +56,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "additionalFindings": additional_findings or []
             },
             "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "evaluatedAt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "confirmedLicensePurchased",
                 "vendor": "Firewall",
@@ -89,7 +89,7 @@ def transform(input):
         recommendations = []
 
         licenses = cato_licenses(data)
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         active = [l for l in licenses if is_active(l, today)]
         license_purchased = len(active) > 0
 

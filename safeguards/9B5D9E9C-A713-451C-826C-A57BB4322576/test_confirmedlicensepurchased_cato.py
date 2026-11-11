@@ -62,6 +62,16 @@ class CatoLicence(unittest.TestCase):
         self.assertIs(self.res({"errors": [{"message": "permission denied"}], "data": None}), False)
         self.assertIs(self.res(None), False)
 
+    def test_partial_graphql_errors_judged_on_licences(self):
+        # GraphQL can return field errors beside data it did resolve. The licences that came back are
+        # real, so they decide; an error with no licence data still fails (test above).
+        payload = body([lic()])
+        payload["errors"] = [{"message": "field unavailable"}]
+        self.assertIs(self.res(payload), True)
+        payload = body([lic(status="EXPIRED")])
+        payload["errors"] = [{"message": "field unavailable"}]
+        self.assertIs(self.res(payload), False)
+
 
 if __name__ == "__main__":
     unittest.main()
