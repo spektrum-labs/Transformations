@@ -7,7 +7,7 @@ Evaluates if the license has been purchased for Security Ratings.
 """
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 
 def extract_input(input_data):
@@ -56,7 +56,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "additionalFindings": additional_findings or []
             },
             "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "evaluatedAt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "confirmedLicensePurchased",
                 "vendor": "Security Ratings",
@@ -88,7 +88,7 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         subscription = subscription_of(data)
         license_purchased = is_subscribed(subscription, today)
 
