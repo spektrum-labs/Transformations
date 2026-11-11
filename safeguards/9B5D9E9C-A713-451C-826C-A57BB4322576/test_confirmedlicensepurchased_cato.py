@@ -43,9 +43,12 @@ class CatoLicence(unittest.TestCase):
 
     def test_date_only_and_today_expiry_pass(self):
         import datetime as dt
-        today = dt.datetime.utcnow().date().isoformat()
         self.assertIs(self.res(body([lic(expires="2029-06-30")])), True)
-        self.assertIs(self.res(body([lic(expires=today)])), True)
+        today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        result = self.res(body([lic(expires=today)]))
+        if dt.datetime.now(dt.timezone.utc).date().isoformat() != today:
+            self.skipTest("the run crossed midnight UTC between computing today and the transform")
+        self.assertIs(result, True)
 
     def test_missing_expiry_passes(self):
         self.assertIs(self.res(body([lic(expires=None)])), True)
