@@ -256,16 +256,23 @@ def transform(input):
         additional_findings = []
 
         # Primary criteria: isFirewallLoggingEnabled. None is Not evaluated: no pass or fail reason is given for it.
+        # One transform serves three methods, and each method's body carries only its own slice: the policy call
+        # sends firewall/wanNetwork, the logging call sends data.auditFeed. A slice the body never carried belongs to
+        # another call, so its None is not this call's collection error. dataCollection.status is read for the whole
+        # output, so reporting it here marked the measured key on every call Not evaluated. With neither slice present
+        # nothing was measured, and both errors are reported.
+        audit_present = isinstance(data, dict) and isinstance(audit_data, dict) and 'auditFeed' in audit_data
+        layers_present = isinstance(data, dict) and ('firewall' in data or 'wanNetwork' in data)
         api_errors = []
         if is_firewall_logging_enabled is True:
             pass_reasons.append("Firewall logging is enabled")
         elif is_firewall_logging_enabled is False:
             fail_reasons.append("Firewall logging is not enabled")
             recommendations.append("Enable firewall logging for audit and compliance")
-        else:
+        elif audit_present or not layers_present:
             api_errors.append(AUDIT_FEED_NOT_READ)
 
-        if is_firewall_enabled_final is None or is_firewall_configured is None:
+        if (is_firewall_enabled_final is None or is_firewall_configured is None) and (layers_present or not audit_present):
             api_errors.append(LAYERS_NOT_READ)
 
         # Additional finding: isFirewallEnabled (none when it was not evaluated)
