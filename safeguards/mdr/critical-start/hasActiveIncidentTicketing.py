@@ -1,0 +1,211 @@
+"""Transformation: hasActiveIncidentTicketing - Critical Start MDR (ZTAP), GET {serverUrl}/api/1.5/incidents/ (getIncidents).
+
+ZTAP is the MDR's own incident queue. An incident is "ticketed" when it has been routed to one of the
+organization's escalation groups (assigned_group) that is a real notification path: a named group with at least one
+subscriber, whether or not it is the default group. ZTAP auto-routes every incident to some group, so a group with
+nobody subscribed is a queue, not a ticket. One such incident proves routing, even on a partial read.
+False only on a complete read of at least one incident where none is routed to a subscribed group and every assigned
+group shows its subscriptions list. No incidents, an error body, a group without a subscriptions list, or a partial
+read without a routed incident is not measured (None).
+"""
+import json
+from datetime import datetime
+
+VENDOR = "Critical Start"
+WRAPPERS = ["result", "response", "apiResponse", "api_response", "Output", "data", "_response_data"]
+
+
+def extract_validation(input_data):
+    if isinstance(input_data, dict) and "validation" in input_data and isinstance(input_data["validation"], dict):
+        return input_data["validation"]
+    return {"status": "unknown", "errors": [], "warnings": ["Legacy input format - no schema validation performed"]}
+
+
+def create_response(result, validation=None, pass_reasons=None, fail_reasons=None, recommendations=None,
+                    input_summary=None, metadata=None, transformation_errors=None, api_errors=None,
+                    additional_findings=None):
+    """Standardized 5-section transformation response."""
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
+    api_err_list = api_errors or []
+    transform_err_list = transformation_errors or []
+    response_metadata = {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0"}
+    if metadata:
+        response_metadata.update(metadata)
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "error" if api_err_list else "success", "errors": api_err_list},
+            "validation": {
+                "status": validation.get("status", "unknown"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", []),
+            },
+            "transformation": {
+                "status": "error" if transform_err_list else "success",
+                "errors": transform_err_list,
+                "inputSummary": input_summary or {},
+            },
+            "evaluation": {
+                "passReasons": pass_reasons or [],
+                "failReasons": fail_reasons or [],
+                "recommendations": recommendations or [],
+                "additionalFindings": additional_findings or [],
+            },
+            "metadata": response_metadata,
+        },
+    }
+
+
+def error_in(cur):
+    """A short error string when a vendor/IS error body is in hand, else None."""
+    if cur.get("errors") or cur.get("error") is True or isinstance(cur.get("error"), (str, dict)):
+        detail = cur.get("errors") or cur.get("error") or cur.get("message") or "error"
+        return json.dumps(detail)[:300]
+    if cur.get("errMsg") or cur.get("errNo"):
+        return json.dumps(cur.get("errMsg") or cur.get("errNo"))[:300]
+    code = cur.get("status_code") or cur.get("statusCode")
+    if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+        return "HTTP " + str(code) + ": " + json.dumps(cur.get("message") or cur.get("detail") or "")[:200]
+    return None
+
+
+def find_key(obj, wanted):
+    """(container_dict, error) for the first dict, through any wrapper, that carries key `wanted`."""
+    cur = obj
+    for depth in range(8):
+        if isinstance(cur, str):
+            try:
+                cur = json.loads(cur)
+            except Exception:
+                return None, None
+        if not isinstance(cur, dict):
+            return None, None
+        if wanted in cur:
+            return cur, None
+        problem = error_in(cur)
+        if problem is not None:
+            return None, problem
+        nxt = None
+        for key in WRAPPERS:
+            if isinstance(cur.get(key), (dict, str)):
+                nxt = cur.get(key)
+                break
+        if nxt is None:
+            return None, None
+        cur = nxt
+    return None, None
+
+
+def raw_body(input):
+    # input.get("data") makes Token-Service pass the undrilled response in a {data, validation}
+    # envelope, so the vendor's total and the paginator's truncation flag stay visible.
+    if isinstance(input, dict) and "validation" in input:
+        return input.get("data")
+    return input
+
+
+def truncated(input, box):
+    """True when the Integration-Service paginator marked the merged read partial."""
+    for cur in (box, raw_body(input), input):
+        if isinstance(cur, dict) and cur.get("paginationTruncated") is True:
+            return True
+    return False
+
+
+def to_int(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def read_objects(input, noun):
+    """(objects, complete, problem) from a ZTAP list read: {"objects": [...], "total": N, ...}."""
+    box, problem = find_key(raw_body(input), "objects")
+    if problem is not None:
+        return None, False, "Critical Start returned an error instead of " + noun + ": " + problem
+    if box is None or not isinstance(box.get("objects"), list):
+        return None, False, "No Critical Start " + noun + " list in the response; nothing to evaluate."
+    items = [o for o in box["objects"] if isinstance(o, dict)]
+    if len(items) != len(box["objects"]):
+        return None, False, "The " + noun + " list holds entries that are not records, so it cannot be scored."
+    total = to_int(box.get("total"))
+    if total is None:
+        return None, False, "The " + noun + " list carries no readable total, so a complete read cannot be shown."
+    complete = (not truncated(input, box)) and len(items) >= total
+    return items, complete, None
+
+
+def not_measured(key, problem, validation):
+    return create_response(
+        result={key: None},
+        validation=validation,
+        fail_reasons=[problem],
+        api_errors=[problem],
+        metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
+    )
+
+
+def subscribers(group):
+    """Subscriber count (subscription records, or bare ids), or None when the group carries no subscriptions list."""
+    subs = group.get("subscriptions")
+    if not isinstance(subs, list):
+        return None
+    return len([s for s in subs if isinstance(s, dict) or (isinstance(s, (int, str)) and not isinstance(s, bool) and str(s).strip())])
+
+
+def routed(incident):
+    """True when routed to a named group with a subscriber, False when it is not, None when the body cannot show it."""
+    group = incident.get("assigned_group")
+    if not isinstance(group, dict):
+        return False
+    name = group.get("name")
+    if not (isinstance(name, str) and name.strip()):
+        return False
+    count = subscribers(group)
+    if count is None:
+        return None
+    return count > 0
+
+
+def transform(input):
+    key = "hasActiveIncidentTicketing"
+    validation = extract_validation(input)
+    try:
+        incidents, complete, problem = read_objects(input, "incidents")
+        if problem is not None:
+            return not_measured(key, problem, validation)
+        if not incidents:
+            return not_measured(key, "Critical Start returned no incidents, so there is no incident to show routed to an escalation group.", validation)
+        states = [routed(i) for i in incidents]
+        ticketed = [i for i, state in zip(incidents, states) if state is True]
+        unknown = len([state for state in states if state is None])
+        if ticketed:
+            text = (str(len(ticketed)) + " of " + str(len(incidents)) + " Critical Start incidents read are routed to an escalation group, "
+                    "so incidents are tracked as owned tickets with a notification path (a group with at least one subscriber).")
+            ok = True
+        elif unknown:
+            return not_measured(key, str(unknown) + " of the " + str(len(incidents)) + " Critical Start incidents read are assigned to a group whose "
+                                "subscriptions are not in the response, and none is routed to a subscribed group; the notification path cannot be shown.", validation)
+        elif complete:
+            text = ("None of the " + str(len(incidents)) + " Critical Start incidents is routed to an escalation group with a subscriber (no group, or "
+                    "only groups nobody is subscribed to), so incidents are queued but not ticketed to anyone.")
+            ok = False
+        else:
+            return not_measured(key, "Only part of the incident list was read and none of it is routed to a group; "
+                                "a partial read cannot show that no incident is ticketed.", validation)
+        return create_response(
+            result={key: ok, "incidentsRead": len(incidents), "routedIncidents": len(ticketed)},
+            validation=validation,
+            pass_reasons=[text] if ok else [],
+            fail_reasons=[] if ok else [text],
+            recommendations=[] if ok else ["Assign ZTAP escalation groups with at least one subscriber so incidents are routed to an owner (ZTAP > Organization > Escalation groups)."],
+            input_summary={"incidentsRead": len(incidents), "routedIncidents": len(ticketed), "completeRead": complete},
+            metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
+        )
+    except Exception as e:
+        return not_measured(key, "Transformation error: " + str(e), validation)
