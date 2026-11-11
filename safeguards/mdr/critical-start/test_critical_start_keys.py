@@ -134,6 +134,20 @@ def test_multi_source_true_false_none(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_multi_source_unnamed_incidents_are_not_false(mode):
+    name = "hasMultiSourceTelemetryIntegration"
+    value, status, out = run(name, ts(incidents([incident("Proofpoint"), incident("Proofpoint"), incident("")])), mode)
+    assert value is None and status == "error"                                                # one named source, one unnamed: not False
+    assert out["additionalInfo"]["evaluation"]["failReasons"][0].startswith("1 of the 3 incidents name no alert source")
+    value, _, out = run(name, ts(incidents([incident("Proofpoint"), incident("Microsoft Sentinel"), incident("")])), mode)
+    assert value is True                                                                       # two named sources still prove it
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["unsourcedIncidents"] == 1
+    value, _, out = run(name, ts(incidents([incident("Proofpoint"), incident("Proofpoint")])), mode)
+    assert value is False and out["additionalInfo"]["transformation"]["inputSummary"]["unsourcedIncidents"] == 0
+    assert run(name, ts(incidents([incident("Proofpoint"), incident("")], total=9)), mode)[0] is None   # partial read, one source
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_multi_source_normalises_slug_and_label(mode):
     name = "hasMultiSourceTelemetryIntegration"
     slug_only = incident("Microsoft Sentinel")
