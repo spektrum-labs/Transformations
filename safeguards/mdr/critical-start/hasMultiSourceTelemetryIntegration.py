@@ -5,8 +5,11 @@ alert_source_display its label ("Microsoft Sentinel"). Sources are counted on on
 is present and the label otherwise, normalised to lower-case letters and digits, so "Microsoft Sentinel",
 "microsoft_sentinel" and "MicrosoftSentinel" are one source, not two. Two or more distinct sources across the
 incidents read prove the MDR ingests telemetry from more than one tool, even on a partial read. False only on a
-complete read of at least one incident where every incident comes from the same single source. No incidents, an
-error body, incidents without a source, or a partial read with one source is not measured (None). A label-only
+complete read of at least one incident where every incident names the same single source. No incidents, an error
+body, a read in which no incident names a source, or a partial read with one source is not measured (None). An
+incident that names no source is counted (unsourcedIncidents) and, when the named incidents all share one source,
+makes the key not measured rather than False, since the unnamed incidents could come from a second tool; two named
+sources still prove True. A label-only
 incident is keyed through the slug that label is seen with on any incident carrying both fields, so "Microsoft
 Sentinel" alone still lands on "ms_sent" when another incident pairs them; only a label that never appears beside a
 slug, and is spelt unlike it, keys on its own. On the live body every incident carries both fields.
@@ -170,23 +173,27 @@ def source_texts(incident):
 
 
 def source_keys(incidents):
-    """{key: label}, one key per product. First pass learns which label belongs to which slug from the incidents that
-    carry both; second pass keys each incident by its slug, else by the slug its label is known to pair with, else by
-    the label itself. Keys are normalised (lower-case letters and digits)."""
+    """({key: label}, unsourced): one key per product, and how many incidents name no source at all. First pass learns
+    which label belongs to which slug from the incidents that carry both; second pass keys each incident by its slug,
+    else by the slug its label is known to pair with, else by the label itself. Keys are normalised (lower-case
+    letters and digits)."""
     alias = {}
     for i in incidents:
         slug, display = source_texts(i)
         if slug and display and normalise(slug) and normalise(display):
             alias[normalise(display)] = normalise(slug)
     labels = {}
+    unsourced = 0
     for i in incidents:
         slug, display = source_texts(i)
         keyed = normalise(slug) if slug else ""
         if not keyed and display:
             keyed = alias.get(normalise(display)) or normalise(display)
-        if keyed and keyed not in labels:
+        if not keyed:
+            unsourced += 1
+        elif keyed not in labels:
             labels[keyed] = display or slug
-    return labels
+    return labels, unsourced
 
 
 def transform(input):
@@ -198,7 +205,7 @@ def transform(input):
             return not_measured(key, problem, validation)
         if not incidents:
             return not_measured(key, "Critical Start returned no incidents, so no telemetry source can be shown.", validation)
-        labels = source_keys(incidents)
+        labels, unsourced = source_keys(incidents)
         sources = sorted(labels)
         if not sources:
             return not_measured(key, "None of the " + str(len(incidents)) + " incidents names its alert source, so the telemetry sources cannot be counted.", validation)
@@ -206,6 +213,9 @@ def transform(input):
             text = (str(len(sources)) + " distinct telemetry sources raised the " + str(len(incidents)) + " Critical Start incidents read: "
                     + ", ".join(labels[s] for s in sources) + ".")
             ok = True
+        elif complete and unsourced:
+            return not_measured(key, str(unsourced) + " of the " + str(len(incidents)) + " incidents name no alert source, so a second telemetry source behind the one named ("
+                                + labels[sources[0]] + ") cannot be ruled out.", validation)
         elif complete:
             text = ("All " + str(len(incidents)) + " Critical Start incidents come from a single telemetry source (" + labels[sources[0]]
                     + "); no second tool feeds the MDR.")
@@ -218,7 +228,7 @@ def transform(input):
             pass_reasons=[text] if ok else [],
             fail_reasons=[] if ok else [text],
             recommendations=[] if ok else ["Connect a second telemetry source (endpoint, identity, email or SIEM) to Critical Start so the MDR correlates across tools."],
-            input_summary={"incidentsRead": len(incidents), "telemetrySources": [labels[s] for s in sources], "telemetrySourceKeys": sources, "completeRead": complete},
+            input_summary={"incidentsRead": len(incidents), "telemetrySources": [labels[s] for s in sources], "telemetrySourceKeys": sources, "unsourcedIncidents": unsourced, "completeRead": complete},
             metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
         )
     except Exception as e:
