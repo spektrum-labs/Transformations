@@ -4,13 +4,26 @@ Minutes from an alert's creation (datetime_created) to Critical Start's SOC hand
 organization (datetime_org_assigned), averaged over the incidents the SOC actually monitors. Incidents marked
 monitored_by "not_monitored" (tuning) or "customer" are not SOC-verified, and incidents the platform auto-routed
 (is_autorouted) were assigned by a rule, not an analyst, so both are left out: counting them would report the
-auto-router's speed, not the analysts'. A SOC-monitored incident with no organization-assignment time yet is
-pending, and one with an unreadable or negative interval is skipped; both are counted and reported, and when they
-outnumber the measured incidents the mean would describe a flattering minority, so it is not measured (None).
+auto-router's speed, not the analysts'.
+
+The sampling rule, so the mean cannot be read from a flattering subset:
+- A SOC-monitored incident with no organization-assignment time yet is "pending": the slowest case, not acknowledged
+  at all. One whose times cannot be placed, or whose assignment precedes its creation (clock skew, re-opened), is
+  "skipped". Both are counted, returned next to the mean (pendingIncidents, skippedIncidents) and named in the reason.
+- When pending plus skipped outnumber the measured incidents, the mean would describe a minority, so it is not
+  measured (None).
+- Timestamps are read as full ISO 8601 with their UTC offset ("2026-11-05T21:15:47Z", "...+05:00", "...-0800",
+  fractional seconds allowed) and compared on the UTC line, so mixed offsets cannot skew an interval. A timestamp
+  with no offset cannot be placed and counts as skipped rather than being guessed as UTC.
+- A partial read (the paginator stopped before the vendor's total) is still measured, reported as partial
+  (completeRead False, named in the reason) and gated one notch stricter: pending plus skipped equal to the measured
+  count is also not measured. Any window's measured incidents are the ones already handed over, so its mean leans
+  optimistic; the pending and skipped counts beside it are what show the slow tail. Refusing every partial read
+  would blind the key on any tenant larger than one page, so the stricter gate is the trade.
 No analyst-handled incident with both timestamps, an error body or no incidents at all is not measured (None).
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 VENDOR = "Critical Start"
 WRAPPERS = ["result", "response", "apiResponse", "api_response", "Output", "data", "_response_data"]
@@ -151,16 +164,48 @@ def not_measured(key, problem, validation):
     )
 
 
+def utc_offset_minutes(zone):
+    """Minutes east of UTC for "Z", "+HH:MM", "-HHMM" or "+HH"; None for anything else, including no offset at all."""
+    if zone in ("Z", "z"):
+        return 0
+    if len(zone) < 3 or zone[0] not in ("+", "-"):
+        return None
+    digits = zone[1:].replace(":", "")
+    if not digits.isdigit() or len(digits) not in (2, 4):
+        return None
+    hours = int(digits[0:2])
+    mins = int(digits[2:4]) if len(digits) == 4 else 0
+    if hours > 23 or mins > 59:
+        return None
+    total = hours * 60 + mins
+    return -total if zone[0] == "-" else total
+
+
 def parse_time(value):
-    """ZTAP timestamps are "2026-11-05T21:15:47Z". No strptime: the Token-Service sandbox does not allow it."""
-    if not isinstance(value, str) or len(value) < 19:
+    """ISO 8601 timestamp to a naive UTC datetime ("2026-11-05T21:15:47Z", "2026-11-05T16:15:47.123-05:00").
+    No strptime: the Token-Service sandbox does not allow it. None when the value carries no UTC offset or cannot
+    be read, so the caller counts it as skipped instead of guessing a zone."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if len(value) < 20:
         return None
     if value[4] != "-" or value[7] != "-" or value[10] not in ("T", " ") or value[13] != ":" or value[16] != ":":
         return None
+    rest = value[19:]
+    if rest.startswith("."):
+        end = 1
+        while end < len(rest) and rest[end].isdigit():
+            end += 1
+        rest = rest[end:]
+    offset = utc_offset_minutes(rest)
+    if offset is None:
+        return None
     try:
-        return datetime(int(value[0:4]), int(value[5:7]), int(value[8:10]), int(value[11:13]), int(value[14:16]), int(value[17:19]))
+        stamp = datetime(int(value[0:4]), int(value[5:7]), int(value[8:10]), int(value[11:13]), int(value[14:16]), int(value[17:19]))
     except Exception:
         return None
+    return stamp - timedelta(minutes=offset)
 
 UNMONITORED = ("not_monitored", "customer", "", "none", "null")
 
@@ -169,7 +214,7 @@ def soc_monitored(incident):
     value = incident.get("monitored_by")
     if value is None:
         return False
-    if incident.get("is_autorouted") is True:
+    if str(incident.get("is_autorouted")).strip().lower() == "true":
         return False
     return str(value).strip().lower() not in UNMONITORED
 
@@ -203,10 +248,11 @@ def transform(input):
                                 "organization-assignment time (" + str(unmonitored) + " are not monitored by Critical Start or were auto-routed by a rule, e.g. still in tuning; "
                                 + str(pending) + " are still pending hand-over; " + str(skipped) + " have unreadable or negative times); "
                                 "the SOC's acknowledgment time cannot be measured.", validation)
-        if pending + skipped > len(minutes):
+        if pending + skipped > len(minutes) or (not complete and pending + skipped >= len(minutes)):
             return not_measured(key, "Only " + str(len(minutes)) + " of the " + str(len(monitored)) + " SOC-monitored Critical Start incidents read have a usable "
                                 "hand-over time (" + str(pending) + " still pending, " + str(skipped) + " with unreadable or negative times); a mean over that "
-                                "minority would hide the slowest incidents, so it is not measured.", validation)
+                                "share would hide the slowest incidents, so it is not measured"
+                                + ("" if complete else "; partial read of the incident list") + ".", validation)
         mean = round(sum(minutes) / len(minutes), 2)
         text = ("Critical Start's SOC handed " + str(len(minutes)) + " monitored incidents to the organization in a mean of " + str(mean)
                 + " minutes after creation (" + str(len(incidents)) + " incidents read; " + str(pending) + " monitored incidents still pending hand-over, "

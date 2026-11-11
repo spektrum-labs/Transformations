@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "the incidents the connected managed-detection tenant lists",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "Two or more distinct alert sources across the incidents read (proof even on a partial read), or a complete read of at least one incident in which every incident names the same single source (False). No incident, no named source, an error or refused answer, or a partial read showing one source is not measured.",
+  "evidenceRequiredForTrue": "Two or more distinct alert sources across the incidents read (proof even on a partial read), or a complete read of at least one incident in which every incident names the same single source (False). Sources are compared on one normalised key per incident (the vendor's slug when present, else its display label, lower-case letters and digits only), so a slug and its label are one source, not two. No incident, no named source, an error or refused answer, or a partial read showing one source is not measured.",
   "evidenceClass": "presence",
   "notMeasured": {
     "value": null,

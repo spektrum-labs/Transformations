@@ -1,9 +1,15 @@
 """Transformation: hasMultiSourceTelemetryIntegration - Critical Start MDR (ZTAP), GET {serverUrl}/api/1.5/incidents/ (getIncidents).
 
-Every ZTAP incident names the product that raised it (alert_source). Two or more distinct sources across the
+Every ZTAP incident names the product that raised it: alert_source is the vendor's slug ("ms_sent") and
+alert_source_display its label ("Microsoft Sentinel"). Sources are counted on one key per incident, the slug when it
+is present and the label otherwise, normalised to lower-case letters and digits, so "Microsoft Sentinel",
+"microsoft_sentinel" and "MicrosoftSentinel" are one source, not two. Two or more distinct sources across the
 incidents read prove the MDR ingests telemetry from more than one tool, even on a partial read. False only on a
 complete read of at least one incident where every incident comes from the same single source. No incidents, an
-error body, incidents without a source, or a partial read with one source is not measured (None).
+error body, incidents without a source, or a partial read with one source is not measured (None). A label-only
+incident is keyed through the slug that label is seen with on any incident carrying both fields, so "Microsoft
+Sentinel" alone still lands on "ms_sent" when another incident pairs them; only a label that never appears beside a
+slug, and is spelt unlike it, keys on its own. On the live body every incident carries both fields.
 """
 import json
 from datetime import datetime
@@ -147,28 +153,40 @@ def not_measured(key, problem, validation):
     )
 
 
-def parse_time(value):
-    """ZTAP timestamps are "2026-11-05T21:15:47Z". No strptime: the Token-Service sandbox does not allow it."""
-    if not isinstance(value, str) or len(value) < 19:
-        return None
-    if value[4] != "-" or value[7] != "-" or value[10] not in ("T", " ") or value[13] != ":" or value[16] != ":":
-        return None
-    try:
-        return datetime(int(value[0:4]), int(value[5:7]), int(value[8:10]), int(value[11:13]), int(value[14:16]), int(value[17:19]))
-    except Exception:
-        return None
+def normalise(value):
+    """Lower-case letters and digits only, so a slug and its display label compare equal."""
+    return "".join(c for c in value.lower() if c.isalnum())
 
 
-def source_of(incident):
+def source_texts(incident):
+    """(slug, label) of the product that raised the incident, each a stripped string or None."""
+    texts = []
     for field in ("alert_source", "alert_source_display"):
         value = incident.get(field)
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower()
         if isinstance(value, dict):
-            name = value.get("name") or value.get("display")
-            if isinstance(name, str) and name.strip():
-                return name.strip().lower()
-    return None
+            value = value.get("name") or value.get("display")
+        texts.append(value.strip() if isinstance(value, str) and value.strip() else None)
+    return texts[0], texts[1]
+
+
+def source_keys(incidents):
+    """{key: label}, one key per product. First pass learns which label belongs to which slug from the incidents that
+    carry both; second pass keys each incident by its slug, else by the slug its label is known to pair with, else by
+    the label itself. Keys are normalised (lower-case letters and digits)."""
+    alias = {}
+    for i in incidents:
+        slug, display = source_texts(i)
+        if slug and display and normalise(slug) and normalise(display):
+            alias[normalise(display)] = normalise(slug)
+    labels = {}
+    for i in incidents:
+        slug, display = source_texts(i)
+        keyed = normalise(slug) if slug else ""
+        if not keyed and display:
+            keyed = alias.get(normalise(display)) or normalise(display)
+        if keyed and keyed not in labels:
+            labels[keyed] = display or slug
+    return labels
 
 
 def transform(input):
@@ -180,15 +198,16 @@ def transform(input):
             return not_measured(key, problem, validation)
         if not incidents:
             return not_measured(key, "Critical Start returned no incidents, so no telemetry source can be shown.", validation)
-        sources = sorted({s for s in (source_of(i) for i in incidents) if s})
+        labels = source_keys(incidents)
+        sources = sorted(labels)
         if not sources:
             return not_measured(key, "None of the " + str(len(incidents)) + " incidents names its alert source, so the telemetry sources cannot be counted.", validation)
         if len(sources) >= 2:
             text = (str(len(sources)) + " distinct telemetry sources raised the " + str(len(incidents)) + " Critical Start incidents read: "
-                    + ", ".join(sources) + ".")
+                    + ", ".join(labels[s] for s in sources) + ".")
             ok = True
         elif complete:
-            text = ("All " + str(len(incidents)) + " Critical Start incidents come from a single telemetry source (" + sources[0]
+            text = ("All " + str(len(incidents)) + " Critical Start incidents come from a single telemetry source (" + labels[sources[0]]
                     + "); no second tool feeds the MDR.")
             ok = False
         else:
@@ -199,7 +218,7 @@ def transform(input):
             pass_reasons=[text] if ok else [],
             fail_reasons=[] if ok else [text],
             recommendations=[] if ok else ["Connect a second telemetry source (endpoint, identity, email or SIEM) to Critical Start so the MDR correlates across tools."],
-            input_summary={"incidentsRead": len(incidents), "telemetrySources": sources, "completeRead": complete},
+            input_summary={"incidentsRead": len(incidents), "telemetrySources": [labels[s] for s in sources], "telemetrySourceKeys": sources, "completeRead": complete},
             metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
         )
     except Exception as e:

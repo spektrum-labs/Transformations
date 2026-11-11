@@ -36,8 +36,8 @@
     {
       "revision": 2,
       "date": "2026-11-05",
-      "change": "Meaning widened: True no longer requires a PSA. Added the Critical Start implementation, where True means a ZTAP incident is routed to an escalation group with at least one subscriber, with no PSA connection required. Huntress True still means a PSA ticket id, so values from the two vendors are not comparable; a requirement that needs PSA routing should not rely on this key for Critical Start."
+      "change": "Meaning widened: True no longer requires a PSA. Added the Critical Start implementation, where True means a ZTAP incident is routed to an escalation group with at least one subscriber, with no PSA connection required. Huntress True still means a PSA ticket id, so values from the two vendors are not comparable; a requirement that needs PSA routing should not rely on this key for Critical Start. No shadow diff: the only implementation on main (Huntress) is untouched, so its verdicts are unchanged; the key stays proposed and V0 with no validation record."
     }
   ],
-  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+  "notes": "Registered so the transforms named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
 }

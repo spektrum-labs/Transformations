@@ -1,9 +1,16 @@
 """Transformation: hasMobileIncidentEscalationCapability - Critical Start MDR (ZTAP), GET {serverUrl}/api/1.5/groups/ (getGroups).
 
-ZTAP escalation groups carry the delivery methods their members are paged on (delivery_methods). A group that
-delivers by SMS, phone, voice or mobile push gives the organization a mobile escalation path; one such group proves
-it, even on a partial read. False only on a complete read of at least one group where every group delivers by
-email (or nothing) alone. No groups, an error body or a partial read with no mobile method is not measured (None).
+ZTAP escalation groups carry the delivery methods their members are paged on (delivery_methods) and the members
+themselves (subscriptions). A group that pages at least one subscriber by SMS, MMS, phone, voice or mobile push gives
+the organization a mobile escalation path; one such group proves it, even on a partial read. A method is mobile only
+when a whole word of its value is one of those tokens ("sms", "mobile_push", "phone call") or the whole value is a
+known mobile method ("text_message", "phone_call"); a method that names email ("email_text", "mobile_email", and a
+composite such as "sms_and_email", which cannot be shown to page anyone by SMS) is never mobile, and the generic words
+"text", "call" and "mobile" on their own do not count. A mobile method on a group with
+nobody subscribed pages no one, so it does not count; a group whose subscriptions are not in the body cannot be shown
+either way. False only on a complete read of at least one group where no group pages a subscriber by a mobile method.
+No groups, an error body, a partial read with no proof, or a mobile method only on groups whose subscriptions are not
+shown is not measured (None).
 """
 import json
 from datetime import datetime
@@ -147,18 +154,9 @@ def not_measured(key, problem, validation):
     )
 
 
-def parse_time(value):
-    """ZTAP timestamps are "2026-11-05T21:15:47Z". No strptime: the Token-Service sandbox does not allow it."""
-    if not isinstance(value, str) or len(value) < 19:
-        return None
-    if value[4] != "-" or value[7] != "-" or value[10] not in ("T", " ") or value[13] != ":" or value[16] != ":":
-        return None
-    try:
-        return datetime(int(value[0:4]), int(value[5:7]), int(value[8:10]), int(value[11:13]), int(value[14:16]), int(value[17:19]))
-    except Exception:
-        return None
-
-MOBILE_METHODS = ("sms", "mms", "text", "phone", "voice", "call", "push", "mobile")
+MOBILE_TOKENS = ("sms", "mms", "phone", "voice", "push")
+MOBILE_VALUES = ("text message", "text_message", "phone call", "phone_call", "mobile push", "mobile_push")
+NOT_MOBILE_TOKENS = ("email", "mail")
 
 
 def methods_of(group):
@@ -181,11 +179,34 @@ def tokens(method):
 
 
 def is_mobile(method):
-    """Exact token match ("sms", "mobile_push", "phone call"); "slack_app" or "callback" is not mobile."""
-    for word in tokens(method):
-        if word in MOBILE_METHODS:
-            return True
-    return False
+    """Whole-token match ("sms", "mobile_push", "phone call") or a known whole value ("text_message"). A method that
+    names email ("email_text", "mobile_email", "sms_and_email") is never mobile; "slack_app", "callback", "api_call",
+    "plain_text", "mobile" or "text" alone is not mobile either."""
+    words = tokens(method)
+    if any(word in NOT_MOBILE_TOKENS for word in words):
+        return False
+    if method in MOBILE_VALUES:
+        return True
+    return any(word in MOBILE_TOKENS for word in words)
+
+
+def subscribers(group):
+    """Subscriber count (subscription records, or bare ids), or None when the group carries no subscriptions list."""
+    subs = group.get("subscriptions")
+    if not isinstance(subs, list):
+        return None
+    return len([s for s in subs if isinstance(s, dict) or (isinstance(s, (int, str)) and not isinstance(s, bool) and str(s).strip())])
+
+
+def mobile_state(group):
+    """True when the group pages a subscriber by a mobile method, False when it cannot, None when it has a mobile
+    method but its subscriptions are not shown."""
+    if not any(is_mobile(m) for m in methods_of(group)):
+        return False
+    count = subscribers(group)
+    if count is None:
+        return None
+    return count > 0
 
 
 def transform(input):
@@ -198,24 +219,31 @@ def transform(input):
         if not groups:
             return not_measured(key, "Critical Start returned no escalation groups, so no escalation path can be shown.", validation)
         all_methods = sorted({m for g in groups for m in methods_of(g)})
-        mobile_groups = [g for g in groups if any(is_mobile(m) for m in methods_of(g))]
+        states = [mobile_state(g) for g in groups]
+        mobile_groups = [g for g, state in zip(groups, states) if state is True]
+        unshown = len([state for state in states if state is None])
+        unsubscribed = len([g for g, state in zip(groups, states) if state is False and any(is_mobile(m) for m in methods_of(g))])
         if mobile_groups:
-            text = (str(len(mobile_groups)) + " of " + str(len(groups)) + " Critical Start escalation groups deliver by a mobile method ("
+            text = (str(len(mobile_groups)) + " of " + str(len(groups)) + " Critical Start escalation groups page at least one subscriber by a mobile method ("
                     + ", ".join(sorted({m for g in mobile_groups for m in methods_of(g) if is_mobile(m)})) + ").")
             ok = True
+        elif unshown:
+            return not_measured(key, str(unshown) + " of the " + str(len(groups)) + " Critical Start escalation groups carry a mobile delivery method but their "
+                                "subscriptions are not in the response, and no other group pages a subscriber by a mobile method; whether anyone is paged cannot be shown.", validation)
         elif complete:
-            text = ("All " + str(len(groups)) + " Critical Start escalation groups deliver by " + (", ".join(all_methods) if all_methods else "no method")
-                    + " only; no SMS, phone, voice or mobile push escalation is configured.")
+            text = ("None of the " + str(len(groups)) + " Critical Start escalation groups pages a subscriber by SMS, MMS, phone, voice or mobile push ("
+                    + (str(unsubscribed) + " carry a mobile method but have no subscribers; " if unsubscribed else "")
+                    + "methods configured: " + (", ".join(all_methods) if all_methods else "none") + ").")
             ok = False
         else:
-            return not_measured(key, "Only part of the escalation group list was read and none of it delivers by a mobile method; a partial read cannot show that none does.", validation)
+            return not_measured(key, "Only part of the escalation group list was read and none of it pages a subscriber by a mobile method; a partial read cannot show that none does.", validation)
         return create_response(
             result={key: ok, "escalationGroupsRead": len(groups), "mobileEscalationGroups": len(mobile_groups)},
             validation=validation,
             pass_reasons=[text] if ok else [],
             fail_reasons=[] if ok else [text],
-            recommendations=[] if ok else ["Add an SMS or phone delivery method to at least one ZTAP escalation group (ZTAP > Organization > Escalation groups > Delivery methods)."],
-            input_summary={"escalationGroupsRead": len(groups), "deliveryMethods": all_methods, "completeRead": complete},
+            recommendations=[] if ok else ["Add an SMS or phone delivery method to a ZTAP escalation group that has at least one subscriber (ZTAP > Organization > Escalation groups > Delivery methods)."],
+            input_summary={"escalationGroupsRead": len(groups), "deliveryMethods": all_methods, "unsubscribedMobileGroups": unsubscribed, "completeRead": complete},
             metadata={"transformationId": key, "vendor": VENDOR, "category": "mdr"},
         )
     except Exception as e:
