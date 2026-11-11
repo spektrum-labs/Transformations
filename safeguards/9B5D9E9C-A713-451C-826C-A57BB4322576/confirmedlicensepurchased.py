@@ -7,7 +7,7 @@ Evaluates if the license has been purchased for the Firewall.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 
 
 def extract_input(input_data):
@@ -89,7 +89,7 @@ def transform(input):
         recommendations = []
 
         licenses = cato_licenses(data)
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.utcnow().date()
         active = [l for l in licenses if is_active(l, today)]
         license_purchased = len(active) > 0
 
@@ -134,9 +134,20 @@ def cato_licenses(data):
     return [l for l in licenses if isinstance(l, dict)] if isinstance(licenses, list) else []
 
 
+def parse_day(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
 def is_active(lic, today):
     if str(lic.get("status", "")).strip().upper() != "ACTIVE":
         return False
-    # ISO-8601 dates compare correctly as strings; a missing expiry is not treated as expired.
-    expires = str(lic.get("expirationDate") or "")[:10]
-    return not expires or expires >= today
+    raw = lic.get("expirationDate")
+    if raw is None or str(raw).strip() == "":
+        return True   # no expiry on the licence: not expired
+    # An expiry that is not an ISO date fails closed: compared as text, "Jun 30, 2029" sorted after any year.
+    expires = parse_day(raw)
+    return expires is not None and expires >= today

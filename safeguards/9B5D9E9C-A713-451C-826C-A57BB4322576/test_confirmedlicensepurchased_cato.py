@@ -41,6 +41,21 @@ class CatoLicence(unittest.TestCase):
     def test_one_active_among_expired_passes(self):
         self.assertIs(self.res(body([lic(status="EXPIRED"), lic()])), True)
 
+    def test_date_only_and_today_expiry_pass(self):
+        import datetime as dt
+        today = dt.datetime.utcnow().date().isoformat()
+        self.assertIs(self.res(body([lic(expires="2029-06-30")])), True)
+        self.assertIs(self.res(body([lic(expires=today)])), True)
+
+    def test_missing_expiry_passes(self):
+        self.assertIs(self.res(body([lic(expires=None)])), True)
+        self.assertIs(self.res(body([lic(expires="")])), True)
+
+    def test_unreadable_expiry_fails_closed(self):
+        for expires in ("Jun 30, 2029", "06/30/2029", "2029-6-30", 1893456000000, "not a date"):
+            with self.subTest(expires=expires):
+                self.assertIs(self.res(body([lic(expires=expires)])), False)
+
     def test_empty_none_and_errors_fail(self):
         self.assertIs(self.res(body([])), False)
         self.assertIs(self.res({}), False)
