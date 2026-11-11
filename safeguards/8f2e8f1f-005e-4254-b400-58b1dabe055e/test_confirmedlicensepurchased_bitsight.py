@@ -41,7 +41,11 @@ class BitsightLicence(unittest.TestCase):
 
     def test_end_date_today_and_timestamp_pass(self):
         import datetime as dt
-        self.assertIs(self.res(company(end=dt.datetime.utcnow().date().isoformat())), True)
+        today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        result = self.res(company(end=today))
+        if dt.datetime.now(dt.timezone.utc).date().isoformat() != today:
+            self.skipTest("the run crossed midnight UTC between computing today and the transform")
+        self.assertIs(result, True)
         self.assertIs(self.res(company(end="2099-12-31T00:00:00Z")), True)
 
     def test_unreadable_end_date_fails_closed(self):
