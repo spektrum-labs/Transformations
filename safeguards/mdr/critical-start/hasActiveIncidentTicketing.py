@@ -150,22 +150,12 @@ def not_measured(key, problem, validation):
     )
 
 
-def parse_time(value):
-    """ZTAP timestamps are "2026-11-05T21:15:47Z". No strptime: the Token-Service sandbox does not allow it."""
-    if not isinstance(value, str) or len(value) < 19:
-        return None
-    if value[4] != "-" or value[7] != "-" or value[10] not in ("T", " ") or value[13] != ":" or value[16] != ":":
-        return None
-    try:
-        return datetime(int(value[0:4]), int(value[5:7]), int(value[8:10]), int(value[11:13]), int(value[14:16]), int(value[17:19]))
-    except Exception:
-        return None
-
-
 def subscribers(group):
-    """Subscriber count, or None when the group carries no subscriptions list (not shown either way)."""
+    """Subscriber count (subscription records, or bare ids), or None when the group carries no subscriptions list."""
     subs = group.get("subscriptions")
-    return len([s for s in subs if isinstance(s, dict)]) if isinstance(subs, list) else None
+    if not isinstance(subs, list):
+        return None
+    return len([s for s in subs if isinstance(s, dict) or (isinstance(s, (int, str)) and not isinstance(s, bool) and str(s).strip())])
 
 
 def routed(incident):

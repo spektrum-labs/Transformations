@@ -68,8 +68,8 @@ def incidents(rows, total=None, truncated=False):
     return body
 
 
-def group(methods=("email",), name="Default"):
-    return {"id": 1, "name": name, "delivery_methods": list(methods), "is_default": True, "subscriptions": []}
+def group(methods=("email",), name="Default", subs=3):
+    return {"id": 1, "name": name, "delivery_methods": list(methods), "is_default": True, "subscriptions": [{"id": i} for i in range(subs)]}
 
 
 def groups(rows, total=None, truncated=False):
@@ -113,6 +113,9 @@ def test_ticketing_needs_a_subscriber_in_any_group(mode):
     flag_str = incident(group="Default", subs=0)
     flag_str["assigned_group"]["is_default"] = "true"
     assert run(name, ts(incidents([flag_str])), mode)[0] is False                             # non-boolean is_default, nobody subscribed
+    ids = incident(group="Tier 1")
+    ids["assigned_group"]["subscriptions"] = [101, "102"]
+    assert run(name, ts(incidents([ids])), mode)[0] is True                                   # bare subscriber ids still count
     slim = incident(group="Tier 1")
     del slim["assigned_group"]["subscriptions"]
     value, status, _ = run(name, ts(incidents([slim, empty_named])), mode)
@@ -128,6 +131,31 @@ def test_multi_source_true_false_none(mode):
     assert run(name, ts(incidents([incident("Proofpoint")], total=9)), mode)[0] is None
     assert run(name, ts(incidents([incident(""), incident("")])), mode)[0] is None
     assert run(name, ts(incidents([])), mode)[0] is None
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_multi_source_normalises_slug_and_label(mode):
+    name = "hasMultiSourceTelemetryIntegration"
+    slug_only = incident("Microsoft Sentinel")
+    del slug_only["alert_source_display"]                                                     # alert_source microsoft_sentinel
+    label_only = incident("Microsoft Sentinel")
+    del label_only["alert_source"]
+    assert run(name, ts(incidents([slug_only, label_only])), mode)[0] is False                # one product, slug and label
+    camel = incident("Microsoft Sentinel")
+    camel["alert_source"] = "MicrosoftSentinel"
+    assert run(name, ts(incidents([slug_only, camel])), mode)[0] is False
+    nested = incident("Microsoft Sentinel")
+    nested["alert_source"] = {"name": "Microsoft Sentinel"}
+    assert run(name, ts(incidents([slug_only, nested])), mode)[0] is False
+    both = incident("Microsoft Sentinel")
+    both["alert_source"] = "ms_sent"                                                           # live spelling: slug unlike the label
+    label_only["alert_source_display"] = "Microsoft Sentinel"
+    value, _, out = run(name, ts(incidents([both, label_only])), mode)
+    assert value is False and out["additionalInfo"]["transformation"]["inputSummary"]["telemetrySourceKeys"] == ["mssent"]
+    value, _, out = run(name, ts(incidents([slug_only, incident("Proofpoint")])), mode)
+    assert value is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["telemetrySourceKeys"] == ["microsoftsentinel", "proofpoint"]
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["telemetrySources"] == ["microsoft_sentinel", "Proofpoint"]
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -164,6 +192,43 @@ def test_ack_minutes_counts_pending_and_skipped(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_ack_minutes_reads_utc_offsets(mode):
+    name = "meanTimeToVerificationAckMinutesCount"
+    five = [incident(monitored="criticalstart", created="2026-11-05T10:00:00Z", assigned="2026-11-05T15:05:00+05:00"),      # 5 min on the UTC line
+            incident(monitored="criticalstart", created="2026-11-05T02:00:00-08:00", assigned="2026-11-05T10:05:00.250Z"),  # fraction, negative offset
+            incident(monitored="criticalstart", created="2026-11-05T10:00:00+0000", assigned="2026-11-05T10:05:00-00:00"),  # compact and signed zero
+            incident(monitored="criticalstart", created="2026-11-05T10:00:00+00", assigned="2026-11-05T10:05:00z")]
+    value, status, _ = run(name, ts(incidents(five)), mode)
+    assert value == 5.0 and status == "success"
+    naive = incident(monitored="criticalstart", created="2026-11-05T10:00:00", assigned="2026-11-05T10:05:00Z")             # no offset: skipped
+    value, status, _ = run(name, ts(incidents([naive])), mode)
+    assert value is None and status == "error"
+    fast = incident(monitored="criticalstart", created="2026-11-05T10:00:00Z", assigned="2026-11-05T10:05:00Z")
+    bad_zone = incident(monitored="criticalstart", created="2026-11-05T10:00:00+25:00", assigned="2026-11-05T10:05:00Z")
+    value, _, out = run(name, ts(incidents([fast, fast, naive, bad_zone, naive])), mode)
+    assert value is None and out["additionalInfo"]["dataCollection"]["status"] == "error"     # 2 measured, 3 skipped: not measured
+    value, _, out = run(name, ts(incidents([fast, fast, fast, bad_zone])), mode)
+    assert value == 5.0 and out["transformedResponse"]["skippedIncidents"] == 1
+    value, _, out = run(name, ts(incidents([fast, fast], total=50)), mode)
+    assert value == 5.0 and out["transformedResponse"]["completeRead"] is False
+    assert "partial read" in out["additionalInfo"]["evaluation"]["passReasons"][0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_ack_minutes_partial_read_gate_is_stricter(mode):
+    name = "meanTimeToVerificationAckMinutesCount"
+    fast = incident(monitored="criticalstart", created="2026-11-05T10:00:00Z", assigned="2026-11-05T10:05:00Z")
+    pending = incident(monitored="criticalstart", created="2026-11-05T11:00:00Z", assigned=None)
+    assert run(name, ts(incidents([fast, pending])), mode)[0] == 5.0                              # complete: 1 measured vs 1 pending measures
+    value, status, out = run(name, ts(incidents([fast, pending], total=400)), mode)
+    assert value is None and status == "error" and "partial read" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    value, _, out = run(name, ts(incidents([fast, fast, pending], total=400)), mode)
+    assert value == 5.0 and out["transformedResponse"]["completeRead"] is False
+    flagged = incident(monitored="criticalstart", autorouted="true", created="2026-11-05T10:00:00Z", assigned="2026-11-05T10:00:05Z")
+    assert run(name, ts(incidents([flagged])), mode)[0] is None                                   # "true" string is auto-routed too
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_mobile_escalation_true_false_none(mode):
     name = "hasMobileIncidentEscalationCapability"
     assert run(name, ts(groups([group(("email",)), group(("email", "sms"), "High")])), mode)[0] is True
@@ -174,6 +239,35 @@ def test_mobile_escalation_true_false_none(mode):
     assert run(name, ts(groups([group(("email",))], total=5)), mode)[0] is None
     assert run(name, ts(groups([group(("email",))], truncated=True)), mode)[0] is None
     assert run(name, ts(groups([])), mode)[0] is None
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mobile_tokens_are_specific(mode):
+    name = "hasMobileIncidentEscalationCapability"
+    for method in ("email_text", "plain_text", "rich_text_email", "mobile_email", "mobile_app_email", "api_call", "webhook_call",
+                   "text", "call", "mobile", "voicemail", "push_email", "sms_and_email"):
+        assert run(name, ts(groups([group(("email", method))])), mode)[0] is False, method
+    for method in ("sms", "mms", "phone", "voice", "push", "mobile_push", "phone call", "text_message", "phone_call", "SMS", "Text Message"):
+        assert run(name, ts(groups([group(("email", method))])), mode)[0] is True, method
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mobile_needs_a_subscriber(mode):
+    name = "hasMobileIncidentEscalationCapability"
+    assert run(name, ts(groups([group(("email", "sms"), subs=0)])), mode)[0] is False                        # mobile method, nobody paged
+    value, _, out = run(name, ts(groups([group(("email", "sms"), subs=0), group(("email",), "B")])), mode)
+    assert value is False and out["additionalInfo"]["transformation"]["inputSummary"]["unsubscribedMobileGroups"] == 1
+    assert "no subscribers" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    slim = group(("sms",))
+    del slim["subscriptions"]
+    value, status, _ = run(name, ts(groups([slim])), mode)
+    assert value is None and status == "error"                                                                  # subscriptions not shown
+    assert run(name, ts(groups([slim, group(("sms",), "B")])), mode)[0] is True                                 # another group proves it
+    assert run(name, ts(groups([slim, group(("email",), "B")], total=5)), mode)[0] is None
+    assert run(name, ts(groups([group(("email",), subs=0)])), mode)[0] is False                                 # email-only stays False
+    ids = group(("sms",))
+    ids["subscriptions"] = [7, "8"]
+    assert run(name, ts(groups([ids])), mode)[0] is True                                                        # bare subscriber ids still count
 
 
 @pytest.mark.parametrize("mode", MODES)
