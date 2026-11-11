@@ -39,6 +39,16 @@ class BitsightLicence(unittest.TestCase):
         self.assertIs(self.res(company(subscription_type=None)), False)
         self.assertIs(self.res(company(subscription_type="")), False)
 
+    def test_end_date_today_and_timestamp_pass(self):
+        import datetime as dt
+        self.assertIs(self.res(company(end=dt.datetime.utcnow().date().isoformat())), True)
+        self.assertIs(self.res(company(end="2099-12-31T00:00:00Z")), True)
+
+    def test_unreadable_end_date_fails_closed(self):
+        for end in ("Dec 31, 2019", "12/31/2099", "2099-1-31", 4102444800000, "soon"):
+            with self.subTest(end=end):
+                self.assertIs(self.res(company(end=end)), False)
+
     def test_empty_none_and_errors_fail(self):
         self.assertIs(self.res({}), False)
         self.assertIs(self.res(None), False)

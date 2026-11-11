@@ -7,7 +7,7 @@ Evaluates if the license has been purchased for Security Ratings.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 
 
 def extract_input(input_data):
@@ -88,7 +88,7 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.utcnow().date()
         subscription = subscription_of(data)
         license_purchased = is_subscribed(subscription, today)
 
@@ -135,6 +135,17 @@ def subscription_of(data):
 def is_subscribed(body, today):
     if not str(body.get("subscription_type") or "").strip():
         return False
-    # ISO-8601 dates compare correctly as strings; a null end date is an open-ended subscription.
-    ends = str(body.get("subscription_end_date") or "")[:10]
-    return not ends or ends >= today
+    raw = body.get("subscription_end_date")
+    if raw is None or str(raw).strip() == "":
+        return True   # a null end date is an open-ended subscription
+    # An end date that is not an ISO date fails closed: compared as text, "Dec 31, 2019" sorted after any year.
+    ends = parse_day(raw)
+    return ends is not None and ends >= today
+
+
+def parse_day(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
