@@ -7,7 +7,7 @@ Evaluates if the license has been purchased for Security Ratings.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timezone
 
 
 def extract_input(input_data):
@@ -56,7 +56,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                 "additionalFindings": additional_findings or []
             },
             "metadata": {
-                "evaluatedAt": datetime.utcnow().isoformat() + "Z",
+                "evaluatedAt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "confirmedLicensePurchased",
                 "vendor": "Security Ratings",
@@ -88,19 +88,9 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        # `data is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(data)
-
-        if isinstance(data, dict) and 'errors' in data:
-            default_value = False
-
-        license_purchased = False
-        if isinstance(data, dict):
-            license_purchased = data.get('licensePurchased', default_value)
-        else:
-            license_purchased = default_value
+        today = datetime.now(timezone.utc).date()
+        subscription = subscription_of(data)
+        license_purchased = is_subscribed(subscription, today)
 
         if license_purchased:
             pass_reasons.append("Security ratings license active")
@@ -114,7 +104,9 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"licensePurchased": license_purchased}
+            input_summary={"licensePurchased": license_purchased,
+                           "subscriptionType": subscription.get("subscription_type"),
+                           "subscriptionEndDate": subscription.get("subscription_end_date")}
         )
 
     except Exception as e:
@@ -126,48 +118,34 @@ def transform(input):
         )
 
 
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
+def subscription_of(data):
+    """Bitsight's company-details body carries the subscription at the top level.
 
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
+    The generic affirmative_signal looked for keys such as licensed or subscribed, which this
+    body does not have, so every subscribed Bitsight company failed.
     """
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
+    if not isinstance(data, dict):
+        return {}
+    for key in ("error", "errors", "detail"):
         if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
+            return {}
+    return data
+
+
+def is_subscribed(body, today):
+    if not str(body.get("subscription_type") or "").strip():
+        return False
+    raw = body.get("subscription_end_date")
+    if raw is None or str(raw).strip() == "":
+        return True   # a null end date is an open-ended subscription
+    # An end date that is not an ISO date fails closed: compared as text, "Dec 31, 2019" sorted after any year.
+    ends = parse_day(raw)
+    return ends is not None and ends >= today
+
+
+def parse_day(value):
+    try:
+        # strptime imports _strptime, which the Token-Service sandbox refuses.
+        return date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
