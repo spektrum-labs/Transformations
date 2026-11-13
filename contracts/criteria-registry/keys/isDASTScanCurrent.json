@@ -1,0 +1,52 @@
+{
+  "name": "isDASTScanCurrent",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the newest successful DAST scan the product returns finished within the last 30 days.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "every successful scan the DAST product returns to the connected API user, newest end time first",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the successful-scan list (scan_status succeeded, sorted by end time) containing a scan with status succeeded and a readable end_time no more than 30 days old. An empty list is a fail; a list holding other statuses or unreadable end times with no recent success is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Application Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "openDecisions": [
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Should another DAST product (for example a different web application scanner) be allowed to answer this key, or should it stay with Burp Suite DAST until a second implementation is replayed?",
+      "positions": [
+        "any (registered): every Application Security integration may answer it, held to this definition.",
+        "listed: only Burp Suite DAST until a second product's implementation is replayed against real data."
+      ]
+    }
+  ],
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/devsecops/burpsuitedast/isdastscancurrent.py (reads Integration-Service method listCompletedScans: scans(sort_column: end, sort_order: desc, scan_status: [succeeded]) { status end_time scan_target })",
+    "https://portswigger.net/burp/extensibility/dast/graphql-api/scan.html (end_time: the time at which the scan finished; retrieved 2026-11-13)",
+    "https://portswigger.net/burp/extensibility/dast/graphql-api/scanstatus.html (succeeded: the scan has finished successfully; retrieved 2026-11-13)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-13",
+      "change": "Registered for the PortSwigger Burp Suite DAST checks. No live server read yet, so the key is proposed and V0."
+    }
+  ],
+  "notes": "The 30-day bar is in the transform; daysSinceLastScan carries the number for the report."
+}
