@@ -1,0 +1,40 @@
+{
+  "name": "isBackupImmutable",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "Backup data is held under an immutability control (for example object lock with a default retention) that stops it being altered or deleted before its retention ends.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the backup storage targets the integration lists, with their immutability or object-lock settings",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A target listing in which at least one target shows immutability on together with an enforced retention mode and period.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/isbackupimmutable.py",
+    "Backblaze B2 native API reference, b2_list_buckets: https://www.backblaze.com/apidocs/b2-list-buckets"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms. Other backup integrations already emit this key; their meaning is not yet validated against this entry."
+    }
+  ],
+  "notes": "Backblaze B2: fileLockConfiguration with isFileLockEnabled and a defaultRetention mode and period. Object Lock without a default retention does not count."
+}
