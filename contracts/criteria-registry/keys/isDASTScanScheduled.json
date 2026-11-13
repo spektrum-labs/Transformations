@@ -1,0 +1,52 @@
+{
+  "name": "isDASTScanScheduled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the DAST product holds at least one recurring scan schedule (a recurrence rule with a frequency) that has a next run time and covers at least one site or folder.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "every scan schedule the DAST product returns to the connected API user (only the sites and folders its groups can see)",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the scan schedule list (no GraphQL errors) holding a schedule item with a non-empty RRULE carrying FREQ, a readable next run time (scheduled_run_time) and a non-empty site or folder list. One-off schedules, ended recurrences (no next run) and schedules covering nothing cannot prove it; an unreadable item with no qualifying item is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Application Security"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "openDecisions": [
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "Should another DAST product (for example a different web application scanner) be allowed to answer this key, or should it stay with Burp Suite DAST until a second implementation is replayed?",
+      "positions": [
+        "any (registered): every Application Security integration may answer it, held to this definition.",
+        "listed: only Burp Suite DAST until a second product's implementation is replayed against real data."
+      ]
+    }
+  ],
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/devsecops/burpsuitedast/isdastscanscheduled.py (reads Integration-Service method listScheduleItems: schedule_items { scheduled_run_time schedule { rrule } sites folders })",
+    "https://portswigger.net/burp/extensibility/dast/graphql-api/scheduleitem.html (scheduled_run_time: the next time a scan from this schedule item is due to run; retrieved 2026-11-13)",
+    "https://portswigger.net/burp/extensibility/dast/graphql-api/schedule.html (rrule: RFC 5545 recurrence such as FREQ=WEEKLY;INTERVAL=1;BYDAY=MO; retrieved 2026-11-13)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-13",
+      "change": "Registered for the PortSwigger Burp Suite DAST checks. No live server read yet, so the key is proposed and V0."
+    }
+  ],
+  "notes": "An empty schedule list is a fail, not unmeasured: the read succeeded and shows no schedule. If the API user's group does not cover a site, its schedule is invisible; the setup guide says to give the group every site in scope."
+}
