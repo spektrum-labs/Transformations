@@ -1,0 +1,37 @@
+{
+  "name": "isFreeOfPHP2ShellFindings",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the customer's vulnerability scanner, read whole and recently, holds no open finding for CVE-2026-109618 or CVE-2026-109619 (PHP2Shell, PHP core, fixed in PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35, published 2026-10-21), and the read itself shows the scanner's PHP2Shell detections reached the tenant and assessed the assets on-host. False when any open or reopened finding for either CVE exists.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "vulnerability records for CVE-2026-109618 and CVE-2026-109619 that the customer's scanner holds; for CrowdStrike Falcon Spotlight, every record of GET /spotlight/combined/vulnerabilities/v1 filtered by those two cve.id values, any status",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "CrowdStrike Falcon Spotlight: a complete, untruncated, error-free read of the cve.id-filtered combined vulnerabilities endpoint whose meta.pagination.total equals the records read, with no repeated id; at least one record (an empty answer cannot show the PHP2Shell detections reached the tenant); every record for one of the two CVEs, status closed (none open, reopen or expired), updated_timestamp on or after 2026-10-21T00:00:00Z, and host_info.managed_by 'Falcon sensor' (on-host assessment).",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/crowdstrike-falcon/isFreeOfPHP2ShellFindings.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-22",
+      "change": "Registered with the CrowdStrike Falcon Spotlight PHP2Shell transform; proposed, no requirement reads it yet."
+    }
+  ],
+  "notes": "Threat-specific (PHP2Shell advisory, October 2026). The supporting field php2shellRiskLevel is high when an affected asset is marked internet-facing by the vendor, standard when every affected asset is marked not internet-facing, unknown otherwise, none when clean. An empty filtered read is Not evaluated, not compliant: the scanner gives no field saying which CVEs its content covers. A read limited to the assets the scanner knows cannot show every web host is covered; hosts with no sensor and no other data provider are outside it. allowedCategories is empty until Integration-Service maps an RTA row."
+}
