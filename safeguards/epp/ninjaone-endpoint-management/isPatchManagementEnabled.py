@@ -155,6 +155,21 @@ INSTALL_WINDOW_DAYS = 30
 FUTURE_SLACK_SECONDS = 86400  # a stamp more than a day ahead of now is a fault, not an install
 
 
+def device_key(value):
+    """A device ID as a string, or None when it is not a usable ID.
+
+    Only a non-bool int or a non-empty string counts. The workflow projection fills a missing field with [],
+    which is unhashable and must not match anything: a None key is skipped on both sides, so two junk IDs
+    can never pair up as a match and an install on an unidentifiable device is no evidence."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def recent_installs(data, devices):
     """(count, problem): INSTALLED patch records in the window on in-scope OS devices, or why none can be read.
 
@@ -167,7 +182,11 @@ def recent_installs(data, devices):
         return 0, "the patch install read carries no record list"
     os_device_ids = None
     if devices is not None:
-        os_device_ids = set(d.get("id") for d in devices if d.get("nodeClass") in OS_NODE_CLASSES)
+        os_device_ids = set()
+        for d in devices:
+            key = device_key(d.get("id"))
+            if key is not None and d.get("nodeClass") in OS_NODE_CLASSES:
+                os_device_ids.add(key)
     # installedAt is epoch seconds. A stamp beyond now + FUTURE_SLACK_SECONDS (clock skew, corrupt data, or
     # epoch milliseconds) cannot be a real install, so it counts as no evidence, never as a recent install.
     now = datetime.now(timezone.utc).timestamp()
@@ -177,7 +196,7 @@ def recent_installs(data, devices):
     for rec in records:
         if not isinstance(rec, dict) or rec.get("status") != "INSTALLED":
             continue
-        if os_device_ids is not None and rec.get("deviceId") not in os_device_ids:
+        if os_device_ids is not None and device_key(rec.get("deviceId")) not in os_device_ids:
             continue
         at = rec.get("installedAt")
         if isinstance(at, (int, float)) and not isinstance(at, bool) and cutoff <= at <= ceiling:

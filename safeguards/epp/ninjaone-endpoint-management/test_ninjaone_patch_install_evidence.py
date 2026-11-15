@@ -85,3 +85,21 @@ def test_future_or_millisecond_stamp_is_not_a_recent_install():
         assert out["recentPatchInstalls"] == 0
     # Small forward skew (under a day) is still a real install.
     assert verdict({"results": [install(2, -0.5)]})[KEY] is True
+
+
+def test_junk_ids_neither_crash_nor_match():
+    # The projection fills missing fields with []. An unhashable or missing ID must give a verdict, not raise,
+    # and two junk IDs must never pair up as a match.
+    rec = {"id": "x", "deviceId": [], "status": "INSTALLED", "installedAt": NOW}
+    assert verdict({"results": [rec]})[KEY] is False
+    junk_device = [{"id": [], "nodeClass": "MAC", "policyId": [], "rolePolicyId": []}]
+    for dev_id in ([], None, True, ""):
+        recs = [dict(rec, deviceId=dev_id), install(2, 1)]
+        out = run({"devices": junk_device, "policies": POLICIES, "osPatchInstalls": {"results": recs}})
+        assert out["transformedResponse"][KEY] is False
+        assert out["transformedResponse"]["recentPatchInstalls"] == 0
+
+
+def test_string_and_int_device_ids_match():
+    rec = {"id": "x", "deviceId": "2", "status": "INSTALLED", "installedAt": NOW - DAY}
+    assert verdict({"results": [rec]})[KEY] is True
