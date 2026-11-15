@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def extract_input(input_data):
@@ -152,6 +152,7 @@ def policy_patch_enabled(policy):
 # patching is on. The workflow also hands over /v2/queries/os-patch-installs as "osPatchInstalls"; an
 # INSTALLED record on an in-scope OS device within this window is direct evidence that patching runs.
 INSTALL_WINDOW_DAYS = 30
+FUTURE_SLACK_SECONDS = 86400  # a stamp more than a day ahead of now is a fault, not an install
 
 
 def recent_installs(data, devices):
@@ -167,7 +168,11 @@ def recent_installs(data, devices):
     os_device_ids = None
     if devices is not None:
         os_device_ids = set(d.get("id") for d in devices if d.get("nodeClass") in OS_NODE_CLASSES)
-    cutoff = datetime.utcnow().timestamp() - INSTALL_WINDOW_DAYS * 86400
+    # installedAt is epoch seconds. A stamp beyond now + FUTURE_SLACK_SECONDS (clock skew, corrupt data, or
+    # epoch milliseconds) cannot be a real install, so it counts as no evidence, never as a recent install.
+    now = datetime.now(timezone.utc).timestamp()
+    cutoff = now - INSTALL_WINDOW_DAYS * 86400
+    ceiling = now + FUTURE_SLACK_SECONDS
     count = 0
     for rec in records:
         if not isinstance(rec, dict) or rec.get("status") != "INSTALLED":
@@ -175,7 +180,7 @@ def recent_installs(data, devices):
         if os_device_ids is not None and rec.get("deviceId") not in os_device_ids:
             continue
         at = rec.get("installedAt")
-        if isinstance(at, (int, float)) and not isinstance(at, bool) and at >= cutoff:
+        if isinstance(at, (int, float)) and not isinstance(at, bool) and cutoff <= at <= ceiling:
             count += 1
     return count, None
 

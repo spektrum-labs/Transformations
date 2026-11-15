@@ -74,3 +74,14 @@ def test_empty_or_unreadable_installs_never_pass():
 def test_without_device_list_any_recent_install_counts():
     out = run({"policies": POLICIES, "osPatchInstalls": {"results": [install(77, 2)]}})["transformedResponse"]
     assert out[KEY] is True
+
+
+def test_future_or_millisecond_stamp_is_not_a_recent_install():
+    # A stamp past now + a day is a clock or data fault (or epoch milliseconds), never evidence.
+    for at in (NOW + 365 * DAY, NOW * 1000):
+        rec = {"id": "x", "deviceId": 2, "status": "INSTALLED", "installedAt": at}
+        out = verdict({"cursor": [], "results": [rec]})
+        assert out[KEY] is False
+        assert out["recentPatchInstalls"] == 0
+    # Small forward skew (under a day) is still a real install.
+    assert verdict({"results": [install(2, -0.5)]})[KEY] is True
