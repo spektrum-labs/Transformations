@@ -495,8 +495,6 @@ class DuoConditionalAccessTests(unittest.TestCase):
             "policy_applies_to a string": lambda p: p[1].__setitem__("policy_applies_to", "all"),
             "policy_applies_to an object": lambda p: p[1].__setitem__("policy_applies_to", {"apply_type": "app"}),
             "policy_applies_to entry not an object": lambda p: p[1]["policy_applies_to"].append("DITENANTA"),
-            "apply_type missing": lambda p: p[1]["policy_applies_to"][0].pop("apply_type"),
-            "apply_type unknown": lambda p: p[1]["policy_applies_to"][0].__setitem__("apply_type", "everyone"),
             "summary entry not an object": lambda p: p.append("POEXAMPLE"),
             "summary lacks a policy": lambda p: p.pop(1),
         }
@@ -643,13 +641,46 @@ class DuoConditionalAccessTests(unittest.TestCase):
             with self.subTest(label):
                 self.assertUnevaluated(bodies(with_sections(DEFAULTS, **change)), "cannot be read")
 
+    def test_unknown_block_os_value_is_evidence_not_fatal(self):
+        os_only = {"operating_systems": {"block_os_list": ["unknownos"]}}
+        # only an unknown value: not a condition, so the app is uncovered -> False (not unevaluated)
+        value, out = self.value(bodies(with_sections(DEFAULTS, **os_only)))
+        self.assertIs(value, False)
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["unknownos"])
+        # beside a known value: the known one counts, the unknown is recorded
+        mixed = {"operating_systems": {"block_os_list": ["unknownos", "android"]}}
+        value, out = self.value(bodies(with_sections(DEFAULTS, **mixed)))
+        self.assertIs(value, True)
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["unknownos"])
+        # other list fields stay strict
+        self.assertUnevaluated(bodies(with_sections(DEFAULTS, browsers={"blocked_browsers_list": ["lynx-ng"]})))
+
+    def test_unknown_apply_type_makes_only_that_policy_scope_unknown(self):
+        for label, mutate in {"unknown": lambda e: e.__setitem__("apply_type", "everyone"),
+                              "missing": lambda e: e.pop("apply_type"),
+                              "none": lambda e: e.__setitem__("apply_type", None)}.items():
+            with self.subTest(label):
+                # covered everywhere but one policy of unknown scope: never True, named in evidence
+                b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+                mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
+                value, out = self.value(b)
+                self.assertIsNone(value)
+                self.assertEqual(out["transformedResponse"][PCT], 100.0)
+                self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["policiesScopeUnknown"], 1)
+                self.assertIn("unrecognised apply_type", json.dumps(out))
+                # an uncovered application still gives False
+                b = bodies(DEFAULTS, customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+                mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
+                value, out = self.value(b)
+                self.assertIs(value, False)
+                self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["policiesScopeUnknown"], 1)
+
     def test_unknown_list_values_are_unevaluated_not_conditions(self):
         cases = {
             "platform": {"health_checks": {"requires_duo_desktop": ["toaster"]}},
             "desktop platform": {"duo_desktop": {"requires_duo_desktop": ["toaster"]}},
             "country": {"user_location": {"deny_access_countries_list": ["Narnia"]}},
             "network": {"authorized_networks": {"blocked": {"ip_list": ["everyone"]}}},
-            "os": {"operating_systems": {"block_os_list": ["plan9"]}},
             "browser": {"browsers": {"blocked_browsers_list": ["lynx-ng"]}},
             "malformed json list": {"health_checks": {"requires_duo_desktop": "[windows"}},
         }
