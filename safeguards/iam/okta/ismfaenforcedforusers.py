@@ -29,7 +29,8 @@ def transform(input):
 
     Identity Engine (at least one ACTIVE authentication policy whose _embedded.resourceType is APP
     or absent): every ACTIVE rule that ALLOWs access, in every ACTIVE app authentication policy,
-    has verificationMethod type ASSURANCE with factorMode 2FA. A rule's conditions (network zone,
+    has verificationMethod type ASSURANCE with factorMode 2FA, or type AUTH_METHOD_CHAIN where every
+    way through the chain proves two factor types (see CHAIN below). A rule's conditions (network zone,
     group, device) are ignored on purpose: a 1FA rule scoped to one zone is still a 1FA path.
     Policies with resourceType END_USER_ACCOUNT_MANAGEMENT (enrolment, recovery, unlock) are not
     app sign-in and are reported, not judged.
@@ -41,7 +42,7 @@ def transform(input):
     Not measured (None on both keys, dataCollection.status "error"): an error body, missing policy or
     rule lists, a rule list whose length does not match its policy list, an active policy with no
     active rules, no rule that allows sign-on, and a transformation error. A verification method this
-    code does not read (AUTH_METHOD_CHAIN, ID_PROOFING, missing) is not a single-factor path: it leaves
+    code does not read (ID_PROOFING, missing, or a chain it cannot classify) is not a single-factor path: it leaves
     isMFAEnforcedForUsers None unless a readable rule already accepts one factor, and leaves
     isMFAEnabled None unless a readable rule already requires two. dataCollection.status belongs to the
     whole output and Token-Service grades on that status alone, so a value beside a None would be dropped by
@@ -50,6 +51,14 @@ def transform(input):
     That withholding is a limit of one output serving two keys, not a verdict on isMFAEnabled: ismfaenabled.py
     answers isMFAEnabled alone, so one readable two-factor rule beside rules this code cannot read stays True
     there. A definition that points isMFAEnabled at this file still gets Not evaluated in that shape.
+
+    CHAIN (AUTH_METHOD_CHAIN, Okta Policy API: verificationMethod.chains[]): each chain is a first step whose
+    authenticationMethods[] are alternatives ({key, method, userVerification}); next[] holds the alternative
+    following steps. A way through the chain is one path from a first step to a step with no next. Each alternative
+    is a factor type: knowledge (okta_password, security_question), or possession (any other known authenticator)
+    plus inherence when userVerification is REQUIRED. A path proves the fewest distinct types any choice of
+    alternatives along it gives; fewer than two is a single-factor path. An alternative with an unknown key and
+    method, or a chain that is not that shape, is not read.
 
     A remediation is recommended only for a measured False. A not-measured output recommends nothing,
     because there is nothing yet to tell the customer to fix.
@@ -102,6 +111,15 @@ def transform(input):
             not_measured.append("Not reported as a verdict because the read was incomplete: " + line)
     return with_user_accounts(checks["respond"]({key: ok, "isMFAEnabled": enabled}, passes, fails, state["inputSummary"],
                                                 [], not_measured), input, key)
+
+
+KNOWLEDGE_KEYS = ["okta_password", "security_question"]
+KNOWLEDGE_METHODS = ["password", "security_question"]
+POSSESSION_KEYS = ["okta_verify", "phone_number", "okta_email", "google_otp", "webauthn", "security_key",
+                   "yubikey_token", "rsa_token", "symantec_vip", "duo", "custom_otp", "custom_app", "smart_card_idp",
+                   "onprem_mfa"]
+POSSESSION_METHODS = ["push", "totp", "signed_nonce", "sms", "voice", "email", "otp", "webauthn", "cert"]
+CHAIN_MAX_STEPS = 5
 
 
 def MFA_CHECKS():
@@ -171,6 +189,52 @@ def MFA_CHECKS():
                 return "Okta returned an error: " + as_text(data.get(k))[:200]
         return None
 
+    def entry_types(entry):
+        """Factor types one chain alternative proves, or None when its authenticator is not known."""
+        key = as_text(entry.get("key")).lower()
+        method = as_text(entry.get("method")).lower()
+        if key in KNOWLEDGE_KEYS or method in KNOWLEDGE_METHODS:
+            return ["knowledge"]
+        if key in POSSESSION_KEYS or method in POSSESSION_METHODS:
+            if as_text(entry.get("userVerification")).upper() == "REQUIRED":
+                return ["possession", "inherence"]
+            return ["possession"]
+        return None
+
+    def chain_factors(method):
+        """Fewest distinct factor types any way through an AUTH_METHOD_CHAIN proves, or None when unreadable."""
+        chains = method.get("chains")
+        if not isinstance(chains, list) or not chains:
+            return None
+        stack = [(node, [""], 1) for node in chains]
+        fewest = None
+        while stack:
+            node, before, depth = stack.pop()
+            if not isinstance(node, dict) or depth > CHAIN_MAX_STEPS:
+                return None
+            options = node.get("authenticationMethods")
+            if not isinstance(options, list) or not options:
+                return None
+            merged = []
+            for option in options:
+                types = entry_types(option) if isinstance(option, dict) else None
+                if types is None:
+                    return None
+                for union in before:
+                    joined = ",".join(sorted(set([t for t in union.split(",") if t] + types)))
+                    if joined not in merged:
+                        merged.append(joined)
+            following = node.get("next")
+            if following is None or following == []:
+                count = min([len(u.split(",")) for u in merged])
+                fewest = count if fewest is None else min(fewest, count)
+            elif isinstance(following, list):
+                for child in following:
+                    stack.append((child, merged, depth + 1))
+            else:
+                return None
+        return fewest
+
     def evaluate(raw):
         data = parse(raw)
         state = {"error": None, "enforced": None, "enabled": None, "weak": [], "unread": [], "summary": "",
@@ -221,6 +285,11 @@ def MFA_CHECKS():
                         strong = strong + 1
                     elif method_type == "ASSURANCE":
                         weak.append(where + " (factorMode " + (mode or "missing") + ")")
+                    elif method_type == "AUTH_METHOD_CHAIN" and chain_factors(method) is not None:
+                        if chain_factors(method) >= 2:
+                            strong = strong + 1
+                        else:
+                            weak.append(where + " (an authentication method chain path proves one factor type)")
                     else:
                         unread.append(where + " (verification method " + (method_type or "missing") + ")")
         elif signon is not None:
