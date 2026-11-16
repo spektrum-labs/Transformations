@@ -340,7 +340,7 @@ SAFE_VALUE = {"smbv1enableddevicecount": 0}
 
 
 @pytest.mark.parametrize("name", ID_ONLY)
-@pytest.mark.parametrize("kb_name", [None, "", "   "])
+@pytest.mark.parametrize("kb_name", [None, "", "   ", "None", "null"])
 def test_id_alone_is_read_when_the_knowledge_base_name_is_missing(name, kb_name):
     """The KB join is a left join: a tenant whose KB table lacks the id returns the row with no name."""
     def unnamed(dev, scid, compliant=1):

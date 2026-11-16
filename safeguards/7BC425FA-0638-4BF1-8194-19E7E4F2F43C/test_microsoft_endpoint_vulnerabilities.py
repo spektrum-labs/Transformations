@@ -172,14 +172,9 @@ class Vulnerabilities(unittest.TestCase):
         hidden = [rec(DEV_B, "CVE-2026-60%02d" % n, "None", 60) for n in range(9)]
         self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "High", 40)] + hidden))  # openCritical 0, 9 of 10
 
-    def test_all_counts_nonzero_survive_too_many_unrated_as_lower_bounds(self):
+    def test_all_counts_nonzero_are_still_unevaluated_when_too_many_unrated(self):
         hidden = [rec(DEV_B, "CVE-2026-70%02d" % n, "None", 60) for n in range(2)]
-        out = self.run_t(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), rec(DEV_A, "CVE-2026-1002", "High", 40)] + hidden))
-        got = out["transformedResponse"]
-        for k in KEYS:
-            self.assertGreater(got[k], 0)
-        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
-        self.assertIn("lower bounds", " ".join(out["additionalInfo"]["evaluation"]["failReasons"]))
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), rec(DEV_A, "CVE-2026-1002", "High", 40)] + hidden))
 
     def test_exception_path_is_unevaluated_not_failed(self):
         # A body whose every read raises drives transform() into its except path. Token-Service grades a
