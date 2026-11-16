@@ -206,7 +206,7 @@ def MFA_CHECKS():
         chains = method.get("chains")
         if not isinstance(chains, list) or not chains:
             return None
-        stack = [(node, [""], 1) for node in chains]
+        stack = [(node, [()], 1) for node in chains]
         fewest = None
         while stack:
             node, before, depth = stack.pop()
@@ -221,12 +221,12 @@ def MFA_CHECKS():
                 if types is None:
                     return None
                 for union in before:
-                    joined = ",".join(sorted(set([t for t in union.split(",") if t] + types)))
+                    joined = tuple(sorted(set(list(union) + types)))
                     if joined not in merged:
                         merged.append(joined)
             following = node.get("next")
             if following is None or following == []:
-                count = min([len(u.split(",")) for u in merged])
+                count = min([len(u) for u in merged])
                 fewest = count if fewest is None else min(fewest, count)
             elif isinstance(following, list):
                 for child in following:
@@ -281,12 +281,13 @@ def MFA_CHECKS():
                     method_type = as_text(method.get("type")).upper()
                     mode = as_text(method.get("factorMode")).upper()
                     where = as_text(policy.get("name")) + " / " + as_text(rule.get("name"))
+                    found = chain_factors(method) if method_type == "AUTH_METHOD_CHAIN" else None
                     if method_type == "ASSURANCE" and mode == "2FA":
                         strong = strong + 1
                     elif method_type == "ASSURANCE":
                         weak.append(where + " (factorMode " + (mode or "missing") + ")")
-                    elif method_type == "AUTH_METHOD_CHAIN" and chain_factors(method) is not None:
-                        if chain_factors(method) >= 2:
+                    elif found is not None:
+                        if found >= 2:
                             strong = strong + 1
                         else:
                             weak.append(where + " (an authentication method chain path proves one factor type)")
