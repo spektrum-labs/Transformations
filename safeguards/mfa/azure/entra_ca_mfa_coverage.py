@@ -49,6 +49,23 @@ group ids) is not read: a policy that includes an unread group keeps only the gr
 carries counts (membersTotal, membersCovered, excludedCount, uncoveredCount) and the group names; user ids, names
 or UPNs never appear, except the at most 2 excluded emergency-access accounts named when a key passes.
 
+Members outside (WI-3a, product decision 16 Nov 2026; same rule as ismfaenforcedforusers.py): when membership was
+read whole and some enabled member accounts are reached by NO enabled Conditional Access policy that requires MFA,
+the key reads False with the count. That is a measured gap, not a question. "Reached" is read generously, so a
+False is never a guess:
+- every enabled policy whose grant includes MFA (the built-in "mfa" control or any authentication strength) counts,
+  for any app, platform, client type, location or device filter, and under OR as well; only risk-only policies
+  do not count;
+- "All" users reaches everyone; an included group must have been read whole, or nothing fails;
+- an excluded group whose members were read excludes them; an excluded role, or an excluded group not read,
+  excludes nobody;
+- a policy that includes a directory role reaches the role's active holders, read from "roleAssignments"
+  (GET /v1.0/roleManagement/directory/roleAssignments?$expand=principal($select=id)); without that list read
+  whole, or with a holder that is a group or carries no type and is not a member account, nothing fails;
+- accounts left outside only because policies exclude them (by name, or through an excluded group read whole that
+  holds at most 2 accounts) are emergency-access accounts when there are at most 2 of them, and are not counted.
+Members reached only by narrowed policies stay not evaluated (they are inside an MFA-requiring policy).
+
 Why a new file: isrdpprotected.py and ismfarequiredforremoteaccess.py count ANY enabled policy that
 grants mfa (or block) for all apps, whoever it targets and whatever else it is conditioned on. On
 2026-09-29 "Block legacy authentication" passed isRDPProtected at one tenant, and "Require MFA for Guest
@@ -68,9 +85,12 @@ Value, per key:
   or includeLocations "All" with trusted or named locations excluded);
 - true, as well, when group-scoped workforce MFA policies are shown by the membership read to reach every enabled
   member account (above);
+- false, as well, when the membership read shows enabled member accounts that no MFA-requiring policy reaches
+  (members outside, above);
 - not evaluated (dataCollection error, None): the only workforce MFA policies are scoped to user groups,
   platforms, client types or named locations, so whether they reach every user and sign-in cannot be
-  read from this list (or the membership read leaves members outside the groups, or was not read whole); or the
+  read from this list (or the membership read was not read whole, or every member it leaves outside the
+  groups is reached by a narrowed MFA policy); or the
   covering policies exclude a group, a role, guests/external users or more than 2 accounts; or no policy is enabled (security defaults on challenge non-admins by risk only; with
   them off or unread, per-user MFA may apply and is not read here);
 - false: policies are enabled and none of them is a workforce MFA policy.
@@ -613,9 +633,114 @@ def group_coverage(candidates, workforce, memberships, groups):
     return out, contributing
 
 
-def evaluate(policies, groups=None, security_defaults=None, membership=None, account_names=None):
+def requires_mfa_reach(policy):
+    """For the members-outside rule only: the grant asks for MFA, the built-in "mfa" control or any authentication
+    strength, whatever else it offers under OR. Generous on purpose: counting a policy can only remove members from
+    "outside", never add a False."""
+    grant = as_dict(policy.get("grantControls"))
+    if "mfa" in lowered(grant.get("builtInControls")):
+        return True
+    strength = grant.get("authenticationStrength")
+    return isinstance(strength, dict) and bool(strength)
+
+
+def odata_kind(obj):
+    """'user', 'serviceprincipal', 'group' or '' from an @odata.type annotation."""
+    text = str(as_dict(obj).get("@odata.type") or "").lower()
+    for kind in ("serviceprincipal", "group", "user"):
+        if text.endswith("." + kind) or text == kind:
+            return kind
+    return ""
+
+
+def role_holders(body, role_ids, workforce):
+    """Lower-case ids of the enabled member accounts that actively hold one of role_ids, from GET /v1.0/roleManagement/
+    directory/roleAssignments?$expand=principal($select=id). None when the list was not read whole, or a holder of
+    one of these roles is a group or an untyped id that is not a member account (its members are not read here)."""
+    for attempt in range(3):
+        if isinstance(body, dict) and "value" not in body:
+            nested = None
+            for key in ("apiResponse", "rawResponse", "response", "result"):
+                if isinstance(body.get(key), (dict, list)):
+                    nested = body[key]
+                    break
+            if nested is None:
+                break
+            body = nested
+    pages = list_pages(body)
+    if pages is None:
+        return None
+    out = set()
+    for page in pages:
+        for item in page["value"]:
+            if not isinstance(item, dict):
+                return None
+            rid = str(item.get("roleDefinitionId") or item.get("roleTemplateId") or "").strip().lower()
+            if rid not in role_ids:
+                continue
+            principal = as_dict(item.get("principal"))
+            pid = str(item.get("principalId") or principal.get("id") or "").strip().lower()
+            if not pid:
+                return None
+            kind = odata_kind(principal)
+            if pid in workforce:
+                out.add(pid)
+            elif kind not in ("user", "serviceprincipal"):
+                return None
+    return out
+
+
+def members_outside(policies, workforce, memberships, role_body):
+    """(ids of the enabled member accounts no enabled MFA-requiring policy reaches, '') or (None, reason) when that
+    cannot be decided. Reach is generous (header), so a non-empty set is a measured gap."""
+    if not workforce:
+        return None, "the enabled member account list was not read whole"
+    reached = set()
+    named_excluded = set()
+    for policy in policies:
+        if str(policy.get("state") or "").lower() != "enabled" or not requires_mfa_reach(policy):
+            continue
+        conditions = as_dict(policy.get("conditions"))
+        if risk_only(conditions):
+            continue
+        users = as_dict(conditions.get("users"))
+        reach = set(workforce) if "all" in lowered(users.get("includeUsers")) \
+            else object_ids(users.get("includeUsers")) & workforce
+        for gid in object_ids(users.get("includeGroups")):
+            members = memberships.get(gid)
+            if members is None:
+                return None, "the member list of a group an MFA policy includes was not read whole"
+            reach = reach | (members & workforce)
+        roles = object_ids(users.get("includeRoles"))
+        if roles:
+            holders = role_holders(role_body, roles, workforce)
+            if holders is None:
+                return None, ("an MFA policy includes a directory role whose holders were not read whole (role "
+                              "assignments not read, or the role is held by a group)")
+            reach = reach | holders
+        if not reach:
+            continue
+        excluded = object_ids(users.get("excludeUsers"))
+        for gid in object_ids(users.get("excludeGroups")):
+            members = memberships.get(gid)
+            if members is None:
+                continue
+            reach = reach - members
+            if len(members) <= MAX_EXCLUDED_ACCOUNTS:
+                excluded = excluded | members  # a break-glass group (36B c); a larger group's members stay outside
+        named_excluded = named_excluded | excluded
+        reached = reached | (reach - excluded)
+    outside = workforce - reached
+    break_glass = outside & named_excluded
+    if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
+        outside = outside - break_glass
+    return outside, ""
+
+
+def evaluate(policies, groups=None, security_defaults=None, membership=None, account_names=None, role_body=None):
     """membership: None when the workflow supplied no membership read, else (workforce ids or None, memberships).
-    account_names: {lower-case user id: displayName}, used only to name excluded emergency-access accounts."""
+    account_names: {lower-case user id: displayName}, used only to name excluded emergency-access accounts.
+    role_body: the role-assignment list, read only for MFA policies that include a directory role."""
     enabled = [p for p in policies if str(p.get("state") or "").lower() == "enabled"]
     result = {"enabledPolicyCount": len(enabled), "policyCount": len(policies),
               "groupListRead": isinstance(groups, dict), "groupsRead": len(groups) if isinstance(groups, dict) else 0,
@@ -668,6 +793,13 @@ def evaluate(policies, groups=None, security_defaults=None, membership=None, acc
             result[key] = None
         else:
             result[key] = False
+        if result[key] is None and enabled and membership is not None:
+            outside, why = members_outside(enabled, membership[0], membership[1], role_body)
+            if outside:
+                result[key] = False
+                result[names + "MembersOutside"] = {"membersTotal": len(membership[0]), "outsideCount": len(outside)}
+            elif why:
+                result[names + "MembersOutsideUndecided"] = why
     return result
 
 
@@ -691,7 +823,7 @@ def read_groups(group_data):
     return out
 
 
-def group_detail(coverage):
+def group_detail(coverage, undecided=""):
     """The reason a group-scoped policy set was not shown to reach every enabled member account."""
     if not isinstance(coverage, dict):
         return "whether they reach every user and sign-in cannot be read here"
@@ -706,9 +838,9 @@ def group_detail(coverage):
         return "no enabled member accounts were read, so whether the included groups reach every user cannot be read here"
     if coverage["uncoveredCount"]:
         where = "the included groups that could be read" if unread else "the included groups"
+        why = undecided or "each of them is reached by another MFA policy that is narrowed or offers another control"
         return (f"{coverage['uncoveredCount']} of {coverage['membersTotal']} enabled members are outside {where}"
-                + unread_note + ". Group membership never fails this check: add them to a group the policy includes, "
-                "or attest")
+                + unread_note + "; not failed because " + why + ": add them to a group the policy includes, or attest")
     return "whether they reach every user and sign-in cannot be read here" + unread_note
 
 
@@ -721,7 +853,9 @@ def transform(input):
         security_defaults = None
         membership = None
         account_names = None
+        role_body = None
         if isinstance(data, dict) and "conditionalAccessPolicies" in data:
+            role_body = data.get("roleAssignments")
             group_data = data.get("groups")
             security_defaults = read_security_defaults(data.get("securityDefaults"))
             if any(k in data for k in ("workforceUsers", "caPolicyGroups", "groupMembers")):
@@ -742,7 +876,7 @@ def transform(input):
         next_link = data.get("@odata.nextLink")
         if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
             raise ValueError("The policy list has more pages than were read (@odata.nextLink still present)")
-        result = evaluate(policies, groups, security_defaults, membership, account_names)
+        result = evaluate(policies, groups, security_defaults, membership, account_names, role_body)
         passed = []
         failed = []
         errors = []
@@ -761,6 +895,13 @@ def transform(input):
             elif result[key] is True:
                 passed.append(key + ": " + prefix + "MFA required of all users for all apps by "
                               + ", ".join(result[names]))
+            elif result[key] is False and result.get(names + "MembersOutside"):
+                found = result[names + "MembersOutside"]
+                word = "account is" if found["outsideCount"] == 1 else "accounts are"
+                failed.append(key + f": {found['outsideCount']} of {found['membersTotal']} enabled member {word} "
+                              "covered by no enabled Conditional Access policy that requires MFA (group membership "
+                              "read), so MFA is not required of them at remote sign-in: add them to a group an MFA "
+                              "policy includes, or target the policy at All users")
             elif result[key] is False:
                 failed.append(key + ": no enabled policy requires MFA of the workforce for all apps (only admins, roles, "
                               "guests, named users, risky sign-ins or specific apps) "
@@ -772,7 +913,7 @@ def transform(input):
                 if result[names + "PartialScoped"]:
                     parts.append("MFA for all apps is required by policies scoped to user groups, platforms, "
                                  "client types or named locations (" + ", ".join(result[names + "PartialScoped"])
-                                 + "); " + group_detail(coverage))
+                                 + "); " + group_detail(coverage, result.get(names + "MembersOutsideUndecided", "")))
                 if result.get(names + "SetAsideText"):
                     parts.append(result[names + "SetAsideText"])
                 else:

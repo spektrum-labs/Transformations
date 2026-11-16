@@ -207,11 +207,109 @@ def test_all_users_policy_excluding_a_read_group_leaves_that_group_outside():
     assert value is False and "2 of 8" in fail_text(out)  # U[2], U[3]: excluded from All, not in G1
 
 
-def test_role_including_policy_never_fails():
+def test_role_including_policy_never_fails_without_the_role_read():
     admins = policy("admins", include_groups=(), includeRoles=["62e90394-69f5-4237-9190-012177145e10"])
     value, out = run(body([policy("A"), admins], [G1], [U[:5]]))
     assert value is None
     assert "directory role" in out["transformedResponse"]["membersOutsideUndecided"]
+
+
+# --- WI-3a (product decision 16 Nov 2026): role holders, no group candidate, break-glass groups -------------------
+
+GA = "62e90394-69f5-4237-9190-012177145e10"
+
+
+def roles(*pairs, **page_extra):
+    """pairs: (principal id, @odata.type suffix or None); every assignment is Global Administrator."""
+    value = []
+    for pid, kind in pairs:
+        principal = {"id": pid}
+        if kind:
+            principal["@odata.type"] = "#microsoft.graph." + kind
+        value.append({"roleDefinitionId": GA, "principalId": pid, "directoryScopeId": "/", "principal": principal})
+    p = {"value": value}
+    p.update(page_extra)
+    return p
+
+
+ADMINS = policy("admins", include_groups=(), includeRoles=[GA])
+
+
+def test_real_shape_role_holders_read_lets_the_rule_fail():
+    value, out = run(body([policy("A"), ADMINS], [G1], [U[:5]], roleAssignments=roles((U[5], "user"))))
+    assert value is False
+    assert "2 of 8 enabled member accounts are not covered" in fail_text(out)  # U[6], U[7]
+
+
+def test_flipped_role_holders_cover_everyone_left():
+    value, out = run(body([policy("A"), ADMINS], [G1], [U[:5]],
+                          roleAssignments=roles((U[5], "user"), (U[6], None), (U[7], "user"))))
+    assert value is None
+    assert "membersOutsideCount" not in out["transformedResponse"]
+
+
+def test_role_holders_wrapped_in_raw_response_are_read():
+    # Azure AD's getDirectoryRoleAssignments returns {"apiResponse": ["rawResponse"]}.
+    value, _ = run(body([policy("A"), ADMINS], [G1], [U[:5]],
+                        roleAssignments={"rawResponse": roles((U[5], "user"))}))
+    assert value is False
+
+
+@pytest.mark.parametrize("role_body", [
+    None, {}, {"stepError": True, "errorSummary": "the vendor returned HTTP 403"},
+    {"error": {"code": "Authorization_RequestDenied"}}, roles((U[5], "user"), **{"@odata.nextLink": "https://x/n"}),
+    roles((U[5], "user"), paginationTruncated=True), roles(("e0000000-0000-0000-0000-000000000001", "group")),
+    roles(("e0000000-0000-0000-0000-000000000002", None)),
+], ids=["none", "empty", "step-error", "graph-error", "paged", "truncated", "group-holder", "untyped-outsider"])
+def test_role_read_that_is_not_whole_never_fails(role_body):
+    value, out = run(body([policy("A"), ADMINS], [G1], [U[:5]], roleAssignments=role_body))
+    assert value is None
+    assert "directory role" in out["transformedResponse"]["membersOutsideUndecided"]
+
+
+def test_service_principal_holder_is_not_a_member_and_does_not_block():
+    value, _ = run(body([policy("A"), ADMINS], [G1], [U[:5]],
+                        roleAssignments=roles(("e0000000-0000-0000-0000-000000000003", "servicePrincipal"))))
+    assert value is False
+
+
+def test_no_group_candidate_still_fails_members_outside_every_policy():
+    # The only MFA policy targets All users from iOS only: it is narrowed (no group candidate), yet it reaches
+    # everyone, so nobody is outside; add an excluded-by-name trio and they are.
+    narrowed = policy("All iOS", include_users=("All",), include_groups=(),
+                      extra={"platforms": {"includePlatforms": ["iOS"]}}, excludeUsers=U[5:8])
+    value, out = run(body([narrowed], [], []))
+    assert value is False
+    assert "3 of 8 enabled member accounts are not covered" in fail_text(out)
+
+
+READER = "4a5d8f65-41da-4de4-8968-e035b65339cf"  # an excluded role sets the policy aside but excludes nobody here
+
+
+def test_no_group_candidate_with_everyone_reached_stays_unevaluated():
+    aside = policy("All but readers", include_users=("All",), include_groups=(), excludeRoles=[READER])
+    value, out = run(body([aside], [], []))
+    assert value is None
+    assert "no set-aside policy is one it can decide" in error_text(out)
+
+
+def test_no_group_candidate_with_role_unread_names_why():
+    narrowed = policy("All iOS", include_users=("All",), include_groups=(),
+                      extra={"platforms": {"includePlatforms": ["iOS"]}}, excludeUsers=U[5:8])
+    value, out = run(body([narrowed, ADMINS], [], []))
+    assert value is None
+    assert "members outside cannot be counted: an MFA policy includes a directory role" in error_text(out)
+
+
+@pytest.mark.parametrize("group_members,expected", [
+    ([U[7]], None),           # one-account excluded group: break-glass, nothing fails
+    (U[5:8], False),          # three accounts: not break-glass, all three outside every policy
+])
+def test_excluded_group_is_break_glass_only_when_small(group_members, expected):
+    all_but = policy("All but G2", include_users=("All",), include_groups=(), excludeGroups=[G2],
+                     excludeRoles=[READER])
+    value, _ = run(body([all_but], [G2], [group_members]))
+    assert value is expected
 
 
 # --- authentication strengths (grantControls.authenticationStrength, builtInControls empty) -----------------------
