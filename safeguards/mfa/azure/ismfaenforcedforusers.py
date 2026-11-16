@@ -629,14 +629,29 @@ def per_user_mfa(data):
 
 
 def requires_mfa_reach(policy):
-    """For the members-outside rule only: the grant asks for MFA, either the built-in "mfa" control or an
-    authentication strength (built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength).
-    Generous on purpose: counting a policy can only remove members from "outside", never add a False."""
+    """For the members-outside rule only: the grant asks for MFA (the built-in "mfa" control or an authentication
+    strength: built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength), or blocks sign-in
+    (an account a block policy covers cannot sign in remotely, so it needs no MFA). Generous on purpose: counting
+    a policy can only remove members from "outside", never add a False."""
     grant = as_dict(policy.get("grantControls"))
-    if "mfa" in lowered(grant.get("builtInControls")):
+    controls = lowered(grant.get("builtInControls"))
+    if "mfa" in controls or "block" in controls:
         return True
     strength = grant.get("authenticationStrength")
     return isinstance(strength, dict) and bool(strength)
+
+
+ALL_RISK_LEVELS = set(["high", "medium", "low", "none"])
+
+
+def risk_only(conditions):
+    """True when the policy fires only for some risk levels (all four levels, 'none' included, is no narrowing).
+    Same rule as entra_ca_mfa_coverage.py, for the members-outside rule only."""
+    for risk in ("signInRiskLevels", "userRiskLevels", "servicePrincipalRiskLevels"):
+        levels = set(lowered(conditions.get(risk)))
+        if levels and not ALL_RISK_LEVELS.issubset(levels):
+            return True
+    return False
 
 
 def odata_kind(obj):
@@ -701,7 +716,7 @@ def members_outside(data, policies):
         if not requires_mfa_reach(policy):
             continue
         conditions = as_dict(policy.get("conditions"))
-        if EXCLUDE_RISK_CONDITIONED and risk_conditioned(conditions):
+        if risk_only(conditions):
             continue
         users = as_dict(conditions.get("users"))
         include = lowered(users.get("includeUsers"))
@@ -911,9 +926,11 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         result=result, validation=validation,
         pass_reasons=[f"MFA methods enabled: {', '.join(enabled_methods)}"],
         fail_reasons=[f"{len(outside)} of {total} enabled member {word} not covered by any enabled Conditional Access "
-                      "policy that requires MFA: they are in none of the groups or user lists those policies include "
-                      "(group membership read), so MFA is not enforced for them"],
-        recommendations=["Add these members to a group an MFA policy includes, or target an MFA policy at All users"],
+                      "policy that requires MFA or blocks sign-in: they are in none of the groups or user lists those "
+                      "policies include (group membership read), so MFA is not enforced for them"
+                      + ("" if per_user_seen is not None else " (per-user MFA was not read: it may apply to them)")],
+        recommendations=["Add these members to a group an MFA policy includes, remove the exclusion, or block them "
+                         "from sign-in"],
         input_summary=input_summary)
 
 
