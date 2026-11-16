@@ -7,9 +7,9 @@ API Source: listConsoleAdmins (POST https://<account>.my.rubrik.com/api/graphql,
     query RscConsoleAdmins($first: Int, $after: String) {
       usersInCurrentAndDescendantOrganization(first: $first, after: $after) {
         count pageInfo { hasNextPage endCursor }
-        nodes { id domain status isAccountOwner roles { id name isOrgAdmin } } }
+        nodes { id domain status isAccountOwner roles { id name isOrgAdmin } allOrgs { id } } }
       groupsInCurrentAndDescendantOrganization(first: 200) {
-        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } } } }
+        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } allOrgs { id } } } }
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
     (type User: domain UserDomainEnum! = LOCAL | SSO | LDAP | CLIENT | PAT | SUPPORT; status UserStatus! =
     ACTIVE | DEACTIVATED | UNKNOWN; roles [Role!]! with isOrgAdmin. type Group: SSO or directory groups that
@@ -22,10 +22,13 @@ identity that is separate from their everyday sign-in: a LOCAL user is a console
 construction) and CLIENT, PAT and SUPPORT users are non-person accounts. An SSO or LDAP user signs in with a
 directory identity, and RSC does not show whether that identity is a separate admin account or the person's
 everyday one. Account names are not read: a naming convention cannot prove which it is.
-True: the user and group reads are complete, no group holds an administrator role, and every administrator is a
-LOCAL console account or a non-person account.
+Roles are read in the context organization only (Group.roles; User.allOrgs lists the sub-organizations where a
+user has roles). A listed group with no roles, or a non-owner user with no roles and a non-empty allOrgs, holds
+its roles in a sub-organization this read cannot see, so the read is not evaluated.
+True: the user and group reads are complete, no group holds an administrator role, no account holds roles only
+in a sub-organization, and every administrator is a LOCAL console account or a non-person account.
 None (not evaluated): any administrator signs in with an SSO or LDAP identity, or with an unknown domain; a group
-holds an administrator role; empty, error or partial input; a GraphQL error on either field; or no
+holds an administrator role; a group or user holds roles only in a sub-organization; empty, error or partial input; a GraphQL error on either field; or no
 administrator in the read.
 Rubrik never returns False: nothing in the RSC read shows that a directory identity is a person's everyday
 account (J.J.'s ruling of 6 Oct 2026 still holds).
@@ -301,6 +304,11 @@ def verdict(validation, counts, summary):
                             "Every member of such a group can administer the console with the identity it signs in "
                             "with, and RSC does not list those members until they sign in, so a separate admin "
                             "identity per person cannot be shown.", RECOMMENDATION, summary)
+    if counts["subOrgGroups"] > 0 or counts["subOrgUsers"] > 0:
+        return not_measured(validation,
+                            str(counts["subOrgGroups"]) + " group(s) and " + str(counts["subOrgUsers"]) + " user(s) "
+                            "hold roles only in sub-organizations, which this read cannot see, so who administers "
+                            "the console cannot be shown.", RECOMMENDATION, summary)
     if admins == 0:
         return not_measured(validation,
                             "The read listed no account holding an RSC administrator role. Every console has at least "
@@ -360,7 +368,8 @@ def transform(input):
             return not_measured(validation, "Rubrik Security Cloud: " + why + ". Groups that hold an administrator "
                                 "role must be read to show who can administer the console.",
                                 "Grant the RSC service account read access to Groups and Roles.")
-        counts = {"separate": 0, "nonPerson": 0, "directory": 0, "unknown": 0, "adminGroups": 0}
+        counts = {"separate": 0, "nonPerson": 0, "directory": 0, "unknown": 0, "adminGroups": 0,
+                  "subOrgGroups": 0, "subOrgUsers": 0}
         for g in groups:
             admin = is_admin(g)
             if admin is None:
@@ -368,6 +377,8 @@ def transform(input):
                                     "administrator role cannot be read.")
             if admin:
                 counts["adminGroups"] = counts["adminGroups"] + 1
+            elif g.get("roles") == []:
+                counts["subOrgGroups"] = counts["subOrgGroups"] + 1
         for n in nodes:
             if str(n.get("status") or "").upper() == "DEACTIVATED":
                 continue
@@ -376,6 +387,8 @@ def transform(input):
                 return not_measured(validation, "A user entry carries no roles list, so who administers the console "
                                     "cannot be read.")
             if not admin:
+                if n.get("roles") == [] and isinstance(n.get("allOrgs"), list) and len(n.get("allOrgs")) > 0:
+                    counts["subOrgUsers"] = counts["subOrgUsers"] + 1
                 continue
             domain = str(n.get("domain") or "").upper()
             if domain in SEPARATE_DOMAINS:
@@ -396,6 +409,8 @@ def transform(input):
             "directoryIdentities": counts["directory"],
             "unknownDomain": counts["unknown"],
             "adminGroups": counts["adminGroups"],
+            "subOrgGroups": counts["subOrgGroups"],
+            "subOrgUsers": counts["subOrgUsers"],
         }
         return verdict(validation, counts, summary)
     except Exception as e:
