@@ -239,6 +239,50 @@ class SessionTimeoutTests(unittest.TestCase):
                                                  "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
         self.assertEqual(self.out(data)[KEY], 60)
 
+    def test_1fa_required_false_kind_does_not_bound_a_path_that_skips_it(self):
+        # (a) a password-only user never touches possession, so the rule-level interval is the worst case
+        data = copy.deepcopy(REAL)
+        method = self.method_of(data)
+        method["factorMode"] = "1FA"
+        method["reauthenticateIn"] = "PT12H"
+        method["constraints"] = [{"possession": {"required": "False", "reauthenticateIn": "PT1H",
+                                                 "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
+        out = self.out(data)
+        self.assertEqual(out[KEY], 720)
+        self.assertFalse(ts_less_than(out[KEY], "480"))
+
+    def test_2fa_required_false_knowledge_is_not_bound_when_possession_alone_can_meet_2fa(self):
+        # (b) possession with user verification, never the password: the 43,800 h rule-level value applies
+        for possession in ({"userVerification": "REQUIRED"}, None):  # (c) no possession key at all
+            data = copy.deepcopy(REAL)
+            method = self.method_of(data)
+            method["factorMode"] = "2FA"
+            method["reauthenticateIn"] = "PT43800H"
+            constraint = {"knowledge": {"required": "False", "reauthenticateIn": "PT1H",
+                                        "excludedAuthenticationMethods": [{"key": "security_question"}]}}
+            if possession is not None:
+                constraint["possession"] = possession
+            method["constraints"] = [constraint]
+            out = self.out(data)
+            self.assertEqual(out[KEY], NO_LIMIT)
+            self.assertFalse(ts_less_than(out[KEY], "10080"))
+
+    def test_2fa_required_knowledge_is_bound_with_possession(self):
+        data = copy.deepcopy(REAL)
+        method = self.method_of(data)
+        method["factorMode"] = "2FA"
+        method["reauthenticateIn"] = "PT12H"
+        method["constraints"] = [{"knowledge": {"required": True, "reauthenticateIn": "PT1H"}, "possession": {}}]
+        self.assertEqual(self.out(data)[KEY], 60)
+
+    def test_non_object_constraint_or_factor_is_unevaluated(self):
+        for bad in (["PT1H"], [None], [{"possession": "PT1H"}], [{"possession": []}]):
+            data = copy.deepcopy(REAL)
+            method = self.method_of(data)
+            method["reauthenticateIn"] = "PT2H"
+            method["constraints"] = bad
+            self.assert_unevaluated(data)
+
     def test_empty_constraint_inherits_the_rule_level_value(self):
         data = copy.deepcopy(REAL)
         method = self.method_of(data)

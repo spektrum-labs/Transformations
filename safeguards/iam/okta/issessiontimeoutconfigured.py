@@ -243,27 +243,40 @@ def reauthenticate_in(method):
     """A rule's re-authentication interval in minutes, or None when it is missing or unreadable. AUTH_METHOD_CHAIN
     carries it at the top and per chain; without the top-level value the longest chain value is the worst case.
     ASSURANCE constraints override the rule-level value per factor kind (Okta: "the re-authentication intervals for
-    constraints take precedent"): a constraint's interval is the shortest over its required factor kinds (re-auth
-    happens when any required factor expires), and the rule's is the longest over its constraints (worst
-    alternative). A factor without its own interval inherits the rule-level value."""
+    constraints take precedent"). A kind's interval is only a bound on a path that must pass through it: `required`
+    is false whenever a kind has excludedAuthenticationMethods, so a listed kind is not necessarily on every path.
+      * 1FA: a user may satisfy the rule with a single kind, so the worst case is the longest over every kind
+        (listed with its own interval, or absent and inheriting the rule-level value).
+      * 2FA: every path uses a possession factor, so possession is always bound; knowledge is bound only when it is
+        required (possession plus user verification is a valid pair that never asks for the password). A kind
+        without its own interval inherits the rule-level value. The shortest over the bound kinds applies.
+    A constraint is the worst alternative: the longest over the rule's constraints. A constraint that is not an
+    object is unreadable (None)."""
     rule_level = duration_minutes(method.get("reauthenticateIn")) if "reauthenticateIn" in method else None
     constraints = method.get("constraints")
     if text(method.get("type")).upper() == "ASSURANCE" and isinstance(constraints, list) and constraints:
         two_factor = text(method.get("factorMode")).upper() == "2FA"
         worst = None
         for constraint in constraints:
-            values = []
-            for kind in ("knowledge", "possession"):
-                factor = as_dict(constraint).get(kind)
-                if not isinstance(factor, dict):
-                    continue
-                own = factor.get("reauthenticateIn")
-                values.append(rule_level if own is None else duration_minutes(own))
-            if not values:
-                values = [rule_level]
-            if None in values:
+            if not isinstance(constraint, dict):
                 return None
-            value = min(values) if two_factor else max(values)
+            mins = {}
+            required = {}
+            for kind in ("knowledge", "possession"):
+                factor = constraint.get(kind)
+                if factor is not None and not isinstance(factor, dict):
+                    return None
+                own = as_dict(factor).get("reauthenticateIn")
+                mins[kind] = rule_level if own is None else duration_minutes(own)
+                required[kind] = isinstance(factor, dict) and text(factor.get("required")).lower() != "false"
+            if two_factor:
+                used = ["possession", "knowledge"] if required["knowledge"] else ["possession"]
+            else:
+                used = list(mins)
+            pool = [mins[k] for k in used]
+            if None in pool:
+                return None
+            value = min(pool) if two_factor else max(pool)
             worst = value if worst is None else max(worst, value)
         return worst
     if "reauthenticateIn" in method:
