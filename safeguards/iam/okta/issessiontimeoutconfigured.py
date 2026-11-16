@@ -44,6 +44,10 @@ def transform(input):
         enforces no maximum lifetime. The largest is the global bound.
       * App sign-on (Identity Engine): ACTIVE app authentication policies (_embedded.resourceType APP or absent),
         their ACTIVE ALLOW rules, each rule's verificationMethod.reauthenticateIn. The largest is the app bound.
+      * ASSURANCE rules whose constraints carry their own reauthenticateIn are read per constraint (see
+        reauthenticate_in): shortest over a constraint's required factor kinds, longest over constraints.
+      * Decision pending Josh's sign-off: the value is the re-authentication interval (the worst case of
+        min(global lifetime, app interval)), not the idle timeout (maxSessionIdleMinutes), which is only reported.
       * A user on app A must authenticate again at min(global lifetime, A's re-authentication interval), so the
         worst case is min(global bound, app bound). Classic Engine has no app authentication policies; the global
         bound alone is reported.
@@ -237,9 +241,32 @@ def duration_minutes(value):
 
 def reauthenticate_in(method):
     """A rule's re-authentication interval in minutes, or None when it is missing or unreadable. AUTH_METHOD_CHAIN
-    carries it at the top and per chain; without the top-level value the longest chain value is the worst case."""
+    carries it at the top and per chain; without the top-level value the longest chain value is the worst case.
+    ASSURANCE constraints override the rule-level value per factor kind (Okta: "the re-authentication intervals for
+    constraints take precedent"): a constraint's interval is the shortest over its required factor kinds (re-auth
+    happens when any required factor expires), and the rule's is the longest over its constraints (worst
+    alternative). A factor without its own interval inherits the rule-level value."""
+    rule_level = duration_minutes(method.get("reauthenticateIn")) if "reauthenticateIn" in method else None
+    constraints = method.get("constraints")
+    if text(method.get("type")).upper() == "ASSURANCE" and isinstance(constraints, list) and constraints:
+        worst = None
+        for constraint in constraints:
+            shortest = None
+            for kind in ("knowledge", "possession"):
+                factor = as_dict(constraint).get(kind)
+                if not isinstance(factor, dict) or text(factor.get("required")).lower() == "false":
+                    continue
+                own = factor.get("reauthenticateIn")
+                value = rule_level if own is None else duration_minutes(own)
+                if value is None:
+                    return None
+                shortest = value if shortest is None else min(shortest, value)
+            if shortest is not None:
+                worst = shortest if worst is None else max(worst, shortest)
+        if worst is not None:
+            return worst
     if "reauthenticateIn" in method:
-        return duration_minutes(method.get("reauthenticateIn"))
+        return rule_level
     chains = method.get("chains")
     if text(method.get("type")).upper() != "AUTH_METHOD_CHAIN" or not isinstance(chains, list) or not chains:
         return None

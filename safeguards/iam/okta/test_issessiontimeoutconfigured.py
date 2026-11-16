@@ -166,6 +166,42 @@ class SessionTimeoutTests(unittest.TestCase):
         data["result"]["accessRules"].append([app_rule("Catch-all Rule", "PT43800H", system="True")])
         self.assertEqual(self.out(data)[KEY], 720)
 
+    def constrain(self, data, policy, index, rule_level, **factors):
+        """Give an ASSURANCE rule constraints; each factor kwarg is its own reauthenticateIn (None = inherit)."""
+        method = data["result"]["accessRules"][policy][index]["actions"]["appSignOn"]["verificationMethod"]
+        method["reauthenticateIn"] = rule_level
+        constraint = {}
+        for kind, own in factors.items():
+            constraint[kind] = {} if own is None else {"reauthenticateIn": own}
+        method["constraints"] = [constraint]
+
+    def test_constraint_interval_overrides_the_rule_level_value_upward(self):
+        data = copy.deepcopy(REAL)
+        self.constrain(data, 1, 0, "PT2H", knowledge="PT24H", possession="PT24H")
+        out = self.out(data)
+        self.assertEqual(out[KEY], 1440)  # rule-level PT2H would have reported 720 from the other rules
+        self.assertEqual(out["appReauthenticateMinutes"], 1440)
+
+    def test_constraint_interval_overrides_the_rule_level_value_downward(self):
+        data = copy.deepcopy(REAL)
+        self.constrain(data, 0, 1, "PT12H", possession="PT1H")
+        self.constrain(data, 2, 0, "PT12H", knowledge="PT1H", possession=None)
+        self.assertEqual(self.out(data)[KEY], 120)
+
+    def test_constraint_takes_the_shortest_factor_and_the_longest_constraint(self):
+        data = copy.deepcopy(REAL)
+        method = data["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"]
+        method["reauthenticateIn"] = "PT2H"
+        method["constraints"] = [{"knowledge": {"reauthenticateIn": "PT43800H"}, "possession": {}},
+                                 {"possession": {"reauthenticateIn": "PT30H"},
+                                  "knowledge": {"reauthenticateIn": "PT1H", "required": False}}]
+        self.assertEqual(self.out(data)[KEY], 1800)
+
+    def test_constraint_with_unreadable_interval_is_unevaluated(self):
+        data = copy.deepcopy(REAL)
+        self.constrain(data, 1, 0, "PT2H", knowledge="soon")
+        self.assert_unevaluated(data)
+
     def test_auth_method_chain_interval_is_read(self):
         data = copy.deepcopy(REAL)
         method = {"type": "AUTH_METHOD_CHAIN", "reauthenticateIn": "P1D",
