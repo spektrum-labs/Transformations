@@ -301,8 +301,6 @@ def is_admin(node):
 def sub_org_roles(n, ctx):
     """True / False, or None when allOrgs is missing: does a non-admin account hold roles in an organization
     other than the context one (or, with no context id, in any organization)?"""
-    if n.get("roles") == []:
-        return True  # listed without roles: its roles are elsewhere
     orgs = n.get("allOrgs")
     if not isinstance(orgs, list):
         return None
