@@ -109,3 +109,31 @@ def test_move_audit_trail_cut_off_reason_is_specific_and_carries_no_record_text(
     assert value is None and reasons
     assert "partial page" in reasons[0]
     assert "@" not in json.dumps(reasons)
+
+
+@pytest.mark.parametrize("name,flip,flipped", CASES)
+def test_a_capped_total_is_a_lower_bound_never_a_complete_read(name, flip, flipped):
+    """recordsNumber stops at 10000: 10000 rows against 10000 may be the first 10000 of more."""
+    rows = [copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10000)]
+    body = merged(records=rows)
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    assert verdict(name, body)[0] is True  # a match already seen still counts
+    if flip:
+        for r in rows:
+            flip(r)
+    else:
+        body["responseData"] = []
+        body["responseEnvelope"]["recordsNumber"] = 10000
+    value, out = verdict(name, body)
+    assert value is None
+    assert "partial page" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_move_audit_trail_capped_total_reads_none_and_a_smaller_total_is_exact():
+    name = "messagemoveaudittrailenabled"
+    body = merged(records=[copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10000)])
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    assert verdict(name, body)[0] is None
+    body["responseEnvelope"]["recordsNumber"] = 9999
+    body["responseData"] = body["responseData"][:9999]
+    assert verdict(name, body)[0] is True
