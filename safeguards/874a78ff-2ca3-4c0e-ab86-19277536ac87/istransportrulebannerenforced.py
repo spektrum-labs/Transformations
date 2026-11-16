@@ -135,6 +135,8 @@ def transform(input):
         recommendations = []
 
         transport_rules = data.get("transportRules") if isinstance(data, dict) else None
+        if isinstance(transport_rules, dict):
+            transport_rules = [transport_rules]  # single rule serializes as an object
         if not isinstance(transport_rules, list):
             # Missing or non-list: an error body or a failed read, not evidence of a missing control.
             return create_response(
@@ -147,6 +149,8 @@ def transform(input):
         banner_rules = []
 
         for rule in transport_rules:
+            if not isinstance(rule, dict):
+                continue
             if rule.get('State') == 'Enabled':
                 actions = rule.get('Actions', [])
                 if actions:

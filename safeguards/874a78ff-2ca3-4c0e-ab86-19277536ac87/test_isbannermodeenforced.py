@@ -69,6 +69,16 @@ class BannerModeEnforcedTests(unittest.TestCase):
         self.assertIs(r["transformedResponse"][KEY], False)
         self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "success")
 
+    def test_single_rule_object_is_graded(self):
+        r = self.t.transform({"Output": {"transportRules": rule()}})
+        self.assertIs(r["transformedResponse"][KEY], True)
+
+    def test_non_dict_rules_are_skipped(self):
+        r = self.t.transform({"Output": {"transportRules": ["example", rule()]}})
+        self.assertIs(r["transformedResponse"][KEY], True)
+        r = self.t.transform({"Output": {"transportRules": ["example"]}})
+        self.assertIs(r["transformedResponse"][KEY], False)
+
 
 if __name__ == "__main__":
     unittest.main()
