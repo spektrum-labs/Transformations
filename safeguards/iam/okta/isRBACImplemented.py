@@ -25,15 +25,16 @@ def transform(input):
     """
     isRBACImplemented - does the Okta org delegate administration through roles?
 
-    True when at least one admin holds an ACTIVE role other than Super Administrator (a standard role such as
-    Help Desk, App or Read-only Administrator, or a custom role): administration is split into narrower roles rather
-    than every admin holding full control. One such admin read is enough, even when other reads failed.
-    False when every admin's roles were read and every ACTIVE role is Super Administrator.
+    True when at least one admin holds ACTIVE roles with no Super Administrator among them (only standard roles such
+    as Help Desk, App or Read-only Administrator, or custom roles): administration is split into narrower roles rather
+    than every admin holding full control. An admin who holds Super Administrator plus a narrower role is still a
+    full admin. One delegated admin read is enough, even when other reads failed.
+    False when every admin's roles were read and every admin holds Super Administrator.
     Not evaluated (None, dataCollection status "error"), never False, when that cannot be shown: an error body, no
     admin list (for example okta.roles.read not granted), an empty admin list (every org has a Super
     Administrator), a role read that failed, is missing, holds no active role or is out of line with the admin
     list, or a list cut short (pagination or iteration cap).
-    Output: isRBACImplemented; inputSummary carries adminCount, adminsRead, superAdminOnlyCount,
+    Output: isRBACImplemented; inputSummary carries adminCount, adminsRead, fullAdminCount,
     delegatedAdminCount and roleTypeCounts. Counts only: no admin is named.
     """
     try:
@@ -133,7 +134,7 @@ def evaluate(raw):
     cut = truncated(data) or len(slots) != len(admins)
     counts = {}
     delegated = 0
-    super_only = 0
+    full_admins = 0
     unread = 0
     for index in range(len(admins)):
         admin = admins[index]
@@ -144,20 +145,20 @@ def evaluate(raw):
             continue
         for kind in types:
             counts[kind] = counts.get(kind, 0) + 1
-        if [k for k in types if k != SUPER_ADMIN]:
+        if SUPER_ADMIN not in types:
             delegated = delegated + 1
         else:
-            super_only = super_only + 1
-    summary = {"adminCount": len(admins), "adminsRead": len(admins) - unread, "superAdminOnlyCount": super_only,
+            full_admins = full_admins + 1
+    summary = {"adminCount": len(admins), "adminsRead": len(admins) - unread, "fullAdminCount": full_admins,
                "delegatedAdminCount": delegated, "roleTypeCounts": counts, "listComplete": not cut}
     if delegated:
-        return respond(True, summary, [str(delegated) + " of " + str(len(admins)) + " Okta admin(s) hold a role "
+        return respond(True, summary, [str(delegated) + " of " + str(len(admins)) + " Okta admin(s) hold only roles "
                                        "narrower than Super Administrator (" + ", ".join(sorted(counts)) + ")"], [], [])
     if unread or cut:
         return respond(None, summary, [], [], [str(unread) + " of " + str(len(admins)) + " Okta admin role read(s) "
                                                "failed or the admin list was cut short, and no admin read so far holds "
                                                "a delegated role, so role delegation cannot be shown either way"])
-    return respond(False, summary, [], ["All " + str(super_only) + " Okta admin(s) hold only Super Administrator: "
+    return respond(False, summary, [], ["All " + str(full_admins) + " Okta admin(s) hold Super Administrator: "
                                         "administration is not split into narrower roles"], [])
 
 
