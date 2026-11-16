@@ -116,10 +116,12 @@ USERS = {"data": {"usersInCurrentAndDescendantOrganization": {"count": 4, "pageI
 
 ADMINS = {"data": {"usersInCurrentAndDescendantOrganization": {"count": 3, "pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [
     {"id": "a1", "username": "owner", "email": "owner@example.com", "domain": "LOCAL", "status": "ACTIVE", "isAccountOwner": True, "roles": []},
-    {"id": "a2", "username": "adm-jdoe@example.com", "email": "adm-jdoe@example.com", "domain": "SSO", "status": "ACTIVE",
+    {"id": "a2", "username": "jdoe-console", "email": "jdoe@example.com", "domain": "LOCAL", "status": "ACTIVE",
      "isAccountOwner": False, "roles": [{"id": "r1", "name": "Administrator", "isOrgAdmin": True}]},
     {"id": "a3", "username": "jdoe@example.com", "email": "jdoe@example.com", "domain": "SSO", "status": "ACTIVE",
-     "isAccountOwner": False, "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}]}]}}}
+     "isAccountOwner": False, "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}]}]},
+    "groupsInCurrentAndDescendantOrganization": {"count": 1, "pageInfo": DONE, "nodes": [
+        {"groupId": "g1", "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}]}]}}}
 
 ROLES = {"data": {"getAllRolesInOrgConnection": {"count": 2, "pageInfo": DONE, "nodes": [
     {"id": "r1", "name": "Administrator", "isOrgAdmin": False, "isReadOnly": True,
