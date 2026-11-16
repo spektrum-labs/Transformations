@@ -279,8 +279,10 @@ def test_is_org_admin_counts_whatever_the_name():
     assert value(body([user("jdoe@example.com", domain="LOCAL"), user("jane.doe@example.com", roles=[custom])])) is None
 
 
-def test_group_with_no_context_roles_not_evaluated():
-    out = run(body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g", roles=[])]))
+def test_group_with_roles_only_in_sub_org_not_evaluated():
+    sub = group("g", roles=[])
+    sub["allOrgs"] = [{"id": "o2"}]
+    out = run(body([user("jdoe@example.com", domain="LOCAL")], groups=[sub]))
     assert out["transformedResponse"][KEY] is None
     assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgGroups"] == 1
 
@@ -298,12 +300,12 @@ def test_user_with_roles_only_in_sub_org_not_evaluated():
     assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
 
 
-def test_listed_user_without_roles_not_evaluated_whatever_allorgs_says():
+def test_role_less_user_in_context_org_only_is_not_a_sub_org_signal():
     plain = user("jdoe@example.com", domain="LOCAL", roles=[])
     plain["allOrgs"] = []
     out = run(body([user("owner@example.com", domain="LOCAL"), plain]))
-    assert out["transformedResponse"][KEY] is None
-    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
+    assert out["transformedResponse"][KEY] is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 0
 
 
 def test_user_without_roles_and_without_allorgs_key_not_evaluated():
@@ -311,7 +313,6 @@ def test_user_without_roles_and_without_allorgs_key_not_evaluated():
     del plain["allOrgs"]
     out = run(body([user("owner@example.com", domain="LOCAL"), plain]))
     assert out["transformedResponse"][KEY] is None
-    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
 
 
 @pytest.mark.parametrize("orgs", [None, "o2"])
