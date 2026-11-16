@@ -23,9 +23,10 @@ Fail closed: anything that is not a complete export read returns every count as 
 "error" (Unevaluated): no envelope, a vendor error body, no `value` list, an @odata.nextLink still present
 (IS stopped at maxPages or a page failed, so the merge is partial), a truncated marker, an empty export
 (Defender Vulnerability Management has assessed nothing, which is not a measured zero), or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
-A record without a vulnerabilitySeverityLevel is skipped and counted (recordsWithoutSeverity), not allowed to
-fail the whole read; when more than 5% carry none the read is Unevaluated, because the unrated records may be
-Critical and a zero from the rest would not be a measured zero.
+A record whose vulnerabilitySeverityLevel is not Critical/High/Medium/Low (missing, blank, "None", "null",
+unknown) is skipped and counted (recordsWithoutSeverity). When more than 5% are unrated and nothing is overdue the
+read is Unevaluated, because the unrated records may be Critical and a zero from the rest would not be a measured
+zero; when something is already overdue the Fail stands and the counts are lower bounds.
 An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
 dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
@@ -148,13 +149,14 @@ def measure(data, now):
         if not isinstance(rec, dict):
             return None, "A Defender vulnerability record is not an object."
         severity = rec.get("vulnerabilitySeverityLevel")
-        if not isinstance(severity, str) or not severity.strip():
+        # Token-Service stringifies values, so a JSON null arrives as "None"/"null": only a known level is rated.
+        sev = severity.strip().lower() if isinstance(severity, str) else ""
+        if sev not in ["critical", "high", "medium", "low"]:
             no_severity = no_severity + 1
             continue
         status = rec.get("status")
         if isinstance(status, str) and status.strip().lower() in CLOSED_STATUSES:
             continue
-        sev = severity.strip().lower()
         if sev not in ["critical", "high"]:
             continue
         device = rec.get("deviceId")
@@ -166,9 +168,6 @@ def measure(data, now):
         prior = instances.get(ident)
         if prior is None or seen < prior["seen"]:
             instances[ident] = {"sev": sev, "seen": seen, "device": device, "cve": cve}
-    if no_severity * 20 > len(records):
-        return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
-                      "vulnerabilitySeverityLevel, too many to rate the export.")
     critical = 0
     high = 0
     overdue = 0
@@ -187,6 +186,11 @@ def measure(data, now):
                 overdue = overdue + 1
         devices[inst["device"]] = True
         cves[inst["cve"]] = True
+    # Unrated records can only hide more findings. A measured overdue finding stands (counts are lower bounds);
+    # otherwise too many unrated records means a zero is not a measured zero.
+    if no_severity * 20 > len(records) and overdue == 0:
+        return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
+                      "recognised vulnerabilitySeverityLevel, too many to rate the export.")
     numbers = {
         KEY_CRITICAL: critical,
         KEY_HIGH: high,
@@ -209,7 +213,8 @@ def transform(input):
                    + " records; open Critical/High on " + str(numbers["devicesWithOpenCriticalOrHigh"]) + " devices): "
                    + str(numbers[KEY_CRITICAL]) + " critical, " + str(numbers[KEY_HIGH]) + " high, "
                    + str(numbers[KEY_OVERDUE]) + " past the BOD 19-02 window (critical > 15 days, high > 30 days)."
-                   + (" " + str(numbers["recordsWithoutSeverity"]) + " record(s) without a severity were skipped."
+                   + (" " + str(numbers["recordsWithoutSeverity"]) + " unrated record(s) not counted"
+                      + ("; the counts are lower bounds." if numbers["recordsWithoutSeverity"] * 20 > numbers["vulnerabilityRecordsRead"] else ".")
                       if numbers["recordsWithoutSeverity"] else ""))
         passes = []
         fails = []
