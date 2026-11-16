@@ -13,30 +13,6 @@ import json
 from datetime import datetime, timedelta
 
 
-def extract_input(input_data):
-    """Extract data and validation from input, handling enriched + legacy formats."""
-    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
-        return input_data["data"], input_data["validation"]
-    data = input_data
-    if isinstance(data, dict):
-        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output"]
-        for _ in range(3):
-            unwrapped = False
-            for key in wrapper_keys:
-                if key in data and isinstance(data.get(key), dict):
-                    data = data[key]
-                    unwrapped = True
-                    break
-            if not unwrapped:
-                break
-    validation = {
-        "status": "unknown",
-        "errors": [],
-        "warnings": ["Legacy input format - no schema validation performed"],
-    }
-    return data, validation
-
-
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
