@@ -156,7 +156,9 @@ def transform(input):
             if token and str(token).strip().lower() not in ("", "none", "null"):
                 return "more"
         total = records_total(body)
-        if total is not None and total > len(body["responseData"]):
+        # HEC caps recordsNumber at 10000: that value means "at least 10000", so a read that holds no more
+        # rows than it is partial, however complete the scroll looks.
+        if total is not None and (total > len(body["responseData"]) or (total >= 10000 and len(body["responseData"]) <= total)):
             return "more"
         if total_unreadable(body):
             return "unknown"
