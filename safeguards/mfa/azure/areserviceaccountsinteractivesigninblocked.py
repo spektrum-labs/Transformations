@@ -266,9 +266,8 @@ def narrowing(cond):
     if isinstance(locs, dict):
         inc = lowered(locs.get("includeLocations"))
         exc = lowered(locs.get("excludeLocations"))
-        # only AllTrusted is the block's trusted exemption: named locations are not read, so any other exclusion
-        # (a country list, a wide IP range) may leave the accounts able to sign in from almost anywhere
-        if (inc and inc != ["all"]) or (exc and exc != ["alltrusted"]):
+        # AllTrusted is the block's trusted exemption; any other exclusion is location_unread(), not narrowing
+        if inc and inc != ["all"]:
             out.append("locations")
     elif has_value(locs):
         out.append("locations")
@@ -441,6 +440,14 @@ def mfa_carve_outs(policies, memberships, accounts):
     return carved, glass, why
 
 
+def location_unread(cond):
+    """True when a policy excludes any location but AllTrusted. Named locations are not read, so an excluded
+    country or IP range may or may not leave the accounts free to sign in (same rule as entra_ca_mfa_coverage.py)."""
+    locs = cond.get("locations")
+    exc = [e for e in lowered(locs.get("excludeLocations")) if e != "none"] if isinstance(locs, dict) else []
+    return bool(exc) and exc != ["alltrusted"]
+
+
 def location_exempt(policy):
     """True when a block policy leaves trusted locations open (excludeLocations is exactly AllTrusted)."""
     cond = policy.get("conditions") if isinstance(policy.get("conditions"), dict) else {}
@@ -448,9 +455,9 @@ def location_exempt(policy):
     return isinstance(locs, dict) and lowered(locs.get("excludeLocations")) == ["alltrusted"]
 
 
-def full_block(policy):
-    """True when an enabled policy blocks every cloud app for every client type with no other narrowing (excluded
-    locations excepted: only AllTrusted, the trusted-location exemption)."""
+def full_block(policy, unread_ok=False):
+    """True when an enabled policy blocks every cloud app for every client type with no other narrowing and no
+    excluded location but AllTrusted (the trusted-location exemption); unread_ok skips that last test."""
     controls = policy.get("grantControls")
     if not enabled(policy) or not isinstance(controls, dict) or "block" not in lowered(controls.get("builtInControls")):
         return False
@@ -461,13 +468,15 @@ def full_block(policy):
     if ("all" not in lowered(apps.get("includeApplications")) or strs(apps.get("excludeApplications"))
             or has_value(apps.get("applicationFilter"))):
         return False
-    return all_client_apps(cond) and not narrowing(cond)
+    return all_client_apps(cond) and not narrowing(cond) and (unread_ok or not location_unread(cond))
 
 
-def blocked(uid, blocks, memberships):
-    """True when some full block policy includes and does not exclude the account; None when one may; else False."""
+def blocked(uid, blocks, memberships, maybe_blocks=()):
+    """True when some full block policy includes and does not exclude the account; None when one may (or a block
+    that excludes a named location not read would reach it); else False."""
     maybe = False
-    for p in blocks:
+    for p in list(blocks) + list(maybe_blocks):
+        is_maybe = p in maybe_blocks
         users = users_of(p)
         included = "all" in lowered(users.get("includeUsers")) or uid in object_ids(users.get("includeUsers"))
         unsure = False
@@ -492,7 +501,7 @@ def blocked(uid, blocks, memberships):
             continue
         if strs(users.get("excludeRoles")) or has_value(users.get("excludeGuestsOrExternalUsers")):
             unsure = True
-        if included and not unsure:
+        if included and not unsure and not is_maybe:
             return True
         maybe = True
     return None if maybe else False
@@ -547,10 +556,11 @@ def transform(input):
         break_glass = glass - by_signal
         service = by_signal | (carve_only - break_glass)
         blocks = [p for p in policies if full_block(p)]
+        maybe_blocks = [p for p in policies if not full_block(p) and full_block(p, True)]
         unblocked = []
         undecided = []
         for uid in sorted(service):
-            state = blocked(uid, blocks, memberships)
+            state = blocked(uid, blocks, memberships, maybe_blocks)
             if state is False:
                 unblocked.append(uid)
             elif state is None:
@@ -593,7 +603,7 @@ def transform(input):
                                 "from service accounts. Attest, or exclude fewer accounts.")
         if undecided or carve_why:
             reason = carve_why or (str(len(undecided)) + " service account(s) are targeted by a block policy whose "
-                                   "group membership, role or guest exclusion was not read, so whether it blocks them "
+                                   "group membership, role, guest or named-location exclusion was not read, so whether it blocks them "
                                    "cannot be decided")
             return not_measured(validation, "Microsoft Entra ID: " + reason + ".", None, summary)
         if not service:
