@@ -48,8 +48,11 @@ A binding is UNRESOLVED, and its application INDETERMINATE (counted neither cove
 when the summary does not name its groups readably (groups missing, empty, not a list, or an entry without a
 group_id) or when more than one different group policy is bound to the same application (which policy reaches
 a user then depends on group overlap, which only membership can show). A summary that hides its bindings (an
-entry without a policy_applies_to list, an unrecognised apply_type, or no entry for a listed policy) is Not
-evaluated, because a hidden binding could change the answer. Group policies are always read, so an unreadable
+entry without a policy_applies_to list, or no entry for a listed policy) is Not evaluated, because a hidden
+binding could change the answer. A policy_applies_to entry with an unrecognised apply_type makes only that
+policy scope-unknown: it is recorded in the evidence, an uncovered application still gives False, and with no
+uncovered application the answer is Not evaluated (never True). Unrecognised operating_systems.block_os_list
+values are recorded in the evidence and never count as a condition. Group policies are always read, so an unreadable
 one fails closed.
 
 Rule:
@@ -64,7 +67,7 @@ Rule:
            several global policies; an application whose policy_key is not in the policy list; a summary that
            hides its bindings (see above); a section of a governing policy that is not an object, or a
            wrong-typed value or unrecognised enum in one; no uncovered application but at least one
-           indeterminate one; any exception.
+           indeterminate one, or at least one scope-unknown policy; any exception.
   conditionalAccessAppPercentage  covered applications / all applications * 100, one decimal. Emitted whenever
            the applications were enumerated and read, including when the boolean is False.
   conditionalAccessAppsCovered, conditionalAccessAppsTotal, conditionalAccessAppsOnGlobalPolicy,
@@ -288,10 +291,11 @@ def is_vendor(v):
     return v.lower() in ENDPOINT_SECURITY_VENDORS
 
 
-def real_items(value, valid, field):
+def real_items(value, valid, field, unknown=None):
     """The meaningful entries of a Duo list setting. Stringified empties ("False", "[]", "none") are not entries.
     Every remaining entry must be a known value for the field; anything else makes the setting unreadable, so an
-    unrecognised value can never count as a condition (fail closed)."""
+    unrecognised value can never count as a condition (fail closed). When ``unknown`` is a list, an unrecognised
+    entry is appended to it and skipped instead (it still never counts as a condition)."""
     if isinstance(value, str) and value.strip().startswith("["):
         try:
             value = json.loads(value)
@@ -303,6 +307,9 @@ def real_items(value, valid, field):
         if token.lower() in EMPTY_TOKENS:
             continue
         if not valid(token.lower() if valid in (in_platforms, in_os, in_browsers) else token):
+            if unknown is not None:
+                unknown.append(token.lower()[:20])
+                continue
             raise unreadable(field + " holds a value that is not a known setting: " + token[:20])
         out.append(token)
     return out
@@ -503,7 +510,7 @@ def effective_section(chain, name):
     return {}
 
 
-def conditions_in(section_name, s):
+def conditions_in(section_name, s, unknown_os):
     """The access conditions one section imposes (a list of short descriptions)."""
     found = []
     field = section_name + "."
@@ -542,7 +549,7 @@ def conditions_in(section_name, s):
             if enum(s, k, ENFORCEMENT, field + k) == "enforce-enabled":
                 found.append("device health (%s): %s" % (section_name, k))
     elif section_name == "operating_systems":
-        blocked_os = real_items(s.get("block_os_list"), in_os, "operating_systems.block_os_list")
+        blocked_os = real_items(s.get("block_os_list"), in_os, "operating_systems.block_os_list", unknown_os)
         if blocked_os:
             found.append("operating systems: %s blocked" % ", ".join([x[:20] for x in blocked_os[:9]]))
         restrictions = s.get("os_restrictions")
@@ -574,10 +581,10 @@ def conditions_in(section_name, s):
     return found
 
 
-def conditions_of(chain):
+def conditions_of(chain, unknown_os):
     found = []
     for name in CONDITION_SECTIONS:
-        found.extend(conditions_in(name, effective_section(chain, name)))
+        found.extend(conditions_in(name, effective_section(chain, name), unknown_os))
     return found
 
 
@@ -606,21 +613,26 @@ def group_problem(target):
 def group_bindings(summary):
     """(bindings, error). bindings maps an application's integration_key to {"policies": the distinct policy keys
     bound to groups of it, "problems": why any of its bindings is unresolved}. error is the text of a summary that
-    cannot be read to the end of its policy_applies_to lists (the whole check is then Not evaluated)."""
+    cannot be read to the end of its policy_applies_to lists (the whole check is then Not evaluated). unknown_scope
+    counts the policies with an unrecognised apply_type: only that policy's scope is unknown, its other entries
+    are still read."""
     bindings = {}
+    unknown_scope = []
     for entry in summary["policies"]:
         if not isinstance(entry, dict):
-            return None, "the policy summary carries an entry that is not a policy object"
+            return None, "the policy summary carries an entry that is not a policy object", 0
         applies = entry.get("policy_applies_to")
         if not isinstance(applies, list):
             return None, ("the policy summary carries no policy_applies_to list for a policy, so its application "
-                          "bindings are unknown")
+                          "bindings are unknown"), 0
         for target in applies:
             if not isinstance(target, dict):
-                return None, "the policy summary carries a policy_applies_to entry that is not an object"
+                return None, "the policy summary carries a policy_applies_to entry that is not an object", 0
             kind = word(target.get("apply_type"))
             if kind not in APPLY_TYPES:
-                return None, "the policy summary carries a policy_applies_to entry with an unrecognised apply_type"
+                if str(entry.get("policy_key")) not in unknown_scope:
+                    unknown_scope.append(str(entry.get("policy_key")))
+                continue
             if kind != "group_app":
                 continue
             key = str(target.get("app_integration_key", target.get("integration_key")))
@@ -634,7 +646,7 @@ def group_bindings(summary):
             problem = group_problem(target)
             if problem:
                 slot["problems"].append(problem)
-    return bindings, ""
+    return bindings, "", len(unknown_scope)
 
 
 def transform(input):
@@ -677,7 +689,7 @@ def transform(input):
             by_key[str(p.get("policy_key"))] = p
 
         app_keys = [str(a.get("integration_key")) for a in apps]
-        groups, text = group_bindings(summary)
+        groups, text, unknown_scope = group_bindings(summary)
         if text:
             return not_evaluated("GET /admin/v2/policies/summary cannot be used: " + text)
         listed = [str(e.get("policy_key")) for e in summary["policies"]]
@@ -699,6 +711,7 @@ def transform(input):
         indeterminate = []
         indeterminate_why = []
         resolved_groups = []
+        unknown_os = []
         on_global = 0
         try:
             for app in apps:
@@ -713,7 +726,7 @@ def transform(input):
                 if own is glob:
                     on_global = on_global + 1
                 chain = [glob] if own is glob else [own, glob]
-                found = conditions_of(chain)
+                found = conditions_of(chain, unknown_os)
                 slot = groups.get(str(app.get("integration_key")))
                 if slot is None:
                     if found:
@@ -725,7 +738,7 @@ def transform(input):
                 # closed, then judge the group chain beside the application's own chain
                 group_found = []
                 for policy_key in slot["policies"]:
-                    group_found.append(conditions_of([by_key[policy_key]] + chain))
+                    group_found.append(conditions_of([by_key[policy_key]] + chain, unknown_os))
                 if slot["problems"]:
                     indeterminate.append(app_name(app))
                     indeterminate_why.append(slot["problems"][0])
@@ -755,7 +768,9 @@ def transform(input):
                 "applicationsUncovered": len(uncovered), "applicationsIndeterminate": len(indeterminate),
                 "applicationsOnGlobalPolicy": on_global,
                 "groupBindings": sum([len(v["policies"]) for v in groups.values()]),
-                "groupBindingsResolved": len(resolved_groups)}
+                "groupBindingsResolved": len(resolved_groups),
+                "policiesScopeUnknown": unknown_scope,
+                "unrecognisedBlockOsValues": sorted(set(unknown_os))[:20]}
         described = [label + ": " + "; ".join(found[:6]) for label, found in covered[:NAMED_LIMIT]]
         indeterminate_note = []
         if indeterminate:
@@ -765,6 +780,14 @@ def transform(input):
         if resolved_groups:
             described = described + ["Application-group policies were resolved for: " + named(resolved_groups)
                                      + " (the application's own policy and each group policy were both checked)"]
+        scope_note = []
+        if unknown_scope:
+            scope_note = ["%d polic%s a policy_applies_to entry with an unrecognised apply_type, so where %s applies "
+                          "is unknown" % (unknown_scope, "y has" if unknown_scope == 1 else "ies have",
+                                          "it" if unknown_scope == 1 else "they")]
+        if unknown_os:
+            described = described + ["Ignored %d unrecognised operating_systems.block_os_list value(s); they were "
+                                     "not counted as an access condition" % len(unknown_os)]
         user_group_note = ("Group membership is not read: a group policy is judged by what it configures, not by "
                            "how many users its group holds")
 
@@ -780,6 +803,10 @@ def transform(input):
                                                     "or Duo Desktop requirements, Authorized Networks, or (on tiers "
                                                     "that offer them) User Location and Anonymous Networks",
                                                     user_group_note])
+        if scope_note and not indeterminate:
+            return create_response(result, input_summary=info, findings=described,
+                                   fail_reasons=["Not evaluated: no application is uncovered, but " + scope_note[0]],
+                                   api_errors=scope_note, warnings=scope_note)
         if indeterminate:
             return create_response(result, input_summary=info, findings=described + indeterminate_note,
                                    fail_reasons=["Not evaluated: no application is uncovered, but %d cannot be "
