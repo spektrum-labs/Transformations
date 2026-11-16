@@ -481,6 +481,10 @@ def transform(input):
         accounts, why = read_accounts(items, cutoff)
         if why:
             return not_measured(validation, "Microsoft Entra ID users with sign-in activity: " + why + ".")
+        if not accounts:
+            # Every tenant has enabled member accounts: an empty read proves nothing (fail closed).
+            return not_measured(validation, "Microsoft Entra ID returned no enabled member account, so which accounts "
+                                "are service accounts cannot be read.")
         memberships = read_memberships(body)
         carved, carve_why = mfa_carve_outs(policies, memberships)
         by_signal = set(u for u in accounts if accounts[u] == "signal")

@@ -144,6 +144,14 @@ def test_human_with_interactive_sign_ins_is_not_a_service_account():
     assert out["additionalInfo"]["transformation"]["inputSummary"]["serviceAccountsBySignInSignal"] == 2
 
 
+@pytest.mark.parametrize("users", [[], [account(SA1, background=1, enabled=False)],
+                                   [account(SA1, background=1, kind="Guest")]],
+                         ids=["empty", "only-disabled", "only-guests"])
+def test_no_enabled_member_account_read_is_not_evaluated(users):
+    got, out = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2])], users=users))
+    assert got is None and "no enabled member account" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
 def test_disabled_guest_and_dormant_accounts_are_not_service_accounts():
     users = [account(SA1, background=1, enabled=False), account(SA2, background=1, kind="Guest"),
              account(HUMAN, background=120), account(BG1)]
