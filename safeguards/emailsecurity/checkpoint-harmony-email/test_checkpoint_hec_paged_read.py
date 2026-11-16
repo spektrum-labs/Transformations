@@ -137,3 +137,25 @@ def test_move_audit_trail_capped_total_reads_none_and_a_smaller_total_is_exact()
     body["responseEnvelope"]["recordsNumber"] = 9999
     body["responseData"] = body["responseData"][:9999]
     assert verdict(name, body)[0] is True
+
+
+@pytest.mark.parametrize("name,flip,flipped", CASES)
+def test_a_capped_total_with_more_rows_than_the_cap_is_still_partial(name, flip, flipped):
+    """IS stops the scroll at the cap, so 10100 rows against recordsNumber 10000 is a cut read."""
+    rows = [copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10100)]
+    if flip:
+        for r in rows:
+            flip(r)
+    body = merged(records=rows) if flip else merged(records=[])
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    if not flip:
+        body["responseData"] = []
+    value, out = verdict(name, body)
+    assert value is None
+    assert "partial page" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+def test_move_audit_trail_over_cap_rows_read_none():
+    body = merged(records=[copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10100)])
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    assert verdict("messagemoveaudittrailenabled", body)[0] is None
