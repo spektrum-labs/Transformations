@@ -25,6 +25,22 @@ def extract_input(input_data):
     return data, validation
 
 
+def truncation_marked(value):
+    """The marker name when Integration-Service says the read was cut off, else ''. Looks at the value,
+    its response_metadata, and the wrappers around the body (api_response, response, result, apiResponse)."""
+    if not isinstance(value, dict):
+        return ""
+    blocks = [value]
+    for key in ("response_metadata", "metadata", "api_response", "response", "result", "apiResponse"):
+        if isinstance(value.get(key), dict):
+            blocks.append(value[key])
+    for block in blocks:
+        for key in ("paginationTruncated", "truncated"):
+            if str(block.get(key)).strip().lower() == "true":
+                return key
+    return ""
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
@@ -102,26 +118,24 @@ def transform(input):
 
     count = len(open_critical)
 
-    # Truncation guard. The organization Dependabot alerts endpoint advertises
-    # its next page only in a Link header, which the pagination handler cannot
-    # read, so this method fetches a single page of PAGE_SIZE and stops. A
-    # response holding exactly PAGE_SIZE alerts means there may be more we
-    # cannot see, and a count taken from it would understate the backlog.
-    # Report that as a collection error rather than a confident number.
-    # Remove once ENG-577 lands real cursor pagination.
+    # Truncation guard. Integration-Service follows the Link header (rel="next") up to a page cap and
+    # marks a read it cut off with paginationTruncated / truncated (on the envelope, so it may arrive
+    # beside the body or in response_metadata). A cut-off read understates the backlog: no count.
+    # shortcut: exactly one full page (PAGE_SIZE) is also withheld, because a definition without
+    # Link-header paging returns at most one page and that is indistinguishable from a real total of
+    # 100; drop this once every live definition pages the method.
     PAGE_SIZE = 100
-    if len(alerts) >= PAGE_SIZE:
+    cut_off = truncation_marked(input) or truncation_marked(data)
+    if cut_off or len(alerts) == PAGE_SIZE:
+        why = ("The alert list was not read to the end (" + cut_off + " is set)" if cut_off else
+               "Received exactly " + str(len(alerts)) + " alerts, one full page, and nothing shows the list was paged")
         return create_response(
             result={"openCriticalDependabotAlertsCount": None, "truncated": True},
             validation=validation,
-            fail_reasons=[
-                f"Received exactly {len(alerts)} alerts, the maximum this method can fetch in one page, "
-                "so the open critical backlog cannot be counted completely. "
-                "Pagination for this endpoint is tracked in ENG-577."
-            ],
+            fail_reasons=[why + ", so the open critical backlog cannot be counted completely."],
             recommendations=["No customer action required; this is a retrieval limitation on our side."],
             input_summary={"alertsReceived": len(alerts), "pageSize": PAGE_SIZE, "truncated": True},
-            api_errors=["Result set truncated at one page; next-page cursor is only available in the Link header."],
+            api_errors=["Result set may be truncated: " + why + "."],
             metadata={"transformationId": "openCriticalDependabotAlertsCount", "vendor": "GitHub", "category": "devsecops"},
         )
 

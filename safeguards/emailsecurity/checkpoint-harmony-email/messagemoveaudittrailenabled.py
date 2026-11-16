@@ -6,8 +6,8 @@ Method: queryOffice365Events (POST /app/hec-api/v1.0/event/query, requestData.sa
 True when at least one message-move action (quarantine, restore, delete, move) appears in the event
 log for the last 30 days and EVERY such action on the page carries actionType, createTime and
 relatedEntityId, i.e. an auditable who-what-when trail. No move action observed, or any move action
-missing a field, reads false. Judges the first page of the event query (the oldest events of the
-window); the response carries no audit-log endpoint beyond this.
+missing a field, reads false. Judges every page Integration-Service read of the event query (it
+follows responseEnvelope.scrollId up to a page cap); a read it marks cut off proves no absence.
 Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised:
 it proves nothing, so it is never reported as False. A readable answer that lists nothing keeps the
 verdict described above.
@@ -144,9 +144,14 @@ def transform(input):
         """"more" when the response says records remain beyond this page: a scrollId that is not
         empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
         "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
-        is complete. "" when the page is complete. Anything but "" cannot prove an absence."""
+        is complete. "" when the page is complete. Anything but "" cannot prove an absence.
+        Integration-Service pages this query and marks a read it cut off (page cap, early end of the
+        scroll) with responseEnvelope.truncated or paginationTruncated: that is "more" too."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
+            for mark in ("truncated", "paginationTruncated"):
+                if str(holder.get(mark)).strip().lower() == "true":
+                    return "more"
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
                 return "more"
