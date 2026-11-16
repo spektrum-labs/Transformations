@@ -35,11 +35,12 @@ CHECKS = {
     "issmbsigningrequired": ("isSMBSigningRequired", ("scid-95", "scid-9999")),
     "isscreenlockwithin15minutesonallapplicabledevices": ("isScreenLockWithin15MinutesOnAllApplicableDevices", ("scid-28",)),
     "islapsenabledonallapplicabledevices": ("isLAPSEnabledOnAllApplicableDevices", ("scid-113",)),
+    "issmbclientsigningrequiredonallapplicabledevices": ("isSMBClientSigningRequiredOnAllApplicableDevices", ("scid-95",)),
 }
 
 SAFE = {"smbV1EnabledDeviceCount": 0, "isWDigestDisabled": True, "isNTLMv1Disabled": True,
         "isSMBSigningRequired": True, "isScreenLockWithin15MinutesOnAllApplicableDevices": True,
-        "isLAPSEnabledOnAllApplicableDevices": True}
+        "isLAPSEnabledOnAllApplicableDevices": True, "isSMBClientSigningRequiredOnAllApplicableDevices": True}
 
 
 def load_plain(name):
@@ -189,10 +190,11 @@ def test_a_missing_part_or_unknown_row_is_not_evaluated(name):
     renamed = fleet(scids)
     renamed["Results"][0]["ConfigurationName"] = "Turn on Microsoft Defender Antivirus"
     assert value(name, renamed)[0] is None
-    # a row with no KB name at all (the join found nothing)
+    # a row with no KB name at all (the join found nothing): id-matched checks read it by id, the rest cannot
     unnamed = fleet(scids)
     unnamed["Results"][0]["ConfigurationName"] = None
-    assert value(name, unnamed)[0] is None
+    got = value(name, unnamed)[0]
+    assert (got == SAFE[CHECKS[name][0]]) if name in ID_ONLY else (got is None)
     # an unexpected configuration id
     extra = fleet(scids)
     extra["Results"].append(row("ws-01", "scid-2010", name="Turn on Microsoft Defender Antivirus"))
@@ -321,12 +323,56 @@ def test_screen_lock_reads_only_the_pinned_id_under_its_knowledge_base_name():
     assert value(name, result(good))[0] is True
     other_id = [row("ws-01", "scid-9998", name=NAMES["scid-28"])]
     assert value(name, result(other_id))[0] is None
-    for kb_name in ("Turn on screen saver", "Enable 'Require password on wake'", None, ""):
+    for kb_name in ("Turn on screen saver", "Enable 'Require password on wake'"):
         bad = row("ws-01", "scid-28")
         bad["ConfigurationName"] = kb_name
         got, out = value(name, result([bad]))
         assert got is None
         assert "scid-28" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+
+
+ID_ONLY = ("isscreenlockwithin15minutesonallapplicabledevices", "isntlmv1disabled", "smbv1enableddevicecount",
+           "iswdigestdisabled", "issmbclientsigningrequiredonallapplicabledevices")
+IDS = {"isscreenlockwithin15minutesonallapplicabledevices": ("scid-28",), "isntlmv1disabled": ("scid-72",),
+       "smbv1enableddevicecount": ("scid-53", "scid-54"), "iswdigestdisabled": ("scid-57",),
+       "issmbclientsigningrequiredonallapplicabledevices": ("scid-95",)}
+SAFE_VALUE = {"smbv1enableddevicecount": 0}
+
+
+@pytest.mark.parametrize("name", ID_ONLY)
+@pytest.mark.parametrize("kb_name", [None, "", "   "])
+def test_id_alone_is_read_when_the_knowledge_base_name_is_missing(name, kb_name):
+    """The KB join is a left join: a tenant whose KB table lacks the id returns the row with no name."""
+    def unnamed(dev, scid, compliant=1):
+        r = row(dev, scid, 1, compliant)
+        r["ConfigurationName"] = kb_name
+        return r
+    scids = IDS[name]
+    good = [unnamed(d, s) for d in ("ws-01", "ws-02") for s in scids]
+    got, out = value(name, result(good))
+    assert got == SAFE_VALUE.get(name, True)
+    assert "2 rated of 2 assessed" in (out["additionalInfo"]["evaluation"]["passReasons"] or
+                                       out["additionalInfo"]["evaluation"]["failReasons"])[0]
+    bad = good + [unnamed("ws-03", scids[0], 0)]
+    got = value(name, result(bad))[0]
+    assert got is not None and got != SAFE_VALUE.get(name, True)
+
+
+@pytest.mark.parametrize("name", ID_ONLY)
+def test_a_present_name_that_contradicts_the_id_is_not_evidence(name):
+    r = row("ws-01", IDS[name][0])
+    r["ConfigurationName"] = "Turn on screen saver and Something Else"
+    got, out = value(name, result([r]))
+    assert got is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+
+
+@pytest.mark.parametrize("name", ID_ONLY)
+def test_no_row_for_the_id_stays_unknown_and_counts_devices(name):
+    other = row("ws-01", "scid-9999", 1, 1)
+    r = row("ws-01", "scid-9999")
+    got, out = value(name, result([r]))
+    assert got is None
 
 
 def test_screen_lock_names_the_device_over_the_limit():
