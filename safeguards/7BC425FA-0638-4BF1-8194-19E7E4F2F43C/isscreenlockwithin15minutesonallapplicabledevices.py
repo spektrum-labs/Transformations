@@ -197,6 +197,8 @@ def config_part(config_id, config_name):
     tenant's knowledge-base table lacks the id) the id alone decides.
     """
     name = str(config_name or "").strip().lower()
+    if name in ("none", "null"):  # Token-Service stringifies a JSON null
+        name = ""
     claimed = []
     for part in PARTS:
         claimed = claimed + list(part["ids"])

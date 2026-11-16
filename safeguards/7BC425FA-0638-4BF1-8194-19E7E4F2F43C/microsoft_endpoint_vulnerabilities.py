@@ -187,9 +187,9 @@ def measure(data, now):
                 overdue = overdue + 1
         devices[inst["device"]] = True
         cves[inst["cve"]] = True
-    # Unrated records can only hide more findings, so any emitted 0 may be false. Emit only when every count
-    # is nonzero (lower bounds still fail a "== 0" criterion).
-    if no_severity * 20 > len(records) and 0 in (critical, high, overdue):
+    # Unrated records can only hide more findings, so counts from a read with more than 5% unrated are lower
+    # bounds, and a lower bound would wrongly pass a threshold criterion such as lessThan 5.
+    if no_severity * 20 > len(records):
         return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
                       "recognised vulnerabilitySeverityLevel, too many to rate the export.")
     numbers = {
@@ -214,8 +214,7 @@ def transform(input):
                    + " records; open Critical/High on " + str(numbers["devicesWithOpenCriticalOrHigh"]) + " devices): "
                    + str(numbers[KEY_CRITICAL]) + " critical, " + str(numbers[KEY_HIGH]) + " high, "
                    + str(numbers[KEY_OVERDUE]) + " past the BOD 19-02 window (critical > 15 days, high > 30 days)."
-                   + (" " + str(numbers["recordsWithoutSeverity"]) + " unrated record(s) not counted"
-                      + ("; the counts are lower bounds." if numbers["recordsWithoutSeverity"] * 20 > numbers["vulnerabilityRecordsRead"] else ".")
+                   + (" " + str(numbers["recordsWithoutSeverity"]) + " unrated record(s) not counted."
                       if numbers["recordsWithoutSeverity"] else ""))
         passes = []
         fails = []
