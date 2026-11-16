@@ -127,19 +127,25 @@ class Vulnerabilities(unittest.TestCase):
         del nosev["vulnerabilitySeverityLevel"]
         self.assert_unevaluated(body([nosev]))
 
-    def test_records_without_severity_are_skipped_and_counted(self):
+    def test_a_few_records_without_severity_are_skipped_and_counted(self):
+        nosev = rec(DEV_B, "CVE-2026-1002", "High", 1)
+        del nosev["vulnerabilitySeverityLevel"]
+        lows = [rec(DEV_B, "CVE-2026-20%02d" % n, "Low", 1) for n in range(18)]
+        out = self.run_t(body([rec(DEV_A, "CVE-2026-1001", "Critical", 3), nosev] + lows))  # 1 of 20 (5%)
+        got = out["transformedResponse"]
+        self.assertEqual(got["openCriticalVulnerabilitiesCount"], 1)
+        self.assertEqual(got["openHighSeverityVulnerabilitiesCount"], 0)
+        self.assertEqual(got["recordsWithoutSeverity"], 1)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        self.assertIn("1 record(s) without a severity were skipped",
+                      " ".join(out["additionalInfo"]["evaluation"]["passReasons"]))
+
+    def test_too_many_records_without_severity_is_unevaluated(self):
         nosev = rec(DEV_B, "CVE-2026-1002", "High", 1)
         del nosev["vulnerabilitySeverityLevel"]
         blank = rec(DEV_B, "CVE-2026-1003", "High", 1)
         blank["vulnerabilitySeverityLevel"] = "  "
-        out = self.run_t(body([rec(DEV_A, "CVE-2026-1001", "Critical", 3), nosev, blank]))
-        got = out["transformedResponse"]
-        self.assertEqual(got["openCriticalVulnerabilitiesCount"], 1)
-        self.assertEqual(got["openHighSeverityVulnerabilitiesCount"], 0)
-        self.assertEqual(got["recordsWithoutSeverity"], 2)
-        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
-        self.assertIn("2 record(s) without a severity were skipped",
-                      " ".join(out["additionalInfo"]["evaluation"]["passReasons"]))
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Low", 3), nosev, blank]))  # 2 of 3
 
     def test_exception_path_is_unevaluated_not_failed(self):
         # A body whose every read raises drives transform() into its except path. Token-Service grades a
