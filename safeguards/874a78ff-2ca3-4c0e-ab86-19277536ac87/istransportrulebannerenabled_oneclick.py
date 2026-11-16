@@ -169,8 +169,9 @@ def transform(input):
             status = data.get("vendorStatus") if isinstance(data, dict) else None
             api_error, recommendation = "Could not read transport rules", "Re-evaluate this check once the Exchange Online read succeeds"
             if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-                # 5xx all read as "service unavailable"; parse_api_error only matches 500/502/503.
-                api_error, recommendation = parse_api_error("HTTP %d" % (500 if status >= 500 else status), source="Microsoft 365")
+                # vendorStatus is the HTTP status of Spektrum's own Exchange collector, not Microsoft: never blame Microsoft.
+                recommendation = "Re-evaluate this check later; if it keeps failing, contact Spektrum support"
+                api_error = "Could not read Exchange Online data: the Spektrum Exchange collector " + ("is unavailable (HTTP 5xx)" if status >= 500 else "returned HTTP %d" % status)
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,

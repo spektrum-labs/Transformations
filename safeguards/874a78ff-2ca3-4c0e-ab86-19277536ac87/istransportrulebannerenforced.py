@@ -111,9 +111,11 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["Could not read the response: input validation failed"],
+                fail_reasons=["Input validation failed"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
             )
 
 

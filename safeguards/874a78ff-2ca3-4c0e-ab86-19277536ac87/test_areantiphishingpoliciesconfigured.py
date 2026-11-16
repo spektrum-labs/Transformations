@@ -51,6 +51,11 @@ class AntiPhishingPoliciesConfiguredTests(unittest.TestCase):
                 self.assertTrue(r["additionalInfo"]["evaluation"]["recommendations"])
                 self.assertNotIn("example", str(r["additionalInfo"]))
 
+    def test_failed_validation_is_not_evaluated(self):
+        r = self.t.transform({"data": {"vendorStatus": 502}, "validation": {"status": "failed", "errors": ["x"], "warnings": []}})
+        self.assertIsNone(r["transformedResponse"][KEY])
+        self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "error")
+
     def test_missing_or_non_list_is_not_evaluated(self):
         for payload in ({"Output": {}}, {"Output": {"policies": None}}, {"Output": {"policies": "x"}}):
             with self.subTest(payload=payload):
