@@ -188,14 +188,65 @@ class SessionTimeoutTests(unittest.TestCase):
         self.constrain(data, 2, 0, "PT12H", knowledge="PT1H", possession=None)
         self.assertEqual(self.out(data)[KEY], 120)
 
-    def test_constraint_takes_the_shortest_factor_and_the_longest_constraint(self):
+    def method_of(self, data):
+        """The one verificationMethod shared by every app ALLOW rule, so the constraints alone set the bound."""
+        shared = copy.deepcopy(self.method_template(data))
+        for rules in data["result"]["accessRules"]:
+            for rule in rules:
+                rule["actions"]["appSignOn"]["verificationMethod"] = shared
+        return shared
+
+    def method_template(self, data):
+        return data["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"]
+
+    def test_2fa_constraint_takes_the_shortest_kind_and_the_longest_constraint(self):
         data = copy.deepcopy(REAL)
-        method = data["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"]
+        method = self.method_of(data)
+        method["factorMode"] = "2FA"
         method["reauthenticateIn"] = "PT2H"
-        method["constraints"] = [{"knowledge": {"reauthenticateIn": "PT43800H"}, "possession": {}},
-                                 {"possession": {"reauthenticateIn": "PT30H"},
-                                  "knowledge": {"reauthenticateIn": "PT1H", "required": False}}]
-        self.assertEqual(self.out(data)[KEY], 1800)
+        method["constraints"] = [{"knowledge": {"reauthenticateIn": "PT10H"}, "possession": {}},
+                                 {"possession": {"reauthenticateIn": "PT5H"},
+                                  "knowledge": {"reauthenticateIn": "PT1H"}}]
+        self.assertEqual(self.out(data)[KEY], 120)  # min(10h, inherited 2h)=2h; min(5h, 1h)=1h; longest 2h
+
+    def test_1fa_constraint_takes_the_longest_kind(self):
+        data = copy.deepcopy(REAL)
+        method = self.method_of(data)
+        method["factorMode"] = "1FA"
+        method["reauthenticateIn"] = "PT2H"
+        method["constraints"] = [{"knowledge": {"reauthenticateIn": "PT10H"}, "possession": {"reauthenticateIn": "PT1H"}}]
+        self.assertEqual(self.out(data)[KEY], 600)
+
+    def test_required_false_does_not_drop_a_kind_or_a_constraint(self):
+        # mixed alternatives: the second constraint has no own interval, so it re-authenticates at the rule level
+        data = copy.deepcopy(REAL)
+        method = self.method_of(data)
+        method["reauthenticateIn"] = "PT12H"
+        method["constraints"] = [{"possession": {"reauthenticateIn": "PT1H"}},
+                                 {"possession": {"required": False,
+                                                 "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
+        self.assertEqual(self.out(data)[KEY], 720)
+        method["constraints"][1] = {}
+        self.assertEqual(self.out(data)[KEY], 720)
+
+    def test_2fa_rule_excluding_phone_still_counts_the_possession_interval(self):
+        data = copy.deepcopy(REAL)
+        method = self.method_of(data)
+        method["factorMode"] = "2FA"
+        method["reauthenticateIn"] = "PT12H"
+        method["constraints"] = [{"knowledge": {"required": True},
+                                  "possession": {"required": False, "reauthenticateIn": "PT1H",
+                                                 "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
+        self.assertEqual(self.out(data)[KEY], 60)
+
+    def test_empty_constraint_inherits_the_rule_level_value(self):
+        data = copy.deepcopy(REAL)
+        method = self.method_of(data)
+        method["reauthenticateIn"] = "PT3H"
+        method["constraints"] = [{}]
+        self.assertEqual(self.out(data)[KEY], 180)
+        del method["reauthenticateIn"]
+        self.assert_unevaluated(data)
 
     def test_constraint_with_unreadable_interval_is_unevaluated(self):
         data = copy.deepcopy(REAL)
