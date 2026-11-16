@@ -188,5 +188,49 @@ class MicrosoftOneClickAntiPhishingTests(unittest.TestCase):
         self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
 
 
+    # Error objects from the Exchange Lambda path. Synthetic shapes; none is evidence, so each is
+    # Not evaluated with a reason, never a pass or a stated-negative fail, and no vendor text is echoed.
+    COLLECTOR_ERRORS = {
+        "integration_service_502": {"result": {"apiResponse": {
+            "integrationName": "Example", "errorMessage": "An error occurred while processing your request.",
+            "vendorStatus": 502, "vendorErrorType": "vendor_error",
+            "vendorError": '{"Type": "User", "message": "example tenant.example.test"}'}}},
+        "lambda_service_body": {"Type": "User", "message": "example tenant.example.test"},
+        "handler_error": {"error": "Internal error"},
+        "script_crashed": {"Success": False, "Output": "", "Error": "example stderr tenant.example.test"},
+        "script_reported_failure": {"Success": True, "Output": {"success": False, "organizationDomain": None}},
+    }
+
+    def test_collector_error_objects_are_not_evaluated_with_a_reason(self):
+        for name, payload in self.COLLECTOR_ERRORS.items():
+            with self.subTest(name=name):
+                response = self.transformation.transform(payload)
+                collection = response["additionalInfo"]["dataCollection"]
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(collection["status"], "error")
+                self.assertEqual(len(collection["errors"]), 1)
+                self.assertTrue(response["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertNotIn("example", str(response["additionalInfo"]))
+
+    def test_a_502_names_a_5xx_from_the_collector(self):
+        response = self.transformation.transform(self.COLLECTOR_ERRORS["integration_service_502"])
+
+        self.assertEqual(
+            response["additionalInfo"]["dataCollection"]["errors"],
+            ["Could not connect to the Exchange Online collector: Service unavailable (HTTP 5xx)"],
+        )
+
+    def test_a_success_status_code_is_not_an_error(self):
+        response = self.transformation.transform({"statusCode": 200, 'policies': [{"Name": "Default", "Enabled": True}]})
+
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_a_none_payload_is_not_evaluated(self):
+        response = self.transformation.transform({"Success": True, "Output": None, "Error": ""})
+
+        self.assertIsNone(response["transformedResponse"][KEY])
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+
 if __name__ == "__main__":
     unittest.main()
