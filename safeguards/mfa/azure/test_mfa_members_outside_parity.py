@@ -29,7 +29,7 @@ ROLE_ADMIN = "62e90394-69f5-4237-9190-012177145e10"
 
 
 def pol(name, grant=("mfa",), include_users=(), include_groups=(), exclude_users=(), exclude_groups=(), roles=(),
-        risk=(), state="enabled", apps=("All",), client=("all",), locations=None):
+        risk=(), state="enabled", apps=("All",), client=("all",), locations=None, exclude_locations=None):
     cond = {"users": {"includeUsers": list(include_users), "includeGroups": list(include_groups),
                       "excludeUsers": list(exclude_users), "excludeGroups": list(exclude_groups),
                       "includeRoles": list(roles), "excludeRoles": []},
@@ -37,6 +37,8 @@ def pol(name, grant=("mfa",), include_users=(), include_groups=(), exclude_users
             "signInRiskLevels": list(risk)}
     if locations is not None:
         cond["locations"] = {"includeLocations": list(locations)}
+    if exclude_locations is not None:
+        cond["locations"] = {"includeLocations": list(locations or ["All"]), "excludeLocations": list(exclude_locations)}
     return {"id": name, "displayName": name, "state": state, "conditions": cond,
             "grantControls": {"operator": "OR", "builtInControls": list(grant)}}
 
@@ -80,7 +82,17 @@ BLOCK_SVC = pol("Block service accounts", grant=("block",), include_groups=[G_SV
 LEGACY_BLOCK = pol("Block legacy auth", grant=("block",), include_users=["All"],
                    client=("exchangeActiveSync", "other"))
 GEO_BLOCK = pol("Block one country", grant=("block",), include_users=["All"], locations=["named-location-id"])
+def block_all(*exclude):
+    return pol("Block all", grant=("block",), include_users=["All"], exclude_locations=list(exclude))
+
+
+MFA_STAFF = pol("MFA staff", include_groups=[G_STAFF])
 CASES = {
+    "block-all-no-exclusion": ([MFA_STAFF, block_all()], [STAFF], set()),
+    "block-all-exclude-none": ([MFA_STAFF, block_all("none")], [STAFF], set()),
+    "block-all-exclude-alltrusted": ([MFA_STAFF, block_all("AllTrusted")], [STAFF], set()),
+    "block-all-exclude-home-country": ([MFA_STAFF, block_all("country-id")], [STAFF], None),
+    "block-all-exclude-alltrusted-and-country": ([MFA_STAFF, block_all("AllTrusted", "country-id")], [STAFF], None),
     "legacy-auth-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), LEGACY_BLOCK], [STAFF], set(U[3:])),
     "geo-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), GEO_BLOCK], [STAFF], set(U[3:])),
     "full-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]),
@@ -117,6 +129,23 @@ def run_cov(b, key="isMFARequiredForRemoteAccess"):
 def run_ismfa(b):
     out = ISMFA.transform(copy.deepcopy(b))
     return out["transformedResponse"]["isMFAEnforcedForUsers"], out
+
+
+@pytest.mark.parametrize("excluded", [["country-id"], ["AllTrusted", "country-id"]])
+def test_block_excluding_a_named_location_is_undecided_in_every_key(excluded):
+    b = body([MFA_STAFF, block_all(*excluded)], [STAFF])
+    for key in ("isRDPProtected", "isMFARequiredForRemoteAccess"):
+        assert run_cov(b, key)[0] is None
+    assert run_ismfa(b)[0] is None
+    for _, why in (outside_cov(b), outside_ismfa(b)):
+        assert "named location that was not read" in why
+
+
+def test_block_excluding_a_named_location_never_hides_a_failure_it_does_not_reach():
+    # the block reaches only STAFF (already covered by MFA); the other members are outside for sure
+    b = body([MFA_STAFF, pol("Block staff", grant=("block",), include_groups=[G_STAFF], exclude_locations=["country-id"])],
+             [STAFF])
+    assert run_cov(b)[0] is False and run_ismfa(b)[0] is False
 
 
 def test_excluded_group_covered_by_a_block_policy_is_not_a_failure():

@@ -641,10 +641,18 @@ def group_coverage(candidates, workforce, memberships, groups):
 ALL_CLIENT_TYPES = set(["browser", "mobileappsanddesktopclients", "exchangeactivesync", "other"])
 
 
-def full_block_reach(policy):
+def location_exclusion_unread(conditions):
+    """True when a policy excludes any location but the AllTrusted exemption. Named locations are not read, so an
+    excluded country or IP range may leave users free to sign in from there (same rule as
+    areserviceaccountsinteractivesigninblocked.py)."""
+    exc = [e for e in lowered(as_dict(conditions.get("locations")).get("excludeLocations")) if e != "none"]
+    return bool(exc) and exc != ["alltrusted"]
+
+
+def full_block_reach(policy, unread_ok=False):
     """True when a block policy stops every sign-in it targets: all apps (none excluded or filtered), all client
     app types, all platforms, no device filter, authentication flow or insider-risk condition, no risk-only firing,
-    and no named-location include (excluded locations are allowed, as for trusted locations). A narrow block
+    no named-location include and no excluded location but AllTrusted (unread_ok skips that last test). A narrow block
     ("block legacy authentication", "block one country") does not stop a modern remote sign-in. Same rule as
     ismfaenforcedforusers.py (the sandbox forces a copy)."""
     conditions = as_dict(policy.get("conditions"))
@@ -658,7 +666,7 @@ def full_block_reach(policy):
     if client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client):
         return False
     locations = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
-    if locations and "all" not in locations:
+    if (locations and "all" not in locations) or (location_exclusion_unread(conditions) and not unread_ok):
         return False
     platforms = as_dict(conditions.get("platforms"))
     include = lowered(platforms.get("includePlatforms"))
@@ -734,8 +742,12 @@ def members_outside(policies, workforce, memberships, role_body):
         return None, "the enabled member account list was not read whole"
     reached = set()
     named_excluded = set()
+    maybe_reached = set()  # reached only by a block that excludes a named location (not read)
     for policy in policies:
-        if str(policy.get("state") or "").lower() != "enabled" or not requires_mfa_reach(policy):
+        if str(policy.get("state") or "").lower() != "enabled":
+            continue
+        unsure = not requires_mfa_reach(policy) and full_block_reach(policy, True)
+        if not unsure and not requires_mfa_reach(policy):
             continue
         conditions = as_dict(policy.get("conditions"))
         if risk_only(conditions):
@@ -765,12 +777,17 @@ def members_outside(policies, workforce, memberships, role_body):
             reach = reach - members
             if len(members) <= MAX_EXCLUDED_ACCOUNTS:
                 excluded = excluded | members  # a break-glass group (36B c); a larger group's members stay outside
+        if unsure:
+            maybe_reached = maybe_reached | (reach - excluded)
+            continue
         named_excluded = named_excluded | excluded
         reached = reached | (reach - excluded)
     outside = workforce - reached
     break_glass = outside & named_excluded
     if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
         outside = outside - break_glass
+    if outside & maybe_reached:
+        return None, "a block policy excludes a named location that was not read, so whether it blocks its members is not known"
     return outside, ""
 
 

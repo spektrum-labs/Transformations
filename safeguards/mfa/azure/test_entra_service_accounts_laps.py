@@ -253,15 +253,27 @@ def test_three_named_exclusions_never_hide_an_unblocked_service_account():
 
 
 @pytest.mark.parametrize("excluded, want", [
-    (["AllTrusted"], True), (["alltrusted"], True), (["named-location-id"], False),
-    (["AllTrusted", "named-location-id"], False)])
+    (None, True), (["none"], True), (["AllTrusted"], True), (["alltrusted"], True),
+    (["home-country-id"], None), (["AllTrusted", "home-country-id"], None)])
 def test_only_alltrusted_is_the_trusted_location_exemption(excluded, want):
-    block = ca("Block svc", all_users=True, exclude_groups=[G_STAFF],
-               locations={"includeLocations": ["All"], "excludeLocations": excluded})
+    # an excluded named location (country or IP range) is not read, so the block is undecided, never a false FAIL
+    locs = {"includeLocations": ["All"]}
+    if excluded is not None:
+        locs["excludeLocations"] = excluded
+    block = ca("Block svc", all_users=True, exclude_groups=[G_STAFF], locations=locs)
     got, out = value(SVC, svc_body([block]))
     assert got is want
     if want:
-        assert "outside trusted locations" in svc_reason(out, "passReasons")
+        assert ("outside trusted locations" in svc_reason(out, "passReasons")) == (excluded in (["AllTrusted"], ["alltrusted"]))
+    else:
+        assert "named-location exclusion" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def test_named_location_block_never_hides_a_real_gap():
+    # a real full block elsewhere still decides True; an unblocked account with only an unread-location block is undecided
+    maybe = ca("Block svc", groups=[G_SVC, G_SVC2], locations={"includeLocations": ["All"], "excludeLocations": ["home"]})
+    real = ca("Block svc real", groups=[G_SVC, G_SVC2])
+    assert value(SVC, svc_body([maybe, real]))[0] is True
 
 
 def test_sync_account_role_excluded_from_the_block_is_not_failed():
