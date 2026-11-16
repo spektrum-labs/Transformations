@@ -13,7 +13,7 @@ BASE = "https://example.okta.com/api/v1/policies/"
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("okta_admin_console_policy", HERE / "isAdminMFAPhishingResistant.py")
+    spec = importlib.util.spec_from_file_location("okta_admin_console_policy", HERE / "isAdminMFAPhishingResistantPolicy.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.transform
@@ -23,7 +23,7 @@ def sandboxed():
     spec = importlib.util.spec_from_file_location("restricted_sandbox_okta_admin_console", ROOT / "tools" / "restricted_sandbox.py")
     sandbox = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sandbox)
-    return sandbox.load((HERE / "isAdminMFAPhishingResistant.py").read_text(), "<transformation>")["transform"]
+    return sandbox.load((HERE / "isAdminMFAPhishingResistantPolicy.py").read_text(), "<transformation>")["transform"]
 
 
 def app(name, policy):
@@ -157,9 +157,20 @@ class AdminConsolePolicyTests(unittest.TestCase):
                      {"errorCode": "E0000006", "errorSummary": "denied", "applications": [], "accessPolicies": []}]:
             self.check(body, None)
 
-    def test_org_factor_input_still_takes_the_older_path(self):
-        out = load()([{"factorType": "webauthn", "provider": "FIDO", "status": "ACTIVE"}])
-        self.assertIs(out["transformedResponse"][KEY], True)
+    def test_every_outcome_carries_the_same_keys(self):
+        flipped = self.edit(1, rule("Catch-all Rule", assurance(resistant=None), system=True))
+        for body, expected in [(REAL, True), (flipped, False), ({"applications": [], "accessPolicies": [], "accessRules": []}, None),
+                               ({"errorCode": "E0000006", "errorSummary": "denied"}, None), ("not json", None)]:
+            for transform in self.runs:
+                out = transform(copy.deepcopy(body) if not isinstance(body, str) else body)["transformedResponse"]
+                self.assertEqual(sorted(out), ["isAdminMFAPhishingResistant", "phishingResistantRules", "weakRules"])
+                self.assertIs(out[KEY], expected)
+                self.assertEqual(out["weakRules"] is None, expected is None)
+
+    def test_filtered_single_app_list_is_enough(self):
+        data = copy.deepcopy(REAL)
+        data["result"]["applications"] = [data["result"]["applications"][1]]
+        self.check(data, True)
 
 
 if __name__ == "__main__":
