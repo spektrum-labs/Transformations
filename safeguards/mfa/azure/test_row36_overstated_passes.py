@@ -449,7 +449,9 @@ def membership(members):
 
 @pytest.mark.parametrize("members,expected", [
     pytest.param([U1, U2], True, id="two-members-is-break-glass"),
-    pytest.param([U1, U2, U3], None, id="three-members-is-not"),
+    # Not break-glass, and the group holds the whole workforce read whole: every member is outside every MFA policy,
+    # a measured gap (WI-3a, 16 Nov 2026; was not evaluated).
+    pytest.param([U1, U2, U3], False, id="three-members-is-not"),
 ])
 def test_36b_c_mfa_excluded_group_read_with_more_than_two_members_is_not_break_glass(mfa, members, expected):
     body = mfa_body(ca_policy("All users", excludeGroups=[G1]))
