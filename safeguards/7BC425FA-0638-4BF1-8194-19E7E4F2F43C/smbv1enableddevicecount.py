@@ -13,8 +13,8 @@ carries its ConfigurationName:
                                    "ConfigurationName", "IsApplicable", "IsCompliant"}, ...]}
 IsApplicable / IsCompliant arrive as SByte (1/0), booleans, or their strings.
 
-A row counts only when its ConfigurationId is one this file names AND its knowledge-base name says what that
-id means; any other row makes the read Not evaluated rather than being guessed at. An applicable device that has
+A row counts when its ConfigurationId is one this file names; the knowledge-base name is a cross-check only: a
+name that is present and does not say what the id means, or an unnamed id, makes the read Not evaluated rather than being guessed at. An applicable device that has
 no reading for one part of the claim is not shown to comply, and a part no device reads as applicable was not
 measured: with no failure elsewhere, either makes the read Not evaluated.
 Scope: devices onboarded to Defender for Endpoint and assessed by Defender Vulnerability Management. Devices
@@ -183,19 +183,23 @@ def name_list(items):
 def config_part(config_id, config_name):
     """The part of the claim this configuration row answers, or None when the row is not one of ours.
 
-    A row counts only when its ConfigurationId is one this file names AND its ConfigurationName (joined from
-    DeviceTvmSecureConfigurationAssessmentKB by the query) says what that id is expected to mean. A known id
-    whose name does not match is not read as evidence: the meaning of the id cannot be shown.
+    A row counts when its ConfigurationId is one this file names. The ConfigurationName (joined from
+    DeviceTvmSecureConfigurationAssessmentKB by the query) is a cross-check only: when it is present and does
+    not say what the id is expected to mean the row is not read as evidence, and when it is missing (the
+    tenant's knowledge-base table lacks the id) the id alone decides.
     """
     name = str(config_name or "").strip().lower()
-    if name == "":
-        return None
     claimed = []
     for part in PARTS:
         claimed = claimed + list(part["ids"])
     for part in PARTS:
-        if config_id in part["ids"] or (len(part["ids"]) == 0 and config_id.startswith("scid-")
-                                         and config_id[5:].isdigit() and config_id not in claimed):
+        if config_id in part["ids"]:
+            for word in part["words"]:
+                if name != "" and word not in name:
+                    return None
+            return part["part"]
+        if len(part["ids"]) == 0 and name != "" and config_id.startswith("scid-") \
+                and config_id[5:].isdigit() and config_id not in claimed:
             ok = True
             for word in part["words"]:
                 if word not in name:
