@@ -236,13 +236,24 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                 self.assertTrue(response["additionalInfo"]["evaluation"]["recommendations"])
                 self.assertNotIn("example", str(response["additionalInfo"]))
 
-    def test_a_502_names_a_5xx_from_the_collector(self):
-        response = self.transformation.transform(self.COLLECTOR_ERRORS["integration_service_502"])
+    def test_a_5xx_status_is_named_as_service_unavailable(self):
+        for status in (502, 504):
+            with self.subTest(status=status):
+                payload = {"result": {"apiResponse": {"vendorStatus": status, "vendorError": "example"}}}
+                response = self.transformation.transform(payload)
 
-        self.assertEqual(
-            response["additionalInfo"]["dataCollection"]["errors"],
-            ["Could not connect to the Exchange Online collector: Service unavailable (HTTP 5xx)"],
-        )
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(
+                    response["additionalInfo"]["dataCollection"]["errors"],
+                    ["Could not connect to Microsoft 365: Service unavailable (HTTP 5xx)"],
+                )
+                self.assertNotIn("credentials", " ".join(response["additionalInfo"]["evaluation"]["recommendations"]))
+
+    def test_a_null_error_key_beside_real_data_still_evaluates(self):
+        response = self.transformation.transform({"Success": True, "Output": {'transportRules': [banner_rule()], 'error': None}})
+
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
 
     def test_a_success_status_code_is_not_an_error(self):
         response = self.transformation.transform({"statusCode": 200, 'transportRules': [banner_rule()]})

@@ -111,23 +111,6 @@ def is_exchange_access_required_error(raw_error):
     return "failed to connect to exchange online" in raw_lower and "exo app-only authentication" in raw_lower
 
 
-def collector_error(data):
-    """(api_error, recommendation) when the Exchange Lambda or Integration-Service answered with an error
-    object instead of data, else None. The vendor's own text is never echoed: it can name the tenant."""
-    if not isinstance(data, dict):
-        return None
-    status = data.get("vendorStatus", data.get("statusCode"))
-    if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-        return parse_api_error(f"HTTP {status}", source="the Exchange Online collector")
-    if data.get("Success") is False or data.get("success") is False:
-        return ("Could not read Exchange Online data: the collection script failed",
-                "Re-evaluate this check; if it keeps failing, check the Exchange Online collector logs")
-    if any(k in data for k in ("errorMessage", "vendorError", "error")) or ("Type" in data and "message" in data):
-        return ("Could not read Exchange Online data: the collector returned an error",
-                "Re-evaluate this check; if it keeps failing, check the Exchange Online collector logs")
-    return None
-
-
 def transform(input):
     criteriaKey = "isTransportRuleBannerEnabled"
 
@@ -178,27 +161,22 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        collector_failure = collector_error(data)
-        if collector_failure:
-            # An error object is not evidence: Not evaluated, with the reason.
-            return create_response(
-                result={criteriaKey: None},
-                validation={"status": "skipped", "errors": [], "warnings": ["API returned error"]},
-                api_errors=[collector_failure[0]],
-                fail_reasons=["Could not retrieve data from Microsoft 365"],
-                recommendations=[collector_failure[1]]
-            )
-
         # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
         # transportRules proved nothing, so it is Not evaluated, never the stated-negative False.
         transport_rules = data.get("transportRules") if isinstance(data, dict) else None
         if not isinstance(transport_rules, list):
+            # An error object from the collector (IS vendorStatus >= 400) is not evidence: say why, not just "missing".
+            status = data.get("vendorStatus") if isinstance(data, dict) else None
+            api_error, recommendation = "Could not read transport rules", "Re-evaluate this check once the Exchange Online read succeeds"
+            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+                # 5xx all read as "service unavailable"; parse_api_error only matches 500/502/503.
+                api_error, recommendation = parse_api_error("HTTP %d" % (500 if status >= 500 else status), source="Microsoft 365")
             return create_response(
                 result={criteriaKey: None},
                 validation=validation,
-                api_errors=["Could not read transport rules"],
+                api_errors=[api_error],
                 fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
-                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+                recommendations=[recommendation]
             )
         banner_rules = []
 
