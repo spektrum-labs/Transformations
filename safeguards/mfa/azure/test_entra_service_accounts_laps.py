@@ -57,17 +57,30 @@ def ts_wrap(body):
     return {"data": {"apiResponse": body}, "validation": {"status": "skipped", "errors": [], "warnings": []}}
 
 
+def ago(days):
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+
+
 # ---- areServiceAccountsInteractiveSignInBlocked -----------------------------------------------------------------
+# WI-3c (16 Nov 2026): service accounts by signal. SA1/SA2 have only non-interactive sign-ins in 90 days; HUMAN
+# signs in interactively. G_SVC/G_SVC2/G_STAFF are read whole (transitive members), paired by position.
 
 G_SVC = "00000000-0000-0000-0000-0000000000a1"
 G_SVC2 = "00000000-0000-0000-0000-0000000000a2"
 G_STAFF = "00000000-0000-0000-0000-0000000000b1"
+SA1 = "5a000000-0000-0000-0000-000000000001"
+SA2 = "5a000000-0000-0000-0000-000000000002"
+HUMAN = "5b000000-0000-0000-0000-000000000003"
+BG1 = "5c000000-0000-0000-0000-000000000004"
+BG2 = "5c000000-0000-0000-0000-000000000005"
+BG3 = "5c000000-0000-0000-0000-000000000006"
 
 
 def ca(name, groups=(), all_users=False, state="enabled", block=True, apps=("All",), exclude_groups=(),
-       client_types=("all",), locations=None):
-    cond = {"users": {"includeUsers": ["All"] if all_users else [], "excludeUsers": [], "includeGroups": list(groups),
-                      "excludeGroups": list(exclude_groups), "includeRoles": [], "excludeRoles": []},
+       client_types=("all",), locations=None, include_users=(), exclude_users=()):
+    cond = {"users": {"includeUsers": ["All"] if all_users else list(include_users), "excludeUsers": list(exclude_users),
+                      "includeGroups": list(groups), "excludeGroups": list(exclude_groups), "includeRoles": [],
+                      "excludeRoles": []},
             "applications": {"includeApplications": list(apps), "excludeApplications": []},
             "clientAppTypes": list(client_types), "locations": locations, "platforms": None,
             "signInRiskLevels": [], "userRiskLevels": []}
@@ -75,20 +88,34 @@ def ca(name, groups=(), all_users=False, state="enabled", block=True, apps=("All
             "grantControls": {"operator": "OR", "builtInControls": ["block"] if block else ["mfa"]}}
 
 
-def groups(extra=()):
-    return graph([{"id": G_SVC, "displayName": "SG-Service-Accounts", "groupTypes": []},
-                  {"id": G_SVC2, "displayName": "svc-integrations", "groupTypes": []},
-                  {"id": G_STAFF, "displayName": "All Staff", "groupTypes": []}] + list(extra))
+def account(uid, interactive=None, background=None, enabled=True, kind="Member", activity=True):
+    item = {"id": uid, "accountEnabled": enabled, "userType": kind}
+    if activity:
+        item["signInActivity"] = {"lastSignInDateTime": None if interactive is None else ago(interactive),
+                                  "lastNonInteractiveSignInDateTime": None if background is None else ago(background)}
+    return item
 
 
-def svc_body(policies, grp=None):
-    return {"conditionalAccessPolicies": graph(policies), "groups": grp or groups()}
+USERS = [account(SA1, interactive=200, background=1), account(SA2, background=3),
+         account(HUMAN, interactive=1, background=1)]
+MEMBERS = [(G_SVC, [SA1]), (G_SVC2, [SA2]), (G_STAFF, [HUMAN])]
+
+
+def svc_body(policies, users=None, members=None):
+    pairs = MEMBERS if members is None else members
+    return {"conditionalAccessPolicies": graph(policies), "signInUsers": graph(USERS if users is None else users),
+            "caPolicyGroups": {"groupIds": [{"id": g} for g, _ in pairs]},
+            "groupMembers": [graph([{"id": m} for m in ids]) for _, ids in pairs]}
 
 
 SVC_PASS = svc_body([ca("Block service accounts", groups=[G_SVC, G_SVC2]), ca("MFA all", all_users=True, block=False)])
 SVC_FAIL = svc_body([ca("Block svc", groups=[G_SVC]),
                      ca("Block integrations outside office", groups=[G_SVC2],
                         locations={"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]})])
+
+
+def svc_reason(out, kind):
+    return " ".join(out["additionalInfo"]["evaluation"][kind])
 
 
 @pytest.mark.parametrize("loader", [load_plain, load_sandboxed])
@@ -103,61 +130,111 @@ def test_service_accounts_pass_and_fail(form, loader):
         good, bad = json.dumps(good), json.dumps(bad)
     got, out = value(SVC, good, loader)
     assert got is True
-    assert "SG-Service-Accounts" in out["additionalInfo"]["evaluation"]["passReasons"][0]
+    assert "All 2 service account(s) are blocked" in svc_reason(out, "passReasons")
     got, out = value(SVC, bad, loader)
     assert got is False
-    reason = out["additionalInfo"]["evaluation"]["failReasons"][0]
-    assert "svc-integrations" in reason and "narrowed by locations" in reason
+    reason = svc_reason(out, "failReasons")
+    assert "1 of 2 service account(s) are not blocked" in reason and "user 5a000000..." in reason
+    assert SA2 not in reason
 
 
-def test_report_only_excluded_and_partial_blocks_do_not_count():
-    assert value(SVC, svc_body([ca("ro", groups=[G_SVC, G_SVC2], state="enabledForReportingButNotEnforced")]))[0] is False
-    assert value(SVC, svc_body([ca("all", all_users=True, exclude_groups=[G_SVC2]), ca("g1", groups=[G_SVC])]))[0] is False
-    # an All-users block that carves out another group may let members of this group through: not counted
-    assert value(SVC, svc_body([ca("all", all_users=True, exclude_groups=[G_SVC2]), ca("g2", groups=[G_SVC2])]))[0] is False
+def test_human_with_interactive_sign_ins_is_not_a_service_account():
+    got, out = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2])]))
+    assert got is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["serviceAccountsBySignInSignal"] == 2
+
+
+def test_disabled_guest_and_dormant_accounts_are_not_service_accounts():
+    users = [account(SA1, background=1, enabled=False), account(SA2, background=1, kind="Guest"),
+             account(HUMAN, background=120), account(BG1)]
+    got, out = value(SVC, svc_body([], users=users))
+    assert got is True
+    assert "No service account found" in svc_reason(out, "passReasons")
+
+
+def test_report_only_disabled_narrowed_and_excluding_blocks_do_not_count():
+    for policies in ([ca("ro", groups=[G_SVC, G_SVC2], state="enabledForReportingButNotEnforced")],
+                     [ca("off", groups=[G_SVC, G_SVC2], state="disabled")],
+                     [ca("all but svc2", all_users=True, exclude_groups=[G_SVC2])],
+                     [ca("all but sa2", all_users=True, exclude_users=[SA2])],
+                     [ca("apps", groups=[G_SVC, G_SVC2], apps=("app-1",))],
+                     [ca("browser", groups=[G_SVC, G_SVC2], client_types=("browser",))],
+                     [ca("mfa only", groups=[G_SVC, G_SVC2], block=False)], []):
+        assert value(SVC, svc_body(policies))[0] is False
     assert value(SVC, svc_body([ca("g1", groups=[G_SVC]), ca("g2", groups=[G_SVC2])]))[0] is True
-    assert value(SVC, svc_body([ca("apps", groups=[G_SVC, G_SVC2], apps=("app-1",))]))[0] is False
-    assert value(SVC, svc_body([ca("browser", groups=[G_SVC, G_SVC2], client_types=("browser",))]))[0] is False
-    assert value(SVC, svc_body([]))[0] is False
+    assert value(SVC, svc_body([ca("all", all_users=True, exclude_groups=[G_STAFF])]))[0] is True
+    assert value(SVC, svc_body([ca("by id", include_users=[SA1, SA2])]))[0] is True
 
 
-def test_no_service_account_group_is_not_evaluated():
-    got, out = value(SVC, svc_body([ca("b", all_users=True)], graph([{"id": G_STAFF, "displayName": "Service Desk"}])))
-    assert got is None
-    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+def test_mfa_carve_out_finds_service_accounts_beyond_break_glass():
+    users = USERS + [account(BG1), account(BG2), account(BG3)]
+    block = ca("Block svc", groups=[G_SVC, G_SVC2])
+    two = ca("MFA all", all_users=True, block=False, exclude_users=[BG1, BG2])
+    got, out = value(SVC, svc_body([block, two], users=users))
+    assert got is True  # two excluded accounts: break-glass, not judged
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["breakGlassAccountsNotJudged"] == 2
+    three = ca("MFA all", all_users=True, block=False, exclude_users=[BG1, BG2, BG3])
+    got, out = value(SVC, svc_body([block, three], users=users))
+    assert got is False
+    assert "3 of 5 service account(s) are not blocked" in svc_reason(out, "failReasons")
 
 
-@pytest.mark.parametrize("name,expected", [
-    ("SG-Service-Accounts", True), ("svc-backup", True), ("Non-Interactive Accounts", True), ("ServiceAccounts", True),
-    ("Service Desk", False), ("Customer Service", False), ("Services Team", False), ("svchost admins", False),
-])
-def test_service_group_marker(name, expected):
-    spec = importlib.util.spec_from_file_location("svc_marker", os.path.join(HERE, SVC + ".py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.is_service_group(name) is expected
+def test_mfa_carve_out_through_a_read_group():
+    users = USERS + [account(BG1), account(BG2), account(BG3)]
+    members = MEMBERS + [("00000000-0000-0000-0000-0000000000c1", [BG1, BG2, BG3])]
+    mfa = ca("MFA all", all_users=True, block=False, exclude_groups=["00000000-0000-0000-0000-0000000000c1"])
+    got, _ = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2]), mfa], users=users, members=members))
+    assert got is False
+
+
+def test_unread_group_keeps_it_not_evaluated_but_never_hides_a_failure():
+    unread = MEMBERS[:1] + [(G_SVC2, None)] + MEMBERS[2:]
+    body = svc_body([ca("Block svc", groups=[G_SVC, G_SVC2])], members=[(g, ids or []) for g, ids in unread])
+    body["groupMembers"][1] = {"vendorErrorAsResponse": {"status": 403}}
+    assert value(SVC, body)[0] is None
+    body = svc_body([ca("Block sa2", include_users=[SA2], exclude_groups=[G_STAFF])], members=MEMBERS)
+    body["groupMembers"][2] = {"error": {"code": "Request_ResourceNotFound"}}
+    got, out = value(SVC, body)
+    assert got is False  # SA1 is in no block policy at all, whatever the unread G_STAFF holds
+    assert "1 of 2 service account(s)" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    mfa = ca("MFA all", all_users=True, block=False, exclude_groups=["00000000-0000-0000-0000-0000000000c9"])
+    got, out = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2]), mfa]))
+    assert got is None and "excluded from an MFA policy was not read" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def test_sign_in_read_without_activity_or_with_bad_dates_is_not_evaluated():
+    no_activity = [account(SA1, activity=False), account(HUMAN, activity=False)]
+    got, out = value(SVC, svc_body([], users=no_activity))
+    assert got is None and "signInActivity" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    bad = [account(SA1), account(HUMAN)]
+    bad[0]["signInActivity"]["lastNonInteractiveSignInDateTime"] = "11/01/2026 08:00"
+    assert value(SVC, svc_body([], users=bad))[0] is None
+    for broken in ({"error": {"code": "Authentication_RequestFromNonPremiumTenantOrB2CTenant"}},
+                   {"stepError": True, "statusCode": 403}, None, [],
+                   graph([account(SA1, background=1)], next_link="https://graph.microsoft.com/v1.0/users?$skiptoken=x")):
+        body = svc_body([ca("Block svc", groups=[G_SVC, G_SVC2])])
+        body["signInUsers"] = broken
+        assert value(SVC, body)[0] is None
 
 
 def test_service_accounts_truncated_parts_are_not_evaluated():
     body = svc_body([ca("b", groups=[G_SVC, G_SVC2])])
-    body["groups"]["@odata.nextLink"] = "https://graph.microsoft.com/v1.0/groups?$skiptoken=x"
-    assert value(SVC, body)[0] is None
-    body = svc_body([ca("b", groups=[G_SVC, G_SVC2])])
     body["conditionalAccessPolicies"]["paginationTruncated"] = True
     assert value(SVC, body)[0] is None
     body = svc_body([ca("b", groups=[G_SVC, G_SVC2])])
-    body["groups"] = {"error": {"code": "Authorization_RequestDenied", "message": "Insufficient privileges"}}
+    body["conditionalAccessPolicies"] = {"error": {"code": "Authorization_RequestDenied", "message": "Insufficient"}}
     assert value(SVC, body)[0] is None
     body = svc_body([ca("b", groups=[G_SVC, G_SVC2])])
-    del body["groups"]
+    del body["signInUsers"]
     assert value(SVC, body)[0] is None
+
+
+def test_legacy_groups_part_is_ignored():
+    body = dict(SVC_PASS, groups=graph([{"id": G_SVC, "displayName": "SG-Service-Accounts"}]))
+    assert value(SVC, body)[0] is True
 
 
 # ---- lapsCoveragePercentage --------------------------------------------------------------------------------------
-
-def ago(days):
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
-
 
 def device(n, trust="AzureAd", enabled=True, seen_days=3):
     return {"id": "obj-%03d" % n, "deviceId": "00000000-0000-0000-0000-%012d" % n, "displayName": "WS-%03d" % n,
@@ -290,17 +367,18 @@ def with_users(policy, **extra):
     return policy
 
 
-@pytest.mark.parametrize("carve_out", [
-    {"excludeUsers": ["00000000-0000-0000-0000-0000000000c1"]},
-    {"excludeRoles": ["62e90394-69f5-4237-9190-012177145e10"]},
-    {"excludeGroups": [G_STAFF]},
-    {"excludeGuestsOrExternalUsers": {"guestOrExternalUserTypes": "internalGuest", "externalTenants": {"membershipKind": "all"}}},
+@pytest.mark.parametrize("carve_out,expected", [
+    ({"excludeUsers": ["00000000-0000-0000-0000-0000000000c1"]}, True),   # another account: SA1/SA2 stay blocked
+    ({"excludeUsers": [SA2]}, False),
+    ({"excludeGroups": [G_STAFF]}, True),                                   # read whole, holds no service account
+    ({"excludeGroups": [G_SVC2]}, False),
+    ({"excludeRoles": ["62e90394-69f5-4237-9190-012177145e10"]}, None),     # role holders not read: may exclude
+    ({"excludeGuestsOrExternalUsers": {"guestOrExternalUserTypes": "internalGuest",
+                                       "externalTenants": {"membershipKind": "all"}}}, None),
 ])
-def test_any_user_side_carve_out_is_not_a_full_block(carve_out):
+def test_user_side_carve_outs_are_judged_per_account(carve_out, expected):
     pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), **carve_out)
-    got, out = value(SVC, svc_body([pol]))
-    assert got is False
-    assert "narrowed by excludes" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert value(SVC, svc_body([pol]))[0] is expected
 
 
 def test_application_filter_and_unknown_conditions_narrow_the_block():
@@ -310,7 +388,7 @@ def test_application_filter_and_unknown_conditions_narrow_the_block():
     pol = ca("Block svc", groups=[G_SVC, G_SVC2])
     pol["conditions"]["insiderRiskLevels"] = "elevated"
     got, out = value(SVC, svc_body([pol]))
-    assert got is False and "insiderRiskLevels" in out["additionalInfo"]["evaluation"]["failReasons"][0]
+    assert got is False and "2 of 2 service account(s) are not blocked" in out["additionalInfo"]["evaluation"]["failReasons"][0]
     pol = ca("Block svc", groups=[G_SVC, G_SVC2])
     pol["conditions"]["someFutureCondition"] = {"mode": "include"}
     assert value(SVC, svc_body([pol]))[0] is False
@@ -322,10 +400,9 @@ def test_application_filter_and_unknown_conditions_narrow_the_block():
     assert value(SVC, stringify(svc_body([pol])))[0] is True
 
 
-def test_disabled_policy_is_named_as_disabled_not_report_only():
+def test_disabled_policy_does_not_block():
     got, out = value(SVC, svc_body([ca("Off", groups=[G_SVC, G_SVC2], state="disabled")]))
     assert got is False
-    assert "state disabled" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
 def test_laps_rotation_overdue_does_not_count():
@@ -353,7 +430,7 @@ def test_empty_condition_objects_do_not_narrow():
     assert value(SVC, svc_body([pol]))[0] is False
 
 
-@pytest.mark.parametrize("name,keys", [(SVC, ("conditionalAccessPolicies", "groups")),
+@pytest.mark.parametrize("name,keys", [(SVC, ("conditionalAccessPolicies", "signInUsers")),
                                        (LAPS, ("deviceLocalCredentials", "windowsDevices"))])
 def test_workflow_reported_truncation_is_not_evaluated(name, keys):
     body = SVC_PASS if name == SVC else LAPS_PASS
