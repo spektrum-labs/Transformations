@@ -75,11 +75,11 @@ VIEWER = {"id": "r-view", "name": "Viewer", "isOrgAdmin": False}
 
 def user(email, domain="SSO", roles=None, status="ACTIVE", owner=False):
     return {"id": email, "username": email, "email": email, "domain": domain, "status": status,
-            "isAccountOwner": owner, "roles": [ADMIN] if roles is None else roles}
+            "isAccountOwner": owner, "roles": [ADMIN] if roles is None else roles, "allOrgs": [{"id": "o1"}]}
 
 
 def group(gid, roles=None):
-    return {"groupId": gid, "roles": [VIEWER] if roles is None else roles}
+    return {"groupId": gid, "roles": [VIEWER] if roles is None else roles, "allOrgs": [{"id": "o1"}]}
 
 
 def body(nodes, has_next=False, end=None, count=None, truncated=None, groups=None, groups_next=False):
@@ -92,7 +92,8 @@ def body(nodes, has_next=False, end=None, count=None, truncated=None, groups=Non
             "count": len(nodes) if count is None else count, "pageInfo": info, "nodes": nodes},
         "groupsInCurrentAndDescendantOrganization": {
             "count": len(groups), "pageInfo": {"hasNextPage": groups_next, "endCursor": "c9" if groups_next else None},
-            "nodes": groups}}}
+            "nodes": groups},
+        "currentOrg": {"id": "o1"}}}
 
 
 #: One person administers through a local console account and keeps an everyday SSO identity with no admin role.
@@ -297,7 +298,62 @@ def test_user_with_roles_only_in_sub_org_not_evaluated():
     assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
 
 
-def test_user_without_roles_and_without_sub_orgs_still_passes():
+def test_listed_user_without_roles_not_evaluated_whatever_allorgs_says():
     plain = user("jdoe@example.com", domain="LOCAL", roles=[])
     plain["allOrgs"] = []
-    assert value(body([user("owner@example.com", domain="LOCAL"), plain])) is True
+    out = run(body([user("owner@example.com", domain="LOCAL"), plain]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
+
+
+def test_user_without_roles_and_without_allorgs_key_not_evaluated():
+    plain = user("jdoe@example.com", domain="LOCAL", roles=[])
+    del plain["allOrgs"]
+    out = run(body([user("owner@example.com", domain="LOCAL"), plain]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
+
+
+@pytest.mark.parametrize("orgs", [None, "o2"])
+def test_non_admin_user_with_roles_and_no_org_list_not_evaluated(orgs):
+    sso = user("jane@example.com", roles=[VIEWER])
+    if orgs is None:
+        del sso["allOrgs"]
+    else:
+        sso["allOrgs"] = orgs
+    out = run(body([user("owner@example.com", domain="LOCAL"), sso]))
+    assert out["transformedResponse"][KEY] is None
+    assert "no organization list" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def test_sso_viewer_with_admin_in_sub_org_not_evaluated():
+    sso = user("jane@example.com", roles=[VIEWER])
+    sso["allOrgs"] = [{"id": "o1"}, {"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL"), sso]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUsers"] == 1
+
+
+def test_group_viewer_with_sub_org_not_evaluated():
+    g = group("g", roles=[VIEWER])
+    g["allOrgs"] = [{"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL")], groups=[g]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgGroups"] == 1
+
+
+def test_group_without_org_list_not_evaluated():
+    g = group("g")
+    del g["allOrgs"]
+    assert value(body([user("owner@example.com", domain="LOCAL")], groups=[g])) is None
+
+
+def test_non_admin_only_in_context_org_still_passes():
+    assert value(body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])],
+                      groups=[group("g")])) is True
+
+
+def test_missing_current_org_fails_closed():
+    b = body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])])
+    del b["data"]["currentOrg"]
+    assert value(b) is None
