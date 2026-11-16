@@ -7,18 +7,21 @@ policy that blocks the account from every cloud app.
 WHICH ACCOUNTS ARE SERVICE ACCOUNTS (WI-3c, product decision 16 Nov 2026, option a): by signal, not by group name.
 Microsoft Graph has no service-account flag, and most tenants have no group named for them. An enabled Member
 account is a service account when either holds:
-  (a) sign-in signal: it has a non-interactive sign-in in the last SIGNAL_DAYS days and has never signed in
-      interactively (signInActivity.lastNonInteractiveSignInDateTime recent; lastSignInDateTime, which Microsoft
-      records for interactive sign-ins only, null or absent). A person whose mobile or desktop clients keep
-      refreshing tokens has an old interactive sign-in, so is not a service account by this signal;
+  (a) sign-in signal: it has a non-interactive sign-in in the last SIGNAL_DAYS days and no interactive sign-in in
+      that window (signInActivity.lastNonInteractiveSignInDateTime recent; lastSignInDateTime, which Microsoft
+      records for interactive sign-ins only, null, absent or older than the window). This is the approved WI-3c
+      option (a) rule. A service account is usually signed into interactively once at setup, so "never signed in"
+      would miss most of them. A person whose devices refresh tokens but who has not signed in for SIGNAL_DAYS
+      days is read as a service account too (a known limit of the approved rule);
   (b) MFA carve-out: an enabled Conditional Access policy that requires MFA of all cloud apps, and is not
       risk-only, would reach it but excludes it, by name (excludeUsers) or through an excluded group whose
       transitive members were read. A policy that never reached the account (admin-only, app-specific, or
       including other groups) is no carve-out.
 Break-glass is worked out first: accounts an All-users MFA policy excludes by name, or through a group of at most
 MAX_BREAK_GLASS members, that the sign-in signal did not find. They must keep interactive sign-in, so they are
-never judged. When more than MAX_BREAK_GLASS such accounts exist they cannot be told from service accounts: not
-evaluated.
+never judged. A service account that no block policy covers is reported whatever the number of such accounts
+(False, with a scope note). Only when every found service account is blocked and more than MAX_BREAK_GLASS such
+accounts exist is the result not evaluated: they cannot be told from service accounts.
 Conditional Access is also evaluated on non-interactive sign-ins, so a block that covers every location would break
 a working workload. A block that leaves trusted locations open (includeLocations All, excludeLocations set) counts
 as blocking: the account cannot sign in from anywhere else.
@@ -262,7 +265,10 @@ def narrowing(cond):
     locs = cond.get("locations")
     if isinstance(locs, dict):
         inc = lowered(locs.get("includeLocations"))
-        if inc and inc != ["all"]:  # excluded locations are the block's trusted exemption, not narrowing
+        exc = lowered(locs.get("excludeLocations"))
+        # only AllTrusted is the block's trusted exemption: named locations are not read, so any other exclusion
+        # (a country list, a wide IP range) may leave the accounts able to sign in from almost anywhere
+        if (inc and inc != ["all"]) or (exc and exc != ["alltrusted"]):
             out.append("locations")
     elif has_value(locs):
         out.append("locations")
@@ -359,7 +365,8 @@ def read_accounts(items, cutoff):
             else:
                 return None, "a sign-in date is not a Graph UTC timestamp"
         interactive, background = stamps
-        out[uid] = "signal" if background != "" and background >= cutoff and interactive == "" else "quiet"
+        quiet_interactive = interactive == "" or interactive < cutoff
+        out[uid] = "signal" if background != "" and background >= cutoff and quiet_interactive else "quiet"
     if out and not carried:
         return None, "the user read carries no signInActivity (it needs AuditLog.Read.All and Entra ID P1)"
     return out, ""
@@ -435,15 +442,15 @@ def mfa_carve_outs(policies, memberships, accounts):
 
 
 def location_exempt(policy):
-    """True when a block policy leaves some locations open (includeLocations All with excludeLocations set)."""
+    """True when a block policy leaves trusted locations open (excludeLocations is exactly AllTrusted)."""
     cond = policy.get("conditions") if isinstance(policy.get("conditions"), dict) else {}
     locs = cond.get("locations")
-    return isinstance(locs, dict) and len(strs(locs.get("excludeLocations"))) > 0
+    return isinstance(locs, dict) and lowered(locs.get("excludeLocations")) == ["alltrusted"]
 
 
 def full_block(policy):
     """True when an enabled policy blocks every cloud app for every client type with no other narrowing (excluded
-    locations excepted: the trusted-location exemption)."""
+    locations excepted: only AllTrusted, the trusted-location exemption)."""
     controls = policy.get("grantControls")
     if not enabled(policy) or not isinstance(controls, dict) or "block" not in lowered(controls.get("builtInControls")):
         return False
@@ -538,11 +545,6 @@ def transform(input):
         by_signal = set(u for u in accounts if accounts[u] == "signal")
         carve_only = carved - by_signal
         break_glass = glass - by_signal
-        if len(break_glass) > MAX_BREAK_GLASS:
-            return not_measured(validation, "Microsoft Entra ID: " + str(len(break_glass)) + " accounts are excluded "
-                                "from an all-users MFA policy by name or through a small group, more than the "
-                                + str(MAX_BREAK_GLASS) + " emergency-access accounts expected, so they cannot be told "
-                                "from service accounts. Attest, or exclude fewer accounts.")
         service = by_signal | (carve_only - break_glass)
         blocks = [p for p in policies if full_block(p)]
         unblocked = []
@@ -558,9 +560,11 @@ def transform(input):
                    "breakGlassAccountsNotJudged": len(break_glass), "fullBlockPolicies": len(blocks),
                    "unblocked": len(unblocked), "undecided": len(undecided), "signalDays": SIGNAL_DAYS}
         scope = (f"service accounts are enabled member accounts with a non-interactive sign-in and no interactive one "
-                 f"ever, or that a Conditional Access MFA policy would reach but excludes")
+                 f"in {SIGNAL_DAYS} days, or that a Conditional Access MFA policy would reach but excludes")
         if break_glass:
-            scope = scope + f" ({len(break_glass)} excluded account(s) treated as emergency access and not judged)"
+            more = f"; more than the {MAX_BREAK_GLASS} expected, so a pass is not given" \
+                if len(break_glass) > MAX_BREAK_GLASS else ""
+            scope = scope + f" ({len(break_glass)} excluded account(s) treated as emergency access and not judged{more})"
         exempt_note = ""
         if [p for p in blocks if location_exempt(p)]:
             exempt_note = " (at least one blocks sign-in outside trusted locations)"
@@ -582,6 +586,11 @@ def transform(input):
                                  "policy."],
                 input_summary=summary,
             )
+        if len(break_glass) > MAX_BREAK_GLASS:
+            return not_measured(validation, "Microsoft Entra ID: " + str(len(break_glass)) + " accounts are excluded "
+                                "from an all-users MFA policy by name or through a small group, more than the "
+                                + str(MAX_BREAK_GLASS) + " emergency-access accounts expected, so they cannot be told "
+                                "from service accounts. Attest, or exclude fewer accounts.")
         if undecided or carve_why:
             reason = carve_why or (str(len(undecided)) + " service account(s) are targeted by a block policy whose "
                                    "group membership, role or guest exclusion was not read, so whether it blocks them "
@@ -591,8 +600,8 @@ def transform(input):
             return create_response(
                 result={KEY: True},
                 validation=validation,
-                pass_reasons=["No service account found: no enabled member account has only non-interactive sign-ins "
-                              f"in {SIGNAL_DAYS} days, and no Conditional Access MFA policy excludes one (user list "
+                pass_reasons=["No service account found: no enabled member account has a non-interactive sign-in and "
+                              f"no interactive one in {SIGNAL_DAYS} days, and no Conditional Access MFA policy excludes one (user list "
                               "and sign-in activity read whole). Scope: " + scope + "."],
                 input_summary=summary,
             )

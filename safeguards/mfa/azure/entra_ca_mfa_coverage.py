@@ -53,13 +53,14 @@ Members outside (WI-3a, product decision 16 Nov 2026; same rule as ismfaenforced
 read whole and some enabled member accounts are reached by NO enabled Conditional Access policy that requires MFA,
 the key reads False with the count. That is a measured gap, not a question. "Reached" is read generously, so a
 False is never a guess:
-- every enabled policy whose grant includes MFA (the built-in "mfa" control or any authentication strength) or
-  blocks sign-in counts (an account a block policy covers cannot sign in remotely), for any app, platform, client
-  type, location or device filter, and under OR as well; only risk-only policies do not count;
-- per-user MFA and security defaults, as in ismfaenforcedforusers.py: members with per-user MFA "enforced"
-  (perUserMfaStates, when the workflow reads it) are removed from the outside set; a per-user list that is not read
-  whole, or shows a member outside as neither enforced nor disabled, or enabled security defaults, keeps the key not
-  evaluated. When the workflow reads no per-user state the fail reason says per-user MFA may apply;
+- every enabled policy whose grant includes MFA (the built-in "mfa" control or any authentication strength) counts,
+  for any app, platform, client type, location or device filter, and under OR as well; only risk-only policies do
+  not count;
+- a block policy counts only as a full block (full_block_reach: all apps, all client types, all platforms, no
+  location include, device filter, flow or insider-risk condition); "block legacy authentication" or "block one
+  country" does not stop a modern remote sign-in and reaches nobody;
+- enabled security defaults keep the key not evaluated. Per-user MFA is not read here (no production workflow reads
+  it): the fail reason says it may apply;
 - "All" users reaches everyone; an included group must have been read whole, or nothing fails;
 - an excluded group whose members were read excludes them; an excluded role, or an excluded group not read,
   excludes nobody;
@@ -637,46 +638,47 @@ def group_coverage(candidates, workforce, memberships, groups):
     return out, contributing
 
 
+ALL_CLIENT_TYPES = set(["browser", "mobileappsanddesktopclients", "exchangeactivesync", "other"])
+
+
+def full_block_reach(policy):
+    """True when a block policy stops every sign-in it targets: all apps (none excluded or filtered), all client
+    app types, all platforms, no device filter, authentication flow or insider-risk condition, no risk-only firing,
+    and no named-location include (excluded locations are allowed, as for trusted locations). A narrow block
+    ("block legacy authentication", "block one country") does not stop a modern remote sign-in. Same rule as
+    ismfaenforcedforusers.py (the sandbox forces a copy)."""
+    conditions = as_dict(policy.get("conditions"))
+    if "block" not in lowered(as_dict(policy.get("grantControls")).get("builtInControls")) or risk_only(conditions):
+        return False
+    apps = as_dict(conditions.get("applications"))
+    if "all" not in lowered(apps.get("includeApplications")) or present(apps.get("excludeApplications")) \
+            or present(apps.get("applicationFilter")):
+        return False
+    client = set(lowered(conditions.get("clientAppTypes")))
+    if client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client):
+        return False
+    locations = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
+    if locations and "all" not in locations:
+        return False
+    platforms = as_dict(conditions.get("platforms"))
+    include = lowered(platforms.get("includePlatforms"))
+    if (include and "all" not in include) or present(platforms.get("excludePlatforms")):
+        return False
+    if any(present(v) for v in as_dict(conditions.get("devices")).values()):
+        return False
+    return not (present(conditions.get("authenticationFlows")) or present(conditions.get("insiderRiskLevels")))
+
+
 def requires_mfa_reach(policy):
     """For the members-outside rule only: the grant asks for MFA, the built-in "mfa" control or any authentication
-    strength (whatever else it offers under OR), or blocks sign-in (an account a block policy covers cannot sign in
-    remotely, so it needs no MFA). Generous on purpose: counting a policy can only remove members from "outside",
-    never add a False."""
+    strength (whatever else it offers under OR), or is a full block of every sign-in (full_block_reach: an account
+    it covers cannot sign in remotely, so it needs no MFA). Generous on purpose for MFA grants: counting a policy
+    can only remove members from "outside", never add a False."""
     grant = as_dict(policy.get("grantControls"))
-    controls = lowered(grant.get("builtInControls"))
-    if "mfa" in controls or "block" in controls:
+    if "mfa" in lowered(grant.get("builtInControls")) or full_block_reach(policy):
         return True
     strength = grant.get("authenticationStrength")
     return isinstance(strength, dict) and bool(strength)
-
-
-MFA_PER_USER_STATES = ("enforced",)
-
-
-def per_user_mfa(data):
-    """(lower-case ids with per-user MFA enforced, ids whose state is decided ("enforced" or "disabled"; not
-    "enabled"), '' or a reason the list cannot be used). An absent key gives (set(), None, ''). Same rule as
-    ismfaenforcedforusers.py (the sandbox forces a copy; test_mfa_members_outside_parity.py pins them together)."""
-    if "perUserMfaStates" not in data:
-        return set(), None, ""
-    if data.get("itemErrors") or data.get("iterateTruncated") is True:
-        return set(), set(), "the per-user MFA read reported item errors or was truncated"
-    pages = list_pages(data.get("perUserMfaStates"))
-    if pages is None:
-        return set(), set(), "the per-user MFA list was not read whole"
-    ids = set()
-    seen = set()
-    for page in pages:
-        for item in page["value"]:
-            uid = str(as_dict(item).get("id") or "").strip().lower()
-            if not uid:
-                return set(), set(), "the per-user MFA list was not read whole"
-            state = str(as_dict(item).get("perUserMfaState") or "").strip().lower()
-            if state in MFA_PER_USER_STATES:
-                ids.add(uid)
-            elif state == "disabled":
-                seen.add(uid)  # any other state ("enabled", missing, unknown) stays out of seen and blocks the False
-    return ids, seen | ids, ""
 
 
 def odata_kind(obj):
@@ -772,17 +774,17 @@ def members_outside(policies, workforce, memberships, role_body):
     return outside, ""
 
 
-def evaluate(policies, groups=None, security_defaults=None, membership=None, account_names=None, role_body=None,
-             per_user=None):
+def evaluate(policies, groups=None, security_defaults=None, membership=None, account_names=None, role_body=None):
     """membership: None when the workflow supplied no membership read, else (workforce ids or None, memberships).
     account_names: {lower-case user id: displayName}, used only to name excluded emergency-access accounts.
-    role_body: the role-assignment list, read only for MFA policies that include a directory role.
-    per_user: per_user_mfa(data), (set(), None, '') when the workflow read no per-user MFA state."""
-    per_user_ids, per_user_seen, per_user_why = per_user or (set(), None, "")
+    role_body: the role-assignment list, read only for MFA policies that include a directory role."""
     enabled = [p for p in policies if str(p.get("state") or "").lower() == "enabled"]
     result = {"enabledPolicyCount": len(enabled), "policyCount": len(policies),
               "groupListRead": isinstance(groups, dict), "groupsRead": len(groups) if isinstance(groups, dict) else 0,
               "securityDefaultsEnabled": security_defaults}
+    outside, outside_why = members_outside(enabled, membership[0], membership[1], role_body) \
+        if enabled and membership is not None else (None, "")
+    blocked_why = "security defaults are enabled, and they are not graded here" if security_defaults is True else ""
     for key, app_ids, names in (("isRDPProtected", RDP_APP_IDS, "rdpPolicies"),
                                 ("isMFARequiredForRemoteAccess", (), "remoteAccessPolicies")):
         full = [p for p in enabled if classify(p, app_ids, groups) == "full"]
@@ -831,24 +833,14 @@ def evaluate(policies, groups=None, security_defaults=None, membership=None, acc
             result[key] = None
         else:
             result[key] = False
-        if result[key] is None and enabled and membership is not None:
-            outside, why = members_outside(enabled, membership[0], membership[1], role_body)
-            if outside:
-                if not per_user_why and per_user_seen is not None and outside - per_user_seen:
-                    per_user_why = ("the per-user MFA list does not show every member outside as enforced or "
-                                    "disabled (missing, or \"enabled\": MFA on modern sign-ins only)")
-                outside = outside - per_user_ids
-                blocked_why = per_user_why or ("security defaults are enabled, and they are not graded here"
-                                               if security_defaults is True else "")
-                if outside and blocked_why:
-                    result[names + "MembersOutsideUndecided"] = blocked_why
-                elif outside:
-                    result[key] = False
-                    result[names + "MembersOutside"] = {"membersTotal": len(membership[0]),
-                                                        "outsideCount": len(outside)}
-                    result[names + "PerUserMfaRead"] = per_user_seen is not None
-            elif why:
-                result[names + "MembersOutsideUndecided"] = why
+        if result[key] is None and outside:
+            if blocked_why:
+                result[names + "MembersOutsideUndecided"] = blocked_why
+            else:
+                result[key] = False
+                result[names + "MembersOutside"] = {"membersTotal": len(membership[0]), "outsideCount": len(outside)}
+        elif result[key] is None and outside_why:
+            result[names + "MembersOutsideUndecided"] = outside_why
     return result
 
 
@@ -903,9 +895,7 @@ def transform(input):
         membership = None
         account_names = None
         role_body = None
-        per_user = None
         if isinstance(data, dict) and "conditionalAccessPolicies" in data:
-            per_user = per_user_mfa(data)
             role_body = data.get("roleAssignments")
             if "paginationStats" in data and as_dict(as_dict(data.get("paginationStats")).get("roleAssignments")).get(
                     "paginationTruncated") is not False:
@@ -930,7 +920,7 @@ def transform(input):
         next_link = data.get("@odata.nextLink")
         if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
             raise ValueError("The policy list has more pages than were read (@odata.nextLink still present)")
-        result = evaluate(policies, groups, security_defaults, membership, account_names, role_body, per_user)
+        result = evaluate(policies, groups, security_defaults, membership, account_names, role_body)
         passed = []
         failed = []
         errors = []
@@ -955,8 +945,7 @@ def transform(input):
                 failed.append(key + f": {found['outsideCount']} of {found['membersTotal']} enabled member {word} "
                               "covered by no enabled Conditional Access policy that requires MFA or blocks sign-in "
                               "(group membership read), so MFA is not required of them at remote sign-in"
-                              + ("" if result.get(names + "PerUserMfaRead") else " (per-user MFA is not read here: it may apply "
-                                 "to them)")
+                              + " (per-user MFA is not read here: it may apply to them)"
                               + ": add them to an MFA policy, remove the exclusion, or block them from sign-in")
             elif result[key] is False:
                 failed.append(key + ": no enabled policy requires MFA of the workforce for all apps (only admins, roles, "

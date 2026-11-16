@@ -1,7 +1,8 @@
 """WI-3a members-outside rule in entra_ca_mfa_coverage.py (isRDPProtected, isMFARequiredForRemoteAccess) and
 ismfaenforcedforusers.py (isMFAEnforcedForUsers). The sandbox forces two copies of the rule, so the same synthetic
-fixtures run through both and must leave the same members outside. Also: an account a block policy covers cannot sign
-in remotely (not outside), and per-user MFA enforced for the members outside keeps the key from failing."""
+fixtures run through both and must leave the same members outside. Also: an account a FULL block policy covers cannot sign
+in remotely (not outside), a narrow block (legacy auth, one country) reaches nobody, and per-user MFA (read by
+ismfaenforcedforusers.py only) enforced for the members outside keeps that key from failing."""
 import copy
 import importlib.util
 from pathlib import Path
@@ -28,12 +29,14 @@ ROLE_ADMIN = "62e90394-69f5-4237-9190-012177145e10"
 
 
 def pol(name, grant=("mfa",), include_users=(), include_groups=(), exclude_users=(), exclude_groups=(), roles=(),
-        risk=(), state="enabled", apps=("All",)):
+        risk=(), state="enabled", apps=("All",), client=("all",), locations=None):
     cond = {"users": {"includeUsers": list(include_users), "includeGroups": list(include_groups),
                       "excludeUsers": list(exclude_users), "excludeGroups": list(exclude_groups),
                       "includeRoles": list(roles), "excludeRoles": []},
-            "applications": {"includeApplications": list(apps)}, "clientAppTypes": ["all"],
+            "applications": {"includeApplications": list(apps)}, "clientAppTypes": list(client),
             "signInRiskLevels": list(risk)}
+    if locations is not None:
+        cond["locations"] = {"includeLocations": list(locations)}
     return {"id": name, "displayName": name, "state": state, "conditions": cond,
             "grantControls": {"operator": "OR", "builtInControls": list(grant)}}
 
@@ -74,7 +77,14 @@ SVC = (G_SVC, U[3:6])
 STAFF = (G_STAFF, U[:3])
 MFA_EXCL_SVC = pol("MFA all users", include_users=["All"], exclude_groups=[G_SVC])
 BLOCK_SVC = pol("Block service accounts", grant=("block",), include_groups=[G_SVC])
+LEGACY_BLOCK = pol("Block legacy auth", grant=("block",), include_users=["All"],
+                   client=("exchangeActiveSync", "other"))
+GEO_BLOCK = pol("Block one country", grant=("block",), include_users=["All"], locations=["named-location-id"])
 CASES = {
+    "legacy-auth-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), LEGACY_BLOCK], [STAFF], set(U[3:])),
+    "geo-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), GEO_BLOCK], [STAFF], set(U[3:])),
+    "full-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]),
+                              pol("Block all", grant=("block",), include_users=["All"])], [STAFF], set()),
     "all-users-mfa": ([pol("MFA", include_users=["All"])], [], set()),
     "group-mfa-staff": ([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], set(U[3:])),
     "excluded-svc-group-no-block": ([MFA_EXCL_SVC], [SVC], set(U[3:])),
@@ -127,24 +137,54 @@ def test_same_exclusion_without_a_block_policy_fails_with_the_count_and_new_advi
     assert value is False and "block them from sign-in" in text and "per-user MFA was not read" in text
 
 
-def test_per_user_mfa_enforced_for_the_members_outside_keeps_the_key_from_failing():
+@pytest.mark.parametrize("name", ["legacy-auth-block-all-users", "geo-block-all-users"])
+def test_a_narrow_block_policy_does_not_hide_the_members_outside_failure(name):
+    b = body(CASES[name][0], CASES[name][1])
+    assert run_cov(b)[0] is False and run_cov(b, "isRDPProtected")[0] is False and run_ismfa(b)[0] is False
+
+
+@pytest.mark.parametrize("change", [
+    {"applications": {"includeApplications": ["All"], "excludeApplications": ["app-id"]}},
+    {"applications": {"includeApplications": ["app-id"]}},
+    {"applications": {"includeApplications": ["All"], "applicationFilter": {"rule": "x"}}},
+    {"platforms": {"includePlatforms": ["android"]}},
+    {"platforms": {"includePlatforms": ["all"], "excludePlatforms": ["iOS"]}},
+    {"devices": {"deviceFilter": {"mode": "include", "rule": "x"}}},
+    {"authenticationFlows": {"transferMethods": "deviceCodeFlow"}},
+    {"insiderRiskLevels": "elevated"},
+    {"signInRiskLevels": ["high"]},
+])
+def test_any_narrowing_condition_makes_a_block_policy_not_a_full_block(change):
+    block = pol("Block", grant=("block",), include_users=["All"])
+    block["conditions"].update(change)
+    for mod in (COV, ISMFA):
+        assert mod.full_block_reach(block) is False
+    assert COV.full_block_reach(pol("Block", grant=("block",), include_users=["All"])) is True
+    all_types = pol("Block", grant=("block",), include_users=["All"],
+                    client=("browser", "mobileAppsAndDesktopClients", "exchangeActiveSync", "other"))
+    all_types["conditions"]["locations"] = {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}
+    assert COV.full_block_reach(all_types) is ISMFA.full_block_reach(all_types) is True
+
+
+def test_per_user_mfa_enforced_for_the_members_outside_keeps_isMFAEnforcedForUsers_from_failing():
+    staff = [pol("MFA staff", include_groups=[G_STAFF])]
     enforced = per_user({u: "enforced" for u in U[3:]})
-    b = body([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], perUserMfaStates=enforced)
-    assert run_cov(b)[0] is not False and run_ismfa(b)[0] is not False
+    assert run_ismfa(body(staff, [STAFF], perUserMfaStates=enforced))[0] is not False
     # a state that is neither enforced nor disabled ("enabled") is undecided: still not a False
     partial = per_user(dict({u: "enforced" for u in U[3:5]}, **{U[5]: "enabled"}))
-    b = body([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], perUserMfaStates=partial)
-    assert run_cov(b)[0] is None and run_ismfa(b)[0] is None
+    assert run_ismfa(body(staff, [STAFF], perUserMfaStates=partial))[0] is None
     # all disabled: measured, so it fails
     disabled = per_user({u: "disabled" for u in U[3:]})
-    b = body([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], perUserMfaStates=disabled)
-    value, out = run_cov(b)
-    assert value is False and "per-user MFA is not read" not in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
-    assert run_ismfa(b)[0] is False
+    assert run_ismfa(body(staff, [STAFF], perUserMfaStates=disabled))[0] is False
     # a per-user read that was cut off or errored never fails
     for bad in ({"error": {"code": "x"}}, {"value": [{"id": U[3], "perUserMfaState": "enforced"}], "@odata.nextLink": "n"}):
-        b = body([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], perUserMfaStates=bad)
-        assert run_cov(b)[0] is None and run_ismfa(b)[0] is None
+        assert run_ismfa(body(staff, [STAFF], perUserMfaStates=bad))[0] is None
+
+
+def test_the_one_click_file_does_not_read_per_user_mfa_and_says_it_may_apply():
+    b = body([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], perUserMfaStates=per_user({u: "enforced" for u in U[3:]}))
+    value, out = run_cov(b)
+    assert value is False and "per-user MFA is not read here" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
 
 
 def test_security_defaults_enabled_keeps_the_members_outside_from_failing_in_both_files():
