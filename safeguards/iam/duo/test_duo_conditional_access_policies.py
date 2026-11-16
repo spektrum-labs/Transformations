@@ -13,6 +13,7 @@ from pathlib import Path
 
 KEY = "isConditionalAccessEnabled"
 PCT = "conditionalAccessAppPercentage"
+INDET = "conditionalAccessAppsIndeterminate"
 HERE = Path(__file__).parent
 ROOT = HERE.parents[2]
 GLOBAL_KEY = "POGLOBALTENANTA00001"
@@ -642,38 +643,54 @@ class DuoConditionalAccessTests(unittest.TestCase):
                 self.assertUnevaluated(bodies(with_sections(DEFAULTS, **change)), "cannot be read")
 
     def test_unknown_block_os_value_is_evidence_not_fatal(self):
-        os_only = {"operating_systems": {"block_os_list": ["unknownos"]}}
-        # only an unknown value: not a condition, so the app is uncovered -> False (not unevaluated)
-        value, out = self.value(bodies(with_sections(DEFAULTS, **os_only)))
+        # unknownos is a documented Duo value and counts as a condition
+        value, out = self.value(bodies(with_sections(DEFAULTS, operating_systems={"block_os_list": ["unknownos"]})))
+        self.assertIs(value, True)
+        self.assertIn("operating systems: unknownos blocked", json.dumps(out))
+        # only a genuinely unknown value: not a condition, so the app is uncovered -> False (not unevaluated)
+        value, out = self.value(bodies(with_sections(DEFAULTS, operating_systems={"block_os_list": ["plan9"]})))
         self.assertIs(value, False)
-        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["unknownos"])
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["plan9"])
         # beside a known value: the known one counts, the unknown is recorded
-        mixed = {"operating_systems": {"block_os_list": ["unknownos", "android"]}}
+        mixed = {"operating_systems": {"block_os_list": ["plan9", "android"]}}
         value, out = self.value(bodies(with_sections(DEFAULTS, **mixed)))
         self.assertIs(value, True)
-        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["unknownos"])
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["plan9"])
         # other list fields stay strict
         self.assertUnevaluated(bodies(with_sections(DEFAULTS, browsers={"blocked_browsers_list": ["lynx-ng"]})))
 
-    def test_unknown_apply_type_makes_only_that_policy_scope_unknown(self):
+    def test_documented_mobile_browser_values_count_as_a_condition(self):
+        for name in ("safari-mobile", "chrome-mobile", "edge-mobile", "firefox-mobile", "other-browsers"):
+            with self.subTest(name):
+                value, _ = self.value(bodies(with_sections(DEFAULTS, browsers={"blocked_browsers_list": [name]})))
+                self.assertIs(value, True)
+
+    def test_unknown_apply_type_makes_only_that_application_indeterminate(self):
         for label, mutate in {"unknown": lambda e: e.__setitem__("apply_type", "everyone"),
                               "missing": lambda e: e.pop("apply_type"),
                               "none": lambda e: e.__setitem__("apply_type", None)}.items():
             with self.subTest(label):
-                # covered everywhere but one policy of unknown scope: never True, named in evidence
+                # covered everywhere but one application with an unresolvable binding: never True
                 b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
                 mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
                 value, out = self.value(b)
                 self.assertIsNone(value)
-                self.assertEqual(out["transformedResponse"][PCT], 100.0)
-                self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["policiesScopeUnknown"], 1)
+                self.assertEqual(out["transformedResponse"][INDET], 1)
+                self.assertLess(out["transformedResponse"][PCT], 100.0)
                 self.assertIn("unrecognised apply_type", json.dumps(out))
-                # an uncovered application still gives False
+                # an uncovered application still gives False, with the indeterminate one in the findings
                 b = bodies(DEFAULTS, customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
                 mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
                 value, out = self.value(b)
                 self.assertIs(value, False)
-                self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["policiesScopeUnknown"], 1)
+                self.assertEqual(out["transformedResponse"][INDET], 1)
+                self.assertIn("unrecognised apply_type", json.dumps(out))
+        # an entry that names no application cannot be placed: the whole check is Not evaluated, as before
+        b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+        e = b["summary"]["response"]["policies"][1]["policy_applies_to"][0]
+        e.pop("app_integration_key")
+        e["apply_type"] = "everyone"
+        self.assertUnevaluated(b, "unrecognised apply_type")
 
     def test_unknown_list_values_are_unevaluated_not_conditions(self):
         cases = {

@@ -249,9 +249,9 @@ EMPTY_TOKENS = ("", "none", "null", "false", "true", "[]", "{}", "n/a", "no", "o
                 "not-required", "not_required")
 PLATFORMS = ("windows", "macos", "linux")
 OS_NAMES = ("android", "ios", "ipados", "windows", "macos", "linux", "chromeos", "blackberry", "windows-phone",
-            "windowsphone", "other", "unknown")
+            "windowsphone", "other", "unknown", "unknownos")
 BROWSERS = ("chrome", "firefox", "safari", "edge", "ie", "internet-explorer", "opera", "brave", "chromium",
-            "other", "unknown")
+            "chrome-mobile", "edge-mobile", "firefox-mobile", "safari-mobile", "other-browsers", "other", "unknown")
 OS_BLOCK_POLICIES = ("end-of-life", "not-up-to-date", "less-than-version", "less-than-latest-version",
                      "less-than-latest")
 
@@ -613,40 +613,39 @@ def group_problem(target):
 def group_bindings(summary):
     """(bindings, error). bindings maps an application's integration_key to {"policies": the distinct policy keys
     bound to groups of it, "problems": why any of its bindings is unresolved}. error is the text of a summary that
-    cannot be read to the end of its policy_applies_to lists (the whole check is then Not evaluated). unknown_scope
-    counts the policies with an unrecognised apply_type: only that policy's scope is unknown, its other entries
-    are still read."""
+    cannot be read to the end of its policy_applies_to lists (the whole check is then Not evaluated). An entry with
+    an unrecognised apply_type that names its application leaves only that application unresolved."""
     bindings = {}
-    unknown_scope = []
     for entry in summary["policies"]:
         if not isinstance(entry, dict):
-            return None, "the policy summary carries an entry that is not a policy object", 0
+            return None, "the policy summary carries an entry that is not a policy object"
         applies = entry.get("policy_applies_to")
         if not isinstance(applies, list):
             return None, ("the policy summary carries no policy_applies_to list for a policy, so its application "
-                          "bindings are unknown"), 0
+                          "bindings are unknown")
         for target in applies:
             if not isinstance(target, dict):
-                return None, "the policy summary carries a policy_applies_to entry that is not an object", 0
+                return None, "the policy summary carries a policy_applies_to entry that is not an object"
             kind = word(target.get("apply_type"))
-            if kind not in APPLY_TYPES:
-                if str(entry.get("policy_key")) not in unknown_scope:
-                    unknown_scope.append(str(entry.get("policy_key")))
+            if kind == "app":
                 continue
-            if kind != "group_app":
-                continue
+            if kind not in APPLY_TYPES and target.get("app_integration_key", target.get("integration_key")) is None:
+                return None, "the policy summary carries a policy_applies_to entry with an unrecognised apply_type"
             key = str(target.get("app_integration_key", target.get("integration_key")))
             slot = bindings.get(key)
             if slot is None:
                 slot = {"policies": [], "problems": []}
                 bindings[key] = slot
+            if kind not in APPLY_TYPES:
+                slot["problems"].append("a binding with an unrecognised apply_type")
+                continue
             policy_key = str(entry.get("policy_key"))
             if policy_key not in slot["policies"]:
                 slot["policies"].append(policy_key)
             problem = group_problem(target)
             if problem:
                 slot["problems"].append(problem)
-    return bindings, "", len(unknown_scope)
+    return bindings, ""
 
 
 def transform(input):
@@ -689,7 +688,7 @@ def transform(input):
             by_key[str(p.get("policy_key"))] = p
 
         app_keys = [str(a.get("integration_key")) for a in apps]
-        groups, text, unknown_scope = group_bindings(summary)
+        groups, text = group_bindings(summary)
         if text:
             return not_evaluated("GET /admin/v2/policies/summary cannot be used: " + text)
         listed = [str(e.get("policy_key")) for e in summary["policies"]]
@@ -769,7 +768,6 @@ def transform(input):
                 "applicationsOnGlobalPolicy": on_global,
                 "groupBindings": sum([len(v["policies"]) for v in groups.values()]),
                 "groupBindingsResolved": len(resolved_groups),
-                "policiesScopeUnknown": unknown_scope,
                 "unrecognisedBlockOsValues": sorted(set(unknown_os))[:20]}
         described = [label + ": " + "; ".join(found[:6]) for label, found in covered[:NAMED_LIMIT]]
         indeterminate_note = []
@@ -780,11 +778,6 @@ def transform(input):
         if resolved_groups:
             described = described + ["Application-group policies were resolved for: " + named(resolved_groups)
                                      + " (the application's own policy and each group policy were both checked)"]
-        scope_note = []
-        if unknown_scope:
-            scope_note = ["%d polic%s a policy_applies_to entry with an unrecognised apply_type, so where %s applies "
-                          "is unknown" % (unknown_scope, "y has" if unknown_scope == 1 else "ies have",
-                                          "it" if unknown_scope == 1 else "they")]
         if unknown_os:
             described = described + ["Ignored %d unrecognised operating_systems.block_os_list value(s); they were "
                                      "not counted as an access condition" % len(unknown_os)]
@@ -803,10 +796,6 @@ def transform(input):
                                                     "or Duo Desktop requirements, Authorized Networks, or (on tiers "
                                                     "that offer them) User Location and Anonymous Networks",
                                                     user_group_note])
-        if scope_note and not indeterminate:
-            return create_response(result, input_summary=info, findings=described,
-                                   fail_reasons=["Not evaluated: no application is uncovered, but " + scope_note[0]],
-                                   api_errors=scope_note, warnings=scope_note)
         if indeterminate:
             return create_response(result, input_summary=info, findings=described + indeterminate_note,
                                    fail_reasons=["Not evaluated: no application is uncovered, but %d cannot be "
