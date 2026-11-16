@@ -245,9 +245,28 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                 self.assertIsNone(response["transformedResponse"][KEY])
                 self.assertEqual(
                     response["additionalInfo"]["dataCollection"]["errors"],
-                    ["Could not connect to Microsoft 365: Service unavailable (HTTP 5xx)"],
+                    ["Could not read Exchange Online data: the Spektrum Exchange collector is unavailable (HTTP 5xx)"],
                 )
-                self.assertNotIn("credentials", " ".join(response["additionalInfo"]["evaluation"]["recommendations"]))
+                recs = " ".join(response["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertIn("contact Spektrum support", recs)
+                self.assertNotIn("credentials", recs)
+                self.assertNotIn("Microsoft 365", recs)
+                self.assertNotIn("Microsoft 365", " ".join(response["additionalInfo"]["dataCollection"]["errors"]))
+
+    def test_a_4xx_status_names_the_collector_not_microsoft(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                payload = {"result": {"apiResponse": {"vendorStatus": status, "vendorError": "example"}}}
+                response = self.transformation.transform(payload)
+
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(
+                    response["additionalInfo"]["dataCollection"]["errors"],
+                    ["Could not read Exchange Online data: the Spektrum Exchange collector returned HTTP %d" % status],
+                )
+                recs = " ".join(response["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertNotIn("Microsoft 365", recs)
+                self.assertNotIn("permissions", recs)
 
     def test_a_null_error_key_beside_real_data_still_evaluates(self):
         response = self.transformation.transform({"Success": True, "Output": {'transportRules': [banner_rule()], 'error': None}})
