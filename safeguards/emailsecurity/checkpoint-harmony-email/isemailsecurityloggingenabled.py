@@ -143,9 +143,14 @@ def transform(input):
         """"more" when the response says records remain beyond this page: a scrollId that is not
         empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
         "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
-        is complete. "" when the page is complete. Anything but "" cannot prove an absence."""
+        is complete. "" when the page is complete. Anything but "" cannot prove an absence.
+        Integration-Service pages this query and marks a read it cut off (page cap, early end of the
+        scroll) with responseEnvelope.truncated or paginationTruncated: that is "more" too."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
+            for mark in ("truncated", "paginationTruncated"):
+                if str(holder.get(mark)).strip().lower() == "true":
+                    return "more"
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
                 return "more"
