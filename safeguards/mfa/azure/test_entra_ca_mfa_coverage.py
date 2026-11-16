@@ -908,3 +908,15 @@ class MembersOutside(unittest.TestCase):
         res, _ = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), report_only), workforce(U1, U2),
                              [(G_STAFF, members(U1))])
         self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+
+    def test_role_read_cut_off_by_the_workflow_never_fails(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        roles = role_assignments((ROLE_GLOBAL_ADMIN, U3, "user"))
+        for stats, expected in (({"roleAssignments": {"paginationTruncated": True}}, None),
+                                ({"workforceUsers": {"paginationTruncated": False}}, None),
+                                ({"roleAssignments": {"paginationTruncated": False}}, False)):
+            payload = {"conditionalAccessPolicies": ca(gpolicy("MFA Staff", [G_STAFF]), admins), "groups": NAMED,
+                       "workforceUsers": workforce(U1, U2, U3, U4), "caPolicyGroups": {"groupIds": [{"id": G_STAFF}]},
+                       "groupMembers": [members(U1, U2)], "roleAssignments": roles, "paginationStats": stats}
+            res = m.transform(payload)["transformedResponse"]
+            self.assertIs(res["isMFARequiredForRemoteAccess"], expected)
