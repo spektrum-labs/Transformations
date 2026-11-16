@@ -64,13 +64,13 @@ class RbacTests(unittest.TestCase):
     def test_real_shape_delegated_roles_pass_with_counts(self):
         full = self.check(REAL, True)
         out = full["additionalInfo"]["transformation"]["inputSummary"]
-        self.assertEqual((out["adminCount"], out["delegatedAdminCount"], out["superAdminOnlyCount"]), (3, 2, 1))
+        self.assertEqual((out["adminCount"], out["delegatedAdminCount"], out["fullAdminCount"]), (3, 2, 1))
         reasons = " ".join(full["additionalInfo"]["evaluation"]["passReasons"])
         self.assertNotIn("00uADMIN", reasons)  # counts only, never an admin
 
     def test_flipped_every_admin_super_admin_only_fails(self):
         full = self.check(super_only(), False)
-        self.assertEqual(full["additionalInfo"]["transformation"]["inputSummary"]["superAdminOnlyCount"], 3)
+        self.assertEqual(full["additionalInfo"]["transformation"]["inputSummary"]["fullAdminCount"], 3)
         self.assertTrue(full["additionalInfo"]["evaluation"]["recommendations"])
 
     def test_one_delegated_admin_passes_even_when_other_reads_failed(self):
@@ -78,6 +78,14 @@ class RbacTests(unittest.TestCase):
         data["result"]["adminRoles"][0] = {"error": True, "statusCode": 429, "item": admin(1), "errorType": "RATE_LIMIT"}
         data["result"]["iterateStats"]["adminRoles"]["itemErrors"] = 1
         self.check(data, True)
+
+    def test_super_admin_plus_narrow_role_on_every_admin_fails(self):
+        data = copy.deepcopy(REAL)
+        data["result"]["adminRoles"] = [[role("SUPER_ADMIN"), role("READ_ONLY_ADMIN")] for _ in range(3)]
+        full = self.check(data, False)
+        self.assertEqual(full["additionalInfo"]["transformation"]["inputSummary"]["fullAdminCount"], 3)
+        data["result"]["paginationStats"]["adminAssignees"]["paginationTruncated"] = True
+        self.check(data, None)
 
     def test_super_admin_only_with_a_failed_or_cut_read_is_not_evaluated(self):
         data = super_only()
