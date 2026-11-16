@@ -96,7 +96,7 @@ def account(uid, interactive=None, background=None, enabled=True, kind="Member",
     return item
 
 
-USERS = [account(SA1, interactive=200, background=1), account(SA2, background=3),
+USERS = [account(SA1, background=1), account(SA2, background=3),
          account(HUMAN, interactive=1, background=1)]
 MEMBERS = [(G_SVC, [SA1]), (G_SVC2, [SA2]), (G_STAFF, [HUMAN])]
 
@@ -111,7 +111,7 @@ def svc_body(policies, users=None, members=None):
 SVC_PASS = svc_body([ca("Block service accounts", groups=[G_SVC, G_SVC2]), ca("MFA all", all_users=True, block=False)])
 SVC_FAIL = svc_body([ca("Block svc", groups=[G_SVC]),
                      ca("Block integrations outside office", groups=[G_SVC2],
-                        locations={"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]})])
+                        locations={"includeLocations": ["AllTrusted"], "excludeLocations": []})])
 
 
 def svc_reason(out, kind):
@@ -174,7 +174,7 @@ def test_report_only_disabled_narrowed_and_excluding_blocks_do_not_count():
     assert value(SVC, svc_body([ca("by id", include_users=[SA1, SA2])]))[0] is True
 
 
-def test_mfa_carve_out_finds_service_accounts_beyond_break_glass():
+def test_named_exclusions_are_break_glass_up_to_two_then_not_evaluated():
     users = USERS + [account(BG1), account(BG2), account(BG3)]
     block = ca("Block svc", groups=[G_SVC, G_SVC2])
     two = ca("MFA all", all_users=True, block=False, exclude_users=[BG1, BG2])
@@ -183,8 +183,57 @@ def test_mfa_carve_out_finds_service_accounts_beyond_break_glass():
     assert out["additionalInfo"]["transformation"]["inputSummary"]["breakGlassAccountsNotJudged"] == 2
     three = ca("MFA all", all_users=True, block=False, exclude_users=[BG1, BG2, BG3])
     got, out = value(SVC, svc_body([block, three], users=users))
-    assert got is False
-    assert "3 of 5 service account(s) are not blocked" in svc_reason(out, "failReasons")
+    assert got is None  # cannot tell three from service accounts: never judged, never blocked
+    assert "cannot be told from service accounts" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+def test_break_glass_plus_app_scoped_exclusion_is_not_judged():
+    users = USERS + [account(BG1), account(BG2), account(BG3)]
+    block = ca("Block svc", groups=[G_SVC, G_SVC2])
+    allmfa = ca("MFA all", all_users=True, block=False, exclude_users=[BG1, BG2])
+    azure = ca("MFA Azure portal", all_users=True, block=False, apps=("app-azure",), exclude_users=[BG3])
+    got, out = value(SVC, svc_body([block, allmfa, azure], users=users))
+    assert got is True
+    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+    assert summary["serviceAccountsByMfaExclusion"] == 0 and summary["breakGlassAccountsNotJudged"] == 2
+
+
+def test_exclusion_from_a_policy_that_never_reached_the_account_is_no_carve_out():
+    users = USERS + [account(BG1)]
+    block = ca("Block svc", groups=[G_SVC, G_SVC2])
+    admins_only = ca("MFA staff group", groups=[G_STAFF], block=False, exclude_users=[BG1])
+    risky = ca("MFA risky", all_users=True, block=False, exclude_users=[BG1])
+    risky["conditions"]["signInRiskLevels"] = ["high"]
+    got, out = value(SVC, svc_body([block, admins_only, risky], users=users))
+    assert got is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["serviceAccountsByMfaExclusion"] == 0
+
+
+def test_location_exempt_block_counts_as_blocked():
+    # CA applies to non-interactive sign-ins, so the real control is "block outside trusted locations".
+    outside = ca("Block svc outside trusted", all_users=True, exclude_groups=[G_STAFF],
+                 locations={"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]})
+    got, out = value(SVC, svc_body([outside]))
+    assert got is True and "outside trusted locations" in svc_reason(out, "passReasons")
+    only_inside = ca("Block inside", all_users=True, exclude_groups=[G_STAFF],
+                     locations={"includeLocations": ["AllTrusted"], "excludeLocations": []})
+    assert value(SVC, svc_body([only_inside]))[0] is False
+    got, out = value(SVC, svc_body([]))
+    assert got is False and "outside your trusted locations" in svc_reason(out, "recommendations")
+    assert "no location or platform exception" not in svc_reason(out, "recommendations")
+
+
+def test_person_with_old_interactive_and_recent_background_sign_in_is_not_a_service_account():
+    mobile_only = account(HUMAN, interactive=200, background=2)
+    got, out = value(SVC, svc_body([], users=[mobile_only, account(SA1, background=2)]))
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["serviceAccountsBySignInSignal"] == 1
+    assert got is False and "1 of 1 service account(s)" in svc_reason(out, "failReasons")
+    assert value(SVC, svc_body([], users=[mobile_only]))[0] is True
+
+
+def test_sync_account_role_excluded_from_the_block_is_not_failed():
+    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["d29b2b05-8046-44ba-8758-1e26182fcf32"])
+    assert value(SVC, svc_body([pol]))[0] is None
 
 
 def test_mfa_carve_out_through_a_read_group():
@@ -193,6 +242,9 @@ def test_mfa_carve_out_through_a_read_group():
     mfa = ca("MFA all", all_users=True, block=False, exclude_groups=["00000000-0000-0000-0000-0000000000c1"])
     got, _ = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2]), mfa], users=users, members=members))
     assert got is False
+    small = [(G_SVC, [SA1]), (G_SVC2, [SA2]), ("00000000-0000-0000-0000-0000000000c1", [BG1, BG2])]
+    got, _ = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2]), mfa], users=users, members=small))
+    assert got is True  # a group of two is break-glass
 
 
 def test_unread_group_keeps_it_not_evaluated_but_never_hides_a_failure():

@@ -7,14 +7,21 @@ policy that blocks the account from every cloud app.
 WHICH ACCOUNTS ARE SERVICE ACCOUNTS (WI-3c, product decision 16 Nov 2026, option a): by signal, not by group name.
 Microsoft Graph has no service-account flag, and most tenants have no group named for them. An enabled Member
 account is a service account when either holds:
-  (a) sign-in signal: it has a non-interactive sign-in in the last SIGNAL_DAYS days and no interactive sign-in in
-      that window (signInActivity.lastNonInteractiveSignInDateTime recent; lastSignInDateTime, which Microsoft
-      records for interactive sign-ins only, absent or older);
-  (b) MFA carve-out: an enabled Conditional Access policy that requires MFA excludes it, by name (excludeUsers) or
-      through an excluded group whose transitive members were read.
-Accounts found only by (b) are emergency-access (break-glass) accounts, which must keep interactive sign-in, when
-there are at most MAX_BREAK_GLASS of them: they are counted in a finding and not judged (the repo's break-glass
-bound, as in entra_ca_mfa_coverage.py).
+  (a) sign-in signal: it has a non-interactive sign-in in the last SIGNAL_DAYS days and has never signed in
+      interactively (signInActivity.lastNonInteractiveSignInDateTime recent; lastSignInDateTime, which Microsoft
+      records for interactive sign-ins only, null or absent). A person whose mobile or desktop clients keep
+      refreshing tokens has an old interactive sign-in, so is not a service account by this signal;
+  (b) MFA carve-out: an enabled Conditional Access policy that requires MFA of all cloud apps, and is not
+      risk-only, would reach it but excludes it, by name (excludeUsers) or through an excluded group whose
+      transitive members were read. A policy that never reached the account (admin-only, app-specific, or
+      including other groups) is no carve-out.
+Break-glass is worked out first: accounts an All-users MFA policy excludes by name, or through a group of at most
+MAX_BREAK_GLASS members, that the sign-in signal did not find. They must keep interactive sign-in, so they are
+never judged. When more than MAX_BREAK_GLASS such accounts exist they cannot be told from service accounts: not
+evaluated.
+Conditional Access is also evaluated on non-interactive sign-ins, so a block that covers every location would break
+a working workload. A block that leaves trusted locations open (includeLocations All, excludeLocations set) counts
+as blocking: the account cannot sign in from anywhere else.
 
 Source: workflow getServiceAccountSignInEvidence (One-Click), merging
     conditionalAccessPolicies  getConditionalAccessPolicies   GET /v1.0/identity/conditionalAccess/policies
@@ -26,8 +33,9 @@ Source: workflow getServiceAccountSignInEvidence (One-Click), merging
 
 An account is BLOCKED when at least one enabled policy (not report-only):
     - has grant control block, targets all cloud apps (includeApplications All, no excluded apps, no application
-      filter), applies to every client app type, and has no other condition with a value (locations or platforms
-      other than All, device filters, risk levels, authentication flows, or any condition this file does not know);
+      filter), applies to every client app type, and has no other condition with a value (included locations other
+      than All, platforms other than All, device filters, risk levels, authentication flows, or any condition this
+      file does not know; excluded locations are allowed, the trusted-location exemption);
     - includes the account: All users, the account by id, or a group whose member list was read and holds it;
     - and does not exclude it: not by id, not through an excluded group that holds it. An excluded group whose
       members were not read, an excluded directory role, or excluded guests/external users may exclude it.
@@ -254,8 +262,7 @@ def narrowing(cond):
     locs = cond.get("locations")
     if isinstance(locs, dict):
         inc = lowered(locs.get("includeLocations"))
-        exc = strs(locs.get("excludeLocations"))
-        if (inc and inc != ["all"]) or exc:
+        if inc and inc != ["all"]:  # excluded locations are the block's trusted exemption, not narrowing
             out.append("locations")
     elif has_value(locs):
         out.append("locations")
@@ -329,7 +336,7 @@ def read_memberships(body):
 
 def read_accounts(items, cutoff):
     """({lower-case id: 'signal' or 'quiet'} for the enabled Member accounts, '' or a reason the read is unusable).
-    'signal': a non-interactive sign-in after cutoff and no interactive one. Timestamps compare as UTC strings."""
+    'signal': a non-interactive sign-in after cutoff and no interactive one ever. Timestamps compare as UTC strings."""
     out = {}
     carried = False
     for item in items:
@@ -352,8 +359,7 @@ def read_accounts(items, cutoff):
             else:
                 return None, "a sign-in date is not a Graph UTC timestamp"
         interactive, background = stamps
-        recent_interactive = interactive != "" and interactive >= cutoff
-        out[uid] = "signal" if background != "" and background >= cutoff and not recent_interactive else "quiet"
+        out[uid] = "signal" if background != "" and background >= cutoff and interactive == "" else "quiet"
     if out and not carried:
         return None, "the user read carries no signInActivity (it needs AuditLog.Read.All and Entra ID P1)"
     return out, ""
@@ -376,26 +382,68 @@ def users_of(policy):
     return cond.get("users") if isinstance(cond.get("users"), dict) else {}
 
 
-def mfa_carve_outs(policies, memberships):
-    """(ids an enabled MFA-requiring policy excludes, '' or a reason the list is incomplete)."""
-    out = set()
+ALL_RISK_LEVELS = set(["high", "medium", "low", "none"])
+
+
+def risk_only(cond):
+    """True when the policy fires only for some risk levels (all four levels, 'none' included, is no narrowing)."""
+    for risk in ("signInRiskLevels", "userRiskLevels", "servicePrincipalRiskLevels"):
+        levels = set(lowered(cond.get(risk)))
+        if levels and not ALL_RISK_LEVELS.issubset(levels):
+            return True
+    return False
+
+
+def mfa_carve_outs(policies, memberships, accounts):
+    """(accounts an enabled all-apps MFA policy would reach but excludes, the subset an All-users policy excludes by
+    name or through a group of at most MAX_BREAK_GLASS members, '' or a reason the list is incomplete)."""
+    carved = set()
+    glass = set()
     why = ""
     for p in policies:
-        if not enabled(p) or not requires_mfa(p):
+        cond = p.get("conditions") if isinstance(p.get("conditions"), dict) else {}
+        apps = cond.get("applications") if isinstance(cond.get("applications"), dict) else {}
+        if (not enabled(p) or not requires_mfa(p) or risk_only(cond)
+                or "all" not in lowered(apps.get("includeApplications"))):
             continue
         users = users_of(p)
-        out = out | object_ids(users.get("excludeUsers"))
+        everyone = "all" in lowered(users.get("includeUsers"))
+        named = object_ids(users.get("includeUsers"))
+        excluded = set(object_ids(users.get("excludeUsers")))
+        small = set(excluded)
         for gid in object_ids(users.get("excludeGroups")):
             members = memberships.get(gid)
             if members is None:
                 why = "a group excluded from an MFA policy was not read whole, so its members are not known"
-            else:
-                out = out | members
-    return out, why
+                continue
+            excluded = excluded | members
+            if len(members) <= MAX_BREAK_GLASS:
+                small = small | members
+        for uid in sorted(excluded & accounts):
+            reached = everyone or uid in named
+            for gid in object_ids(users.get("includeGroups")):
+                members = memberships.get(gid)
+                if members is None:
+                    why = "a group an MFA policy includes was not read whole, so its members are not known"
+                elif uid in members:
+                    reached = True
+            if reached:
+                carved.add(uid)
+                if everyone and uid in small:
+                    glass.add(uid)
+    return carved, glass, why
+
+
+def location_exempt(policy):
+    """True when a block policy leaves some locations open (includeLocations All with excludeLocations set)."""
+    cond = policy.get("conditions") if isinstance(policy.get("conditions"), dict) else {}
+    locs = cond.get("locations")
+    return isinstance(locs, dict) and len(strs(locs.get("excludeLocations"))) > 0
 
 
 def full_block(policy):
-    """True when an enabled policy blocks every cloud app for every client type with no other narrowing."""
+    """True when an enabled policy blocks every cloud app for every client type with no other narrowing (excluded
+    locations excepted: the trusted-location exemption)."""
     controls = policy.get("grantControls")
     if not enabled(policy) or not isinstance(controls, dict) or "block" not in lowered(controls.get("builtInControls")):
         return False
@@ -486,10 +534,15 @@ def transform(input):
             return not_measured(validation, "Microsoft Entra ID returned no enabled member account, so which accounts "
                                 "are service accounts cannot be read.")
         memberships = read_memberships(body)
-        carved, carve_why = mfa_carve_outs(policies, memberships)
+        carved, glass, carve_why = mfa_carve_outs(policies, memberships, set(accounts))
         by_signal = set(u for u in accounts if accounts[u] == "signal")
-        carve_only = (carved & set(accounts)) - by_signal
-        break_glass = carve_only if len(carve_only) <= MAX_BREAK_GLASS else set()
+        carve_only = carved - by_signal
+        break_glass = glass - by_signal
+        if len(break_glass) > MAX_BREAK_GLASS:
+            return not_measured(validation, "Microsoft Entra ID: " + str(len(break_glass)) + " accounts are excluded "
+                                "from an all-users MFA policy by name or through a small group, more than the "
+                                + str(MAX_BREAK_GLASS) + " emergency-access accounts expected, so they cannot be told "
+                                "from service accounts. Attest, or exclude fewer accounts.")
         service = by_signal | (carve_only - break_glass)
         blocks = [p for p in policies if full_block(p)]
         unblocked = []
@@ -505,9 +558,12 @@ def transform(input):
                    "breakGlassAccountsNotJudged": len(break_glass), "fullBlockPolicies": len(blocks),
                    "unblocked": len(unblocked), "undecided": len(undecided), "signalDays": SIGNAL_DAYS}
         scope = (f"service accounts are enabled member accounts with a non-interactive sign-in and no interactive one "
-                 f"in {SIGNAL_DAYS} days, or that a Conditional Access MFA policy excludes")
+                 f"ever, or that a Conditional Access MFA policy would reach but excludes")
         if break_glass:
             scope = scope + f" ({len(break_glass)} excluded account(s) treated as emergency access and not judged)"
+        exempt_note = ""
+        if [p for p in blocks if location_exempt(p)]:
+            exempt_note = " (at least one blocks sign-in outside trusted locations)"
         if unblocked:
             shown = ", ".join(account_ref(u) for u in unblocked[:MAX_NAMED])
             if len(unblocked) > MAX_NAMED:
@@ -518,9 +574,12 @@ def transform(input):
                 fail_reasons=[str(len(unblocked)) + " of " + str(len(service)) + " service account(s) are not blocked "
                               "from interactive sign-in by an enabled Conditional Access policy that blocks all cloud "
                               "apps for every client type: " + shown + ". Scope: " + scope + "."],
-                recommendations=["Block these accounts from all cloud apps with a Conditional Access policy (all client "
-                                 "app types, no location or platform exception), or move the workload to a service "
-                                 "principal or managed identity."],
+                recommendations=["Move the workload to a service principal or managed identity, or restrict these "
+                                 "accounts with a Conditional Access policy that blocks all cloud apps outside your "
+                                 "trusted locations. Conditional Access also applies to non-interactive sign-ins, so a "
+                                 "block with no location exemption stops a working workload. Exclude the Microsoft "
+                                 "Entra Connect sync account (Directory Synchronization Accounts role) from any such "
+                                 "policy."],
                 input_summary=summary,
             )
         if undecided or carve_why:
@@ -541,7 +600,7 @@ def transform(input):
             result={KEY: True},
             validation=validation,
             pass_reasons=["All " + str(len(service)) + " service account(s) are blocked from every cloud app by an "
-                          "enabled Conditional Access block policy. Scope: " + scope + "."],
+                          "enabled Conditional Access block policy" + exempt_note + ". Scope: " + scope + "."],
             input_summary=summary,
         )
     except Exception as e:
