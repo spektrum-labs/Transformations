@@ -9,7 +9,8 @@ API Source: listConsoleAdmins (POST https://<account>.my.rubrik.com/api/graphql,
         count pageInfo { hasNextPage endCursor }
         nodes { id domain status isAccountOwner roles { id name isOrgAdmin } allOrgs { id } } }
       groupsInCurrentAndDescendantOrganization(first: 200) {
-        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } allOrgs { id } } } }
+        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } allOrgs { id } } }
+      currentOrg { id } }
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
     (type User: domain UserDomainEnum! = LOCAL | SSO | LDAP | CLIENT | PAT | SUPPORT; status UserStatus! =
     ACTIVE | DEACTIVATED | UNKNOWN; roles [Role!]! with isOrgAdmin. type Group: SSO or directory groups that
@@ -22,9 +23,11 @@ identity that is separate from their everyday sign-in: a LOCAL user is a console
 construction) and CLIENT, PAT and SUPPORT users are non-person accounts. An SSO or LDAP user signs in with a
 directory identity, and RSC does not show whether that identity is a separate admin account or the person's
 everyday one. Account names are not read: a naming convention cannot prove which it is.
-Roles are read in the context organization only (Group.roles; User.allOrgs lists the sub-organizations where a
-user has roles). A listed group with no roles, or a non-owner user with no roles and a non-empty allOrgs, holds
-its roles in a sub-organization this read cannot see, so the read is not evaluated.
+Roles are read in the context organization only (roles; allOrgs lists the organizations where the account has
+roles, currentOrg is the context organization). A non-admin user or group that is listed with no roles, or whose
+allOrgs holds any organization other than currentOrg, holds roles in a sub-organization this read cannot see
+(possibly an administrator role), so the read is not evaluated. A non-admin account with roles and no allOrgs
+list is not evaluated either.
 True: the user and group reads are complete, no group holds an administrator role, no account holds roles only
 in a sub-organization, and every administrator is a LOCAL console account or a non-person account.
 None (not evaluated): any administrator signs in with an SSO or LDAP identity, or with an unknown domain; a group
@@ -295,6 +298,21 @@ def is_admin(node):
 
 
 
+def sub_org_roles(n, ctx):
+    """True / False, or None when allOrgs is missing: does a non-admin account hold roles in an organization
+    other than the context one (or, with no context id, in any organization)?"""
+    if n.get("roles") == []:
+        return True  # listed without roles: its roles are elsewhere
+    orgs = n.get("allOrgs")
+    if not isinstance(orgs, list):
+        return None
+    for o in orgs:
+        oid = o.get("id") if isinstance(o, dict) else o
+        if oid is None or oid != ctx:
+            return True
+    return False
+
+
 def verdict(validation, counts, summary):
     """The criterion from complete user and group reads. counts: administrators by sign-in kind."""
     admins = counts["separate"] + counts["nonPerson"] + counts["directory"] + counts["unknown"]
@@ -368,6 +386,9 @@ def transform(input):
             return not_measured(validation, "Rubrik Security Cloud: " + why + ". Groups that hold an administrator "
                                 "role must be read to show who can administer the console.",
                                 "Grant the RSC service account read access to Groups and Roles.")
+        root = body.get("data") if isinstance(body.get("data"), dict) else body
+        cur = root.get("currentOrg")
+        ctx = cur.get("id") if isinstance(cur, dict) else None
         counts = {"separate": 0, "nonPerson": 0, "directory": 0, "unknown": 0, "adminGroups": 0,
                   "subOrgGroups": 0, "subOrgUsers": 0}
         for g in groups:
@@ -377,8 +398,13 @@ def transform(input):
                                     "administrator role cannot be read.")
             if admin:
                 counts["adminGroups"] = counts["adminGroups"] + 1
-            elif g.get("roles") == []:
-                counts["subOrgGroups"] = counts["subOrgGroups"] + 1
+            else:
+                sub = sub_org_roles(g, ctx)
+                if sub is None:
+                    return not_measured(validation, "A group entry carries no organization list, so roles held in "
+                                        "sub-organizations cannot be read.")
+                if sub:
+                    counts["subOrgGroups"] = counts["subOrgGroups"] + 1
         for n in nodes:
             if str(n.get("status") or "").upper() == "DEACTIVATED":
                 continue
@@ -387,7 +413,11 @@ def transform(input):
                 return not_measured(validation, "A user entry carries no roles list, so who administers the console "
                                     "cannot be read.")
             if not admin:
-                if n.get("roles") == [] and isinstance(n.get("allOrgs"), list) and len(n.get("allOrgs")) > 0:
+                sub = sub_org_roles(n, ctx)
+                if sub is None:
+                    return not_measured(validation, "A user entry carries no organization list, so roles held in "
+                                        "sub-organizations cannot be read.")
+                if sub:
                     counts["subOrgUsers"] = counts["subOrgUsers"] + 1
                 continue
             domain = str(n.get("domain") or "").upper()
