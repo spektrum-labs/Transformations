@@ -368,11 +368,18 @@ def test_a_present_name_that_contradicts_the_id_is_not_evidence(name):
 
 
 @pytest.mark.parametrize("name", ID_ONLY)
-def test_no_row_for_the_id_stays_unknown_and_counts_devices(name):
-    other = row("ws-01", "scid-9999", 1, 1)
-    r = row("ws-01", "scid-9999")
-    got, out = value(name, result([r]))
+def test_an_unknown_id_is_not_evaluated(name):
+    got, out = value(name, result([row("ws-01", "scid-9999")]))
     assert got is None
+
+
+@pytest.mark.parametrize("name", ID_ONLY)
+def test_no_row_at_all_stays_unknown(name):
+    got, out = value(name, result([]))
+    assert got is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
+    print(out["additionalInfo"]["evaluation"]["failReasons"])
+    assert out["additionalInfo"]["evaluation"]["failReasons"][0].startswith("0 rated of 0 assessed")
 
 
 def test_screen_lock_names_the_device_over_the_limit():

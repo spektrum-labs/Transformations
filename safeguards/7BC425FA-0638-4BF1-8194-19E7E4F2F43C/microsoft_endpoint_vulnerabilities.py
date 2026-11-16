@@ -22,9 +22,10 @@ Numbers emitted (every key, so each check's evidence shows all of them):
 Fail closed: anything that is not a complete export read returns every count as None with dataCollection
 "error" (Unevaluated): no envelope, a vendor error body, no `value` list, an @odata.nextLink still present
 (IS stopped at maxPages or a page failed, so the merge is partial), a truncated marker, an empty export
-(Defender Vulnerability Management has assessed nothing, which is not a measured zero), or or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
+(Defender Vulnerability Management has assessed nothing, which is not a measured zero), or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
 A record without a vulnerabilitySeverityLevel is skipped and counted (recordsWithoutSeverity), not allowed to
-fail the whole read; when no record carries a severity the read is Unevaluated.
+fail the whole read; when more than 5% carry none the read is Unevaluated, because the unrated records may be
+Critical and a zero from the rest would not be a measured zero.
 An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
 dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
@@ -165,8 +166,9 @@ def measure(data, now):
         prior = instances.get(ident)
         if prior is None or seen < prior["seen"]:
             instances[ident] = {"sev": sev, "seen": seen, "device": device, "cve": cve}
-    if no_severity == len(records):
-        return None, "None of the " + str(len(records)) + " Defender vulnerability records has a vulnerabilitySeverityLevel."
+    if no_severity * 20 > len(records):
+        return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
+                      "vulnerabilitySeverityLevel, too many to rate the export.")
     critical = 0
     high = 0
     overdue = 0
