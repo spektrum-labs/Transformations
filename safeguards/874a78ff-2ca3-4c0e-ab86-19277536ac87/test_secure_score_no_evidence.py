@@ -1,4 +1,4 @@
-"""Secure Score checks: no controlScores to read is unknown, never a measured fail.
+"""Secure Score checks (every file that reads controlScores): no controlScores to read is unknown, never a measured fail.
 
 Microsoft Graph GET /security/secureScores timed out (504) at larger tenants, and an
 empty or failed read came back from these transforms as False: a red check for a
@@ -13,6 +13,7 @@ Fixtures are synthetic. Each case runs as plain Python and in the Token-Service 
 import importlib.util
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -34,23 +35,29 @@ except ImportError:
 
 MODES = ["python", "sandbox"]
 
+# Every transform in this directory that reads Secure Score controlScores, found by reading the files,
+# so a new one that skips the guard fails here. These three read controlScores but are wired to other
+# methods (not getRecentSecureScores); a file added to this set needs the same reason.
+NOT_SECURE_SCORE_FILES = {"areadminaccountsseparate", "isadminmfaphishingresistant", "ismfaenforcedforusers"}
+# Report "no data" as False with a collection error (Token-Service reads that as Not evaluated), not None.
+NO_DATA_FALSE = {"ismailboxauditingenabled", "isauditlogsearchenabled"}
+
+
+def _checks():
+    out = {}
+    for path in sorted(HERE.glob("*.py")):
+        text = path.read_text()
+        if path.name.startswith("test_") or "controlScores" not in text or path.stem in NOT_SECURE_SCORE_FILES:
+            continue
+        out[path.stem] = re.search(r'criteriaKey\s*=\s*"(\w+)"', text).group(1)
+    return out
+
+
 # file -> criterion key
-CHECKS = {
-    "aredlppoliciesconfigured": "areDLPPoliciesConfigured",
-    "aretransportrulesconfigured": "areTransportRulesConfigured",
-    "isappconsentrestricted": "isAppConsentRestricted",
-    "isattachmentscanningenabled": "isAttachmentScanningEnabled",
-    "isautoforwarddisabled": "isAutoForwardDisabled",
-    "isdataclassificationenabled": "isDataClassificationEnabled",
-    "islegacyauthblocked": "isLegacyAuthBlocked",
-    "issafeattachmentsenabled": "isSafeAttachmentsEnabled",
-    "issafelinksenabled": "isSafeLinksEnabled",
-    "issafelinksprotectionenabled": "isSafeLinksProtectionEnabled",
-    "issmtpauthdisabled": "isSMTPAuthDisabled",
-}
+CHECKS = _checks()
 CONTROLS = ["dlp_datalossprevention", "mdo_blockmailforward", "IntegratedApps", "mdo_safeattachmentpolicy",
             "mdo_safeattachments", "mdo_autoforwardingmode", "mip_sensitivitylabelspolicies",
-            "BlockLegacyAuthentication", "mdo_safelinksforemail"]
+            "BlockLegacyAuthentication", "mdo_safelinksforemail", "exo_mailboxaudit", "mip_search_auditlog"]
 
 
 def score(pct):
@@ -113,7 +120,8 @@ def test_zero_score_is_a_measured_fail(name, mode):
 def test_no_controlScores_is_unknown_with_a_reason(name, case, mode):
     body = NO_EVIDENCE[case]
     out = load(name, mode)(body if isinstance(body, str) else json.dumps(body))
-    assert out["transformedResponse"][CHECKS[name]] is None
+    value = out["transformedResponse"][CHECKS[name]]
+    assert value is None or (name in NO_DATA_FALSE and value is False)
     assert unevaluated(out)
     errors = out["additionalInfo"]["dataCollection"]["errors"]
     assert errors and all(isinstance(e, str) and e for e in errors)
@@ -143,6 +151,12 @@ class Poisoned(dict):
 
     def get(self, *a, **k):
         raise RuntimeError("boom")
+
+
+def test_every_secure_score_file_is_covered():
+    # The guard names these files: a silent drop in the derived list fails here.
+    assert {"isurlrewriteenabled", "ismailboxauditingenabled", "isauditlogsearchenabled"} <= set(CHECKS)
+    assert len(CHECKS) >= 14
 
 
 @pytest.mark.parametrize("name", sorted(CHECKS))

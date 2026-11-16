@@ -260,8 +260,9 @@ def transform(input):
     """True only when Global Administrator is covered by an enabled Conditional Access policy that requires MFA
     (builtInControls "mfa" or an authenticationStrength) for every cloud app or the Microsoft Admin Portals, with
     neither the admin portals nor the Microsoft Azure Management app in excludeApplications, without excluding the
-    role and without being limited to risky sign-ins, excluding at most break-glass. False: no such policy. None,
-    with dataCollection.status "error": the policy list was not read, a partial page (@odata.nextLink) leaves the
+    role and without being limited to risky sign-ins, excluding at most break-glass. False: enabled policies exist but none
+    qualifies. None, with dataCollection.status "error": the policy list was not read, no policy is enabled (Security
+    Defaults not read), a partial page (@odata.nextLink) leaves the
     role uncovered, exclusions go beyond break-glass, or the transformation failed.
     """
     criteriaKey = "isRootUserMFAEnabled"
@@ -291,6 +292,12 @@ def transform(input):
             policies = data
         else:
             return not_measured("The Conditional Access policy list was not read", validation)
+
+        # Security Defaults (which require admin MFA) and Conditional Access are mutually exclusive, so a
+        # tenant with no enabled policy may be enforcing MFA through Security Defaults, which is not read here.
+        if not any(isinstance(p, dict) and str(p.get("state") or "").lower() == "enabled" for p in policies):
+            return not_measured("No enabled Conditional Access policies; Security Defaults (which require admin MFA) "
+                                "were not read", validation)
 
         pass_reasons = []
         fail_reasons = []
