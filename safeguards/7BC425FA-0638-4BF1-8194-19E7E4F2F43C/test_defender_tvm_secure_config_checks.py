@@ -378,7 +378,6 @@ def test_no_row_at_all_stays_unknown(name):
     got, out = value(name, result([]))
     assert got is None
     assert out["additionalInfo"]["dataCollection"]["status"] == "error"
-    print(out["additionalInfo"]["evaluation"]["failReasons"])
     assert out["additionalInfo"]["evaluation"]["failReasons"][0].startswith("0 rated of 0 assessed")
 
 
