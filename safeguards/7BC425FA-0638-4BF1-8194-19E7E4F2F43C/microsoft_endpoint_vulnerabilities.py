@@ -25,9 +25,7 @@ Fail closed: anything that is not a complete export read returns every count as 
 (Defender Vulnerability Management has assessed nothing, which is not a measured zero), or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
 A record whose vulnerabilitySeverityLevel is not Critical/High/Medium/Low (missing, blank, "None", "null",
 unknown) is skipped and counted (recordsWithoutSeverity). When more than 5% are unrated the read is Unevaluated,
-because the unrated records may be Critical and a zero from the rest would not be a measured zero. The one exception:
-when the open Critical, open High and overdue counts are all nonzero, they are lower bounds that still fail a
-"== 0" criterion, so they are emitted as a Fail.
+because the unrated records may be Critical and a zero from the rest would not be a measured zero.
 An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
 dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
