@@ -856,6 +856,9 @@ def transform(input):
         role_body = None
         if isinstance(data, dict) and "conditionalAccessPolicies" in data:
             role_body = data.get("roleAssignments")
+            if "paginationStats" in data and as_dict(as_dict(data.get("paginationStats")).get("roleAssignments")).get(
+                    "paginationTruncated") is not False:
+                role_body = None  # the workflow cut the role list off at its page limit (reportPagination)
             group_data = data.get("groups")
             security_defaults = read_security_defaults(data.get("securityDefaults"))
             if any(k in data for k in ("workforceUsers", "caPolicyGroups", "groupMembers")):

@@ -412,3 +412,14 @@ def test_restricted_python_agrees_on_the_new_verdicts():
         p_out = M.transform(copy.deepcopy(b))
         assert s_out["transformedResponse"] == p_out["transformedResponse"]
         assert s_out["additionalInfo"]["evaluation"] == p_out["additionalInfo"]["evaluation"]
+
+
+@pytest.mark.parametrize("stats,expected", [
+    ({"roleAssignments": {"paginationTruncated": True}}, None),
+    ({"signInUsers": {"paginationTruncated": False}}, None),       # the role step did not report: not trusted
+    ({"roleAssignments": {"paginationTruncated": False}}, False),
+])
+def test_role_read_cut_off_by_the_workflow_never_fails(stats, expected):
+    value, _ = run(body([policy("A"), ADMINS], [G1], [U[:5]], roleAssignments=roles((U[5], "user")),
+                        paginationStats=stats))
+    assert value is expected

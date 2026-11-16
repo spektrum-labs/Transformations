@@ -708,7 +708,11 @@ def members_outside(data, policies):
         reach = set(workforce) if "all" in include else (object_ids(users.get("includeUsers")) & workforce)
         roles = object_ids(users.get("includeRoles"))
         if roles:
-            holders = role_holders(data.get("roleAssignments"), roles, workforce)
+            role_body = data.get("roleAssignments")
+            if "paginationStats" in data and as_dict(as_dict(data.get("paginationStats")).get("roleAssignments")).get(
+                    "paginationTruncated") is not False:
+                role_body = None  # the workflow cut the role list off at its page limit (reportPagination)
+            holders = role_holders(role_body, roles, workforce)
             if holders is None:
                 return None, ("an MFA policy includes a directory role whose holders were not read whole (role "
                               "assignments not read, or the role is held by a group), so members counted as outside "
