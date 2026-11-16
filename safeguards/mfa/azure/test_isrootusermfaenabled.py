@@ -106,14 +106,21 @@ def test_policy_for_other_roles_only_is_a_measured_fail(mode):
     assert pair(out) == (False, "success")
 
 
+# Tenants on Entra Security Defaults have no Conditional Access policies (the two are mutually exclusive)
+# yet Security Defaults require MFA for Global Administrator: no enabled policy is unknown, never a fail.
 @pytest.mark.parametrize("mode", MODES)
-def test_report_only_policy_is_a_measured_fail(mode):
-    assert pair(load(mode)(graph(policy(state="enabledForReportingButNotEnforced")))) == (False, "success")
+@pytest.mark.parametrize("pol", [None, "report_only", "disabled"])
+def test_no_enabled_policy_is_unknown_because_security_defaults_are_not_read(mode, pol):
+    body = graph() if pol is None else graph(policy(state={"report_only": "enabledForReportingButNotEnforced",
+                                                            "disabled": "disabled"}[pol]))
+    out = load(mode)(body)
+    assert pair(out) == (None, "error")
+    assert "Security Defaults" in out["additionalInfo"]["dataCollection"]["errors"][0]
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_no_policies_is_a_measured_fail(mode):
-    assert pair(load(mode)(graph())) == (False, "success")
+def test_an_enabled_policy_that_does_not_qualify_is_still_a_measured_fail(mode):
+    assert pair(load(mode)(graph(policy(roles=(SECURITY_ADMIN,))))) == (False, "success")
 
 
 @pytest.mark.parametrize("mode", MODES)
