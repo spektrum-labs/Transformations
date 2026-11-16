@@ -24,9 +24,10 @@ Fail closed: anything that is not a complete export read returns every count as 
 (IS stopped at maxPages or a page failed, so the merge is partial), a truncated marker, an empty export
 (Defender Vulnerability Management has assessed nothing, which is not a measured zero), or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
 A record whose vulnerabilitySeverityLevel is not Critical/High/Medium/Low (missing, blank, "None", "null",
-unknown) is skipped and counted (recordsWithoutSeverity). When more than 5% are unrated and nothing is overdue the
-read is Unevaluated, because the unrated records may be Critical and a zero from the rest would not be a measured
-zero; when something is already overdue the Fail stands and the counts are lower bounds.
+unknown) is skipped and counted (recordsWithoutSeverity). When more than 5% are unrated the read is Unevaluated,
+because the unrated records may be Critical and a zero from the rest would not be a measured zero. The one exception:
+when the open Critical, open High and overdue counts are all nonzero, they are lower bounds that still fail a
+"== 0" criterion, so they are emitted as a Fail.
 An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
 dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
@@ -186,9 +187,9 @@ def measure(data, now):
                 overdue = overdue + 1
         devices[inst["device"]] = True
         cves[inst["cve"]] = True
-    # Unrated records can only hide more findings. A measured overdue finding stands (counts are lower bounds);
-    # otherwise too many unrated records means a zero is not a measured zero.
-    if no_severity * 20 > len(records) and overdue == 0:
+    # Unrated records can only hide more findings, so any emitted 0 may be false. Emit only when every count
+    # is nonzero (lower bounds still fail a "== 0" criterion).
+    if no_severity * 20 > len(records) and 0 in (critical, high, overdue):
         return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
                       "recognised vulnerabilitySeverityLevel, too many to rate the export.")
     numbers = {

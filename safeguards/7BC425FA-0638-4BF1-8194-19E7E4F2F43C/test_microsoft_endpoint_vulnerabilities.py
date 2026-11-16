@@ -162,13 +162,22 @@ class Vulnerabilities(unittest.TestCase):
             self.assertIsNone(out["transformedResponse"][k])
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
 
-    def test_overdue_finding_survives_too_many_unrated_records(self):
+    def test_overdue_finding_with_zero_sibling_is_unevaluated_when_too_many_unrated(self):
         nosev = rec(DEV_B, "CVE-2026-1002", "High", 1)
         del nosev["vulnerabilitySeverityLevel"]
         lows = [rec(DEV_B, "CVE-2026-50%02d" % n, "Low", 1) for n in range(5)]
-        out = self.run_t(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), nosev] + lows))  # 1 of 7 unrated
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), nosev] + lows))  # 1 of 7, openHigh 0
+
+    def test_unrated_criticals_hide_behind_overdue_high_is_unevaluated(self):
+        hidden = [rec(DEV_B, "CVE-2026-60%02d" % n, "None", 60) for n in range(9)]
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "High", 40)] + hidden))  # openCritical 0, 9 of 10
+
+    def test_all_counts_nonzero_survive_too_many_unrated_as_lower_bounds(self):
+        hidden = [rec(DEV_B, "CVE-2026-70%02d" % n, "None", 60) for n in range(2)]
+        out = self.run_t(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), rec(DEV_A, "CVE-2026-1002", "High", 40)] + hidden))
         got = out["transformedResponse"]
-        self.assertEqual(got["overdueCriticalHighVulnerabilitiesCount"], 1)
+        for k in KEYS:
+            self.assertGreater(got[k], 0)
         self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
         self.assertIn("lower bounds", " ".join(out["additionalInfo"]["evaluation"]["failReasons"]))
 
