@@ -5,8 +5,9 @@ installed agent, servers included); configured = agents enforcing protection: mi
 does not block) with a non-empty activeProtection list. The pass bar lives in the requirement. Only agents whose
 lastActiveDate is within 15 days of the newest one in the response are judged (endpoint rules 2026-09-29); the rest
 are reported as staleAgentCount, and a fleet with no agent inside the window is not evaluated. Not evaluated (dataCollection error, no value) when no agent
-is returned or when the agent list is a truncated page (pagination.totalItems larger than the agents returned, or a
-nextCursor still present): a percentage of a sample is not the fleet's.
+is returned, or when the read is not a complete agent list (an error body, text that is not valid JSON such as a body
+cut off in transit, no pagination block, a nextCursor still present, or fewer agents than pagination.totalItems):
+a percentage of a sample is not the fleet's.
 """
 import json
 from datetime import datetime, timedelta
@@ -40,7 +41,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
-    if validation is None:
+    if not isinstance(validation, dict):
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
     transform_err_list = transformation_errors or []
@@ -76,6 +77,68 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
         },
     }
 
+
+def find_agent_list(obj):
+    """(agents, pagination, error) from the getEndpoints response, whatever wrapper Token-Service hands over."""
+    cur = obj
+    for depth in range(6):
+        if isinstance(cur, bytes):
+            cur = cur.decode("utf-8", "replace")
+        if isinstance(cur, str):
+            try:
+                cur = json.loads(cur)
+            except Exception:
+                # A body cut off in transit arrives as text that stops mid-JSON (IS, Nov 2026).
+                return None, None, ("The SentinelOne agent list is not valid JSON (" + str(len(cur))
+                                    + " characters; it may have been cut off in transit), so it cannot be read.")
+        if isinstance(cur, list):
+            return cur, None, None
+        if not isinstance(cur, dict):
+            return None, None, None
+        if cur.get("errors") or cur.get("error") is True:
+            detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
+            return None, None, "SentinelOne returned an error instead of an agent list: " + json.dumps(detail)[:300]
+        if isinstance(cur.get("data"), list):
+            pagination = cur.get("pagination")
+            return cur["data"], (pagination if isinstance(pagination, dict) else None), None
+        nxt = None
+        for key in ["result", "response", "apiResponse", "api_response", "Output", "data"]:
+            if isinstance(cur.get(key), (dict, list, str)):
+                nxt = cur.get(key)
+                break
+        if nxt is None:
+            return None, None, None
+        cur = nxt
+    return None, None, None
+
+
+def complete_agent_read(raw):
+    """(agents, None) for a complete GET /agents read, else (None, problem).
+
+    Complete means: an agent list with SentinelOne's pagination block, a numeric totalItems, no
+    nextCursor left (every page read), no IS `truncated` marker (maxPages stopped the pager), and
+    at least totalItems agents. Anything else is a partial or unreadable read and is not scored.
+    """
+    agents, pagination, error = find_agent_list(raw)
+    if error is not None:
+        return None, error
+    if agents is None:
+        return None, "No SentinelOne agent list in the response; nothing to evaluate."
+    if pagination is None:
+        return None, "The agent list carries no pagination block, so a complete read cannot be shown."
+    total = pagination.get("totalItems")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        return None, "pagination.totalItems is missing, so a complete read cannot be shown."
+    agents = [a for a in agents if isinstance(a, dict)]
+    if pagination.get("truncated"):
+        return None, ("Read stopped at the page limit (" + str(len(agents)) + " of " + str(total)
+                      + " agents); a partial read is not scored.")
+    if str(pagination.get("nextCursor") or "").strip() not in ("", "None", "null"):
+        return None, ("Only the first page was read (" + str(len(agents)) + " of " + str(total)
+                      + " agents; more pages remain); a partial read is not scored.")
+    if len(agents) < total:
+        return None, "Read " + str(len(agents)) + " of " + str(total) + " agents; a partial read is not scored."
+    return agents, None
 
 ACTIVE_WINDOW_DAYS = 15
 
@@ -116,46 +179,27 @@ def fresh_agents(agents):
 
 
 def transform(input):
-    # New input format: TS hands {"data": <raw response>, "validation": ...} to a transform that reads
-    # input.get("data"), so pagination.totalItems and nextCursor stay visible. The legacy format drills
-    # into the bare agent list and would hide a truncated page.
-    if isinstance(input, dict) and "validation" in input:
-        data, validation = extract_input(input.get("data"))[0], input["validation"]
-    else:
-        data, validation = extract_input(input)
-
-    # Token-Service preprocessing may unwrap to a bare list of agents (when API
-    # response's `data` field is a list) or leave a dict containing `data`/`pagination`.
-    next_cursor = None
-    if isinstance(data, list):
-        agents = data
-        total_items = len(agents)
-    elif isinstance(data, dict):
-        agents = data.get("data") or []
-        if not isinstance(agents, list):
-            agents = []
-        pagination = data.get("pagination") or {}
-        if not isinstance(pagination, dict):
-            pagination = {}
-        total_items = pagination.get("totalItems") or len(agents)
-        next_cursor = pagination.get("nextCursor")
-    else:
-        agents = []
-        total_items = 0
-    total_items = int(total_items) if total_items else 0
-
+    # Read the undrilled response (input.get("data") makes Token-Service pass it whole), so the
+    # pagination block is visible: an error body, unreadable text or a partial read is not scored.
+    envelope = isinstance(input, dict) and "validation" in input
+    raw = input.get("data") if envelope else input
+    validation = input.get("validation") if envelope else None
+    agents, problem = complete_agent_read(raw)
+    if problem is not None:
+        return create_response(
+            result={"isEPPConfigured": None},
+            validation=validation,
+            fail_reasons=[problem],
+            api_errors=[problem],
+            metadata={"transformationId": "isEPPConfigured", "vendor": "SentinelOne", "category": "epp"},
+        )
+    total_items = len(agents)
+    agents, stale_count = fresh_agents(agents)
     sampled = len(agents)
-    truncated = total_items > sampled or str(next_cursor).strip() not in ("", "None", "null")
-    stale_count = 0
-    if not truncated:
-        agents, stale_count = fresh_agents(agents)
-        sampled = len(agents)
 
-    # No agents, or a truncated page: not evaluated (no value), never a percentage of a sample
-    if sampled == 0 or truncated:
+    # An empty judged fleet proves nothing either way: Unevaluated with the reason, never 0%.
+    if sampled == 0:
         reason = (
-            f"Agent list is truncated: {sampled} of {total_items} agents returned; configuration not evaluated on a sample"
-            if sampled and truncated else
             f"All {stale_count} SentinelOne agents last checked in more than {ACTIVE_WINDOW_DAYS} days ago; there is nothing to measure"
             if stale_count else "No SentinelOne agents were returned; there is nothing to measure"
         )
@@ -163,8 +207,7 @@ def transform(input):
             result={
                 "isEPPConfigured": None,
                 "totalAgents": total_items,
-                "sampledAgents": sampled,
-            "staleAgentCount": stale_count,
+                "sampledAgents": 0,
                 "staleAgentCount": stale_count,
                 "protectModeCount": 0,
                 "detectModeCount": 0,
@@ -173,11 +216,8 @@ def transform(input):
             validation=validation,
             api_errors=[reason],
             fail_reasons=[reason],
-            recommendations=[
-                "Add pagination to the SentinelOne agents method so every agent is read"
-                if sampled else "Deploy SentinelOne agents to endpoints and confirm the siteId setting"
-            ],
-            input_summary={"totalAgents": total_items, "sampledAgents": sampled},
+            recommendations=["Deploy SentinelOne agents to endpoints and confirm the siteId setting"],
+            input_summary={"totalAgents": total_items, "sampledAgents": 0},
             metadata={
                 "transformationId": "isEPPConfigured",
                 "vendor": "SentinelOne",
