@@ -133,9 +133,18 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        policies = data.get('policies', [])
+        policies = data.get("policies") if isinstance(data, dict) else None
+        if isinstance(policies, dict):
+            policies = [policies]
         if not isinstance(policies, list):
-            policies = [policies] if policies else []
+            # Missing or non-list: an error body or a failed read, not evidence of a missing control.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Could not read anti-phishing policies"],
+                fail_reasons=["Anti-phishing policies were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+            )
 
         # Find policies that meet all required settings
         matching_policies = [

@@ -132,7 +132,16 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        transport_rules = data.get("transportRules", [])
+        transport_rules = data.get("transportRules") if isinstance(data, dict) else None
+        if not isinstance(transport_rules, list):
+            # Missing or non-list: an error body or a failed read, not evidence of a missing control.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Could not read transport rules"],
+                fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+            )
         banner_rules = []
 
         for rule in transport_rules:
