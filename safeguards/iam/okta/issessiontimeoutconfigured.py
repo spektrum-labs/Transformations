@@ -45,7 +45,7 @@ def transform(input):
       * App sign-on (Identity Engine): ACTIVE app authentication policies (_embedded.resourceType APP or absent),
         their ACTIVE ALLOW rules, each rule's verificationMethod.reauthenticateIn. The largest is the app bound.
       * ASSURANCE rules whose constraints carry their own reauthenticateIn are read per constraint (see
-        reauthenticate_in): shortest over a constraint's required factor kinds, longest over constraints.
+        reauthenticate_in): shortest over a constraint's factor kinds under 2FA (longest under 1FA), longest over constraints.
       * Decision pending Josh's sign-off: the value is the re-authentication interval (the worst case of
         min(global lifetime, app interval)), not the idle timeout (maxSessionIdleMinutes), which is only reported.
       * A user on app A must authenticate again at min(global lifetime, A's re-authentication interval), so the
@@ -249,22 +249,23 @@ def reauthenticate_in(method):
     rule_level = duration_minutes(method.get("reauthenticateIn")) if "reauthenticateIn" in method else None
     constraints = method.get("constraints")
     if text(method.get("type")).upper() == "ASSURANCE" and isinstance(constraints, list) and constraints:
+        two_factor = text(method.get("factorMode")).upper() == "2FA"
         worst = None
         for constraint in constraints:
-            shortest = None
+            values = []
             for kind in ("knowledge", "possession"):
                 factor = as_dict(constraint).get(kind)
-                if not isinstance(factor, dict) or text(factor.get("required")).lower() == "false":
+                if not isinstance(factor, dict):
                     continue
                 own = factor.get("reauthenticateIn")
-                value = rule_level if own is None else duration_minutes(own)
-                if value is None:
-                    return None
-                shortest = value if shortest is None else min(shortest, value)
-            if shortest is not None:
-                worst = shortest if worst is None else max(worst, shortest)
-        if worst is not None:
-            return worst
+                values.append(rule_level if own is None else duration_minutes(own))
+            if not values:
+                values = [rule_level]
+            if None in values:
+                return None
+            value = min(values) if two_factor else max(values)
+            worst = value if worst is None else max(worst, value)
+        return worst
     if "reauthenticateIn" in method:
         return rule_level
     chains = method.get("chains")
