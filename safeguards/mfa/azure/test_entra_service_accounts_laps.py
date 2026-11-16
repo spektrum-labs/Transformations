@@ -223,12 +223,45 @@ def test_location_exempt_block_counts_as_blocked():
     assert "no location or platform exception" not in svc_reason(out, "recommendations")
 
 
-def test_person_with_old_interactive_and_recent_background_sign_in_is_not_a_service_account():
-    mobile_only = account(HUMAN, interactive=200, background=2)
-    got, out = value(SVC, svc_body([], users=[mobile_only, account(SA1, background=2)]))
-    assert out["additionalInfo"]["transformation"]["inputSummary"]["serviceAccountsBySignInSignal"] == 1
+def test_setup_sign_in_older_than_90_days_with_no_block_is_a_service_account():
+    # signal (a), approved WI-3c option (a): no interactive sign-in in 90 days, non-interactive present
+    setup_only = account(SA1, interactive=300, background=1)
+    got, out = value(SVC, svc_body([], users=[setup_only]))
     assert got is False and "1 of 1 service account(s)" in svc_reason(out, "failReasons")
-    assert value(SVC, svc_body([], users=[mobile_only]))[0] is True
+    assert "in 90 days" in svc_reason(out, "failReasons")
+    blocked = svc_body([ca("Block svc", groups=[G_SVC])], users=[setup_only])
+    assert value(SVC, blocked)[0] is True
+
+
+def test_recent_interactive_sign_in_or_stale_background_is_not_a_service_account():
+    recent_human = account(HUMAN, interactive=30, background=1)
+    stale_background = account(SA1, interactive=300, background=120)
+    got, out = value(SVC, svc_body([], users=[recent_human, stale_background]))
+    assert got is True and "No service account found" in svc_reason(out, "passReasons")
+    assert "no interactive one in 90 days" in svc_reason(out, "passReasons")
+
+
+def test_three_named_exclusions_never_hide_an_unblocked_service_account():
+    users = USERS + [account(BG1), account(BG2), account(BG3)]
+    three = ca("MFA all", all_users=True, block=False, exclude_users=[BG1, BG2, BG3])
+    got, out = value(SVC, svc_body([three], users=users))
+    assert got is False and "2 of 2 service account(s)" in svc_reason(out, "failReasons")
+    assert "more than the 2 expected" in svc_reason(out, "failReasons")
+    blocked = svc_body([ca("Block svc", groups=[G_SVC, G_SVC2]), three], users=users)
+    got, out = value(SVC, blocked)
+    assert got is None and "cannot be told from service accounts" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+@pytest.mark.parametrize("excluded, want", [
+    (["AllTrusted"], True), (["alltrusted"], True), (["named-location-id"], False),
+    (["AllTrusted", "named-location-id"], False)])
+def test_only_alltrusted_is_the_trusted_location_exemption(excluded, want):
+    block = ca("Block svc", all_users=True, exclude_groups=[G_STAFF],
+               locations={"includeLocations": ["All"], "excludeLocations": excluded})
+    got, out = value(SVC, svc_body([block]))
+    assert got is want
+    if want:
+        assert "outside trusted locations" in svc_reason(out, "passReasons")
 
 
 def test_sync_account_role_excluded_from_the_block_is_not_failed():

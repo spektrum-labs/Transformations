@@ -628,14 +628,45 @@ def per_user_mfa(data):
     return ids, seen | ids, ""
 
 
+ALL_CLIENT_TYPES = set(["browser", "mobileappsanddesktopclients", "exchangeactivesync", "other"])
+
+
+def full_block_reach(policy):
+    """True when a block policy stops every sign-in it targets: all apps (none excluded or filtered), all client
+    app types, all platforms, no device filter, authentication flow or insider-risk condition, no risk-only firing,
+    and no named-location include (excluded locations are allowed, as for trusted locations). A narrow block
+    ("block legacy authentication", "block one country") does not stop a modern remote sign-in. Same rule as
+    entra_ca_mfa_coverage.py (the sandbox forces a copy)."""
+    conditions = as_dict(policy.get("conditions"))
+    if "block" not in lowered(as_dict(policy.get("grantControls")).get("builtInControls")) or risk_only(conditions):
+        return False
+    apps = as_dict(conditions.get("applications"))
+    if "all" not in lowered(apps.get("includeApplications")) or present(apps.get("excludeApplications")) \
+            or present(apps.get("applicationFilter")):
+        return False
+    client = set(lowered(conditions.get("clientAppTypes")))
+    if client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client):
+        return False
+    locations = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
+    if locations and "all" not in locations:
+        return False
+    platforms = as_dict(conditions.get("platforms"))
+    include = lowered(platforms.get("includePlatforms"))
+    if (include and "all" not in include) or present(platforms.get("excludePlatforms")):
+        return False
+    if any(present(v) for v in as_dict(conditions.get("devices")).values()):
+        return False
+    return not (present(conditions.get("authenticationFlows")) or present(conditions.get("insiderRiskLevels")))
+
+
 def requires_mfa_reach(policy):
     """For the members-outside rule only: the grant asks for MFA (the built-in "mfa" control or an authentication
-    strength: built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength), or blocks sign-in
-    (an account a block policy covers cannot sign in remotely, so it needs no MFA). Generous on purpose: counting
-    a policy can only remove members from "outside", never add a False."""
+    strength: built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength), or is a full
+    block of every sign-in (full_block_reach: an account it covers cannot sign in remotely, so it needs no MFA).
+    Generous on purpose for MFA grants: counting a policy can only remove members from "outside", never add a
+    False."""
     grant = as_dict(policy.get("grantControls"))
-    controls = lowered(grant.get("builtInControls"))
-    if "mfa" in controls or "block" in controls:
+    if "mfa" in lowered(grant.get("builtInControls")) or full_block_reach(policy):
         return True
     strength = grant.get("authenticationStrength")
     return isinstance(strength, dict) and bool(strength)
