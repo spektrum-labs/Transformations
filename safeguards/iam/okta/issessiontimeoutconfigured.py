@@ -8,8 +8,9 @@
 # Docs: https://developer.okta.com/docs/api/openapi/okta-management/management/tag/Policy/
 #   listPolicies, listPolicyRules (apiToken, or OAuth scope okta.policies.read; GA). Rule schemas:
 #   OktaSignOnPolicyRule.actions.signon.{access, session.{maxSessionIdleMinutes, maxSessionLifetimeMinutes}}.
+#     maxSessionIdleMinutes: the minutes of inactivity after which the session ends (0 or absent: no idle limit).
 #     maxSessionLifetimeMinutes: "Maximum number of minutes (from when the user signs in) that a user's session is
-#     active ... Disable by setting to 0" (default 0, i.e. no maximum lifetime).
+#     active ... Disable by setting to 0" (default 0, i.e. no maximum lifetime). Reported as evidence only.
 #   AccessPolicyRule.actions.appSignOn.verificationMethod.reauthenticateIn (ASSURANCE and AUTH_METHOD_CHAIN): an
 #     ISO 8601 duration after which the user must authenticate again to reach the app, "regardless of user
 #     activity". "PT0S" is every sign-in; "PT43800H" is Okta's value for "once per session" (no app-level limit).
@@ -27,54 +28,44 @@ KEY = "isSessionTimeoutConfigured"
 DEFAULT_PAGE_SIZE = 20
 LIMIT_PAGE_SIZE = 200
 PAGE_SIZES = (DEFAULT_PAGE_SIZE, LIMIT_PAGE_SIZE)
-# Reported when nothing bounds a session: 43,800 hours, the value Okta itself writes for "once per session"
-# (reauthenticateIn PT43800H). No Okta session or re-authentication setting is longer, so every numeric threshold
-# reads it as Failed, where a string such as "unlimited" made Token-Service answer "could not be evaluated".
+# Reported when a session has no idle limit: 43,800 hours, the value Okta itself writes for "once per session"
+# (reauthenticateIn PT43800H). No Okta session setting is longer, so every numeric threshold reads it as Failed,
+# where a string such as "unlimited" made Token-Service answer "could not be evaluated".
 NO_LIMIT_MINUTES = 43800 * 60
 
 
 def transform(input):
     """
-    isSessionTimeoutConfigured - the longest time, in minutes, an Okta user can keep using an app before Okta makes
-    them authenticate again. The requirement's threshold decides (for example lessThan 10080 = at most 7 days).
+    isSessionTimeoutConfigured - the longest time, in minutes, an Okta session may sit idle before Okta ends it
+    (Josh's decision 2026-11-16: the IDLE timeout is graded). The requirement's threshold decides (for example
+    lessThan 480).
 
-    How the number is derived (worst case over every path a user can land on):
-      * Global session: ACTIVE global session (OKTA_SIGN_ON) policies, their ACTIVE rules whose action is ALLOW (a
-        DENY rule starts no session), each rule's actions.signon.session.maxSessionLifetimeMinutes. 0 means Okta
-        enforces no maximum lifetime. The largest is the global bound.
-      * App sign-on (Identity Engine): ACTIVE app authentication policies (_embedded.resourceType APP or absent),
-        their ACTIVE ALLOW rules, each rule's verificationMethod.reauthenticateIn. The largest is the app bound.
-      * ASSURANCE rules whose constraints carry their own reauthenticateIn are read per constraint (see
-        reauthenticate_in): shortest over a constraint's factor kinds under 2FA (longest under 1FA), longest over constraints.
-      * Decision pending Josh's sign-off: the value is the re-authentication interval (the worst case of
-        min(global lifetime, app interval)), not the idle timeout (maxSessionIdleMinutes), which is only reported.
-      * A user on app A must authenticate again at min(global lifetime, A's re-authentication interval), so the
-        worst case is min(global bound, app bound). Classic Engine has no app authentication policies; the global
-        bound alone is reported.
-      * Nothing bounds the session (no maximum lifetime and no app re-authentication interval, or "once per
-        session"): NO_LIMIT_MINUTES (43,800 hours), which fails every numeric threshold. sessionLifetimeUnlimited
-        says so. Never 0, false or a string, which Token-Service reads as a pass or cannot compare.
-      * maxSessionIdleMinutes (largest global idle timeout among the same rules) is reported beside the value. It
-        ends an idle session only; an active session is bounded by the lifetime and re-authentication above, so it
-        is not the value.
-    Rule and policy reachability (group assignment, priority shadowing, app mapping) is not read, so a shadowed rule
-    still counts.
+    Value: the largest maxSessionIdleMinutes over the ACTIVE global session (OKTA_SIGN_ON) policies' ACTIVE rules
+    whose action is ALLOW (a DENY rule starts no session; inactive rules and policies are ignored). A rule whose
+    idle timeout is 0 or missing has no idle limit and counts as NO_LIMIT_MINUTES (43,800 hours), so it fails every
+    numeric threshold. Never 0, false or a string, which Token-Service reads as a pass or cannot compare.
+    Rule and policy reachability (group assignment, priority shadowing) is not read, so a shadowed rule still counts.
 
-    Output: isSessionTimeoutConfigured (minutes), maxSessionLifetimeMinutes (None when unlimited),
-    sessionLifetimeUnlimited, appReauthenticateMinutes, maxSessionIdleMinutes, allowRuleCount, appAllowRuleCount,
-    policiesJudged, appPoliciesJudged.
+    Evidence, reported in additionalInfo and never graded:
+      * maxSessionLifetimeMinutes / sessionLifetimeUnlimited: the longest global session lifetime (0 = no maximum);
+      * appReauthenticateMinutes: the longest app re-authentication interval (Identity Engine ACTIVE app
+        authentication policies, their ACTIVE ALLOW rules, verificationMethod.reauthenticateIn; see
+        reauthenticate_in). None when no app policy is readable or none bounds it. An unreadable authentication
+        policy list does not stop the idle grade; it only leaves this evidence empty.
+
+    Output: isSessionTimeoutConfigured (minutes), maxSessionIdleMinutes (None when any rule has no idle limit),
+    sessionIdleUnlimited, plus the evidence above, allowRuleCount, appAllowRuleCount, policiesJudged,
+    appPoliciesJudged.
 
     Unevaluated (value None, dataCollection status "error") on: an error body, missing policy or rule lists, rule
     lists that do not line up with the policies, no active global session policy, no active ALLOW rule, an ALLOW
-    rule without session settings, a lifetime that is not a whole number of minutes, or an app ALLOW rule whose
-    reauthenticateIn is missing or unreadable. Identity Engine (global session rules carry primaryFactor) also needs
-    a readable authentication policy list. Also on a list that may be incomplete:
-      * the global session policy list has no Default Policy (system: true), or the authentication policy list
-        (Identity Engine) has no system policy. Okta always returns them, so the list was cut short;
-      * the Default Policy's rule list has no Default Rule, or an active app policy's rule list has no system
-        Catch-all Rule. Both are always last, so the rule list was cut short;
-      * an active policy returned no rules, or exactly a page of rules (a length in PAGE_SIZES), which cannot be
-        told apart from a first page cut short.
+    rule without session settings, or an idle timeout that is not a whole number of minutes. Also on a global
+    session list that may be incomplete:
+      * the policy list has no Default Policy (system: true), or exactly a page of policies (a length in
+        PAGE_SIZES). Okta always returns the Default Policy, so the list was cut short;
+      * the Default Policy's rule list has no Default Rule (always last), so the rule list was cut short;
+      * an active policy returned no rules, or exactly a page of rules, which cannot be told apart from a first
+        page cut short.
     Custom global session policies are judged on the rules they return: Okta gives them no Default Rule, and a user
     who matches none of them falls through to a later policy, ending at the Default Policy, whose rules are always
     judged.
@@ -91,15 +82,14 @@ def transform(input):
     value = state["value"]
     summary = state["inputSummary"]
     if value == NO_LIMIT_MINUTES:
-        fails = ["Okta sessions have no time limit: " + state["why"] + "; reported as " + str(NO_LIMIT_MINUTES)
+        fails = ["Okta sessions have no idle limit: " + state["why"] + "; reported as " + str(NO_LIMIT_MINUTES)
                  + " minutes (43,800 hours, Okta's 'once per session'), which no session threshold accepts"]
         for policy_name, rule_name in state["where"][:10]:
-            fails.append("Okta policy: '" + policy_name + "' rule '" + rule_name + "' sets no time limit")
+            fails.append("Okta policy: '" + policy_name + "' rule '" + rule_name + "' sets no idle timeout")
         return respond(value, summary, [], fails,
-                       ["Set a maximum Okta global session lifetime on every active ALLOW rule of every active global "
-                        "session policy, or a re-authentication interval on every active ALLOW rule of every app "
-                        "authentication policy"])
-    passes = ["Okta sessions: users must authenticate again within " + str(value) + " minutes (" + state["why"] + ")"]
+                       ["Set a maximum session idle time (maxSessionIdleMinutes above 0) on every active ALLOW rule "
+                        "of every active global session policy"])
+    passes = ["Okta sessions: an idle session ends within " + str(value) + " minutes (" + state["why"] + ")"]
     return respond(value, summary, passes, [], [])
 
 
@@ -300,8 +290,9 @@ def identity_engine(signon_pairs):
 
 
 def global_bound(state, signon_pairs):
-    """Worst global session lifetime over active ALLOW rules: (minutes or None for no maximum, where, idles,
-    rule count, policies judged); sets state["error"] and returns None when it cannot be read."""
+    """Over active ALLOW rules of active global session policies: (idle minutes, rules with no idle limit, lifetime
+    evidence (minutes or None when a rule has none, readable lifetimes), rule count, policies judged); sets
+    state["error"] and returns None when it cannot be read."""
     problem = incomplete(signon_pairs, "Okta global session (OKTA_SIGN_ON) policies", "Default Rule")
     if problem is not None:
         state["error"] = problem
@@ -310,8 +301,8 @@ def global_bound(state, signon_pairs):
     if not judged:
         state["error"] = "Okta global session policies: no active global session (OKTA_SIGN_ON) policy was returned"
         return None
-    lifetimes = []
     idles = []
+    lifetimes = []
     for policy, rules in judged:
         for rule in rules:
             if not active(rule):
@@ -325,25 +316,26 @@ def global_bound(state, signon_pairs):
                 state["error"] = ("Okta session policy: '" + label[0] + "' ALLOW rule '" + label[1] + "' carries no "
                                   "session settings")
                 return None
-            lifetime = minutes(session.get("maxSessionLifetimeMinutes"))
-            if lifetime is None:
-                state["error"] = ("Okta session policy: '" + label[0] + "' ALLOW rule '" + label[1] + "' has a "
-                                  "session lifetime that is not a whole number of minutes: "
-                                  + text(session.get("maxSessionLifetimeMinutes"))[:40])
+            raw = session.get("maxSessionIdleMinutes")
+            idle = 0 if text(raw) == "" else minutes(raw)
+            if idle is None:
+                state["error"] = ("Okta session policy: '" + label[0] + "' ALLOW rule '" + label[1] + "' has an "
+                                  "idle timeout that is not a whole number of minutes: " + text(raw)[:40])
                 return None
-            idle = minutes(session.get("maxSessionIdleMinutes"))
-            if idle is not None:
-                idles.append(idle)
-            lifetimes.append((lifetime, label))
-    if not lifetimes:
+            idles.append((idle, label))
+            lifetime = minutes(session.get("maxSessionLifetimeMinutes"))
+            if lifetime is not None:
+                lifetimes.append(lifetime)
+    if not idles:
         state["error"] = ("Okta global session policies: no active ALLOW rule in the active policies; no session is "
                           "started to measure")
         return None
-    unlimited = [label for (value, label) in lifetimes if value == 0]
+    unlimited = [label for (value, label) in idles if value == 0]
+    lifetime = None if 0 in lifetimes else (max(lifetimes) if lifetimes else None)
     if unlimited:
-        return None, unlimited, idles, len(lifetimes), len(judged)
-    worst = max([value for (value, label) in lifetimes])
-    return worst, [label for (value, label) in lifetimes if value == worst], idles, len(lifetimes), len(judged)
+        return None, unlimited, lifetime, len(idles), len(judged)
+    worst = max([value for (value, label) in idles])
+    return worst, [label for (value, label) in idles if value == worst], lifetime, len(idles), len(judged)
 
 
 def app_bound(state, access_pairs):
@@ -395,37 +387,24 @@ def evaluate(raw):
     access_pairs, access_problem = pair(data.get("accessPolicies"), data.get("accessRules"),
                                         "Okta authentication (ACCESS_POLICY)")
     engine = "Identity Engine" if identity_engine(signon_pairs) else "Classic Engine"
-    if access_problem is not None:
-        if engine == "Identity Engine":
-            state["error"] = (access_problem + "; under Identity Engine those policies set when users must "
-                              "authenticate again, so the longest session cannot be read")
-            return state
-        access_pairs = []
     found = global_bound(state, signon_pairs)
     if found is None:
         return state
-    lifetime, lifetime_where, idles, allow_rules, policies = found
-    found = app_bound(state, access_pairs)
-    if found is None:
-        return state
-    reauth, reauth_where, app_rules, app_policies = found
-    if engine == "Identity Engine" and app_policies == 0:
-        state["error"] = ("Okta authentication (ACCESS_POLICY) policies: no active app authentication policy was "
-                          "returned for an Identity Engine org, so the app re-authentication interval cannot be read")
-        return state
-    if lifetime is not None and (reauth is None or lifetime <= reauth):
-        value, where = lifetime, lifetime_where
-        why = "the longest global session lifetime is " + str(lifetime) + " minutes"
-    elif reauth is not None and reauth < NO_LIMIT_MINUTES:
-        value, where = reauth, reauth_where
-        why = ("the longest app re-authentication interval is " + str(reauth) + " minutes"
-               + ("; the global session has no maximum lifetime" if lifetime is None else ""))
+    idle, idle_where, lifetime, allow_rules, policies = found
+    # evidence only: an unreadable authentication policy list leaves it empty and never blocks the idle grade
+    reauth, app_rules, app_policies = None, 0, 0
+    if access_problem is None:
+        found = app_bound(state, access_pairs)
+        if found is None:
+            state["error"] = None
+        else:
+            reauth, app_rules, app_policies = found[0], found[2], found[3]
+    if idle is not None:
+        value, where = idle, idle_where
+        why = "the longest global session idle timeout is " + str(idle) + " minutes"
     else:
-        value = NO_LIMIT_MINUTES
-        where = lifetime_where + reauth_where
-        why = "the global session has no maximum lifetime (maxSessionLifetimeMinutes 0)" + (
-            " and an app authentication rule re-authenticates only once per session" if reauth is not None
-            else (" and no app authentication policy sets a re-authentication interval"))
+        value, where = NO_LIMIT_MINUTES, idle_where
+        why = "a global session ALLOW rule has no idle timeout (maxSessionIdleMinutes 0 or missing)"
     state["value"] = value
     state["why"] = why
     state["where"] = where
@@ -438,7 +417,8 @@ def evaluate(raw):
         "maxSessionLifetimeMinutes": lifetime,
         "sessionLifetimeUnlimited": lifetime is None,
         "appReauthenticateMinutes": reauth,
-        "maxSessionIdleMinutes": max(idles) if idles else None,
+        "maxSessionIdleMinutes": idle,
+        "sessionIdleUnlimited": idle is None,
     }
     return state
 
@@ -452,7 +432,7 @@ def metadata():
 def respond(value, summary, passes, fails, recommendations):
     result = {KEY: value}
     for field in ["maxSessionLifetimeMinutes", "sessionLifetimeUnlimited", "appReauthenticateMinutes",
-                  "maxSessionIdleMinutes", "allowRuleCount", "appAllowRuleCount", "policiesJudged",
+                  "maxSessionIdleMinutes", "sessionIdleUnlimited", "allowRuleCount", "appAllowRuleCount", "policiesJudged",
                   "appPoliciesJudged"]:
         result[field] = summary.get(field)
     return {
@@ -470,7 +450,7 @@ def respond(value, summary, passes, fails, recommendations):
 
 def unevaluated(reason, errors):
     return {
-        "transformedResponse": {KEY: None, "maxSessionLifetimeMinutes": None},
+        "transformedResponse": {KEY: None, "maxSessionIdleMinutes": None},
         "additionalInfo": {
             "dataCollection": {"status": "error", "errors": [reason]},
             "validation": {"status": "error" if errors else "unknown", "errors": [], "warnings": []},

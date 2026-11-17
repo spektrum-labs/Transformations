@@ -17,15 +17,13 @@ PATH = Path(__file__).with_name("issessiontimeoutconfigured.py")
 FIXTURES = Path(__file__).with_name("fixtures")
 KEY = "isSessionTimeoutConfigured"
 
-
 def load():
     spec = importlib.util.spec_from_file_location("issessiontimeoutconfigured", PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
-
-def rule(name, lifetime, idle="120", access="ALLOW", status="ACTIVE", system="False", priority="1"):
+def rule(name, idle, lifetime="0", access="ALLOW", status="ACTIVE", system="False", priority="1"):
     return {"id": "rul-" + name.lower().replace(" ", "-"), "name": name, "status": status, "system": system,
             "priority": priority, "type": "SIGN_ON",
             "conditions": {"people": {"users": {"exclude": []}}, "network": {"connection": "ANYWHERE"}},
@@ -34,11 +32,9 @@ def rule(name, lifetime, idle="120", access="ALLOW", status="ACTIVE", system="Fa
                                    "session": {"usePersistentCookie": "False", "maxSessionIdleMinutes": idle,
                                                "maxSessionLifetimeMinutes": lifetime}}}}
 
-
 def app_policy(pid, name, system="False", kind="APP", status="ACTIVE"):
     return {"id": pid, "name": name, "status": status, "system": system, "type": "ACCESS_POLICY",
             "_embedded": {"resourceType": kind}}
-
 
 def app_rule(name, reauth, access="ALLOW", status="ACTIVE", system="False", method_type="ASSURANCE"):
     method = {"type": method_type, "factorMode": "2FA", "reauthenticateIn": reauth}
@@ -47,15 +43,14 @@ def app_rule(name, reauth, access="ALLOW", status="ACTIVE", system="False", meth
     return {"id": "rul-" + name.lower().replace(" ", "-"), "name": name, "status": status, "system": system,
             "type": "ACCESS_POLICY", "actions": {"appSignOn": {"access": access, "verificationMethod": method}}}
 
-
 REAL = {"result": {
     "signOnPolicies": [
         {"id": "pol-1", "name": "Passwordless Policy", "status": "ACTIVE", "system": "False", "priority": "1"},
         {"id": "pol-2", "name": "Default Policy", "status": "ACTIVE", "system": "True", "priority": "2"},
     ],
     "signOnRules": [
-        [rule("Passwordless", "240"), rule("Contractors", "480", priority="2")],
-        [rule("Default Rule", "0", system="True")],
+        [rule("Passwordless", "60", "240"), rule("Contractors", "120", "480", priority="2")],
+        [rule("Default Rule", "120", "0", system="True")],
     ],
     "accessPolicies": [
         app_policy("rst-1", "Admin Console"),
@@ -71,7 +66,6 @@ REAL = {"result": {
     ],
 }}
 
-
 def classic(data):
     """The same global session rules as a Classic Engine org: no primaryFactor and no authentication policies."""
     data = copy.deepcopy(data)
@@ -82,10 +76,8 @@ def classic(data):
     data["result"]["accessRules"] = []
     return data
 
-
 NO_LIMIT = 43800 * 60
 CLASSIC = classic(REAL)
-
 
 def ts_less_than(value, threshold):
     """Token-Service Conditions.lessThan: int(float(value)) <= int(float(threshold)); any exception is False."""
@@ -93,7 +85,6 @@ def ts_less_than(value, threshold):
         return int(float(value)) <= int(float(threshold))
     except Exception:
         return False
-
 
 class SessionTimeoutTests(unittest.TestCase):
     @classmethod
@@ -112,51 +103,96 @@ class SessionTimeoutTests(unittest.TestCase):
         self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "error", payload)
         self.assertTrue(full["additionalInfo"]["dataCollection"]["errors"], payload)
 
+    def assert_idle_graded_app_evidence_empty(self, data, value=120):
+        """The idle grade stands while the app re-authentication evidence is unreadable (it is never graded)."""
+        full = self.full(data)
+        self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success", data)
+        self.assertEqual(full["transformedResponse"][KEY], value, data)
+        self.assertIsNone(full["transformedResponse"]["appReauthenticateMinutes"], data)
+
+    def set_idle(self, data, policy, index, value):
+        data["result"]["signOnRules"][policy][index]["actions"]["signon"]["session"]["maxSessionIdleMinutes"] = value
+
     def set_lifetime(self, data, policy, index, value):
         data["result"]["signOnRules"][policy][index]["actions"]["signon"]["session"]["maxSessionLifetimeMinutes"] = value
 
-    # Identity Engine: the app authentication policies bound what the global session leaves unlimited.
+    # Identity Engine: the idle timeout is graded; the app re-authentication interval is evidence beside it.
 
-    def test_real_shape_unlimited_global_session_is_bounded_by_app_reauthentication(self):
+    def test_real_shape_grades_the_largest_idle_timeout_and_reports_reauthentication_beside_it(self):
         full = self.full(REAL)
         out = full["transformedResponse"]
         self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
-        self.assertEqual(out[KEY], 720)
-        self.assertTrue(out["sessionLifetimeUnlimited"])
-        self.assertIsNone(out["maxSessionLifetimeMinutes"])
-        self.assertEqual(out["appReauthenticateMinutes"], 720)
+        self.assertEqual(out[KEY], 120)
         self.assertEqual(out["maxSessionIdleMinutes"], 120)
+        self.assertFalse(out["sessionIdleUnlimited"])
+        self.assertTrue(out["sessionLifetimeUnlimited"])  # evidence: the Default Rule has no maximum lifetime
+        self.assertIsNone(out["maxSessionLifetimeMinutes"])
+        self.assertEqual(out["appReauthenticateMinutes"], 720)  # evidence, not graded
         self.assertEqual(out["appPoliciesJudged"], 3)  # the account management policy is not app sign-in
         self.assertEqual(out["appAllowRuleCount"], 4)
-        self.assertTrue(ts_less_than(out[KEY], "1440"))
-        self.assertFalse(ts_less_than(out[KEY], "480"))
-        self.assertIn("app re-authentication interval is 720 minutes",
-                      full["additionalInfo"]["evaluation"]["passReasons"][0])
+        self.assertTrue(ts_less_than(out[KEY], "480"))
+        self.assertFalse(ts_less_than(out[KEY], "60"))
+        self.assertIn("idle timeout is 120 minutes", full["additionalInfo"]["evaluation"]["passReasons"][0])
 
-    def test_flipped_once_per_session_app_rule_with_unlimited_global_session_fails_every_threshold(self):
+    def test_idle_zero_missing_or_blank_is_no_limit_and_fails_every_threshold(self):
+        for idle in ("0", 0, None, ""):
+            data = copy.deepcopy(REAL)
+            self.set_idle(data, 0, 1, idle)
+            full = self.full(data)
+            out = full["transformedResponse"]
+            self.assertEqual(out[KEY], NO_LIMIT, idle)
+            self.assertIsNone(out["maxSessionIdleMinutes"])
+            self.assertTrue(out["sessionIdleUnlimited"])
+            self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
+            for threshold in ["480", "1440", "10080", "129600"]:
+                self.assertFalse(ts_less_than(out[KEY], threshold), (idle, threshold))
+            reasons = " ".join(full["additionalInfo"]["evaluation"]["failReasons"])
+            self.assertIn("Okta policy: 'Passwordless Policy' rule 'Contractors' sets no idle timeout", reasons)
         data = copy.deepcopy(REAL)
-        data["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"]["reauthenticateIn"] = "PT43800H"
-        full = self.full(data)
-        out = full["transformedResponse"]
-        self.assertEqual(out[KEY], NO_LIMIT)
-        self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
-        for threshold in ["480", "1440", "10080", "129600"]:
-            self.assertFalse(ts_less_than(out[KEY], threshold), threshold)
-        self.assertIn("once per session", " ".join(full["additionalInfo"]["evaluation"]["failReasons"]))
-        self.assertTrue(full["additionalInfo"]["evaluation"]["recommendations"])
+        del data["result"]["signOnRules"][0][1]["actions"]["signon"]["session"]["maxSessionIdleMinutes"]
+        self.assertEqual(self.out(data)[KEY], NO_LIMIT)  # key absent
 
-    def test_bounded_global_session_shorter_than_app_interval_decides(self):
+    def test_mixed_rules_grade_the_largest_idle_and_one_unlimited_rule_decides(self):
         data = copy.deepcopy(REAL)
-        self.set_lifetime(data, 1, 0, "240")
+        self.set_idle(data, 0, 0, "30")
+        self.set_idle(data, 0, 1, "90")
+        self.set_idle(data, 1, 0, "45")
         out = self.out(data)
-        self.assertEqual(out[KEY], 480)
-        self.assertEqual(out["maxSessionLifetimeMinutes"], 480)
-        self.assertFalse(out["sessionLifetimeUnlimited"])
+        self.assertEqual(out[KEY], 90)
+        self.assertEqual(out["allowRuleCount"], 3)
+        self.set_idle(data, 1, 0, "0")
+        self.assertEqual(self.out(data)[KEY], NO_LIMIT)
 
-    def test_app_interval_shorter_than_bounded_global_session_decides(self):
+    def test_idle_not_re_authentication_decides_when_the_two_disagree(self):
+        # the decision of 2026-11-16: idle 120 passes lessThan 480 although re-authentication is 720
+        data = copy.deepcopy(REAL)
+        out = self.out(data)
+        self.assertEqual(out["appReauthenticateMinutes"], 720)
+        self.assertTrue(ts_less_than(out[KEY], "480"))
+        data["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"]["reauthenticateIn"] = "PT43800H"
+        out = self.out(data)
+        self.assertEqual(out[KEY], 120)  # a once-per-session app rule no longer changes the grade
+        self.assertEqual(out["appReauthenticateMinutes"], NO_LIMIT)
+
+    def test_lifetime_is_evidence_only(self):
         data = copy.deepcopy(REAL)
         self.set_lifetime(data, 1, 0, "20160")
-        self.assertEqual(self.out(data)[KEY], 720)
+        out = self.out(data)
+        self.assertEqual(out[KEY], 120)
+        self.assertEqual(out["maxSessionLifetimeMinutes"], 20160)
+        self.assertFalse(out["sessionLifetimeUnlimited"])
+        self.set_lifetime(data, 0, 1, "garbage")
+        self.assertEqual(self.out(data)[KEY], 120)  # an unreadable lifetime does not block the idle grade
+
+    def test_inactive_deny_rules_and_inactive_policies_do_not_set_the_idle_timeout(self):
+        data = copy.deepcopy(REAL)
+        data["result"]["signOnRules"][0].append(rule("Denied", "0", access="DENY", priority="3"))
+        data["result"]["signOnRules"][0].append(rule("Old", "0", status="INACTIVE", priority="4"))
+        data["result"]["signOnPolicies"].append({"id": "pol-3", "name": "Retired", "status": "INACTIVE"})
+        data["result"]["signOnRules"].append([rule("Retired rule", "0")])
+        out = self.out(data)
+        self.assertEqual(out[KEY], 120)
+        self.assertEqual(out["allowRuleCount"], 3)
 
     def test_deny_inactive_and_non_app_policies_do_not_set_the_app_interval(self):
         data = copy.deepcopy(REAL)
@@ -164,7 +200,7 @@ class SessionTimeoutTests(unittest.TestCase):
         data["result"]["accessRules"][1].insert(0, app_rule("Old", "PT43800H", status="INACTIVE"))
         data["result"]["accessPolicies"].append(app_policy("rst-5", "Retired", status="INACTIVE"))
         data["result"]["accessRules"].append([app_rule("Catch-all Rule", "PT43800H", system="True")])
-        self.assertEqual(self.out(data)[KEY], 720)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 720)
 
     def constrain(self, data, policy, index, rule_level, **factors):
         """Give an ASSURANCE rule constraints; each factor kwarg is its own reauthenticateIn (None = inherit)."""
@@ -179,14 +215,14 @@ class SessionTimeoutTests(unittest.TestCase):
         data = copy.deepcopy(REAL)
         self.constrain(data, 1, 0, "PT2H", knowledge="PT24H", possession="PT24H")
         out = self.out(data)
-        self.assertEqual(out[KEY], 1440)  # rule-level PT2H would have reported 720 from the other rules
+        self.assertEqual(out["appReauthenticateMinutes"], 1440)  # rule-level PT2H would have reported 720 from the other rules
         self.assertEqual(out["appReauthenticateMinutes"], 1440)
 
     def test_constraint_interval_overrides_the_rule_level_value_downward(self):
         data = copy.deepcopy(REAL)
         self.constrain(data, 0, 1, "PT12H", possession="PT1H")
         self.constrain(data, 2, 0, "PT12H", knowledge="PT1H", possession=None)
-        self.assertEqual(self.out(data)[KEY], 120)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 120)
 
     def method_of(self, data):
         """The one verificationMethod shared by every app ALLOW rule, so the constraints alone set the bound."""
@@ -207,7 +243,7 @@ class SessionTimeoutTests(unittest.TestCase):
         method["constraints"] = [{"knowledge": {"reauthenticateIn": "PT10H"}, "possession": {}},
                                  {"possession": {"reauthenticateIn": "PT5H"},
                                   "knowledge": {"reauthenticateIn": "PT1H"}}]
-        self.assertEqual(self.out(data)[KEY], 120)  # min(10h, inherited 2h)=2h; min(5h, 1h)=1h; longest 2h
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 120)  # min(10h, inherited 2h)=2h; min(5h, 1h)=1h; longest 2h
 
     def test_1fa_constraint_takes_the_longest_kind(self):
         data = copy.deepcopy(REAL)
@@ -215,7 +251,7 @@ class SessionTimeoutTests(unittest.TestCase):
         method["factorMode"] = "1FA"
         method["reauthenticateIn"] = "PT2H"
         method["constraints"] = [{"knowledge": {"reauthenticateIn": "PT10H"}, "possession": {"reauthenticateIn": "PT1H"}}]
-        self.assertEqual(self.out(data)[KEY], 600)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 600)
 
     def test_required_false_does_not_drop_a_kind_or_a_constraint(self):
         # mixed alternatives: the second constraint has no own interval, so it re-authenticates at the rule level
@@ -225,9 +261,9 @@ class SessionTimeoutTests(unittest.TestCase):
         method["constraints"] = [{"possession": {"reauthenticateIn": "PT1H"}},
                                  {"possession": {"required": False,
                                                  "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
-        self.assertEqual(self.out(data)[KEY], 720)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 720)
         method["constraints"][1] = {}
-        self.assertEqual(self.out(data)[KEY], 720)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 720)
 
     def test_2fa_rule_excluding_phone_still_counts_the_possession_interval(self):
         data = copy.deepcopy(REAL)
@@ -237,7 +273,7 @@ class SessionTimeoutTests(unittest.TestCase):
         method["constraints"] = [{"knowledge": {"required": True},
                                   "possession": {"required": False, "reauthenticateIn": "PT1H",
                                                  "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
-        self.assertEqual(self.out(data)[KEY], 60)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 60)
 
     def test_1fa_required_false_kind_does_not_bound_a_path_that_skips_it(self):
         # (a) a password-only user never touches possession, so the rule-level interval is the worst case
@@ -248,8 +284,8 @@ class SessionTimeoutTests(unittest.TestCase):
         method["constraints"] = [{"possession": {"required": "False", "reauthenticateIn": "PT1H",
                                                  "excludedAuthenticationMethods": [{"key": "phone_number"}]}}]
         out = self.out(data)
-        self.assertEqual(out[KEY], 720)
-        self.assertFalse(ts_less_than(out[KEY], "480"))
+        self.assertEqual(out["appReauthenticateMinutes"], 720)
+        self.assertFalse(ts_less_than(out["appReauthenticateMinutes"], "480"))
 
     def test_2fa_required_false_knowledge_is_not_bound_when_possession_alone_can_meet_2fa(self):
         # (b) possession with user verification, never the password: the 43,800 h rule-level value applies
@@ -264,8 +300,8 @@ class SessionTimeoutTests(unittest.TestCase):
                 constraint["possession"] = possession
             method["constraints"] = [constraint]
             out = self.out(data)
-            self.assertEqual(out[KEY], NO_LIMIT)
-            self.assertFalse(ts_less_than(out[KEY], "10080"))
+            self.assertEqual(out["appReauthenticateMinutes"], NO_LIMIT)
+            self.assertFalse(ts_less_than(out["appReauthenticateMinutes"], "10080"))
 
     def test_2fa_required_knowledge_is_bound_with_possession(self):
         data = copy.deepcopy(REAL)
@@ -273,78 +309,80 @@ class SessionTimeoutTests(unittest.TestCase):
         method["factorMode"] = "2FA"
         method["reauthenticateIn"] = "PT12H"
         method["constraints"] = [{"knowledge": {"required": True, "reauthenticateIn": "PT1H"}, "possession": {}}]
-        self.assertEqual(self.out(data)[KEY], 60)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 60)
 
-    def test_non_object_constraint_or_factor_is_unevaluated(self):
+    def test_non_object_constraint_or_factor_leaves_the_idle_grade_and_empties_the_evidence(self):
         for bad in (["PT1H"], [None], [{"possession": "PT1H"}], [{"possession": []}]):
             data = copy.deepcopy(REAL)
             method = self.method_of(data)
             method["reauthenticateIn"] = "PT2H"
             method["constraints"] = bad
-            self.assert_unevaluated(data)
+            self.assert_idle_graded_app_evidence_empty(data)
 
-    def test_empty_constraint_inherits_the_rule_level_value(self):
+    def test_empty_constraint_inherits_the_rule_level_evidence(self):
         data = copy.deepcopy(REAL)
         method = self.method_of(data)
         method["reauthenticateIn"] = "PT3H"
         method["constraints"] = [{}]
-        self.assertEqual(self.out(data)[KEY], 180)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 180)
         del method["reauthenticateIn"]
-        self.assert_unevaluated(data)
+        self.assert_idle_graded_app_evidence_empty(data)
 
-    def test_constraint_with_unreadable_interval_is_unevaluated(self):
+    def test_constraint_with_unreadable_interval_leaves_the_idle_grade_and_empties_the_evidence(self):
         data = copy.deepcopy(REAL)
         self.constrain(data, 1, 0, "PT2H", knowledge="soon")
-        self.assert_unevaluated(data)
+        self.assert_idle_graded_app_evidence_empty(data)
 
-    def test_auth_method_chain_interval_is_read(self):
+    def test_auth_method_chain_interval_is_read_as_evidence(self):
         data = copy.deepcopy(REAL)
         method = {"type": "AUTH_METHOD_CHAIN", "reauthenticateIn": "P1D",
                   "chains": [{"authenticationMethods": [{"key": "okta_password", "method": "password"}],
                               "reauthenticateIn": "P1D"}]}
         data["result"]["accessRules"][1][0]["actions"]["appSignOn"]["verificationMethod"] = method
-        self.assertEqual(self.out(data)[KEY], 1440)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 1440)
         del method["reauthenticateIn"]
         method["chains"].append({"authenticationMethods": [], "reauthenticateIn": "P2D"})
-        self.assertEqual(self.out(data)[KEY], 2880)
+        self.assertEqual(self.out(data)["appReauthenticateMinutes"], 2880)
         method["chains"][1]["reauthenticateIn"] = "soon"
-        self.assert_unevaluated(data)
+        self.assert_idle_graded_app_evidence_empty(data)
 
-    def test_unreadable_app_interval_is_unevaluated(self):
+    def test_unreadable_app_interval_leaves_the_idle_grade_and_empties_the_evidence(self):
         for bad in [None, "", "12 hours", "P", "PT", "P1DT", 720]:
             data = copy.deepcopy(REAL)
             data["result"]["accessRules"][0][0] = app_rule("Admins", bad)
-            self.assert_unevaluated(data)
+            self.assert_idle_graded_app_evidence_empty(data)
 
-    def test_identity_engine_without_readable_app_policies_is_unevaluated(self):
+    def test_identity_engine_without_readable_app_policies_leaves_the_idle_grade_and_empties_the_evidence(self):
         for access, rules in [([], []), (None, None), ([app_policy("rst-3", "Default Policy", system="True")], [])]:
             data = copy.deepcopy(REAL)
             data["result"]["accessPolicies"] = access
             data["result"]["accessRules"] = rules
-            self.assert_unevaluated(data)
+            self.assert_idle_graded_app_evidence_empty(data)
         data = copy.deepcopy(REAL)
         data["result"]["accessRules"][2] = {"errorCode": "E0000006"}
-        self.assert_unevaluated(data)
+        self.assert_idle_graded_app_evidence_empty(data)
 
     def test_cut_app_policy_or_rule_lists_are_unevaluated(self):
         data = copy.deepcopy(REAL)
         data["result"]["accessPolicies"][2]["system"] = "False"
-        self.assert_unevaluated(data)  # no system default authentication policy
+        self.assert_idle_graded_app_evidence_empty(data)  # no system default authentication policy
         data = copy.deepcopy(REAL)
         data["result"]["accessRules"][1] = [app_rule("Office", "PT1H")]
-        self.assert_unevaluated(data)  # no Catch-all Rule
+        self.assert_idle_graded_app_evidence_empty(data)  # no Catch-all Rule
         data = copy.deepcopy(REAL)
         data["result"]["accessRules"][0] = ([app_rule("Rule " + str(i), "PT1H") for i in range(19)]
                                             + [app_rule("Catch-all Rule", "PT1H", system="True")])
-        self.assert_unevaluated(data)  # exactly one page of rules
+        self.assert_idle_graded_app_evidence_empty(data)  # exactly one page of rules
         data = copy.deepcopy(REAL)
         data["result"]["accessPolicies"] = [app_policy("rst-" + str(i), "P" + str(i)) for i in range(19)]
         data["result"]["accessPolicies"].append(app_policy("rst-x", "Default Policy", system="True"))
         data["result"]["accessRules"] = [[app_rule("Catch-all Rule", "PT1H", system="True")] for i in range(20)]
-        self.assert_unevaluated(data)  # exactly one page of policies
+        self.assert_idle_graded_app_evidence_empty(data)  # exactly one page of policies
 
-    def test_synthetic_fixture_unlimited_default_rule_and_once_per_session_apps_fails(self):
+    def test_synthetic_fixture_default_rule_without_idle_limit_fails(self):
         body = json.loads((FIXTURES / "okta_signon_passwordless_no_default_rule_unlimited_synthetic.json").read_text())
+        body = body.get("result", body)
+        body["signOnRules"][1][0]["actions"]["signon"]["session"]["maxSessionIdleMinutes"] = "0"
         full = self.full(body)
         out = full["transformedResponse"]
         self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
@@ -352,8 +390,10 @@ class SessionTimeoutTests(unittest.TestCase):
         self.assertFalse(ts_less_than(out[KEY], "10080"))
         self.assertTrue(full["additionalInfo"]["evaluation"]["failReasons"])
 
-    def test_synthetic_fixture_limited_default_rule_passes(self):
+    def test_synthetic_fixture_limited_idle_passes(self):
         body = json.loads((FIXTURES / "okta_signon_passwordless_no_default_rule_limited_synthetic.json").read_text())
+        body = body.get("result", body)
+        body["signOnRules"][1][0]["actions"]["signon"]["session"]["maxSessionIdleMinutes"] = "720"
         full = self.full(body)
         out = full["transformedResponse"]
         self.assertEqual(out[KEY], 720)
@@ -361,23 +401,25 @@ class SessionTimeoutTests(unittest.TestCase):
         self.assertFalse(ts_less_than(out[KEY], "480"))
         self.assertTrue(full["additionalInfo"]["evaluation"]["passReasons"][0].startswith("Okta sessions"))
 
-    # Classic Engine: the global session lifetime alone.
+    # Classic Engine: the global session idle timeout alone.
 
-    def test_classic_no_lifetime_limit_fails_every_threshold(self):
-        full = self.full(CLASSIC)
+    def test_classic_no_idle_limit_fails_every_threshold(self):
+        data = copy.deepcopy(CLASSIC)
+        self.set_idle(data, 1, 0, "0")
+        full = self.full(data)
         out = full["transformedResponse"]
         self.assertEqual(out[KEY], NO_LIMIT)
         self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
-        self.assertTrue(out["sessionLifetimeUnlimited"])
+        self.assertTrue(out["sessionIdleUnlimited"])
         self.assertFalse(ts_less_than(out[KEY], "10080"))
         self.assertFalse(ts_less_than(out[KEY], "480"))
         reasons = full["additionalInfo"]["evaluation"]["failReasons"]
         self.assertTrue(all(r.startswith("Okta ") for r in reasons), reasons)
-        self.assertIn("Okta policy: 'Default Policy' rule 'Default Rule' sets no time limit", " ".join(reasons))
+        self.assertIn("Okta policy: 'Default Policy' rule 'Default Rule' sets no idle timeout", " ".join(reasons))
 
     def test_classic_every_rule_limited_reports_the_longest(self):
         data = copy.deepcopy(CLASSIC)
-        self.set_lifetime(data, 1, 0, "720")
+        self.set_idle(data, 1, 0, "720")
         out = self.out(data)
         self.assertEqual(out[KEY], 720)
         self.assertEqual(out["allowRuleCount"], 3)
@@ -387,21 +429,21 @@ class SessionTimeoutTests(unittest.TestCase):
 
     def test_classic_longer_than_seven_days_fails_threshold(self):
         data = copy.deepcopy(CLASSIC)
-        self.set_lifetime(data, 1, 0, "20160")
+        self.set_idle(data, 1, 0, "20160")
         out = self.out(data)
         self.assertEqual(out[KEY], 20160)
         self.assertFalse(ts_less_than(out[KEY], "10080"))
 
     def test_classic_unreadable_access_list_is_ignored(self):
         data = copy.deepcopy(CLASSIC)
-        self.set_lifetime(data, 1, 0, "600")
+        self.set_idle(data, 1, 0, "600")
         data["result"]["accessPolicies"] = None
         self.assertEqual(self.out(data)[KEY], 600)
 
     def test_integer_values_are_read_too(self):
         data = copy.deepcopy(CLASSIC)
-        self.set_lifetime(data, 0, 0, 480)
-        self.set_lifetime(data, 1, 0, 600)
+        self.set_idle(data, 0, 0, 480)
+        self.set_idle(data, 1, 0, 600)
         self.assertEqual(self.out(data)[KEY], 600)
 
     def test_deny_inactive_rules_and_inactive_policies_are_not_judged(self):
@@ -412,7 +454,7 @@ class SessionTimeoutTests(unittest.TestCase):
         data["result"]["signOnRules"].append([rule("Retired rule", "0")])
         data = classic(data)
         out = self.out(data)
-        self.assertEqual(out[KEY], 480)
+        self.assertEqual(out[KEY], 120)
         self.assertEqual(out["allowRuleCount"], 2)
 
     def test_policy_list_cut_before_the_default_policy_is_unevaluated_not_a_pass(self):
@@ -441,7 +483,7 @@ class SessionTimeoutTests(unittest.TestCase):
     def test_custom_policy_without_a_default_rule_is_judged_on_its_rules(self):
         data = copy.deepcopy(CLASSIC)
         data["result"]["signOnRules"][0] = [rule("Passwordless", "240")]
-        self.set_lifetime(data, 1, 0, "180")
+        self.set_idle(data, 1, 0, "180")
         data = classic(data)
         full = self.full(data)
         self.assertEqual(full["additionalInfo"]["dataCollection"]["status"], "success")
@@ -453,25 +495,25 @@ class SessionTimeoutTests(unittest.TestCase):
     def test_custom_policy_without_a_default_rule_fails_on_its_own_unlimited_rule(self):
         data = copy.deepcopy(CLASSIC)
         data["result"]["signOnRules"][0] = [rule("Passwordless", "0")]
-        self.set_lifetime(data, 1, 0, "180")
+        self.set_idle(data, 1, 0, "180")
         data = classic(data)
         full = self.full(data)
         self.assertEqual(full["transformedResponse"][KEY], NO_LIMIT)
         self.assertFalse(ts_less_than(full["transformedResponse"][KEY], "10080"))
         reasons = full["additionalInfo"]["evaluation"]["failReasons"]
-        self.assertIn("Okta policy: 'Passwordless Policy' rule 'Passwordless' sets no time limit", " ".join(reasons))
+        self.assertIn("Okta policy: 'Passwordless Policy' rule 'Passwordless' sets no idle timeout", " ".join(reasons))
 
     def test_active_policy_with_no_rules_is_unevaluated(self):
         data = copy.deepcopy(CLASSIC)
         data["result"]["signOnRules"][0] = []
         self.assert_unevaluated(data)
         data["result"]["signOnPolicies"][0]["status"] = "INACTIVE"
-        self.assertEqual(self.out(data)[KEY], NO_LIMIT)
+        self.assertEqual(self.out(data)[KEY], 120)
 
     def test_rule_list_one_page_long_is_unevaluated(self):
         for size in [20, 200]:
             data = copy.deepcopy(CLASSIC)
-            self.set_lifetime(data, 1, 0, "60")
+            self.set_idle(data, 1, 0, "60")
             data["result"]["signOnRules"][0] = [rule("Rule " + str(i), "60", priority=str(i)) for i in range(1, size + 1)]
             data = classic(data)
             full = self.full(data)
@@ -523,7 +565,7 @@ class SessionTimeoutTests(unittest.TestCase):
         self.assert_unevaluated(data)
         data = copy.deepcopy(REAL)
         data["result"]["accessRules"] = data["result"]["accessRules"][:2]
-        self.assert_unevaluated(data)
+        self.assert_idle_graded_app_evidence_empty(data)  # the authentication lists are evidence only
 
     def test_no_active_policy_or_allow_rule_is_unevaluated(self):
         data = copy.deepcopy(REAL)
@@ -539,14 +581,13 @@ class SessionTimeoutTests(unittest.TestCase):
         data = copy.deepcopy(REAL)
         del data["result"]["signOnRules"][0][0]["actions"]["signon"]["session"]
         self.assert_unevaluated(data)
-        for bad in ["", "abc", "-5", None, True, 12.5, "7d"]:
+        for bad in ["abc", "-5", True, 12.5, "7d"]:
             data = copy.deepcopy(REAL)
-            self.set_lifetime(data, 0, 0, bad)
+            self.set_idle(data, 0, 0, bad)
             self.assert_unevaluated(data)
 
     def test_transformation_error_is_unevaluated(self):
         self.assert_unevaluated(b"\xff not json")
-
 
 if __name__ == "__main__":
     unittest.main()
