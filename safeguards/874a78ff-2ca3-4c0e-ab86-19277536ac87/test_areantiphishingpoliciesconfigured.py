@@ -78,7 +78,7 @@ class AntiPhishingPoliciesConfiguredTests(unittest.TestCase):
 
 
     def test_non_dict_policies_are_not_graded(self):
-        for policies in (["x"], [None]):
+        for policies in (["x"], [None], {}):
             r = self.t.transform({"Output": {"policies": policies}}) if hasattr(self, "t") else None
             self.assertIsNone(r["transformedResponse"][KEY])
 
