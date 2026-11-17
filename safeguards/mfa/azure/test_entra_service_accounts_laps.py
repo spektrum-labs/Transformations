@@ -303,7 +303,8 @@ def test_role_holders_read_whole_are_not_judged_when_a_block_excludes_the_role()
     body["roleAssignments"] = assign(SA1, SA2)
     got, out = value(SVC, body)
     assert got is True and "Only holders of the Directory Synchronization Accounts role" in svc_reason(out, "passReasons")
-    three = svc_body([pol], users=USERS + [account(BG1, background=1), account(BG2, background=1), account(BG3, background=1)])
+    three = svc_body([pol], users=USERS + [account(BG1, background=1), account(BG2, background=1), account(BG3, background=1)],
+                     members=[(G_SVC, [SA1, BG1, BG2, BG3]), (G_SVC2, [SA2]), (G_STAFF, [HUMAN])])
     three["roleAssignments"] = assign(BG1, BG2, BG3)
     got, out = value(SVC, three)
     assert got is None and "hold the Directory Synchronization Accounts role" in out["additionalInfo"]["dataCollection"]["errors"][0]
@@ -313,6 +314,14 @@ def test_role_holders_never_hide_an_unblocked_account():
     # no block excludes the role: holders are judged like any account
     body = svc_body([ca("MFA all", all_users=True, block=False)])
     body["roleAssignments"] = assign(SA1, SA2)
+    assert value(SVC, body)[0] is False
+
+
+def test_role_holder_outside_every_block_is_still_judged():
+    # the block that excludes the role reaches only SA1; SA2 (a holder) is in no block, so it is unblocked
+    body = svc_body([with_users(ca("Block svc", groups=[G_SVC]), excludeRoles=[DIRSYNC])])
+    assert value(SVC, body)[0] is False
+    body["roleAssignments"] = assign(SA2)
     assert value(SVC, body)[0] is False
 
 

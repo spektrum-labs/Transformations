@@ -507,6 +507,19 @@ def sync_role_excluded(policy):
     return DIRSYNC_ROLE in lowered(users_of(policy).get("excludeRoles"))
 
 
+def reached_by(uid, policy, memberships):
+    """True when the policy includes the account (all users, by id, or through a group read whole) and no user or
+    group exclusion read whole removes it. Unread groups never count as reaching, so the account is still judged."""
+    users = users_of(policy)
+    included = "all" in lowered(users.get("includeUsers")) or uid in object_ids(users.get("includeUsers"))
+    for gid in object_ids(users.get("includeGroups")):
+        included = included or uid in (memberships.get(gid) or set())
+    excluded = uid in object_ids(users.get("excludeUsers"))
+    for gid in object_ids(users.get("excludeGroups")):
+        excluded = excluded or uid in (memberships.get(gid) or set())
+    return included and not excluded
+
+
 def blocked(uid, decided, memberships):
     """True when some full block policy includes and does not exclude the account; None when one may (or a block
     that excludes a named location not read would reach it); else False. decided: (policy, full_block result) pairs
@@ -596,8 +609,10 @@ def transform(input):
         decided = [(p, full_block(p)) for p in policies]
         decided = [(p, d) for p, d in decided if d is not False]
         blocks = [p for p, d in decided if d]
-        # Role holders are left out only when an enabled full block excludes the role (the advised exemption).
-        sync_held = service & holders if holders and [p for p in blocks if sync_role_excluded(p)] else set()
+        # A role holder is left out only when an enabled full block that reaches it excludes the role (the advised
+        # exemption); any other holder is judged like every account.
+        sync_held = set(u for u in (service & holders if holders else ())
+                        if [p for p in blocks if sync_role_excluded(p) and reached_by(u, p, memberships)])
         service = service - sync_held
         unblocked = []
         undecided = []
