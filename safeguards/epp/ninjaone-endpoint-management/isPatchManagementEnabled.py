@@ -185,7 +185,7 @@ def recent_installs(data, devices):
         os_device_ids = set()
         for d in devices:
             key = device_key(d.get("id"))
-            if key is not None and d.get("nodeClass") in OS_NODE_CLASSES:
+            if key is not None and isinstance(d.get("nodeClass"), str) and d.get("nodeClass") in OS_NODE_CLASSES:
                 os_device_ids.add(key)
     # installedAt is epoch seconds. A stamp beyond now + FUTURE_SLACK_SECONDS (clock skew, corrupt data, or
     # epoch milliseconds) cannot be a real install, so it counts as no evidence, never as a recent install.
