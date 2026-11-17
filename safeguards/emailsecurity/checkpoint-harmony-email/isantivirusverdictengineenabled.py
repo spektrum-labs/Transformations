@@ -85,6 +85,7 @@ def transform(input):
         Integration-Service wrappers until that shape is found. Returns (body, error): body is
         None when the shape is not found; error is a fixed reason when a wrapper around the body
         carries an error marker, in which case nothing inside it is trusted."""
+        cut = False  # a cut-off marker on an outer wrapper must survive the unwrap
         for attempt in range(4):
             if isinstance(data, str):
                 try:
@@ -94,7 +95,12 @@ def transform(input):
             if not isinstance(data, dict):
                 return None, None
             if isinstance(data.get("responseData"), list):
+                if cut:
+                    data = dict(data, paginationTruncated=True)
                 return data, None
+            for blk in (data, data.get("response_metadata"), data.get("metadata")):
+                if isinstance(blk, dict) and any(str(blk.get(k)).strip().lower() in ("true", "1", "yes") for k in ("truncated", "paginationTruncated")):
+                    cut = True
             err = marker_error(data)
             if err:
                 return None, err

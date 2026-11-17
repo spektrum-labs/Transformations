@@ -159,3 +159,15 @@ def test_move_audit_trail_over_cap_rows_read_none():
     body = merged(records=[copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10100)])
     body["responseEnvelope"]["recordsNumber"] = 10000
     assert verdict("messagemoveaudittrailenabled", body)[0] is None
+
+
+@pytest.mark.parametrize("name,flip,flipped", CASES)
+@pytest.mark.parametrize("wrap", [
+    lambda b: {"response": b, "truncated": True},
+    lambda b: {"apiResponse": b, "response_metadata": {"paginationTruncated": "true"}},
+])
+def test_a_marker_on_an_outer_wrapper_still_proves_no_absence(name, flip, flipped, wrap):
+    body = merged(flip) if flip else merged(records=[])
+    value, out = verdict(name, wrap(body))
+    assert value is None
+    assert "partial page" in out["additionalInfo"]["evaluation"]["failReasons"][0]
