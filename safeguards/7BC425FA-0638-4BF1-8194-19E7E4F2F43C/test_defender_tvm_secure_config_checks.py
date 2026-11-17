@@ -371,6 +371,7 @@ def test_a_present_name_that_contradicts_the_id_is_not_evidence(name):
 def test_an_unknown_id_is_not_evaluated(name):
     got, out = value(name, result([row("ws-01", "scid-9999")]))
     assert got is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 @pytest.mark.parametrize("name", ID_ONLY)
