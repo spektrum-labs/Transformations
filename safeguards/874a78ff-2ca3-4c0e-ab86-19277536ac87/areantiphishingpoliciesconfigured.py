@@ -136,7 +136,7 @@ def transform(input):
         recommendations = []
 
         policies = data.get("policies") if isinstance(data, dict) else None
-        if isinstance(policies, dict):
+        if isinstance(policies, dict) and policies:
             policies = [policies]
         if not isinstance(policies, list) or (policies and not any(isinstance(x, dict) for x in policies)):
             # Missing or non-list: an error body or a failed read, not evidence of a missing control.
