@@ -76,7 +76,7 @@ def test_presence_checks_on_a_complete_paged_read(name, flip, flipped):
 
 
 @pytest.mark.parametrize("name,flip,flipped", CASES)
-@pytest.mark.parametrize("marker", [{"truncated": True}, {"truncated": "true"}, {"paginationTruncated": True}])
+@pytest.mark.parametrize("marker", [{"truncated": True}, {"truncated": "true"}, {"paginationTruncated": True}, {"truncated": 1}, {"truncated": "yes"}])
 def test_a_cut_off_read_keeps_a_match_but_proves_no_absence(name, flip, flipped, marker):
     assert verdict(name, merged(**marker))[0] is True
     body = merged(flip, **marker) if flip else merged(records=[], **marker)

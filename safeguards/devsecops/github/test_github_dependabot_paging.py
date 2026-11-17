@@ -59,6 +59,8 @@ def test_exactly_one_full_page_is_withheld():
     lambda rows: {"apiResponse": rows, "response_metadata": {"paginationTruncated": True}},
     lambda rows: {"apiResponse": rows, "paginationTruncated": True},
     lambda rows: {"response": rows, "truncated": "true"},
+    lambda rows: {"response": rows, "truncated": 1},
+    lambda rows: {"response": rows, "truncated": "yes"},
 ])
 def test_a_cut_off_read_gives_no_count(wrap):
     value, out = run(wrap(alerts(230, critical_open=7)))

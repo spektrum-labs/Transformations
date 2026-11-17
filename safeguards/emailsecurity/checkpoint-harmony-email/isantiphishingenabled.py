@@ -142,6 +142,9 @@ def transform(input):
         is complete. "" when the page is complete. Anything but "" cannot prove an absence."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
+            for mark in ("truncated", "paginationTruncated"):
+                if str(holder.get(mark)).strip().lower() in ("true", "1", "yes"):
+                    return "more"
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
                 return "more"
