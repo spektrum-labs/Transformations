@@ -516,7 +516,8 @@ def reached_by(uid, policy, memberships):
         included = included or uid in (memberships.get(gid) or set())
     excluded = uid in object_ids(users.get("excludeUsers"))
     for gid in object_ids(users.get("excludeGroups")):
-        excluded = excluded or uid in (memberships.get(gid) or set())
+        members = memberships.get(gid)
+        excluded = excluded or members is None or uid in members
     return included and not excluded
 
 
@@ -641,6 +642,9 @@ def transform(input):
         if not sync_held and [p for p in blocks if sync_role_excluded(p)]:
             exempt_note += (" (holders of the Directory Synchronization Accounts role are excluded from a block and "
                             "were not checked)")
+        elif sync_held:
+            exempt_note += (f" ({len(sync_held)} holder(s) of the Directory Synchronization Accounts role excluded from "
+                            "a block that reaches them were not judged)")
         if unblocked:
             shown = ", ".join(account_ref(u) for u in unblocked[:MAX_NAMED])
             if len(unblocked) > MAX_NAMED:
