@@ -795,15 +795,17 @@ def members_outside(data, policies):
             maybe_reached = maybe_reached | (reach - excluded)
             continue
         reached = reached | (reach - excluded)
-    outside = workforce - reached
-    break_glass = outside & named_excluded
-    if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
-        outside = outside - break_glass
-    unsure_outside = outside & maybe_reached
-    outside = outside - maybe_reached  # a measured gap stays a FAIL (WI-3a); undecided only when nothing else is outside
-    if unsure_outside and not outside:
+    def glass(out):
+        bg = out & named_excluded
+        return out - bg if len(bg) <= MAX_EXCLUDED_ACCOUNTS else out
+
+    # Credit break-glass where every maybe block holds: that set is a subset of the other world's, so FAIL on it is a safe lower bound.
+    sure = glass(workforce - reached - maybe_reached)
+    if sure:
+        return {"outside": sure, "membersTotal": len(workforce)}, ""
+    if glass(workforce - reached):
         return None, "a block policy excludes a named location that was not read, so whether it blocks its members is not known"
-    return {"outside": outside, "membersTotal": len(workforce)}, ""
+    return {"outside": set(), "membersTotal": len(workforce)}, ""
 
 
 def candidate_reach(data, candidates):
