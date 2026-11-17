@@ -79,3 +79,8 @@ def test_a_false_marker_changes_nothing(flag):
 @pytest.mark.parametrize("body", [None, {"message": "Not Found"}, "not json", {"apiResponse": {"error": True}}])
 def test_unreadable_bodies_give_no_count(body):
     assert run(body)[0] is None
+
+
+def test_a_multi_page_read_without_a_marker_is_counted():
+    # Assumes Integration-Service always sets a marker when it stops at the page cap.
+    assert run(alerts(200, critical_open=4))[0] == 4
