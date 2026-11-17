@@ -20,7 +20,8 @@ DeviceTvmSecureConfigurationAssessmentKB so each row carries its ConfigurationNa
 IsApplicable / IsCompliant arrive as SByte (1/0), booleans, or their strings.
 
 A row counts when its ConfigurationId is one this file names; the knowledge-base name is a cross-check only: a
-name that is present and does not say what the id means, or an unnamed id, makes the read Not evaluated rather than being guessed at. An applicable device that has
+name that is present and does not say what the id means, or an id this file does not name, makes the read
+Not evaluated rather than being guessed at. An applicable device that has
 no reading for one part of the claim is not shown to comply, and a part no device reads as applicable was not
 measured: with no failure elsewhere, either makes the read Not evaluated.
 Scope: devices onboarded to Defender for Endpoint and assessed by Defender Vulnerability Management. Devices
