@@ -342,7 +342,7 @@ def read_memberships(body):
 
 def read_accounts(items, cutoff):
     """({lower-case id: 'signal' or 'quiet'} for the enabled Member accounts, '' or a reason the read is unusable).
-    'signal': a non-interactive sign-in after cutoff and no interactive one ever. Timestamps compare as UTC strings."""
+    'signal': a non-interactive sign-in after cutoff and no interactive one after cutoff (none ever counts). Timestamps compare as UTC strings."""
     out = {}
     carried = False
     for item in items:

@@ -279,6 +279,8 @@ MATRIX = (
         {"someFutureCondition": {"include": []}},
         {"devices": {"deviceFilter": None}},
         {"signInRiskLevels": ["high", "medium", "low", "none"]},
+        {"@odata.type": "#microsoft.graph.conditionalAccessConditionSet"},
+        {"@odata.type": "#microsoft.graph.conditionalAccessConditionSet", "devices": {"deviceFilter": {"rule": "x"}}},
     )]
     + [_block(client=c) for c in (("browser",), ("browser", "mobileAppsAndDesktopClients"),
                                   ("browser", "mobileAppsAndDesktopClients", "exchangeActiveSync", "other"),
@@ -293,3 +295,14 @@ def test_the_three_files_share_one_definition_of_a_full_block(index):
     policy = MATRIX[index]
     assert COV.full_block_reach(policy) == ISMFA.full_block_reach(policy) == SVC.full_block(policy)
     assert COV.full_block_reach(policy) in (True, None, False)
+
+
+def test_an_odata_annotation_on_conditions_is_not_a_narrowing_condition_in_any_file():
+    block = pol("Block", grant=("block",), include_users=["All"])
+    block["conditions"]["@odata.type"] = "#microsoft.graph.conditionalAccessConditionSet"
+    assert COV.full_block_reach(block) is ISMFA.full_block_reach(block) is SVC.full_block(block) is True
+    # a full block covers every member: nobody is outside, in both MFA copies
+    b = body([block], [])
+    assert not outside_cov(b)[0] and not outside_ismfa(b)[0]
+    for out in (run_cov(b)[1], run_ismfa(b)[1]):
+        assert "covered by no enabled" not in str(out)
