@@ -164,7 +164,9 @@ def transform(input):
         # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
         # transportRules proved nothing, so it is Not evaluated, never the stated-negative False.
         transport_rules = data.get("transportRules") if isinstance(data, dict) else None
-        if not isinstance(transport_rules, list):
+        if isinstance(transport_rules, dict) and transport_rules:
+            transport_rules = [transport_rules]  # single rule serializes as an object
+        if not isinstance(transport_rules, list) or (transport_rules and not any(isinstance(x, dict) for x in transport_rules)):
             # An error object from the collector (IS vendorStatus >= 400) is not evidence: say why, not just "missing".
             status = data.get("vendorStatus") if isinstance(data, dict) else None
             api_error, recommendation = "Could not read transport rules", "Re-evaluate this check once the Exchange Online read succeeds"
@@ -179,6 +181,7 @@ def transform(input):
                 fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
                 recommendations=[recommendation]
             )
+        transport_rules = [x for x in transport_rules if isinstance(x, dict)]  # skip unreadable entries
         banner_rules = []
 
         for rule in transport_rules:
