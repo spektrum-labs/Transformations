@@ -36,5 +36,5 @@
       "change": "Registered with the Tracekit agent evidence transforms; proposed, no requirement reads it yet."
     }
   ],
-  "notes": "Input is Integration-Service's summary of `tracekit verify --json` (tracekit-ai 1.4.2) per bundle (src/services/tracekit_evidence.py), not a vendor API response. The trust config is Spektrum's, never the uploader's. No integration answers this key yet, so no RTA row maps it."
+  "notes": "Input is Integration-Service's summary of `tracekit verify --json` (tracekit-ai 1.6.0) per bundle (src/services/tracekit_evidence.py), not a vendor API response. The trust config is Spektrum's, never the uploader's. No integration answers this key yet, so no RTA row maps it."
 }

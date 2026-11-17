@@ -6,7 +6,7 @@ Criterion: every Tracekit evidence bundle received in the window verified intact
 
 Data source: Spektrum's own verification of the customer's Tracekit evidence bundles (.tkb), not a vendor API.
 The customer pushes the bundles their Tracekit signer exported; Integration-Service
-(src/services/tracekit_evidence.py) runs `tracekit verify --json` (tracekit-ai 1.4.2) on each one against the trust
+(src/services/tracekit_evidence.py) runs `tracekit verify --json` (tracekit-ai 1.6.0) on each one against the trust
 config Spektrum pinned when the customer connected, keeps a summary and discards the bundle. This transform reads
 the summaries of the bundles in the evaluation window:
   {"truncated": false, "bundles": [{"bundleSha256", "verifiedAt", "verifierVersion", "exitCode",
@@ -19,7 +19,7 @@ Verifier vocabulary: https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verd
 Every criterion needs EVERY bundle in the window to have verified intact: a record that failed, could not be
 verified, or belongs to a run that never closed shows nothing, so one such bundle makes the criterion false.
 Fails closed: an error body, no bundles, a bundle summary missing a field, a verified summary with a non-zero exit
-code, a failed or warning check name outside tracekit-ai 1.4.2's vocabulary, or a window whose
+code, a failed or warning check name outside tracekit-ai 1.6.0's vocabulary, or a window whose
 "truncated" is present and not false (more failing bundles than Integration-Service returns) returns None
 (not measured). A window without "truncated" is read as complete.
   isAgentEvidenceIntegrityVerified = true when every bundle verified intact.
@@ -95,17 +95,17 @@ def load(input):
 
 
 INTEGRITY_VALUES = ["verified", "open", "failed", "unverifiable", "unusable"]
-# Every line tracekit-ai 1.4.2's v2 verifier can report (tracekit/verify/v2.py). A failed or
+# Every line tracekit-ai 1.6.0's v2 verifier can report (tracekit/verify/v2.py). A failed or
 # warning line outside it comes from a verifier these criteria were not written against.
-KNOWN_CHECKS = ["approvals by agents", "approvals by people", "args source", "break-glass approvals",
+KNOWN_CHECKS = ["approvals by agents", "approvals by people", "args source", "boxed agent", "break-glass approvals",
                 "bundle readable", "bundle structure", "checkpoint", "constraints", "content vault",
                 "coverage", "coverage matrix", "external decisions", "fail-open classes", "findings",
                 "findings counted", "format bridge", "gaps", "gateway amendments", "harness", "held calls",
-                "incident policies", "incidents", "inclusion", "isolation", "key assurance", "keys",
+                "incident policies", "incidents", "inclusion", "intent grants", "isolation", "key assurance", "keys",
                 "log tail", "manifest", "monitor", "not interpreted", "observers", "openshell policy",
                 "policy", "policy snapshot", "principals", "rekor anchor", "replay runs", "reviews",
                 "reviews counted", "revocations", "run chain", "run parts", "run-set", "signatures",
-                "tenant-level gaps", "tiers", "trust config", "witness quorum"]
+                "tenant-level gaps", "tiers", "trust config", "verifier minimum", "witness quorum"]
 ASSURANCE_VALUES = ["dev", "local", "witnessed", "witnessed+monitored", "none"]
 
 

@@ -1,7 +1,7 @@
 """Tracekit agent evidence (Artificial Intelligence): four criteria over Integration-Service's bundle summaries.
 
 Fixtures are synthetic summaries in the shape src/services/tracekit_evidence.py returns for
-`tracekit verify --json` (tracekit-ai 1.4.2, https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verdicts.md).
+`tracekit verify --json` (tracekit-ai 1.6.0, https://github.com/Cygnux-Labs/Tracekit/blob/main/docs/verdicts.md).
 """
 import importlib.util
 from pathlib import Path
@@ -24,7 +24,7 @@ MODULES = {k: load(k) for k in KEYS}
 
 def bundle(integrity="verified", assurance="witnessed", isolation=None, failed=None, warned=None, sha="a"):
     isolation = {"remote": 2} if isolation is None else isolation
-    return {"bundleSha256": sha * 64, "verifiedAt": "2026-10-25T00:00:00Z", "verifierVersion": "1.4.2",
+    return {"bundleSha256": sha * 64, "verifiedAt": "2026-10-25T00:00:00Z", "verifierVersion": "1.6.0",
             "exitCode": 0 if integrity in ("verified", "open") else 1, "integrity": integrity,
             "assurance": assurance, "isolation": isolation, "runCount": sum(isolation.values()),
             "passedChecks": ["coverage", "fail-open classes", "signatures"] if integrity in ("verified", "open") else [],
@@ -113,7 +113,7 @@ def test_truncated_window_is_not_measured(key):
 
 @pytest.mark.parametrize("key", KEYS)
 @pytest.mark.parametrize("payload", [
-    {"bundles": [bundle(warned=["held_calls"])]},                          # a name 1.4.2 never reports
+    {"bundles": [bundle(warned=["held_calls"])]},                          # a name 1.6.0 never reports
     {"bundles": [bundle(failed=["Held calls"])]},
     {"bundles": [dict(bundle(), exitCode=1)]},                             # verified with a failing exit
     {"bundles": [dict(bundle(), exitCode=True)]},
@@ -124,6 +124,14 @@ def test_truncated_window_is_not_measured(key):
 ])
 def test_unknown_vocabulary_and_inconsistent_summaries_are_not_measured(key, payload):
     assert run(key, payload) == (None, "error")
+
+
+@pytest.mark.parametrize("key", KEYS)
+@pytest.mark.parametrize("name", ["boxed agent", "intent grants", "verifier minimum"])
+def test_lines_added_in_1_6_are_read_not_unknown(key, name):
+    # A warning on one of them is measured; a failed one is a failed bundle.
+    assert run(key, {"bundles": [bundle(warned=[name])]}) == (True, "success")
+    assert run(key, {"bundles": [bundle(integrity="failed", failed=[name])]}) == (False, "success")
 
 
 @pytest.mark.parametrize("missing", ["coverage", "fail-open classes"])
