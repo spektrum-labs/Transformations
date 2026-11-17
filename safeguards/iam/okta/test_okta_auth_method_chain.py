@@ -34,6 +34,7 @@ FASTPASS = {"key": "okta_verify", "method": "signed_nonce", "userVerification": 
 FASTPASS_NO_UV = {"key": "okta_verify", "method": "signed_nonce", "userVerification": "OPTIONAL"}
 SMS = {"key": "phone_number", "method": "sms"}
 EMAIL = {"key": "okta_email", "method": "email"}
+SMARTCARD = {"key": "smart_card_idp", "method": "smart_card_idp"}
 QUESTION = {"key": "security_question", "method": "security_question"}
 
 
@@ -98,6 +99,9 @@ class ChainTests(unittest.TestCase):
 
     def test_fastpass_with_user_verification_alone_is_two_factor(self):
         self.assert_values(chain(step(FASTPASS)), True, True, True)
+
+    def test_smart_card_alone_is_card_plus_pin_two_factors(self):
+        self.assert_values(chain(step(SMARTCARD)), True, True, True)
 
     def test_flipped_password_alone_is_a_single_factor_path(self):
         self.assert_values(chain(step(PASSWORD)), False, False, False)

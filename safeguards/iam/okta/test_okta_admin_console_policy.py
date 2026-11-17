@@ -90,6 +90,14 @@ class AdminConsolePolicyTests(unittest.TestCase):
         del no_constraints["constraints"]
         self.check(self.edit(1, rule("Catch-all Rule", no_constraints, system=True)), False)
 
+    def test_string_required_false_fails_closed(self):
+        for value in ["false", "False"]:
+            self.check(self.edit(1, rule("Catch-all Rule", assurance(required=value), system=True)), False)
+
+    def test_smart_card_chain_is_card_plus_pin(self):
+        card = {"key": "smart_card_idp", "method": "smart_card_idp"}
+        self.check(self.edit(0, rule("Admins", {"type": "AUTH_METHOD_CHAIN", "chains": [{"authenticationMethods": [card]}]})), True)
+
     def test_one_factor_with_user_verification_is_phishing_resistant_mfa(self):
         self.check(self.edit(1, rule("Catch-all Rule", assurance(mode="1FA", uv="REQUIRED"), system=True)), True)
 

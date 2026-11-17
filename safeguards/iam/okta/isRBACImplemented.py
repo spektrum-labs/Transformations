@@ -18,6 +18,8 @@
 
 KEY = "isRBACImplemented"
 SUPER_ADMIN = "SUPER_ADMIN"
+# Org Administrator holds almost all of Super Administrator's day-to-day powers, so it is a full-control role too.
+FULL_ROLES = ["SUPER_ADMIN", "ORG_ADMIN"]
 WRAPPERS = ["data", "response", "result", "apiResponse", "api_response", "Output"]
 
 
@@ -25,11 +27,11 @@ def transform(input):
     """
     isRBACImplemented - does the Okta org delegate administration through roles?
 
-    True when at least one admin holds ACTIVE roles with no Super Administrator among them (only standard roles such
+    True when at least one admin holds ACTIVE roles with no Super Administrator or Org Administrator among them (only standard roles such
     as Help Desk, App or Read-only Administrator, or custom roles): administration is split into narrower roles rather
     than every admin holding full control. An admin who holds Super Administrator plus a narrower role is still a
     full admin. One delegated admin read is enough, even when other reads failed.
-    False when every admin's roles were read and every admin holds Super Administrator.
+    False when every admin's roles were read and every admin holds Super Administrator or Org Administrator.
     Not evaluated (None, dataCollection status "error"), never False, when that cannot be shown: an error body, no
     admin list (for example okta.roles.read not granted), an empty admin list (every org has a Super
     Administrator), a role read that failed, is missing, holds no active role or is out of line with the admin
@@ -145,7 +147,7 @@ def evaluate(raw):
             continue
         for kind in types:
             counts[kind] = counts.get(kind, 0) + 1
-        if SUPER_ADMIN not in types:
+        if not [t for t in types if t in FULL_ROLES]:
             delegated = delegated + 1
         else:
             full_admins = full_admins + 1
@@ -153,12 +155,12 @@ def evaluate(raw):
                "delegatedAdminCount": delegated, "roleTypeCounts": counts, "listComplete": not cut}
     if delegated:
         return respond(True, summary, [str(delegated) + " of " + str(len(admins)) + " Okta admin(s) hold only roles "
-                                       "narrower than Super Administrator (" + ", ".join(sorted(counts)) + ")"], [], [])
+                                       "narrower than Super Administrator and Org Administrator"], [], [])
     if unread or cut:
         return respond(None, summary, [], [], [str(unread) + " of " + str(len(admins)) + " Okta admin role read(s) "
                                                "failed or the admin list was cut short, and no admin read so far holds "
                                                "a delegated role, so role delegation cannot be shown either way"])
-    return respond(False, summary, [], ["All " + str(full_admins) + " Okta admin(s) hold Super Administrator: "
+    return respond(False, summary, [], ["All " + str(full_admins) + " Okta admin(s) hold Super or Org Administrator: "
                                         "administration is not split into narrower roles"], [])
 
 

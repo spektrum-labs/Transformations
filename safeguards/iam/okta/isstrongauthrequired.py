@@ -225,6 +225,8 @@ def transform(input):
         """Factor types one chain alternative proves, or None when its authenticator is not known."""
         entry_key = as_text(entry.get("key")).lower()
         entry_method = as_text(entry.get("method")).lower()
+        if entry_key == "smart_card_idp":
+            return ["possession", "knowledge"]  # PIV/CAC: the card plus its PIN
         if entry_key in KNOWLEDGE_KEYS or entry_method in KNOWLEDGE_METHODS:
             return ["knowledge"]
         if entry_key in POSSESSION_KEYS or entry_method in POSSESSION_METHODS:
