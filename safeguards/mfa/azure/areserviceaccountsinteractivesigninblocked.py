@@ -479,6 +479,10 @@ def full_block(policy):
     return None if location_unread(cond) else True
 
 
+def sync_role_excluded(policy):
+    return DIRSYNC_ROLE in lowered(users_of(policy).get("excludeRoles"))
+
+
 def blocked(uid, decided, memberships):
     """True when some full block policy includes and does not exclude the account; None when one may (or a block
     that excludes a named location not read would reach it); else False. decided: (policy, full_block result) pairs
@@ -507,7 +511,8 @@ def blocked(uid, decided, memberships):
                 excluded = True
         if excluded:
             continue
-        if [r for r in lowered(users.get("excludeRoles")) if r != DIRSYNC_ROLE] or has_value(users.get("excludeGuestsOrExternalUsers")):
+        other_roles = [r for r in lowered(users.get("excludeRoles")) if r != DIRSYNC_ROLE]
+        if other_roles or has_value(users.get("excludeGuestsOrExternalUsers")):
             unsure = True
         if included and not unsure and certain:
             return True
@@ -578,6 +583,7 @@ def transform(input):
                    "serviceAccountsBySignInSignal": len(by_signal), "serviceAccountsByMfaExclusion": len(carve_only - break_glass),
                    "breakGlassAccountsNotJudged": len(break_glass), "fullBlockPolicies": len(blocks),
                    "trustedLocationExemption": any(location_exempt(p) for p in blocks),
+                   "syncRoleExempted": any(sync_role_excluded(p) for p in blocks),
                    "unblocked": len(unblocked), "undecided": len(undecided), "signalDays": SIGNAL_DAYS}
         scope = (f"service accounts are enabled member accounts with a non-interactive sign-in and no interactive one "
                  f"in {SIGNAL_DAYS} days, or that a Conditional Access MFA policy would reach but excludes")
@@ -588,6 +594,9 @@ def transform(input):
         exempt_note = ""
         if [p for p in blocks if location_exempt(p)]:
             exempt_note = " (at least one blocks sign-in outside trusted locations)"
+        if [p for p in blocks if sync_role_excluded(p)]:
+            exempt_note += (" (holders of the Directory Synchronization Accounts role are excluded from a block and "
+                            "were not checked)")
         if unblocked:
             shown = ", ".join(account_ref(u) for u in unblocked[:MAX_NAMED])
             if len(unblocked) > MAX_NAMED:
