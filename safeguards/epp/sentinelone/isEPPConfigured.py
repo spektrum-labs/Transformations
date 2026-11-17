@@ -61,6 +61,8 @@ def find_agent_list(obj):
         if isinstance(cur, bytes):
             cur = cur.decode("utf-8", "replace")
         if isinstance(cur, str):
+            if not cur.strip():
+                return None, None, "The SentinelOne agent list is empty (no body was returned), so it cannot be read."
             try:
                 cur = json.loads(cur)
             except Exception:

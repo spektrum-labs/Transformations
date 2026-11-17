@@ -63,6 +63,10 @@ class UnreadablePayload(unittest.TestCase):
         self.assert_not_evaluated(ts({"result": cut}), "cut off in transit")
         self.assert_not_evaluated(cut, "cut off in transit")
 
+    def test_empty_body_is_not_evaluated_with_an_empty_reason(self):
+        for empty in ("", b"", "  "):
+            self.assert_not_evaluated(ts(empty), "is empty")
+
     def test_incomplete_response_error_object_is_not_evaluated(self):
         stub = {"error": True, "errorType": "incomplete_response", "statusCode": 200, "status": "Error",
                 "message": "The vendor's response was cut off before it ended, so it could not be read."}
