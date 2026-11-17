@@ -1,8 +1,10 @@
 """
 Transformation: confirmedLicensePurchased
 Vendor: BeyondTrust  |  Category: Identity & Access Management
-Evaluates: Whether a valid BeyondTrust Password Safe license is active,
-verified by a successful (non-error) response from the ManagedAccounts endpoint.
+Evaluates: Whether a valid BeyondTrust Password Safe license is active, from evidence in the body.
+A successful ManagedAccounts list shows only that the authenticated call succeeded, so a list is
+Not evaluated (None), never a pass. An explicit licence field still decides, and a licence or
+authentication error still fails.
 """
 import json
 from datetime import datetime
@@ -49,7 +51,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 def evaluate(data):
-    """Return True if the ManagedAccounts endpoint responded without a license/auth error."""
+    """True only on an explicit licence field; a licence/auth error is False; a bare list is None."""
     try:
         if data is None:
             return {"confirmedLicensePurchased": False, "reason": "Null response - possible license error"}
@@ -71,8 +73,9 @@ def evaluate(data):
                 return {"confirmedLicensePurchased": False, "reason": "Authentication failed"}
             return {"confirmedLicensePurchased": affirmative_signal(data)}
 
+        # A list (even empty) shows the call succeeded, not that a licence is active.
         if isinstance(data, list):
-            return {"confirmedLicensePurchased": True, "managedAccountCount": len(data)}
+            return {"confirmedLicensePurchased": None, "managedAccountCount": len(data)}
 
         return {"confirmedLicensePurchased": False, "reason": "Unexpected response type"}
     except Exception as e:

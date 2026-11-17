@@ -1,9 +1,11 @@
 """
 Transformation: confirmedLicensePurchased
 Vendor: BeyondTrust Privileged Remote Access (PRA)  |  Category: Identity & Access Management
-Evaluates: Active PRA license by confirming a successful authenticated response
-from the vault account API. PRA has no dedicated license endpoint; any valid
-response from /api/config/v1/vault/account confirms a licensed, reachable appliance.
+Evaluates: an active PRA license, from evidence in the body only.
+PRA's configuration API has no licence endpoint, and the vault account list this check reads
+(/api/config/v1/vault/account) shows only that the appliance answered an authenticated call.
+A list of vault accounts, empty or not, is therefore Not evaluated (None), never a pass; an
+explicit licence field in the body still decides, and a licence error still fails.
 """
 import json
 from datetime import datetime
@@ -68,9 +70,9 @@ def evaluate(data):
             # Dict returned — valid but unexpected shape for vault/account (PRA returns a list)
             return {"confirmedLicensePurchased": affirmative_signal(data)}
 
-        # List response (even empty) confirms license and API access
+        # A vault account list (even empty) shows the appliance answered, not that it is licensed.
         if isinstance(data, list):
-            return {"confirmedLicensePurchased": True, "vaultAccountCount": len(data)}
+            return {"confirmedLicensePurchased": None, "vaultAccountCount": len(data)}
 
         return {"confirmedLicensePurchased": False, "reason": "Unexpected response type"}
     except Exception as e:

@@ -1,9 +1,9 @@
 """Qualys confirmedLicensePurchased, isASMEnabled and isASMLoggingEnabled read the real body shapes.
 
 confirmedLicensePurchased: GET /qps/rest/portal/version answers
-{"licenseStatus": {"ServiceResponse": {"responseCode": "SUCCESS", ...}}}. The transform never
-unwrapped ServiceResponse and fell back to a generic signal that read False, so a working
-subscription failed. isASMEnabled / isASMLoggingEnabled: the schedule list arrives as
+{"licenseStatus": {"ServiceResponse": {"responseCode": "SUCCESS", ...}}}. SUCCESS shows only that the
+API user signed in (a trial signs in too), so it is Not evaluated, never a pass; a code naming an
+expired or missing subscription is a measured False. isASMEnabled / isASMLoggingEnabled: the schedule list arrives as
 SCHEDULE_SCAN_LIST_OUTPUT; the transform looked for SCHEDULED_SCAN_LIST_OUTPUT and read False.
 
 All fixtures are synthetic.
@@ -56,15 +56,19 @@ class LicenceVerdicts(unittest.TestCase):
     def res(self, body):
         return lic.transform(body)["transformedResponse"][KEY]
 
-    def test_success_body_passes(self):
+    def test_success_body_is_not_evaluated(self):
+        # Reachability, not a licence: SUCCESS carries no subscription status.
         out = lic.transform(PORTAL_SUCCESS)
-        self.assertIs(out["transformedResponse"][KEY], True)
-        self.assertIn("portal 3.25.0.0-10", out["additionalInfo"]["evaluation"]["passReasons"][0])
+        self.assertIsNone(out["transformedResponse"][KEY])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+        self.assertTrue(out["additionalInfo"]["dataCollection"]["errors"])
+        self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+        self.assertIn("portal 3.25.0.0-10", out["additionalInfo"]["evaluation"]["failReasons"][0])
 
-    def test_success_body_unwrapped_and_as_string(self):
-        self.assertIs(self.res(PORTAL_SUCCESS["licenseStatus"]), True)
-        self.assertIs(self.res(json.dumps(PORTAL_SUCCESS)), True)
-        self.assertIs(self.res({"response": PORTAL_SUCCESS}), True)
+    def test_success_body_unwrapped_and_as_string_is_never_a_pass(self):
+        self.assertIsNone(self.res(PORTAL_SUCCESS["licenseStatus"]))
+        self.assertIsNone(self.res(json.dumps(PORTAL_SUCCESS)))
+        self.assertIsNone(self.res({"response": PORTAL_SUCCESS}))
 
     def test_auth_and_permission_codes_not_evaluated(self):
         for code in ("INVALID_CREDENTIALS", "UNAUTHORIZED", "INSUFFICIENT_PRIVILEGES", "INVALID_REQUEST", "OTHER_ERROR", ""):
