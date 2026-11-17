@@ -105,6 +105,10 @@ CASES = {
     "block-all-exclude-country-excludes-big-group": ([pol("MFA staff", include_groups=[G_STAFF]),
                                                       block_all("country-id", exclude_groups=[G_BIG])],
                                                      [(G_STAFF, U[:2]), (G_BIG, U[3:6])], set(U[3:6])),
+    # the maybe-blocked service account must not push the break-glass pair over the cap: whether it is blocked decides the answer
+    "maybe-block-of-named-service-account-keeps-break-glass-credit": (
+        [pol("MFA all", include_users=["All"], exclude_users=[U[3], U[4], U[5]]),
+         pol("Block svc", grant=("block",), include_users=[U[5]], exclude_locations=["country-id"])], [], None),
     "legacy-auth-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), LEGACY_BLOCK], [STAFF], set(U[3:])),
     "geo-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), GEO_BLOCK], [STAFF], set(U[3:])),
     "full-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]),
@@ -151,6 +155,11 @@ def test_a_maybe_block_keeps_break_glass_credit_and_never_hides_a_measured_gap(n
     for value in (run_cov(b)[0], run_cov(b, "isRDPProtected")[0], run_ismfa(b)[0]):
         assert (value is False) == bool(want)
     assert (run_cov(b)[0] is not False) == (not want)
+
+
+def test_a_maybe_blocked_service_account_never_makes_the_break_glass_pair_a_confident_fail():
+    b = body(*CASES["maybe-block-of-named-service-account-keeps-break-glass-credit"][:2])
+    assert run_cov(b)[0] is None and run_cov(b, "isRDPProtected")[0] is None and run_ismfa(b)[0] is None
 
 
 @pytest.mark.parametrize("excluded", [["country-id"], ["AllTrusted", "country-id"]])
