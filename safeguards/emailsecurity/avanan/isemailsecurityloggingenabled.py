@@ -35,6 +35,9 @@ def transform(input):
         # If we got valid data, assume logging is enabled
         if not email_security_logging_enabled:
             email_security_logging_enabled = default_value
+            if email_security_logging_enabled is None and input.get('isEmailSecurityLoggingEnabled') is False:
+                # An explicit OFF is a measured fail, not "no evidence".
+                email_security_logging_enabled = False
 
         if email_security_logging_enabled is None:
             return {

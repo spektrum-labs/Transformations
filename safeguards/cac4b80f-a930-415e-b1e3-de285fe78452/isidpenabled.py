@@ -102,6 +102,11 @@ def transform(input):
         if isinstance(data, dict):
             is_sso_enabled = data.get('isSSOEnabled', default_value)
             is_sso_enabled_mdr = data.get('isSSOEnabledMDR', default_value)
+            if is_sso_enabled_mdr is None and is_sso_enabled is not None:
+                # The body states isSSOEnabled but says nothing about isSSOEnabledMDR. Keep the
+                # secondary a fail, as before, rather than a None that would turn the
+                # explicit primary verdict into Not evaluated.
+                is_sso_enabled_mdr = False
         else:
             is_sso_enabled = default_value
             is_sso_enabled_mdr = default_value

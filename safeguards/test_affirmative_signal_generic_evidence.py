@@ -210,3 +210,80 @@ def test_audit_log_needs_event_fields(rel):
 def test_empty_audit_log_stays_a_measured_fail(rel):
     out, criteria = run(rel, {"@odata.context": "x", "value": []})
     assert all(v is False for v in criteria.values()), out
+
+
+# A body that states the criterion explicitly is a measurement, whatever the helper says about
+# the rest of it. The helper's None ("no evidence") must not turn an explicit OFF into Not
+# evaluated, and a None sibling must not hide an explicit primary verdict.
+
+def dc_status(out):
+    return out.get("additionalInfo", {}).get("dataCollection", {}).get("status", "success")
+
+
+@pytest.mark.parametrize("body", [
+    {"isSAMLEnforced": False},
+    {"samlEnabled": False},
+    {"ssoEnabled": False},
+    {"sso": {"enforced": False}},
+    {"isSAMLEnforced": False, "status": "ok"},
+])
+def test_datto_saml_explicit_off_is_a_measured_fail(body):
+    out, criteria = run("backups/datto/issamlenforced.py", body)
+    assert criteria == {"isSAMLEnforced": False}, out
+    assert dc_status(out) == "success", out
+
+
+@pytest.mark.parametrize("body", [
+    {"isSAMLEnforced": True},
+    {"sso": {"enforced": True}},
+    {"isSAMLEnforced": False, "ssoEnabled": True},
+])
+def test_datto_saml_explicit_on_passes(body):
+    out, criteria = run("backups/datto/issamlenforced.py", body)
+    assert criteria == {"isSAMLEnforced": True}, out
+    assert dc_status(out) == "success", out
+
+
+PRIMARY_WITH_SIBLING = {
+    "isidpenabled.py": ("isSSOEnabled", "isSSOEnabledMDR"),
+    "ispatchmanagementenabled.py": ("isPatchManagementEnabled", "isPatchManagementValid"),
+}
+SIBLING_CASES = [(rel, value) for rel in FILES if rel.rsplit("/", 1)[-1] in PRIMARY_WITH_SIBLING
+                 for value in (True, False)]
+
+
+@pytest.mark.parametrize("rel,value", SIBLING_CASES)
+def test_explicit_primary_without_sibling_keeps_its_verdict(rel, value):
+    primary, sibling = PRIMARY_WITH_SIBLING[rel.rsplit("/", 1)[-1]]
+    out, criteria = run(rel, {primary: value})
+    assert criteria[primary] is value, out
+    assert dc_status(out) == "success", out
+    # The body says nothing about the sibling, so it is never a pass on the primary's word.
+    assert criteria[sibling] is False, out
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_asm_explicit_flag_without_lists_stays_measured(value):
+    out, criteria = run("a6b871e6-de13-41fa-8636-81a3b6f315f4/asm_transform.py", {"isASMEnabled": value})
+    assert criteria["isASMEnabled"] is value, out
+    assert criteria["isASMLoggingEnabled"] is None, out
+    assert dc_status(out) == "success", out
+    reasons = out["additionalInfo"]["evaluation"]["passReasons" if value else "failReasons"]
+    assert any("Attack Surface Management" in r for r in reasons), out
+
+
+def test_avanan_logging_explicit_off_is_a_measured_fail():
+    out, criteria = run("emailsecurity/avanan/isemailsecurityloggingenabled.py",
+                        {"isEmailSecurityLoggingEnabled": False})
+    assert criteria["isEmailSecurityLoggingEnabled"] is False, out
+    assert dc_status(out) == "success", out
+
+
+@pytest.mark.parametrize("rel,value", SIBLING_CASES)
+def test_sibling_alone_leaves_the_primary_not_evaluated(rel, value):
+    # The file answers the primary criterion; a body that names only the secondary finding
+    # has no evidence for it, so the whole response routes to Not evaluated, never a pass.
+    primary, sibling = PRIMARY_WITH_SIBLING[rel.rsplit("/", 1)[-1]]
+    out, criteria = run(rel, {sibling: value})
+    assert criteria[primary] is None, out
+    assert dc_status(out) == "error", out
