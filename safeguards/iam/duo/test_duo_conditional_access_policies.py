@@ -388,6 +388,24 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
         self.assertIn("RDP Application", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
 
+    def test_dropped_os_value_on_one_chain_does_not_hide_a_firm_false_on_the_other(self):
+        # own chain clean and empty, group policy drops its only value: users outside the group are uncovered
+        group_os = {"operating_systems": {"block_os_list": ["plan9"]}}
+        value, out = self.value(self.rdp_body(global_sections=DEFAULTS, group_sections=group_os, covered_apps=0))
+        self.assertIs(value, False)
+        self.assertEqual(out["transformedResponse"][INDET], 0)
+        # own chain drops one value but still has a condition; group policy clears its sections and drops nothing
+        own_os = {"operating_systems": {"block_os_list": ["plan9", "android"]}}
+        value, out = self.value(self.rdp_body(global_sections=with_sections(DEFAULTS, **own_os),
+                                              group_sections=DEFAULTS, covered_apps=0))
+        self.assertIs(value, False)
+        self.assertEqual(out["transformedResponse"][INDET], 0)
+        # own chain drops its only value: users outside the group are undecidable
+        value, out = self.value(self.rdp_body(global_sections=with_sections(DEFAULTS, **group_os),
+                                              group_sections=GEO_BLOCK, covered_apps=0))
+        self.assertIsNone(value)
+        self.assertEqual(out["transformedResponse"][INDET], 1)
+
     def test_group_binding_on_a_custom_application_policy_uses_that_chain(self):
         customs = [(VPN_KEY, "VPN trusted only", {"trusted_endpoints": {"trusted_endpoint_checking": "require-trusted"}}),
                    (GROUP_KEY, "Group policy with no setting", {"remembered_devices": {}})]
