@@ -118,8 +118,8 @@ CLIENT = "issmbclientsigningrequiredonallapplicabledevices"
 
 def test_client_signing_is_the_kb_entry_confirmed_on_a_tenant():
     """scid-95 under its knowledge-base name: every applicable device compliant passes, one not compliant fails
-    and is named; scid-95 under another name is Not evaluated, one with no name (the tenant's KB lacks it) is read by id, or another id under that name,
-    is Not evaluated, never passed."""
+    and is named; scid-95 under another name is Not evaluated, and one with no name (the tenant's KB lacks it) is
+    read by id. Another id under that name is Not evaluated, never passed."""
     transform = load_plain(CLIENT)
     good = [row("ws-01", "scid-95"), row("srv-01", "scid-95"), row("kiosk-01", "scid-95", 0, 0)]
     out = transform(result(good))
