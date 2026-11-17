@@ -279,7 +279,10 @@ def test_named_location_block_never_hides_a_real_gap():
 def test_sync_account_role_excluded_from_the_block_keeps_the_answer():
     # excluding only the Directory Synchronization Accounts role is the advised exemption: the result is still decided
     pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["D29B2B05-8046-44ba-8758-1e26182fcf32"])
-    assert value(SVC, svc_body([pol]))[0] is True
+    got, out = value(SVC, svc_body([pol]))
+    assert got is True
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["syncRoleExempted"] is True
+    assert "Directory Synchronization Accounts role are excluded" in svc_reason(out, "passReasons")
     other = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["62e90394-69f5-4237-9190-012177145e10"])
     assert value(SVC, svc_body([other]))[0] is None  # any other excluded role stays undecided
 
