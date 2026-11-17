@@ -3,9 +3,12 @@ Transformation: confirmedLicensePurchased
 Vendor: Qualys (Attack Surface Management)
 Category: Security / Licensing
 
-Reads GET /qps/rest/portal/version. Qualys serves the QPS API only to an active
-subscription, so ServiceResponse.responseCode SUCCESS proves the licence. A refused,
-failed or unrecognised answer is Not evaluated (None), never False by default.
+Reads GET /qps/rest/portal/version. A ServiceResponse.responseCode of SUCCESS shows that the
+API user authenticated and the portal answered; it carries no subscription, module or expiry
+field, and Qualys lists a product subscription as Active, Trial or Expired, so SUCCESS does not
+tell a purchase from a trial. SUCCESS is therefore Not evaluated (None), not a pass. A code that
+names an expired or missing subscription is False; an explicit licensePurchased flag still
+decides. A refused, failed or unrecognised answer is Not evaluated, never False by default.
 """
 
 import json
@@ -206,15 +209,15 @@ def transform(input):
         code = code.strip().upper() if isinstance(code, str) else ""
 
         if code == "SUCCESS":
+            # Reachability, not a licence: the portal version answers any authenticated API user.
             version = portal_version(service_response)
-            reason = "Qualys answered the authenticated portal call with SUCCESS"
-            if version:
-                reason = reason + " (portal " + version + ")"
-            return create_response(
-                result={criteriaKey: True},
-                validation=validation,
-                pass_reasons=[reason],
-                input_summary={"licensePurchased": True, "responseCode": code}
+            reason = "Qualys answered the authenticated portal call (SUCCESS"
+            reason = reason + (", portal " + version + ")" if version else ")")
+            return not_evaluated(
+                criteriaKey, validation,
+                reason + ", which shows the API user can sign in, not that a subscription was purchased",
+                "Wire a Qualys read that returns the subscription's status (Active, Trial, Expired) to prove the licence",
+                api_errors=["The portal version call carries no subscription evidence"]
             )
 
         if code in LICENCE_ABSENT_CODES:

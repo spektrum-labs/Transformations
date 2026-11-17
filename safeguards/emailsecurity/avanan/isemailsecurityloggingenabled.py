@@ -2,7 +2,10 @@ def transform(input):
     """
     Evaluates if email security logging is enabled in Avanan.
     
-    Checks for presence of audit logs and security event logs.
+    Checks for presence of audit logs and security event logs. `responseData` is the generic
+    envelope of every Avanan (Harmony Email & Collaboration) query, so its rows count only when
+    they are event records (an eventId or an event time); any other populated responseData is
+    Not evaluated, not a pass.
 
     Parameters:
         input (dict): The JSON data from Avanan audit logs endpoint.
@@ -23,8 +26,14 @@ def transform(input):
         # Check for explicit logging status
         email_security_logging_enabled = input.get('isEmailSecurityLoggingEnabled', False)
         
-        # If audit logs exist, logging is enabled
-        audit_logs = input.get('auditLogs', input.get('responseData', []))
+        # If audit logs exist, logging is enabled. Rows of the generic responseData envelope
+        # count only when they are event records.
+        if 'auditLogs' in input:
+            audit_logs = input.get('auditLogs')
+        else:
+            rows = input.get('responseData', [])
+            audit_logs = [r for r in rows if isinstance(r, dict) and any(r.get(k) for k in EVENT_RECORD_KEYS)] \
+                if isinstance(rows, list) else []
         security_events = input.get('securityEvents', [])
         
         if isinstance(audit_logs, list) and len(audit_logs) > 0:
@@ -51,6 +60,9 @@ def transform(input):
         return email_security_logging_info
     except Exception as e:
         return {"isEmailSecurityLoggingEnabled": False, "isEmailLoggingEnabled": False, "error": str(e)}
+
+
+EVENT_RECORD_KEYS = ("eventId", "eventCreated", "eventTime", "eventDate", "timestamp")
 
 
 NOT_EVIDENCED_REASON = (

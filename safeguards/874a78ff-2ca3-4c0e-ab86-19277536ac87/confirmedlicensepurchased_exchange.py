@@ -17,6 +17,16 @@ no enabled mailbox plan was seen elsewhere, malformed or unreadable input, and f
 code cannot read is one without service plans, a plan without a name, or a row with a mailbox plan whose status or
 enabled unit count is missing or not readable. A SKU list that was read whole and holds no enabled Exchange
 mailbox plan is a real False. An enabled mailbox plan that was read stays True beside any of the above.
+
+Purchased, not trial or free. subscribedSkus carries no trial flag, so the two-read wiring also reads
+GET https://graph.microsoft.com/v1.0/directory/subscriptions (Organization.Read.All, the same permission) and the
+workflow hands both bodies over as {"subscribedSkus": <body>, "subscriptions": <body>}. With that wiring a mailbox
+SKU counts only when one of its companySubscription rows (matched on skuId) is status "Enabled" with isTrial false.
+A trial-only or not-enabled mailbox SKU is a measured False. A mailbox SKU whose subscription row is missing or
+unreadable, an empty or error subscriptions body, or a subscriptions page that continues is Not evaluated unless a
+paid mailbox SKU was read. No-cost SKUs that carry a real mailbox plan (developer sandboxes, Office 365 A1) never
+count as purchased, in either wiring. The older single read (the bare subscribedSkus body) is still read as before
+and says in its pass reason that the trial status was not read.
 """
 
 import json
@@ -24,6 +34,11 @@ from datetime import datetime
 
 NEXT_LINK_KEYS = ("@odata.nextLink", "odata.nextLink", "nextLink")
 WRAPPER_KEYS = ("api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data")
+SKUS_KEY = "subscribedSkus"
+SUBSCRIPTIONS_KEY = "subscriptions"
+# No-cost SKUs that include an Exchange Online mailbox plan: the Microsoft 365 / Office 365 developer sandboxes and
+# the free Office 365 A1 education plans. A mailbox from one of these was not purchased.
+FREE_SKU_PARTS = ("DEVELOPERPACK", "DEVELOPERPACK_E5", "STANDARDWOFFPACK_FACULTY", "STANDARDWOFFPACK_STUDENT")
 
 
 def extract_input(input_data):
@@ -142,6 +157,28 @@ def has_next_link(body, depth=0):
     return False
 
 
+def subscription_verdict(sku_id, rows):
+    """Whether the companySubscription rows for one SKU show it is paid: "paid", "unpaid" or "unreadable".
+
+    Paid means at least one subscription for the SKU is Enabled and not a trial (isTrial is the boolean false).
+    A SKU with no subscription row, or a row whose status or trial flag cannot be read, cannot be shown paid."""
+    if not isinstance(sku_id, str) or sku_id.strip() == "":
+        return "unreadable"
+    matching = [r for r in rows if isinstance(r, dict) and str(r.get("skuId") or "").strip().lower() == sku_id.strip().lower()]
+    if not matching:
+        return "unreadable"
+    unreadable = False
+    for row in matching:
+        status = row.get("status")
+        trial = row.get("isTrial")
+        if not isinstance(status, str) or status.strip() == "" or not isinstance(trial, bool):
+            unreadable = True
+            continue
+        if status.strip().lower() == "enabled" and trial is False:
+            return "paid"
+    return "unreadable" if unreadable else "unpaid"
+
+
 def transform(input):
     criteriaKey = "confirmedLicensePurchased"
     try:
@@ -157,6 +194,11 @@ def transform(input):
                 "Input validation failed",
                 "Re-evaluate this check once the subscribedSkus read succeeds"
             )
+        # Two-read wiring: the workflow stores subscribedSkus and directory/subscriptions under their own keys.
+        combined = isinstance(data, dict) and SKUS_KEY in data
+        subscriptions = data.get(SUBSCRIPTIONS_KEY) if combined else None
+        if combined:
+            data = data.get(SKUS_KEY)
         if isinstance(data, dict) and ("PSError" in data or data.get("error")):
             raw = str(data.get("PSError") or data.get("error"))
             api_error, recommendation = parse_api_error(raw, source="Microsoft Graph")
@@ -175,11 +217,12 @@ def transform(input):
                 "No subscribed SKU was returned, so the licence could not be evaluated",
                 "Verify the integration can read subscribedSkus (Organization.Read.All), then re-evaluate this check"
             )
-        partial = has_next_link(input)
+        partial = has_next_link(data if combined else input)
         skus = [s for s in rows if isinstance(s, dict) and isinstance(s.get("servicePlans"), list)]
         unreadable = len(rows) - len(skus)
-        licensed = []
+        enabled_mail = []
         inactive = []
+        free = []
         for sku in skus:
             plans = []
             for plan in sku.get("servicePlans"):
@@ -201,6 +244,10 @@ def transform(input):
             if not plans:
                 continue
             part = str(sku.get("skuPartNumber") or sku.get("skuId") or "unknown")
+            if part.strip().upper() in FREE_SKU_PARTS:
+                # A no-cost SKU carries a real mailbox plan, but nothing was purchased.
+                free.append(part)
+                continue
             status = sku.get("capabilityStatus")
             if not isinstance(status, str) or status.strip() == "":
                 unreadable += 1
@@ -215,36 +262,69 @@ def transform(input):
                 unreadable += 1
                 continue
             if enabled_units > 0:
-                licensed.append(part)
+                enabled_mail.append((part, sku.get("skuId")))
             else:
                 inactive.append(part + " (" + status.strip() + ", 0 units)")
+
+        trial_checked = False
+        subscriptions_partial = False
+        trial_unreadable = 0
+        if combined:
+            # The trial flag lives on directory/subscriptions (companySubscription.isTrial), not on subscribedSkus.
+            sub_rows = subscriptions.get("value") if isinstance(subscriptions, dict) else subscriptions
+            sub_error = isinstance(subscriptions, dict) and ("PSError" in subscriptions or subscriptions.get("error"))
+            if isinstance(sub_rows, list) and len(sub_rows) > 0 and not sub_error:
+                trial_checked = True
+                subscriptions_partial = has_next_link(subscriptions)
+                licensed = []
+                for part, sku_id in enabled_mail:
+                    verdict = subscription_verdict(sku_id, sub_rows)
+                    if verdict == "paid":
+                        licensed.append(part)
+                    elif verdict == "unpaid":
+                        inactive.append(part + " (trial or not enabled)")
+                    else:
+                        trial_unreadable += 1
+            else:
+                licensed = []
+                trial_unreadable = len(enabled_mail)
+        else:
+            licensed = [part for part, _ in enabled_mail]
+
         is_licensed = len(licensed) > 0
-        if not is_licensed and partial:
-            # A page that continues holds SKUs that were not read, so the absence of a mailbox plan proves nothing.
+        if not is_licensed and (partial or subscriptions_partial):
+            # A page that continues holds rows that were not read, so the absence of a paid mailbox plan proves nothing.
             return not_evaluated(
                 validation,
-                "The subscribedSkus read is incomplete: more pages exist than were read",
-                "More subscribed SKU pages exist than were read, so the absence of a mailbox plan is not proven",
-                "Re-evaluate this check once every subscribedSkus page can be read"
+                "The subscribedSkus or subscriptions read is incomplete: more pages exist than were read",
+                "More pages exist than were read, so the absence of a paid mailbox plan is not proven",
+                "Re-evaluate this check once every page can be read"
             )
-        if not is_licensed and unreadable > 0:
-            # A row or plan the code cannot read may be the mailbox plan, so its absence from the answer proves nothing.
+        if not is_licensed and (unreadable > 0 or trial_unreadable > 0):
+            # A row the code cannot read, or a mailbox SKU whose trial status cannot be read, may be the paid plan.
             return not_evaluated(
                 validation,
-                "Could not read every subscribed SKU",
-                "Not every subscribed SKU could be read, so the absence of a mailbox plan is not proven",
-                "Verify the integration can read subscribedSkus (Organization.Read.All), then re-evaluate this check"
+                "Could not read every subscribed SKU and its subscription",
+                "Not every mailbox SKU could be shown paid or unpaid, so the licence is not proven",
+                "Verify the integration can read subscribedSkus and directory/subscriptions (Organization.Read.All), then re-evaluate this check"
             )
         pass_reasons = []
         fail_reasons = []
         recommendations = []
         if is_licensed:
-            pass_reasons.append("Enabled Exchange Online subscription(s): " + ", ".join(licensed[:5]))
-            if partial or unreadable > 0:
-                pass_reasons.append("Not every subscribed SKU was read; an enabled mailbox plan that was read proves the licence")
-        elif inactive:
-            fail_reasons.append("Exchange Online subscriptions are present but not active: " + ", ".join(inactive[:5]))
-            recommendations.append("Renew the Microsoft 365 / Exchange Online subscription")
+            if trial_checked:
+                pass_reasons.append("Paid (not trial), enabled Exchange Online subscription(s): " + ", ".join(licensed[:5]))
+            else:
+                pass_reasons.append("Enabled Exchange Online subscription(s): " + ", ".join(licensed[:5]))
+                pass_reasons.append("Trial status was not read: wire directory/subscriptions to tell a trial from a purchase")
+            if partial or unreadable > 0 or subscriptions_partial or trial_unreadable > 0:
+                pass_reasons.append("Not every row was read; a paid mailbox plan that was read proves the licence")
+        elif inactive or free:
+            if inactive:
+                fail_reasons.append("Exchange Online subscriptions are present but not purchased and active: " + ", ".join(inactive[:5]))
+            if free:
+                fail_reasons.append("Only no-cost SKUs carry a mailbox plan: " + ", ".join(free[:5]))
+            recommendations.append("Purchase or renew a Microsoft 365 / Exchange Online subscription")
         else:
             fail_reasons.append("No subscribed SKU carries an Exchange Online mailbox plan")
             recommendations.append("License Exchange Online (standalone or through a Microsoft 365 plan)")
@@ -254,7 +334,9 @@ def transform(input):
             pass_reasons=pass_reasons,
             fail_reasons=fail_reasons,
             recommendations=recommendations,
-            input_summary={"skuCount": len(skus), "exchangeSkusEnabled": len(licensed), "exchangeSkusInactive": len(inactive), "unreadable": unreadable, "moreSkuPages": partial}
+            input_summary={"skuCount": len(skus), "exchangeSkusEnabled": len(licensed), "exchangeSkusInactive": len(inactive),
+                           "freeMailboxSkus": len(free), "unreadable": unreadable, "moreSkuPages": partial,
+                           "trialStatusRead": trial_checked, "trialStatusUnreadable": trial_unreadable}
         )
     except Exception as e:
         message = str(e)[:200]  # the text reaches the stored result, so a long one is cut
