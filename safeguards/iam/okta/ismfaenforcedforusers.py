@@ -193,6 +193,8 @@ def MFA_CHECKS():
         """Factor types one chain alternative proves, or None when its authenticator is not known."""
         key = as_text(entry.get("key")).lower()
         method = as_text(entry.get("method")).lower()
+        if key == "smart_card_idp":
+            return ["possession", "knowledge"]  # PIV/CAC: the card plus its PIN
         if key in KNOWLEDGE_KEYS or method in KNOWLEDGE_METHODS:
             return ["knowledge"]
         if key in POSSESSION_KEYS or method in POSSESSION_METHODS:

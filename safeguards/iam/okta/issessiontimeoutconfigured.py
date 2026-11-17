@@ -37,7 +37,7 @@ NO_LIMIT_MINUTES = 43800 * 60
 def transform(input):
     """
     isSessionTimeoutConfigured - the longest time, in minutes, an Okta session may sit idle before Okta ends it
-    (Josh's decision 2026-11-16: the IDLE timeout is graded). The requirement's threshold decides (for example
+    (decision 2026-11-16: the IDLE timeout is graded). The requirement's threshold decides (for example
     lessThan 480).
 
     Value: the largest maxSessionIdleMinutes over the ACTIVE global session (OKTA_SIGN_ON) policies' ACTIVE rules

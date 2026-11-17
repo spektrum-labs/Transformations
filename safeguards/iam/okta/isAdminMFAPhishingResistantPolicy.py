@@ -107,7 +107,7 @@ def assurance_resistant(method):
     two_factor = policy_text(method.get("factorMode")).upper() == "2FA"
     for constraint in constraints:
         possession = policy_dict(policy_dict(constraint).get("possession"))
-        if policy_text(possession.get("phishingResistant")).upper() != "REQUIRED" or possession.get("required") is False:
+        if policy_text(possession.get("phishingResistant")).upper() != "REQUIRED" or policy_text(possession.get("required")).lower() == "false":
             return False, "a constraint does not require a phishing-resistant authenticator"
         if not two_factor and policy_text(possession.get("userVerification")).upper() != "REQUIRED":
             return False, "factorMode " + (policy_text(method.get("factorMode")) or "missing") + " without user verification"
@@ -118,6 +118,8 @@ def entry_types(entry):
     """Factor types one chain alternative proves, or None when its authenticator is not known."""
     key = policy_text(entry.get("key")).lower()
     method = policy_text(entry.get("method")).lower()
+    if key == "smart_card_idp":
+        return ["possession", "knowledge"]  # PIV/CAC: the card plus its PIN
     if key in KNOWLEDGE_KEYS or method in KNOWLEDGE_METHODS:
         return ["knowledge"]
     if key in POSSESSION_KEYS or method in POSSESSION_METHODS:

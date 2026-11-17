@@ -79,6 +79,13 @@ class RbacTests(unittest.TestCase):
         data["result"]["iterateStats"]["adminRoles"]["itemErrors"] = 1
         self.check(data, True)
 
+    def test_org_admin_is_a_full_control_role(self):
+        data = copy.deepcopy(REAL)
+        data["result"]["adminRoles"] = [[role("ORG_ADMIN")], [role("SUPER_ADMIN"), role("ORG_ADMIN")], [role("ORG_ADMIN")]]
+        self.check(data, False)
+        data["result"]["adminRoles"][2] = [role("HELP_DESK_ADMIN")]
+        self.check(data, True)
+
     def test_super_admin_plus_narrow_role_on_every_admin_fails(self):
         data = copy.deepcopy(REAL)
         data["result"]["adminRoles"] = [[role("SUPER_ADMIN"), role("READ_ONLY_ADMIN")] for _ in range(3)]
