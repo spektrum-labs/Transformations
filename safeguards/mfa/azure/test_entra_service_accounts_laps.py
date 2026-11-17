@@ -108,6 +108,7 @@ def svc_body(policies, users=None, members=None):
             "groupMembers": [graph([{"id": m} for m in ids]) for _, ids in pairs]}
 
 
+DIRSYNC = "d29b2b05-8046-44ba-8758-1e26182fcf32"
 SVC_PASS = svc_body([ca("Block service accounts", groups=[G_SVC, G_SVC2]), ca("MFA all", all_users=True, block=False)])
 SVC_FAIL = svc_body([ca("Block svc", groups=[G_SVC]),
                      ca("Block integrations outside office", groups=[G_SVC2],
@@ -285,6 +286,25 @@ def test_sync_account_role_excluded_from_the_block_keeps_the_answer():
     assert "Directory Synchronization Accounts role are excluded" in svc_reason(out, "passReasons")
     other = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["62e90394-69f5-4237-9190-012177145e10"])
     assert value(SVC, svc_body([other]))[0] is None  # any other excluded role stays undecided
+
+
+def test_role_holders_read_whole_are_not_judged_as_blocked():
+    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=[DIRSYNC])
+    body = svc_body([pol])
+    body["roleAssignments"] = graph([{"principalId": SA1, "roleDefinitionId": DIRSYNC}])
+    got, out = value(SVC, body)
+    summary = out["additionalInfo"]["transformation"]["inputSummary"]
+    assert got is True and summary["syncRoleHoldersNotJudged"] == 1 and summary["syncRoleExempted"] is False
+    assert "were not checked" not in svc_reason(out, "passReasons")
+    body["roleAssignments"] = graph([{"principalId": u, "roleDefinitionId": DIRSYNC} for u in (SA1, SA2, "x1")])
+    assert value(SVC, body)[0] is True  # a holder that is not a service account is not counted
+    three = svc_body([pol], users=USERS + [account(BG1, background=1), account(BG2, background=1), account(BG3, background=1)])
+    three["roleAssignments"] = graph([{"principalId": u, "roleDefinitionId": DIRSYNC} for u in (BG1, BG2, BG3)])
+    got, out = value(SVC, three)
+    assert got is None and "hold the Directory Synchronization Accounts role" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    truncated = svc_body([pol])
+    truncated["roleAssignments"] = {"value": [], "paginationTruncated": True}
+    assert "were not checked" in svc_reason(value(SVC, truncated)[1], "passReasons")
 
 
 def test_sync_account_excluded_by_name_is_failed_and_advice_names_the_role():
