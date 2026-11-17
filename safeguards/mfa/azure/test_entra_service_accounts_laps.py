@@ -288,23 +288,47 @@ def test_sync_account_role_excluded_from_the_block_keeps_the_answer():
     assert value(SVC, svc_body([other]))[0] is None  # any other excluded role stays undecided
 
 
-def test_role_holders_read_whole_are_not_judged_as_blocked():
+def assign(*ids, kind="user", role=DIRSYNC):
+    return graph([{"principalId": u, "roleDefinitionId": role, "principal": {"@odata.type": "#microsoft.graph." + kind}}
+                  for u in ids])
+
+
+def test_role_holders_read_whole_are_not_judged_when_a_block_excludes_the_role():
     pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=[DIRSYNC])
     body = svc_body([pol])
-    body["roleAssignments"] = graph([{"principalId": SA1, "roleDefinitionId": DIRSYNC}])
+    body["roleAssignments"] = assign(SA1)
     got, out = value(SVC, body)
     summary = out["additionalInfo"]["transformation"]["inputSummary"]
     assert got is True and summary["syncRoleHoldersNotJudged"] == 1 and summary["syncRoleExempted"] is False
-    assert "were not checked" not in svc_reason(out, "passReasons")
-    body["roleAssignments"] = graph([{"principalId": u, "roleDefinitionId": DIRSYNC} for u in (SA1, SA2, "x1")])
-    assert value(SVC, body)[0] is True  # a holder that is not a service account is not counted
+    body["roleAssignments"] = assign(SA1, SA2)
+    got, out = value(SVC, body)
+    assert got is True and "Only holders of the Directory Synchronization Accounts role" in svc_reason(out, "passReasons")
     three = svc_body([pol], users=USERS + [account(BG1, background=1), account(BG2, background=1), account(BG3, background=1)])
-    three["roleAssignments"] = graph([{"principalId": u, "roleDefinitionId": DIRSYNC} for u in (BG1, BG2, BG3)])
+    three["roleAssignments"] = assign(BG1, BG2, BG3)
     got, out = value(SVC, three)
     assert got is None and "hold the Directory Synchronization Accounts role" in out["additionalInfo"]["dataCollection"]["errors"][0]
-    truncated = svc_body([pol])
-    truncated["roleAssignments"] = {"value": [], "paginationTruncated": True}
-    assert "were not checked" in svc_reason(value(SVC, truncated)[1], "passReasons")
+
+
+def test_role_holders_never_hide_an_unblocked_account():
+    # no block excludes the role: holders are judged like any account
+    body = svc_body([ca("MFA all", all_users=True, block=False)])
+    body["roleAssignments"] = assign(SA1, SA2)
+    assert value(SVC, body)[0] is False
+
+
+@pytest.mark.parametrize("roles", [
+    {"value": [], "paginationTruncated": True},   # truncated
+    {"value": []},                                # lists no holder of this role (a filtered read cannot tell)
+    assign("g1", kind="group"),                   # held through a group: its members are not read
+    assign(SA1, role="62e90394-69f5-4237-9190-012177145e10"),  # some other role only
+])
+def test_role_read_that_cannot_name_the_holders_keeps_the_note(roles):
+    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=[DIRSYNC])
+    body = svc_body([pol])
+    body["roleAssignments"] = roles
+    got, out = value(SVC, body)
+    assert got is True and out["additionalInfo"]["transformation"]["inputSummary"]["syncRoleExempted"] is True
+    assert "were not checked" in svc_reason(out, "passReasons")
 
 
 def test_sync_account_excluded_by_name_is_failed_and_advice_names_the_role():
