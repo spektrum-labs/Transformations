@@ -1,7 +1,10 @@
 def transform(input):
     """
     Evaluates if the license has been purchased for Liongard.
-    Checks the environments API response to verify valid API key/subscription.
+    The environments list (and its count) shows only that the API key was accepted: Liongard's
+    environments records carry no subscription or licence field. So only an explicit licence
+    field in the body decides; an environments list, a count (0 included) or any other body is
+    Not evaluated (None), and an error or explicit OFF is False.
 
     Parameters:
         input (dict): The JSON data containing Liongard API environments response.
@@ -25,26 +28,12 @@ def transform(input):
         if 'apiResponse' in input:
             input = input['apiResponse']
 
-        # If we got a valid response from the environments endpoint,
-        # it means the API key is valid and the subscription is active
-        # `input is not None` asked whether a RESPONSE ARRIVED, not what it said, so any
-        # 2xx body -- including one describing the control as OFF -- satisfied this
-        # criterion and no input could make it false. Resolved from the payload now.
-        default_value = affirmative_signal(input)
-
-        # Check if environments were returned (indicates valid subscription)
-        has_data = False
-        if isinstance(input, dict):
-            # Check for data array or environments list
-            data = input.get('data', input.get('environments', input.get('items', [])))
-            has_data = len(data) > 0 if isinstance(data, list) else bool(data)
-            # Also check for count field
-            if not has_data and 'count' in input:
-                has_data = int(input.get('count', 0)) >= 0
-        elif isinstance(input, list):
-            has_data = len(input) > 0
-
-        license_purchased = has_data or default_value
+        # An accepted API key, an environments list or a count (`count >= 0` was always true)
+        # is not a licence. Only what the payload says about the licence decides.
+        if isinstance(input, list):
+            license_purchased = None if input else False
+        else:
+            license_purchased = affirmative_signal(input)
 
         if license_purchased is None:
             return {
