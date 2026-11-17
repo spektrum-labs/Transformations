@@ -734,6 +734,7 @@ def transform(input):
                 chain = [glob] if own is glob else [own, glob]
                 dropped_before = len(unknown_os)
                 found = conditions_of(chain, unknown_os)
+                own_dropped = len(unknown_os) > dropped_before
                 slot = groups.get(str(app.get("integration_key")))
                 if slot is None:
                     if found:
@@ -747,6 +748,7 @@ def transform(input):
                 # an application with group bindings: read every group policy first so an unreadable one fails
                 # closed, then judge the group chain beside the application's own chain
                 group_found = []
+                group_start = len(unknown_os)
                 for policy_key in slot["policies"]:
                     group_found.append(conditions_of([by_key[policy_key]] + chain, unknown_os))
                 if slot["problems"]:
@@ -759,7 +761,8 @@ def transform(input):
                 elif found and group_found[0]:
                     covered.append((app_name(app), found))
                     resolved_groups.append(app_name(app))
-                elif not (found and group_found[0]) and len(unknown_os) > dropped_before:
+                elif (not found and own_dropped) or \
+                        (found and not group_found[0] and len(unknown_os) > group_start):
                     indeterminate.append(app_name(app))
                     indeterminate_why.append(DROPPED_WHY)
                 elif not found and not group_found[0]:
