@@ -238,14 +238,15 @@ def policy_covers_admin_roles(policy):
     if listed(conditions, "userRiskLevels") or listed(conditions, "signInRiskLevels"):
         return []
     users = conditions.get("users")
-    include_users = listed(users, "includeUsers")
-    include_roles = listed(users, "includeRoles")
-    exclude_roles = listed(users, "excludeRoles")
+    include_users = folded(listed(users, "includeUsers"))
+    include_roles = folded(listed(users, "includeRoles"))
+    exclude_roles = folded(listed(users, "excludeRoles"))
     covered = []
     for role_id in SECURITY_ADMIN_ROLES:
-        if role_id in exclude_roles:
+        rid = role_id.lower()
+        if rid in exclude_roles:
             continue
-        if "All" in include_users or "All" in include_roles or role_id in include_roles:
+        if "all" in include_users or "all" in include_roles or rid in include_roles:
             covered.append(role_id)
     return covered
 
@@ -319,7 +320,8 @@ def transform(input):
                 continue
 
             state = str(policy.get("state") or "").lower()
-            name = str(policy.get("displayName") or policy.get("id") or "unnamed")
+            # id, not displayName: tenant-written names can carry people's names
+            name = str(policy.get("id") or "unnamed")
 
             if not policy_requires_mfa(policy):
                 continue
