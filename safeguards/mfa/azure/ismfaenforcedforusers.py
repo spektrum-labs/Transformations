@@ -666,7 +666,8 @@ def full_block_reach(policy):
             or has_value(apps.get("applicationFilter")) or has_value(plat.get("excludePlatforms"))
             or (client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client))
             or (where and "all" not in where) or (system and "all" not in system)
-            or any([has_value(v) for k, v in conditions.items() if k not in READ_CONDITIONS])):
+            or any([has_value(v) for k, v in conditions.items()
+                     if k not in READ_CONDITIONS and not str(k).startswith("@")])):
         return False
     return None if location_exclusion_unread(conditions) else True
 
