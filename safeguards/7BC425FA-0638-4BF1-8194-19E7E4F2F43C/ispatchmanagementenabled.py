@@ -102,6 +102,11 @@ def transform(input):
         if isinstance(data, dict):
             is_patch_management_enabled = data.get('isPatchManagementEnabled', default_value)
             is_patch_management_valid = data.get('isPatchManagementValid', default_value)
+            if is_patch_management_valid is None and is_patch_management_enabled is not None:
+                # The body states isPatchManagementEnabled but says nothing about isPatchManagementValid. Keep the
+                # secondary a fail, as before, rather than a None that would turn the
+                # explicit primary verdict into Not evaluated.
+                is_patch_management_valid = False
         else:
             is_patch_management_enabled = default_value
             is_patch_management_valid = default_value

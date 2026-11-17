@@ -102,12 +102,14 @@ def transform(input):
         # Check for SAML/SSO enforcement
         is_saml_enforced = False
         if isinstance(data, dict):
-            is_saml_enforced = (
-                data.get('isSAMLEnforced', default_value) or
-                data.get('samlEnabled', default_value) or
-                data.get('ssoEnabled', default_value) or
-                data.get('sso', {}).get('enforced', default_value)
-            )
+            # An explicit setting decides on its own. The helper's None ("no evidence") is
+            # only the answer when the body names none of them, so an explicit OFF stays a
+            # measured fail instead of turning into Not evaluated.
+            explicit = [data[k] for k in ("isSAMLEnforced", "samlEnabled", "ssoEnabled") if k in data]
+            sso = data.get("sso")
+            if isinstance(sso, dict) and "enforced" in sso:
+                explicit.append(sso["enforced"])
+            is_saml_enforced = any(v is True for v in explicit) if explicit else default_value
 
         if is_saml_enforced:
             pass_reasons.append("SAML/SSO is enforced for Datto BCDR portal access")

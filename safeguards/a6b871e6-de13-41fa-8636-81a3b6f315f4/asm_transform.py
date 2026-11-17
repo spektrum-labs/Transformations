@@ -66,11 +66,6 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                       or ["The response could not answer this check, so it was not evaluated."])
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
-    if not api_errors and None in result.values():
-        # A criterion left as None was not measured; say so where the evaluator reads it.
-        api_errors = [NOT_EVIDENCED_REASON]
-        fail_reasons = [NOT_EVIDENCED_REASON]
-        recommendations = []
     return {
         "transformedResponse": result,
         "additionalInfo": {
@@ -391,12 +386,6 @@ def transform(input):
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
         )
-
-
-NOT_EVIDENCED_REASON = (
-    "Not evaluated: the response carries no evidence for this criterion. A status field, an "
-    "HTTP code or a list of records on its own only shows that the call succeeded."
-)
 
 
 def affirmative_signal(data):
