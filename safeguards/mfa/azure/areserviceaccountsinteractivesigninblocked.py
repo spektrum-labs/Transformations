@@ -479,6 +479,26 @@ def full_block(policy):
     return None if location_unread(cond) else True
 
 
+def sync_holders(body):
+    """Lower-case ids holding the Directory Synchronization Accounts role from an optional roleAssignments read
+    (principal ids); None when the part is absent or not read whole, so the exemption note stays."""
+    if "roleAssignments" not in body:
+        return None
+    items, why = graph_collection(body.get("roleAssignments"), "role assignments")
+    if why:
+        return None
+    out = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        if str(item.get("roleDefinitionId") or item.get("roleTemplateId") or "").strip().lower() == DIRSYNC_ROLE:
+            pid = str(item.get("principalId") or "").strip().lower()
+            if not pid:
+                return None
+            out.add(pid)
+    return out
+
+
 def sync_role_excluded(policy):
     return DIRSYNC_ROLE in lowered(users_of(policy).get("excludeRoles"))
 
@@ -568,6 +588,9 @@ def transform(input):
         carve_only = carved - by_signal
         break_glass = glass - by_signal
         service = by_signal | (carve_only - break_glass)
+        holders = sync_holders(body)
+        sync_held = (service & holders) if holders is not None else set()
+        service = service - sync_held
         decided = [(p, full_block(p)) for p in policies]
         decided = [(p, d) for p, d in decided if d is not False]
         blocks = [p for p, d in decided if d]
@@ -583,7 +606,8 @@ def transform(input):
                    "serviceAccountsBySignInSignal": len(by_signal), "serviceAccountsByMfaExclusion": len(carve_only - break_glass),
                    "breakGlassAccountsNotJudged": len(break_glass), "fullBlockPolicies": len(blocks),
                    "trustedLocationExemption": any(location_exempt(p) for p in blocks),
-                   "syncRoleExempted": any(sync_role_excluded(p) for p in blocks),
+                   "syncRoleExempted": holders is None and any(sync_role_excluded(p) for p in blocks),
+                   "syncRoleHoldersNotJudged": len(sync_held),
                    "unblocked": len(unblocked), "undecided": len(undecided), "signalDays": SIGNAL_DAYS}
         scope = (f"service accounts are enabled member accounts with a non-interactive sign-in and no interactive one "
                  f"in {SIGNAL_DAYS} days, or that a Conditional Access MFA policy would reach but excludes")
@@ -594,7 +618,7 @@ def transform(input):
         exempt_note = ""
         if [p for p in blocks if location_exempt(p)]:
             exempt_note = " (at least one blocks sign-in outside trusted locations)"
-        if [p for p in blocks if sync_role_excluded(p)]:
+        if holders is None and [p for p in blocks if sync_role_excluded(p)]:
             exempt_note += (" (holders of the Directory Synchronization Accounts role are excluded from a block and "
                             "were not checked)")
         if unblocked:
@@ -615,6 +639,11 @@ def transform(input):
                                  "Synchronization Accounts role, not the account by name."],
                 input_summary=summary,
             )
+        if len(sync_held) > MAX_BREAK_GLASS:
+            return not_measured(validation, "Microsoft Entra ID: " + str(len(sync_held)) + " service accounts hold the "
+                                "Directory Synchronization Accounts role, more than the Entra Connect sync accounts "
+                                "expected, so they are not judged and a pass is not given. Attest, or remove the role "
+                                "from non-sync accounts.")
         if len(break_glass) > MAX_BREAK_GLASS:
             return not_measured(validation, "Microsoft Entra ID: " + str(len(break_glass)) + " accounts are excluded "
                                 "from an all-users MFA policy by name or through a small group, more than the "
