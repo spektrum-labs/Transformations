@@ -194,7 +194,7 @@ def MFA_CHECKS():
         key = as_text(entry.get("key")).lower()
         method = as_text(entry.get("method")).lower()
         if key == "smart_card_idp":
-            return ["possession", "knowledge"]  # PIV/CAC: the card plus its PIN
+            return ["possession", "knowledge"]  # assumption: PIV/CAC = card plus PIN; the middleware enforces the PIN, the policy body cannot show it (Okta smart card IdP docs)
         if key in KNOWLEDGE_KEYS or method in KNOWLEDGE_METHODS:
             return ["knowledge"]
         if key in POSSESSION_KEYS or method in POSSESSION_METHODS:
