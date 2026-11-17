@@ -4,13 +4,14 @@ Vendor: Check Point Harmony Email & Collaboration (Infinity Portal API)
 Method: searchLinkEmails (POST /app/hec-api/v1.0/search/query, office365_emails_email, entityPayload.emailLinks isNotEmpty, last 7 days)
 
 True when at least one email entity that contains links (entityPayload.emailLinks non-empty)
-carries a click-time protection result: entitySecurityResults.combinedVerdict.clicktimeProtection
-is set, or entitySecurityResults.clicktimeProtection is a non-empty result with a verdict (API
+carries a click-time protection result: entitySecurityResult.combinedVerdict.clicktimeProtection
+is set, or entitySecurityResult.clicktimeProtection is a non-empty result with a verdict (API
 reference, Get the Details of a Specific Entity: combinedVerdict.clicktimeProtection = Clicktime
 protection verdict). Links are only scanned at click time when HEC rewrites them, so a verdict is
 the observable effect of URL rewriting. Entities without links are ignored (the filter is not
-trusted); no linked email in the window, or none with a verdict, reads false. Field names are
-from the API reference; no live payload of this method has been captured yet.
+trusted); no linked email in the window, or none with a verdict, reads false. The field name
+entitySecurityResult was measured on a live payload (27 Oct 2026); the API reference spells it
+entitySecurityResults, and both are read.
 Not evaluated (None, with a data-collection error) when the body is an error, empty or unrecognised:
 it proves nothing, so it is never reported as False. A readable answer that lists nothing keeps the
 verdict described above.
@@ -147,7 +148,10 @@ def transform(input):
         """"more" when the response says records remain beyond this page: a scrollId that is not
         empty (the stored raw form writes null as "None"), or a recordsNumber larger than the page.
         "unknown" when it states a recordsNumber that cannot be read, so nobody knows whether the page
-        is complete. "" when the page is complete. Anything but "" cannot prove an absence."""
+        is complete. "" when the page is complete. Anything but "" cannot prove an absence.
+        A live search answer carries a scrollId on its last page too, so a page whose recordsNumber
+        equals its length still reads "more" here: deliberately conservative (None, never a false
+        verdict), left for a follow-up that changes every presence check together."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
             token = holder.get("scrollId")
@@ -213,6 +217,14 @@ def transform(input):
             except Exception:
                 return None, False
         return value, True
+
+    def security_result(entity):
+        """The entity's security-result block under either spelling: entitySecurityResult (what the
+        live search API returns) or entitySecurityResults (the API reference). A present key wins
+        even when empty, so a blank singular is not masked by a stale plural."""
+        if "entitySecurityResult" in entity:
+            return entity.get("entitySecurityResult")
+        return entity.get("entitySecurityResults")
 
     def read_object(value):
         """(object, readable): a dict, or JSON text holding one. A missing, blank or "None" value and
@@ -285,7 +297,9 @@ def transform(input):
             if not (isinstance(links, list) and len([l for l in links if text(l)]) > 0):
                 continue
             linked.append(e)
-            results, results_ok = read_object(e.get("entitySecurityResults"))
+            # The live search API names the block entitySecurityResult (singular, measured on a real
+            # tenant 27 Oct 2026); the API reference and older fixtures spell it entitySecurityResults.
+            results, results_ok = read_object(security_result(e))
             if not results_ok:
                 unreadable = unreadable + 1
                 continue

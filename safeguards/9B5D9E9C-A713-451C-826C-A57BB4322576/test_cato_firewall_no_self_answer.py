@@ -7,6 +7,10 @@ Rules, all on the Cato firewall answers (isFirewallLoggingEnabled, isFirewallEna
 2. isFirewallLoggingEnabled is answered only by an audit feed that was actually read. A feed that is absent, null, empty,
    not an object, or has a fetchedCount that is missing or cannot be read as a count was not measured: None with a
    data-collection error (Not evaluated), never False. Only a feed read with fetchedCount 0 is the measured False.
+   One transform serves three methods and each body carries only its own slice (the policy call sends firewall/wanNetwork,
+   the logging call sends auditFeed). A slice the body never carried is None with no data-collection error, because the
+   status is read for the whole output and would mark the measured key Not evaluated. A slice present but unreadable,
+   or a body with neither slice, still reports the error.
 3. isFirewallEnabled and isFirewallConfigured are answered from the two policy layers (internet firewall, WAN network).
    A layer is read only when its policy object is there and its enabled flag is a boolean or the text "true"/"false"
    (any case, any spacing). Any other enabled value (a number, "maybe", "yes", null, a list) leaves the layer unread; an
@@ -187,7 +191,12 @@ def test_a_feed_that_is_absent_or_not_an_object_is_not_evaluated(tx, name, body)
     for shape in shapes(body):
         assert_logging_not_evaluated(tx(shape))
     for shape in shapes(full(**body)):
-        assert_logging_not_evaluated(tx(shape))
+        out = tx(shape)
+        if "auditFeed" in body:
+            assert_logging_not_evaluated(out)
+        else:  # a policy-call body: the feed is another method's slice
+            assert value(out) is None
+            assert collection(out)["status"] == "success"
 
 
 BAD_COUNT_BODIES = [
@@ -219,9 +228,11 @@ def test_a_feed_with_no_readable_count_is_not_evaluated(tx, name, body):
             assert_logging_not_evaluated(tx(shape))
 
 
-def test_a_feed_not_read_leaves_the_layer_answers_as_they_were(tx):
+def test_a_policy_call_body_is_evaluated_without_the_feed(tx):
     out = tx(full())
-    assert_logging_not_evaluated(out)
+    assert value(out) is None
+    assert collection(out)["status"] == "success"
+    assert collection(out)["errors"] == []
     assert value(out, ENABLED) is True
     assert value(out, CONFIGURED) is True
     assert out["transformedResponse"]["internetFirewallRules"] == ["block-all-inbound"]
@@ -379,7 +390,8 @@ def test_only_a_measured_read_may_answer_false(tx, internet_state, wan_state, ru
         assert value(out, ENABLED) is enabled
         assert value(out, CONFIGURED) is configured
         assert value(out, KEY) is True  # the feed was read
-        if enabled is None or configured is None:
+        layer_present = internet_state != "absent" or wan_state != "absent"
+        if (enabled is None or configured is None) and layer_present:
             assert collection(out)["status"] == "error"
             assert collection(out)["errors"]
         else:
@@ -461,7 +473,6 @@ def test_a_layer_with_rules_not_a_list_is_still_a_read_layer_for_enabled(tx):
 NO_LAYER_BODIES = [
     ("an empty body", {}),
     ("another key only", {"something": 1}),
-    ("a feed and no layer", {"auditFeed": {"fetchedCount": 3}}),
     ("a firewall key with no data", {"firewall": {}}),
     ("a firewall key with data and no policy", {"firewall": {"data": {}}}),
     ("a policy with no internet firewall", {"firewall": {"data": {"policy": {}}}}),
@@ -486,6 +497,7 @@ def test_a_body_with_no_layer_still_measures_a_feed_that_was_read(tx):
     out = tx({"auditFeed": {"fetchedCount": 3}})
     assert value(out) is True
     assert value(out, ENABLED) is None
+    assert collection(out)["status"] == "success"  # a logging-call body: the layers are another method's slice
     out = tx({"auditFeed": {"fetchedCount": 0}})
     assert value(out) is False
     assert value(out, CONFIGURED) is None

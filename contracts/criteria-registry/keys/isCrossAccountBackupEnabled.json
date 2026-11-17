@@ -1,0 +1,40 @@
+{
+  "name": "isCrossAccountBackupEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "At least one enabled replication rule copies a bucket to a bucket in a different storage account.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the buckets the backup storage account lists, with their outbound replication rules",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A bucket list in which an enabled outbound replication rule names a destination bucket that is not one of the account's own listed buckets.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/iscrossaccountbackupenabled.py",
+    "Backblaze B2 native API reference, b2_list_buckets: https://www.backblaze.com/apidocs/b2-list-buckets"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms, its first implementation."
+    }
+  ],
+  "notes": "Backblaze B2: replicationConfiguration.asReplicationSource.replicationRules. Needs a key that sees every bucket."
+}

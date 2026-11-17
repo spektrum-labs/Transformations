@@ -1,0 +1,40 @@
+{
+  "name": "isArchivedDataAccessRestricted",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "No storage bucket in the account is readable by the public: every listed bucket requires authorization to download its files.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the buckets the backup storage account lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A bucket list with at least one bucket in which every bucket is of a type the vendor documents as private.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/backblaze-b2/isarchiveddataaccessrestricted.py",
+    "Backblaze B2 native API reference, b2_list_buckets: https://www.backblaze.com/apidocs/b2-list-buckets"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-29",
+      "change": "Registered with the Backblaze B2 transforms, its first implementation."
+    }
+  ],
+  "notes": "Backblaze B2: bucketType allPrivate or snapshot passes, allPublic fails, any other type is not measured."
+}

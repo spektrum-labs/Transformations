@@ -193,6 +193,108 @@ def scan_problem(data):
     return None
 
 
+# --- unresponsive surface (same rule as nuclei_transform.py, 29 Oct 2026) ----------------------------------
+# The Integration Service lists hosts whose scan batches failed under ``unresponsiveHosts``, each with the
+# ``reason`` of its latest failure and ``consecutiveTimeouts`` (failed runs, at least a nightly apart). A host
+# that failed on two consecutive runs and timed out on the latest is excluded from the surface this key is
+# evaluated on, when every host the scan did not cover is such a host, there are few of them
+# (MAX_EXCLUDED_PERCENT of the discovered hosts, one always allowed) and the arithmetic is exact. Anything else
+# keeps the partial rule (None). Keep this block identical to nuclei_transform.py so the keys read one scan
+# the same way.
+CHRONIC_AFTER_FAILURES = 2
+MAX_EXCLUDED_PERCENT = 10
+EXCLUDABLE_REASON = "scan_timed_out"
+NAMED_HOSTS = 10
+HOST_NAME_MAX = 253
+
+
+def host_name(host):
+    """A non-empty, length-bounded host name from an unresponsiveHosts entry, else None."""
+    if not isinstance(host, dict):
+        return None
+    name = host.get("domain")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    return name[:HOST_NAME_MAX] if name else None
+
+
+def scanned_domains(data):
+    """The host names domainResults accounts for."""
+    out = set()
+    for r in data.get("domainResults") or []:
+        if isinstance(r, dict) and isinstance(r.get("domain"), str) and r.get("domain").strip():
+            out.add(r["domain"].strip()[:HOST_NAME_MAX])
+    return out
+
+
+def unresponsive_hosts(data):
+    """(excluded, pending, unexplained), as in nuclei_transform.py."""
+    excluded = []
+    pending = []
+    unexplained = 0
+    seen = set()
+    scanned = scanned_domains(data)
+    hosts = data.get("unresponsiveHosts")
+    for host in hosts if isinstance(hosts, list) else []:
+        name = host_name(host)
+        if name is None:
+            unexplained += 1
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        failures = to_int(host.get("consecutiveTimeouts")) or 0
+        timed_out = str(host.get("reason") or "").strip() == EXCLUDABLE_REASON
+        if failures >= CHRONIC_AFTER_FAILURES and timed_out and name not in scanned:
+            excluded.append(name)
+        else:
+            pending.append(name)
+    return excluded, pending, unexplained
+
+
+def excluded_allowed(discovered):
+    """How many of ``discovered`` hosts may be excluded (MAX_EXCLUDED_PERCENT; at least one)."""
+    return max(1, discovered * MAX_EXCLUDED_PERCENT // 100)
+
+
+def unresponsive_surface(data, excluded, pending, unexplained):
+    """True when the only discovered hosts the scan did not cover are the excluded ones, as in
+    nuclei_transform.py."""
+    if pending or unexplained or not excluded:
+        return False
+    if is_true(data.get("scanTimeLimited")):
+        return False
+    scanned = to_int(data.get("domainsScanned"))
+    discovered = to_int(data.get("totalDiscovered"))
+    if scanned is None or discovered is None or scanned <= 0:
+        return False
+    if len(excluded) > excluded_allowed(discovered):
+        return False
+    results = data.get("domainResults")
+    if not isinstance(results, list) or scanned != len(results) or scanned != len(scanned_domains(data)):
+        return False
+    return scanned + len(excluded) == discovered
+
+
+def named(hosts):
+    shown = ", ".join(hosts[:NAMED_HOSTS])
+    return shown + (" and " + str(len(hosts) - NAMED_HOSTS) + " more" if len(hosts) > NAMED_HOSTS else "")
+
+
+def surface_coverage(data, domain):
+    """(note, excluded, pending): ``note`` is the pass-reason line when the hosts the scan did not cover are
+    all excluded unresponsive surface, else None."""
+    excluded, pending, unexplained = unresponsive_hosts(data)
+    if not unresponsive_surface(data, excluded, pending, unexplained):
+        return None, excluded, pending
+    note = ("scans of " + str(len(excluded)) + " of " + str(to_int(data.get("totalDiscovered")))
+            + " discovered host(s) of " + str(domain) + " failed on two consecutive runs, timing "
+            + "out on the latest, and are excluded from the surface evaluated: " + named(excluded))
+    return note, excluded, pending
+# --- end unresponsive surface ------------------------------------------------------------------------------
+
+
 def capped_note(data):
     """The reason a zero would be partial (more hosts discovered than scanned), else None."""
     if not is_true(data.get("domainsCapped")):
@@ -431,8 +533,17 @@ def transform(input):
                           + " carry no usable EPSS percentile, so none can be shown to be below " + threshold,
                           validation, summary)
         capped = capped_note(data)
+        coverage_note, excluded, pending = surface_coverage(data, domain) if capped else (None, [], [])
+        if coverage_note:
+            capped = None
+            summary["unresponsiveHostsExcluded"] = excluded[:20]
         if capped and count == 0:
-            return failed(capped + "; zero high-EPSS findings on a partial scan is not proof of no findings in scope", validation, summary)
+            reason = capped + "; zero high-EPSS findings on a partial scan is not proof of no findings in scope"
+            if pending:
+                reason += ("; " + str(len(pending)) + " host(s) failed this scan and will be retried: "
+                           + named(pending))
+                summary["unresponsiveHostsPending"] = pending[:20]
+            return failed(reason, validation, summary)
         result = {CRITERIA_KEY: count, "severityScope": SCAN_SCOPE, "epssPercentileThreshold": EPSS_PERCENTILE_THRESHOLD,
                   "hostsScanned": to_int(data.get("domainsScanned"))}
         if count > 0:
@@ -441,7 +552,8 @@ def transform(input):
             return create_response(
                 result=result, validation=validation,
                 pass_reasons=["No live " + SCAN_SCOPE + "-severity finding with EPSS percentile >= " + threshold
-                              + " across " + str(summary["domainsScanned"]) + " host(s) of " + str(domain)],
+                              + " across " + str(summary["domainsScanned"]) + " host(s) of " + str(domain)]
+                + ([coverage_note] if coverage_note else []),
                 additional_findings=notes, input_summary=summary)
         fails = [str(count) + " live " + SCAN_SCOPE + "-severity finding(s) with EPSS percentile >= " + threshold
                  + " for " + str(domain)]
@@ -449,6 +561,7 @@ def transform(input):
             fails.append(capped)
         return create_response(
             result=result, validation=validation, fail_reasons=fails,
+            pass_reasons=[coverage_note] if coverage_note else None,
             recommendations=["Remediate these first: EPSS rates them among the CVEs most likely to be exploited in the next 30 days"],
             additional_findings=risky[:50] + notes, input_summary=summary)
     except Exception as e:

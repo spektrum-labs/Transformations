@@ -9,10 +9,11 @@ page) the page is partial, and every result that rests on ABSENCE reads None (No
 
 A match already seen on the page still proves a presence check (True stays True). A negative that
 an item already seen proves (a message-move action that lacks its audit fields) stays False. A
-count is the vendor's own recordsNumber total when that total is larger than the page, else None.
+count is the vendor's own recordsNumber total when that total is at least the page length (the search
+endpoint sends a scrollId on its last page too), else None.
 
 THE UNREADABLE-ENTRY RULE. An entry that cannot be read is never skipped: an entry that is not an
-object, or a field that should hold JSON (entitySecurityResults, entityPayload, emailLinks,
+object, or a field that should hold JSON (entitySecurityResult or entitySecurityResults, entityPayload, emailLinks,
 actions) and does not parse, or an action that is not an object. The unread entry may be the match
 or the counter-example, so a result that rests on an absence reads None, a match or a negative
 already seen keeps its verdict, and a count reads None. A missing, blank or "None" field is a
@@ -313,13 +314,16 @@ def pending(**over):
             "entitySecurityResults": {}}
 
 
-def test_open_quarantined_count_never_reads_the_page_as_the_total_when_a_token_is_present():
+def test_open_quarantined_count_with_a_token_trusts_a_total_at_or_above_the_page():
     three = [pending(), pending(), pending()]
     assert_measured(run(QUARANTINE, envelope(three, scroll="tok", total=250)), 250)
-    assert_not_evaluated(run(QUARANTINE, envelope(three, scroll="tok", total=3)))
+    # HEC sends a scrollId on the last page too (live, 27 Oct 2026): a total equal to the page is complete
+    assert_measured(run(QUARANTINE, envelope(three, scroll="tok", total=3)), 3)
+    assert_measured(run(QUARANTINE, envelope([], scroll="tok", total=0)), 0)
+    # a total below the page contradicts the page, so the page is only a lower bound
+    assert_not_evaluated(run(QUARANTINE, envelope(three, scroll="tok", total=2)))
     assert_not_evaluated(run(QUARANTINE, envelope(three, scroll="tok", total="None")))
-    assert_not_evaluated(run(QUARANTINE, envelope([], scroll="tok", total=0)))
-    assert_not_evaluated(run(QUARANTINE, envelope([], scroll="tok")))
+    # a token with no total at all stays unreadable (QUARANTINE_NONE_PATHS, "paged, no total")
     # a stray entity proves the filter was not applied, so the count is unreadable even with a total
     assert_not_evaluated(run(QUARANTINE, envelope(three + [pending(isRestored="true")], scroll="tok", total=250)))
 
@@ -522,10 +526,13 @@ BAD_ENTITY_FIELDS = {
     "isantivirusverdictengineenabled": [
         ("entitySecurityResults", lambda: entity_with(entitySecurityResults=BAD_JSON)),
         ("entitySecurityResults list", lambda: entity_with(entitySecurityResults=["x"])),
+        ("entitySecurityResult", lambda: singular(entity_with(entitySecurityResults=BAD_JSON))),
+        ("entitySecurityResult list", lambda: singular(entity_with(entitySecurityResults=["x"]))),
         ("entityInfo", lambda: entity_with(entityInfo=BAD_JSON)),
     ],
     "isclicktimeurlrewriteenabled": [
         ("entitySecurityResults", lambda: dict(entity(links=LINK), entitySecurityResults=BAD_JSON)),
+        ("entitySecurityResult", lambda: singular(dict(entity(links=LINK), entitySecurityResults=BAD_JSON))),
         ("entityPayload", lambda: dict(entity(links=LINK), entityPayload=BAD_JSON)),
         ("entityPayload list", lambda: dict(entity(links=LINK), entityPayload=["x"])),
         ("emailLinks", lambda: dict(entity(links=LINK),
@@ -578,8 +585,11 @@ def test_blank_actions_are_readable_and_empty(name, empty):
 @pytest.mark.parametrize("empty", EMPTY_FIELDS, ids=repr)
 def test_blank_entity_fields_are_readable_and_empty(empty):
     assert_measured(run("isantivirusverdictengineenabled", envelope([entity_with(entitySecurityResults=empty)])), False)
+    assert_measured(run("isantivirusverdictengineenabled", envelope([singular(entity_with(entitySecurityResults=empty))])), False)
     assert_measured(run("isclicktimeurlrewriteenabled",
                         envelope([dict(entity(links=LINK), entitySecurityResults=empty)])), False)
+    assert_measured(run("isclicktimeurlrewriteenabled",
+                        envelope([singular(dict(entity(links=LINK), entitySecurityResults=empty))])), False)
     assert_measured(run("isclicktimeurlrewriteenabled",
                         envelope([dict(entity(), entityPayload=empty)])), False)
 
@@ -595,6 +605,9 @@ def test_text_forms_of_objects_and_lists_are_read():
                         envelope([dict(linked, entityPayload=as_text(linked["entityPayload"]),
                                        entitySecurityResults=as_text(linked["entitySecurityResults"]))])), True)
     assert_measured(run("ispostdeliveryquarantineenabled", envelope([ev(actions=as_text([act()]))])), True)
+    # the live spelling, as JSON text
+    assert_measured(run("isantivirusverdictengineenabled",
+                        envelope([singular(entity_with(entitySecurityResults=as_text(entity(av="clean")["entitySecurityResults"])))])), True)
 
 
 # --- messageMoveAuditTrailEnabled with unreadable entries ----------------------------------------------
@@ -807,7 +820,7 @@ QUARANTINE_NONE_PATHS = [
     ("unreadable entry", lambda: envelope([pending(), "garbled"])),
     ("stray entity", lambda: envelope([pending(isRestored="true")])),
     ("unreadable total", lambda: raw_total_body([pending()], "many")),
-    ("paged, total not above the page", lambda: envelope([pending()], scroll="tok", total=1)),
+    ("paged, total below the page", lambda: envelope([pending(), pending()], scroll="tok", total=1)),
     ("paged, no total", lambda: {"responseEnvelope": {"scrollId": "tok"}, "responseData": [pending()]}),
 ]
 
@@ -823,3 +836,33 @@ def test_open_quarantined_none_return_sets_the_data_collection_error(entry, labe
     assert all(isinstance(e, str) and e for e in collection["errors"])
     assert collection["errors"] == out["additionalInfo"]["evaluation"]["failReasons"]
     assert SENTINEL not in json.dumps(out)
+
+
+# --- (e) the live field name: entitySecurityResult, singular ----------------------------------------
+
+def singular(e):
+    """The live HEC search API names the block entitySecurityResult (measured on a real tenant,
+    27 Oct 2026); the API reference and the builders above spell it entitySecurityResults."""
+    e = dict(e)
+    e["entitySecurityResult"] = e.pop("entitySecurityResults")
+    return e
+
+
+def test_click_time_and_av_read_the_singular_live_field_name():
+    assert_measured(run("isclicktimeurlrewriteenabled", envelope([singular(entity(ctp="links_replaced", links=LINK))])), True)
+    assert_measured(run("isantivirusverdictengineenabled", envelope([singular(entity(av="clean"))])), True)
+    # the plural spelling still reads, so the API-reference shape is not broken
+    assert_measured(run("isclicktimeurlrewriteenabled", envelope([entity(ctp="links_replaced", links=LINK)])), True)
+    assert_measured(run("isantivirusverdictengineenabled", envelope([entity(av="clean")])), True)
+
+
+@pytest.mark.parametrize("blank", [{}, None, "None"], ids=repr)
+def test_a_present_singular_block_wins_over_a_stale_plural_one(blank):
+    e = singular(entity(ctp="links_replaced", links=LINK))
+    e["entitySecurityResults"] = e["entitySecurityResult"]
+    e["entitySecurityResult"] = blank
+    assert_measured(run("isclicktimeurlrewriteenabled", envelope([e])), False)
+    a = singular(entity(av="clean"))
+    a["entitySecurityResults"] = a["entitySecurityResult"]
+    a["entitySecurityResult"] = blank
+    assert_measured(run("isantivirusverdictengineenabled", envelope([a])), False)
