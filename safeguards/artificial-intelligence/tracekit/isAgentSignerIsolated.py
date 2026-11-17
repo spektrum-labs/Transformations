@@ -22,8 +22,8 @@ Fails closed: an error body, no bundles, a bundle summary missing a field, a ver
 code, a failed or warning check name outside tracekit-ai 1.6.0's vocabulary, or a window whose
 "truncated" is present and not false (more failing bundles than Integration-Service returns) returns None
 (not measured). A window without "truncated" is read as complete.
-  isAgentSignerIsolated = true when every bundle verified intact and all its runs report
-  separate-user or remote isolation.
+  isAgentSignerIsolated = true when every bundle verified intact, all its runs report
+  separate-user or remote isolation, and its boxed agent line did not warn.
 Isolation is the signer's own report, signed into the run; it shows how the operator deployed the signer, not who administers its host.
 """
 import json
@@ -173,6 +173,9 @@ ISOLATED = ["separate-user", "remote"]
 
 
 def meets(bundle):
+    # A Tracekit Box label the signer never writes: the verifier claims nothing about who could reach the key.
+    if "boxed agent" in bundle["warningChecks"]:
+        return False
     for label in bundle["isolation"]:
         if bundle["isolation"][label] > 0 and label not in ISOLATED:
             return False

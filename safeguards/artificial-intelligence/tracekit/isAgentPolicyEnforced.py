@@ -23,8 +23,8 @@ code, a failed or warning check name outside tracekit-ai 1.6.0's vocabulary, or 
 "truncated" is present and not false (more failing bundles than Integration-Service returns) returns None
 (not measured). A window without "truncated" is read as complete.
   isAgentPolicyEnforced = true when every bundle verified intact and none of the verifier lines
-  policy, held calls, gaps, observers, fail-open classes or coverage warned or failed, and its
-  coverage and fail-open classes lines passed.
+  policy, held calls, gaps, observers, fail-open classes, coverage or intent grants warned or
+  failed, and its coverage and fail-open classes lines passed.
 Policy rules match text and tool names; this shows the decisions were honoured, not that the policy would stop every harmful call.
 """
 import json
@@ -170,7 +170,7 @@ def intact(bundle):
     return bundle["integrity"] == "verified" and not bundle["failedChecks"] and bundle["runCount"] > 0
 
 
-POLICY_CHECKS = ["policy", "held calls", "gaps", "observers", "fail-open classes", "coverage"]
+POLICY_CHECKS = ["policy", "held calls", "gaps", "observers", "fail-open classes", "coverage", "intent grants"]
 # Lines every v2 report carries: a report without them shows nothing about policy.
 ALWAYS_REPORTED = ["coverage", "fail-open classes"]
 
@@ -187,8 +187,8 @@ def meets(bundle):
 
 MEETS_TEXT = "show every decision honoured with no signed gap"
 RECOMMENDATION = (
-    "Review the runs whose verify report warns on policy, held calls, gaps, observers, fail-open classes "
-    "or coverage, and set the run's fail mode to closed for actions that change systems."
+    "Review the runs whose verify report warns on policy, held calls, gaps, observers, fail-open classes,"
+    " coverage or intent grants, and set the run's fail mode to closed for actions that change systems."
 )
 
 

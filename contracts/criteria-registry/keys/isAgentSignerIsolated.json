@@ -7,7 +7,7 @@
   "unit": "none",
   "population": "Tracekit evidence bundles (.tkb) the customer pushed in the evaluation window, each verified by Integration-Service",
   "polarity": "good_when_true",
-  "evidenceRequiredForTrue": "Every bundle verified intact and every run's signer-reported isolation is separate-user or remote. Same-user (dev mode), unknown or unreported isolation is false.",
+  "evidenceRequiredForTrue": "Every bundle verified intact and every run's signer-reported isolation is separate-user or remote, and no bundle warns on the boxed agent line. Same-user (dev mode), unknown or unreported isolation is false.",
   "evidenceClass": "measured",
   "notMeasured": {
     "value": null,

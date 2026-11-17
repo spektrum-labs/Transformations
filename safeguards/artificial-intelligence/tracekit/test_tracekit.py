@@ -126,11 +126,18 @@ def test_unknown_vocabulary_and_inconsistent_summaries_are_not_measured(key, pay
     assert run(key, payload) == (None, "error")
 
 
+# A warning on a line added in 1.6 is measured. "boxed agent" warns when a box label is one the signer never
+# writes (nothing is then claimed about who could reach the key); "intent grants" warns when a grant or release
+# record is not as the signer writes it. "verifier minimum" only says an older verifier could have claimed more.
+WARNING_COUNTS_AGAINST = {"boxed agent": "isAgentSignerIsolated", "intent grants": "isAgentPolicyEnforced",
+                          "verifier minimum": None}
+
+
 @pytest.mark.parametrize("key", KEYS)
-@pytest.mark.parametrize("name", ["boxed agent", "intent grants", "verifier minimum"])
+@pytest.mark.parametrize("name", sorted(WARNING_COUNTS_AGAINST))
 def test_lines_added_in_1_6_are_read_not_unknown(key, name):
-    # A warning on one of them is measured; a failed one is a failed bundle.
-    assert run(key, {"bundles": [bundle(warned=[name])]}) == (True, "success")
+    expected = key != WARNING_COUNTS_AGAINST[name]
+    assert run(key, {"bundles": [bundle(warned=[name])]}) == (expected, "success")
     assert run(key, {"bundles": [bundle(integrity="failed", failed=[name])]}) == (False, "success")
 
 
