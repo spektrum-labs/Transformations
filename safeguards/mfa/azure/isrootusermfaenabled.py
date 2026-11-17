@@ -448,4 +448,4 @@ def transform(input):
         )
 
     except Exception as e:
-        return not_measured("Transformation error: " + str(e))
+        return not_measured("Transformation error")

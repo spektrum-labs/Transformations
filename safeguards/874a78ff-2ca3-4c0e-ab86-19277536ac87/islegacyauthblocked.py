@@ -273,7 +273,7 @@ def transform(input):
 
     except json.JSONDecodeError as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
             api_errors=["Microsoft Secure Score response is not valid JSON"],
             fail_reasons=["Could not parse input as valid JSON"]
