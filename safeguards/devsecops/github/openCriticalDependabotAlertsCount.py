@@ -36,7 +36,7 @@ def truncation_marked(value):
             blocks.append(value[key])
     for block in blocks:
         for key in ("paginationTruncated", "truncated"):
-            if str(block.get(key)).strip().lower() == "true":
+            if str(block.get(key)).strip().lower() in ("true", "1", "yes"):
                 return key
     return ""
 

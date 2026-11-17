@@ -151,6 +151,9 @@ def transform(input):
         verdict), left for a follow-up that changes every presence check together."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
+            for mark in ("truncated", "paginationTruncated"):
+                if str(holder.get(mark)).strip().lower() in ("true", "1", "yes"):
+                    return "more"
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
                 return "more"
