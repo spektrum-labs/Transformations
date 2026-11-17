@@ -2,8 +2,10 @@ def transform(input):
     """
     Evaluates if a valid Avanan (Check Point) license/subscription is active.
 
-    The Avanan API requires successful authentication to access any endpoint.
-    If we receive a valid response (token or security events), the license is active.
+    An issued token, or a body that carries securityEvents / entities / responseData /
+    exceptions keys, shows only that authentication worked: a trial or an evaluation tenant
+    authenticates too. Only an explicit licence field decides; anything else is Not evaluated
+    (None), and an error or explicit OFF is False.
 
     Parameters:
         input (dict): The JSON data from Avanan API authentication or security events endpoint.
@@ -21,20 +23,11 @@ def transform(input):
         # criterion and no input could make it false. Resolved from the payload now.
         default_value = affirmative_signal(input)
 
-        # Check for explicit license field or infer from data presence
+        # Only an explicit licence field decides. A token, or the presence of an events,
+        # entities, responseData or exceptions key (even empty), shows the call authenticated.
         license_purchased = input.get('licensePurchased', default_value)
-        
-        # If token was generated successfully, platform is licensed
-        if 'token' in input and input.get('token'):
-            license_purchased = True
-        
-        # If security events or entities exist, platform is licensed
-        if 'securityEvents' in input or 'entities' in input or 'responseData' in input:
-            license_purchased = True
-            
-        # If we received any exceptions data, platform is licensed
-        if 'exceptions' in input:
-            license_purchased = True
+        if not isinstance(license_purchased, bool):
+            license_purchased = None
 
         if license_purchased is None:
             return {
