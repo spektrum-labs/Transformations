@@ -24,10 +24,10 @@ construction) and CLIENT, PAT and SUPPORT users are non-person accounts. An SSO 
 directory identity, and RSC does not show whether that identity is a separate admin account or the person's
 everyday one. Account names are not read: a naming convention cannot prove which it is.
 Roles are read in the context organization only (roles; allOrgs lists the organizations where the account has
-roles, currentOrg is the context organization). A non-admin user or group that is listed with no roles, or whose
-allOrgs holds any organization other than currentOrg, holds roles in a sub-organization this read cannot see
-(possibly an administrator role), so the read is not evaluated. A non-admin account with roles and no allOrgs
-list is not evaluated either.
+roles, currentOrg is the context organization). A non-admin user or group whose allOrgs holds any
+organization other than currentOrg holds roles in a sub-organization this read cannot see (possibly an
+administrator role), so the read is not evaluated. A non-admin account with no allOrgs list is not evaluated
+either.
 True: the user and group reads are complete, no group holds an administrator role, no account holds roles only
 in a sub-organization, and every administrator is a LOCAL console account or a non-person account.
 None (not evaluated): any administrator signs in with an SSO or LDAP identity, or with an unknown domain; a group
