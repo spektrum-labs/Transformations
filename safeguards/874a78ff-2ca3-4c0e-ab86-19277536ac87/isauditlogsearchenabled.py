@@ -284,9 +284,9 @@ def transform(input):
                        "Verify the Microsoft Graph integration is returning Secure Score data")
     except Exception as e:
         return create_response(
-            result=verdict(False),
+            result=verdict(None),
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
+            transformation_errors=["Secure Score transformation error"],
             api_errors=["Secure Score transformation error"],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=["Transformation error"]
         )

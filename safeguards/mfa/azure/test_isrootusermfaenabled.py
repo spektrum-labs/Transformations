@@ -92,6 +92,21 @@ def test_all_users_policy_passes(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_all_match_is_case_insensitive(mode):
+    p = policy(roles=())
+    p["conditions"]["users"]["includeUsers"] = ["all"]
+    assert pair(load(mode)(graph(p))) == (True, "success")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_policy_display_name_never_reaches_the_output(mode):
+    p = policy()
+    p["displayName"] = "MFA excl. Jane Doe break-glass"
+    p["conditions"]["users"]["excludeUsers"] = ["a", "b", "c"]
+    assert "Jane" not in json.dumps(load(mode)(graph(p)))
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_break_glass_is_allowed_and_only_counted(mode):
     out = load(mode)(graph(policy(exclude_users=(BREAK_GLASS_1, BREAK_GLASS_2))))
     assert pair(out) == (True, "success")

@@ -162,5 +162,5 @@ def test_every_secure_score_file_is_covered():
 @pytest.mark.parametrize("name", sorted(CHECKS))
 def test_a_crash_is_reported_as_not_evaluated(name):
     out = load(name, "python")(Poisoned(value=[]))
-    assert out["transformedResponse"][CHECKS[name]] is not True
+    assert out["transformedResponse"][CHECKS[name]] is None
     assert unevaluated(out)
