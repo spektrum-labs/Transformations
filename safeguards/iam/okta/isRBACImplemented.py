@@ -19,7 +19,7 @@
 KEY = "isRBACImplemented"
 SUPER_ADMIN = "SUPER_ADMIN"
 # Org Administrator holds almost all of Super Administrator's day-to-day powers, so it is a full-control role too.
-FULL_ROLES = ["SUPER_ADMIN", "ORG_ADMIN"]
+FULL_ROLES = [SUPER_ADMIN, "ORG_ADMIN"]
 WRAPPERS = ["data", "response", "result", "apiResponse", "api_response", "Output"]
 
 
