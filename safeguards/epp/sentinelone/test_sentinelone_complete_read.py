@@ -22,9 +22,11 @@ def load(name):
 
 
 def agent(i):
+    # Every tenth agent is a server, so isEPPEnabledForCriticalSystems has systems in scope to score
+    # (with none it is Not evaluated by design, ENG-1354).
     return {"id": str(i), "computerName": "host" + str(i), "mitigationMode": "protect", "activeProtection": ["edr"],
             "isActive": True, "isUninstalled": False, "isDecommissioned": False, "isUpToDate": True,
-            "machineType": "desktop"}
+            "machineType": "server" if i % 10 == 0 else "desktop"}
 
 
 def is_response(agents, total, cursor=None, truncated=None):
