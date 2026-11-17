@@ -138,7 +138,7 @@ def transform(input):
         policies = data.get("policies") if isinstance(data, dict) else None
         if isinstance(policies, dict):
             policies = [policies]
-        if not isinstance(policies, list):
+        if not isinstance(policies, list) or (policies and not any(isinstance(x, dict) for x in policies)):
             # Missing or non-list: an error body or a failed read, not evidence of a missing control.
             return create_response(
                 result={criteriaKey: None},
@@ -147,6 +147,8 @@ def transform(input):
                 fail_reasons=["Anti-phishing policies were not returned, so this check could not be evaluated"],
                 recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
             )
+
+        policies = [x for x in policies if isinstance(x, dict)]  # skip unreadable entries
 
         # Find policies that meet all required settings
         matching_policies = [

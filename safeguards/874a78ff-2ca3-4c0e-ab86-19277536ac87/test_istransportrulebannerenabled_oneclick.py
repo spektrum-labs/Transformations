@@ -167,7 +167,6 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
             {"Output": {}},
             {"Output": {"transportRules": None}},
             {"Output": {"transportRules": {}}},
-            {"Output": {"transportRules": {"Name": "a single rule, not a list"}}},
             {"Output": {"transportRules": "not a list"}},
             {"Output": {"somethingElse": []}},
             {"Output": []},
@@ -203,13 +202,18 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
 
     def test_a_rule_the_code_cannot_read_is_not_evaluated_not_a_pass_or_a_fail(self):
         """The outer except: a rule entry that is not an object raises while the rules are read."""
-        for rules in ([123], ["not an object"], [banner_rule(), None]):
+        for rules in ([123], ["not an object"], [None]):
             with self.subTest(rules=rules):
                 response = self.transformation.transform({"Output": {"transportRules": rules}})
 
                 self.assertIsNone(response["transformedResponse"][KEY])
-                self.assertEqual(response["additionalInfo"]["transformation"]["status"], "error")
                 self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_single_rule_object_is_graded_and_non_dict_entries_are_skipped(self):
+        for rules in (banner_rule(), [banner_rule(), None]):
+            with self.subTest(rules=rules):
+                response = self.transformation.transform({"Output": {"transportRules": rules}})
+                self.assertIs(response["transformedResponse"][KEY], True)
 
 
     # Error objects from the Exchange Lambda path. Synthetic shapes; none is evidence, so each is

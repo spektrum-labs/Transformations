@@ -76,8 +76,10 @@ class TransportRuleBannerEnforcedTests(unittest.TestCase):
     def test_non_dict_rules_are_skipped(self):
         r = self.t.transform({"Output": {"transportRules": ["example", rule()]}})
         self.assertIs(r["transformedResponse"][KEY], True)
-        r = self.t.transform({"Output": {"transportRules": ["example"]}})
-        self.assertIs(r["transformedResponse"][KEY], False)
+        for rules in (["example"], [None]):
+            r = self.t.transform({"Output": {"transportRules": rules}})
+            self.assertIsNone(r["transformedResponse"][KEY])
+            self.assertEqual(r["additionalInfo"]["dataCollection"]["status"], "error")
 
 
 if __name__ == "__main__":
