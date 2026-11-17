@@ -192,7 +192,7 @@ def transform(input):
         # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
         # policies value proved nothing, so it is Not evaluated, never the stated-negative False.
         policies = data.get("policies") if isinstance(data, dict) else None
-        if isinstance(policies, dict):
+        if isinstance(policies, dict) and policies:
             policies = [policies]
         if not isinstance(policies, list):
             # An error object from the collector (IS vendorStatus >= 400) is not evidence: say why, not just "missing".

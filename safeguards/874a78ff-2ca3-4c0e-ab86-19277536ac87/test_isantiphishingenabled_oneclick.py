@@ -261,6 +261,10 @@ class MicrosoftOneClickAntiPhishingTests(unittest.TestCase):
 
         self.assertIsNone(response["transformedResponse"][KEY])
         self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
+    def test_an_empty_policies_object_is_not_evaluated(self):
+        response = self.transformation.transform({"Success": True, "Output": {"policies": {}}, "Error": ""})
+
+        self.assertIsNone(response["transformedResponse"][KEY])
 
 if __name__ == "__main__":
     unittest.main()
