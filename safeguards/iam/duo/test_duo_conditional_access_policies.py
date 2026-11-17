@@ -647,9 +647,12 @@ class DuoConditionalAccessTests(unittest.TestCase):
         value, out = self.value(bodies(with_sections(DEFAULTS, operating_systems={"block_os_list": ["unknownos"]})))
         self.assertIs(value, True)
         self.assertIn("operating systems: unknownos blocked", json.dumps(out))
-        # only a genuinely unknown value: not a condition, so the app is uncovered -> False (not unevaluated)
+        # only a genuinely unknown value: not a condition, and the app is indeterminate (the value may have been
+        # its condition), so the check is Not evaluated rather than a firm False
         value, out = self.value(bodies(with_sections(DEFAULTS, operating_systems={"block_os_list": ["plan9"]})))
-        self.assertIs(value, False)
+        self.assertIsNone(value)
+        self.assertEqual(out["transformedResponse"][INDET], 1)
+        self.assertNotIn("Ignored 2", json.dumps(out))
         self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["plan9"])
         # beside a known value: the known one counts, the unknown is recorded
         mixed = {"operating_systems": {"block_os_list": ["plan9", "android"]}}
@@ -691,6 +694,16 @@ class DuoConditionalAccessTests(unittest.TestCase):
         e.pop("app_integration_key")
         e["apply_type"] = "everyone"
         self.assertUnevaluated(b, "unrecognised apply_type")
+        # an entry whose key is blank or not in the applications list: Not evaluated, and the reason names apply_type
+        for key in ("", "   ", "no-such-app"):
+            b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+            e = b["summary"]["response"]["policies"][1]["policy_applies_to"][0]
+            e["app_integration_key"] = key
+            e["apply_type"] = "everyone"
+            value, out = self.value(b)
+            self.assertIsNone(value)
+            self.assertIn("unrecognised apply_type", json.dumps(out))
+            self.assertNotIn("application-group binding", json.dumps(out))
 
     def test_unknown_list_values_are_unevaluated_not_conditions(self):
         cases = {

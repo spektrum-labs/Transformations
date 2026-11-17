@@ -49,11 +49,13 @@ when the summary does not name its groups readably (groups missing, empty, not a
 group_id) or when more than one different group policy is bound to the same application (which policy reaches
 a user then depends on group overlap, which only membership can show). A summary that hides its bindings (an
 entry without a policy_applies_to list, or no entry for a listed policy) is Not evaluated, because a hidden
-binding could change the answer. A policy_applies_to entry with an unrecognised apply_type makes only that
-policy scope-unknown: it is recorded in the evidence, an uncovered application still gives False, and with no
-uncovered application the answer is Not evaluated (never True). Unrecognised operating_systems.block_os_list
-values are recorded in the evidence and never count as a condition. Group policies are always read, so an unreadable
-one fails closed.
+binding could change the answer. A policy_applies_to entry with an unrecognised apply_type that names its
+application makes only that application INDETERMINATE (the reason is recorded; an uncovered application elsewhere
+still gives False, and with no uncovered application the answer is Not evaluated, never True); one that names no
+application makes the whole check Not evaluated. Unrecognised operating_systems.block_os_list values are recorded in
+the evidence and never count as a condition; an application that would be uncovered only because such values were
+dropped is INDETERMINATE, not uncovered, because the dropped value may have been its condition. Group policies are
+always read, so an unreadable one fails closed.
 
 Rule:
   isConditionalAccessEnabled
@@ -67,7 +69,7 @@ Rule:
            several global policies; an application whose policy_key is not in the policy list; a summary that
            hides its bindings (see above); a section of a governing policy that is not an object, or a
            wrong-typed value or unrecognised enum in one; no uncovered application but at least one
-           indeterminate one, or at least one scope-unknown policy; any exception.
+           indeterminate one; any exception.
   conditionalAccessAppPercentage  covered applications / all applications * 100, one decimal. Emitted whenever
            the applications were enumerated and read, including when the boolean is False.
   conditionalAccessAppsCovered, conditionalAccessAppsTotal, conditionalAccessAppsOnGlobalPolicy,
@@ -596,6 +598,8 @@ def named(labels):
 
 
 APPLY_TYPES = ("app", "group_app")
+DROPPED_WHY = ("an operating_systems.block_os_list value is not recognised, so the application's access condition "
+               "cannot be decided")
 
 
 def group_problem(target):
@@ -702,6 +706,9 @@ def transform(input):
                     return not_evaluated("an application-group binding names a policy the policy list does not "
                                          "carry")
             if integration_key not in app_keys:
+                if "a binding with an unrecognised apply_type" in slot["problems"]:
+                    return not_evaluated("a policy_applies_to entry with an unrecognised apply_type names an "
+                                         "application the applications list does not carry")
                 return not_evaluated("an application-group binding names an application the applications list "
                                      "does not carry, so the list is incomplete")
 
@@ -725,11 +732,15 @@ def transform(input):
                 if own is glob:
                     on_global = on_global + 1
                 chain = [glob] if own is glob else [own, glob]
+                dropped_before = len(unknown_os)
                 found = conditions_of(chain, unknown_os)
                 slot = groups.get(str(app.get("integration_key")))
                 if slot is None:
                     if found:
                         covered.append((app_name(app), found))
+                    elif len(unknown_os) > dropped_before:
+                        indeterminate.append(app_name(app))
+                        indeterminate_why.append(DROPPED_WHY)
                     else:
                         uncovered.append(app_name(app))
                     continue
@@ -748,6 +759,9 @@ def transform(input):
                 elif found and group_found[0]:
                     covered.append((app_name(app), found))
                     resolved_groups.append(app_name(app))
+                elif not (found and group_found[0]) and len(unknown_os) > dropped_before:
+                    indeterminate.append(app_name(app))
+                    indeterminate_why.append(DROPPED_WHY)
                 elif not found and not group_found[0]:
                     uncovered.append(app_name(app))
                 elif not found:
@@ -780,7 +794,7 @@ def transform(input):
                                      + " (the application's own policy and each group policy were both checked)"]
         if unknown_os:
             described = described + ["Ignored %d unrecognised operating_systems.block_os_list value(s); they were "
-                                     "not counted as an access condition" % len(unknown_os)]
+                                     "not counted as an access condition" % len(set(unknown_os))]
         user_group_note = ("Group membership is not read: a group policy is judged by what it configures, not by "
                            "how many users its group holds")
 
