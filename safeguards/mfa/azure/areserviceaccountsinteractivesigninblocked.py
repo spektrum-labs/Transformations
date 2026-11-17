@@ -244,7 +244,8 @@ def lowered(value):
 
 #: Condition keys the check reads itself. Every other condition key with a value narrows the policy, so a
 #: condition Microsoft adds later is read as narrowing (fail-closed), never as "every sign-in".
-READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "platforms")
+READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "platforms", "signInRiskLevels",
+                   "userRiskLevels", "servicePrincipalRiskLevels")
 
 
 def has_value(value):
@@ -455,28 +456,32 @@ def location_exempt(policy):
     return isinstance(locs, dict) and lowered(locs.get("excludeLocations")) == ["alltrusted"]
 
 
-def full_block(policy, unread_ok=False):
-    """True when an enabled policy blocks every cloud app for every client type with no other narrowing and no
-    excluded location but AllTrusted (the trusted-location exemption); unread_ok skips that last test."""
+def full_block(policy):
+    """True when an enabled policy blocks every cloud app for every client type with no other narrowing (a risk-only
+    firing included); None when it would but for an excluded location other than AllTrusted (named locations are not
+    read); else False. One rule in three files: full_block_reach in entra_ca_mfa_coverage.py and ismfaenforcedforusers.py;
+    test_mfa_members_outside_parity.py pins them together."""
     controls = policy.get("grantControls")
     if not enabled(policy) or not isinstance(controls, dict) or "block" not in lowered(controls.get("builtInControls")):
         return False
     cond = policy.get("conditions")
-    if not isinstance(cond, dict):
+    if not isinstance(cond, dict) or risk_only(cond):
         return False
     apps = cond.get("applications") if isinstance(cond.get("applications"), dict) else {}
     if ("all" not in lowered(apps.get("includeApplications")) or strs(apps.get("excludeApplications"))
             or has_value(apps.get("applicationFilter"))):
         return False
-    return all_client_apps(cond) and not narrowing(cond) and (unread_ok or not location_unread(cond))
+    if not all_client_apps(cond) or narrowing(cond):
+        return False
+    return None if location_unread(cond) else True
 
 
-def blocked(uid, blocks, memberships, maybe_blocks=()):
+def blocked(uid, decided, memberships):
     """True when some full block policy includes and does not exclude the account; None when one may (or a block
-    that excludes a named location not read would reach it); else False."""
+    that excludes a named location not read would reach it); else False. decided: (policy, full_block result) pairs
+    whose result is not False."""
     maybe = False
-    for p in list(blocks) + list(maybe_blocks):
-        is_maybe = p in maybe_blocks
+    for p, certain in decided:
         users = users_of(p)
         included = "all" in lowered(users.get("includeUsers")) or uid in object_ids(users.get("includeUsers"))
         unsure = False
@@ -501,7 +506,7 @@ def blocked(uid, blocks, memberships, maybe_blocks=()):
             continue
         if strs(users.get("excludeRoles")) or has_value(users.get("excludeGuestsOrExternalUsers")):
             unsure = True
-        if included and not unsure and not is_maybe:
+        if included and not unsure and certain:
             return True
         maybe = True
     return None if maybe else False
@@ -555,12 +560,13 @@ def transform(input):
         carve_only = carved - by_signal
         break_glass = glass - by_signal
         service = by_signal | (carve_only - break_glass)
-        blocks = [p for p in policies if full_block(p)]
-        maybe_blocks = [p for p in policies if not full_block(p) and full_block(p, True)]
+        decided = [(p, full_block(p)) for p in policies]
+        decided = [(p, d) for p, d in decided if d is not False]
+        blocks = [p for p, d in decided if d]
         unblocked = []
         undecided = []
         for uid in sorted(service):
-            state = blocked(uid, blocks, memberships, maybe_blocks)
+            state = blocked(uid, decided, memberships)
             if state is False:
                 unblocked.append(uid)
             elif state is None:

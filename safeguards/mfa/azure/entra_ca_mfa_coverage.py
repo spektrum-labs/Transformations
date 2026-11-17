@@ -10,24 +10,20 @@ Coverage (2 Oct 2026, J.J.): entra_ca_tenantwide_mfa.py left every group-scoped 
 - a policy scoped to user groups covers all users when every included group is a dynamic group whose rule
   selects every (enabled, member) user and whose rule processing is On. Assigned-membership groups, or a group
   missing from the supplied group list, keep the policy "partial" (membership is not read here);
-- policies with the same full user reach that differ only in client app types count together: browser plus
-  mobileAppsAndDesktopClients across two enabled MFA policies is the same as "all";
-- exclusions are bounded (3 Oct 2026, master review, the #850 bar): at most 2 user accounts in total may be
-  excluded by name (excludeUsers) across the policies that make a key true; they are emergency-access (break-glass)
-  accounts and the pass reason names them. More than 2, or ANY excluded group (its size is not counted here),
-  excluded directory role (every holder of it, admins included, is excluded), guest or external user exclusion,
-  or "All" in excludeUsers, keeps the key not evaluated with the reason. A policy with such an exclusion never
-  counts towards coverage.
+- policies with the same full user reach that differ only in client app types count together (browser plus
+  mobileAppsAndDesktopClients is "all");
+- exclusions are bounded (3 Oct 2026, master review, the #850 bar): at most 2 user accounts in total may be excluded
+  by name (excludeUsers) across the policies that make a key true; they are emergency-access (break-glass) accounts
+  and the pass reason names them. More than 2, or ANY excluded group, excluded directory role, guest or external
+  user exclusion, or "All" in excludeUsers, keeps the key not evaluated with the reason; such a policy never counts
+  towards coverage.
 Nothing here can pass a tenant on data it did not read.
 
 Security defaults (3 Oct 2026, J.J.): when no Conditional Access policy is enabled, the tenant's security defaults
-policy is read. Security defaults and enabled Conditional Access policies are mutually exclusive in Entra.
-Security defaults never pass either key: they require administrators to use MFA at every sign-in, but other users
-are challenged only when Microsoft judges a sign-in risky, not at every remote sign-in, and they do not target the
-Remote Desktop apps. When isEnabled is true, both keys read not evaluated with that reason and the honest next step
-(add a Conditional Access policy requiring MFA, or attest). When it is false, the keys stay not evaluated, because
-per-user MFA may still apply and is not read here. An absent, error or unrecognised security defaults body changes nothing (not evaluated, as
-before). It is never consulted when any Conditional Access policy is enabled.
+policy is read (mutually exclusive with enabled Conditional Access policies in Entra). It never passes either key: it
+challenges non-admins only when a sign-in is risky and does not target the Remote Desktop apps. isEnabled true: both
+keys read not evaluated with the honest next step (add a Conditional Access policy requiring MFA, or attest). False,
+absent, error or unrecognised: not evaluated, because per-user MFA may still apply and is not read here.
 
 Group membership (3 Oct 2026, J.J.): a workforce MFA policy scoped to user groups, and narrowed by nothing else (no
 platform, client-type or device-filter narrowing, and in force off the corporate network), is decided from the
@@ -39,15 +35,13 @@ groups' membership when the workflow supplies it:
   excluded groups are not used: any excluded group keeps the key not evaluated);
 - "groupMembers": one GET /v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$select=id body per group id,
   in the same order (nested groups count, because the read is transitive).
-Such policies, together (a union, as client types already are), cover the workforce when every enabled member
-account is in at least one included group or listed as an included user, or is one of the at most 2 accounts the
-policies exclude by name (as for "All users" policies; counted and named). Group math can pass a key; it never
-fails one. When members are left outside the included groups the key stays not evaluated and says how many, and
-any list not read whole (an error, a vendor error returned as data, @odata.nextLink still present, an
-@odata.count that disagrees with the items, an item with no id, or member lists that cannot be paired with the
-group ids) is not read: a policy that includes an unread group keeps only the groups that were read. The output
-carries counts (membersTotal, membersCovered, excludedCount, uncoveredCount) and the group names; user ids, names
-or UPNs never appear, except the at most 2 excluded emergency-access accounts named when a key passes.
+Such policies, together (a union), cover the workforce when every enabled member account is in at least one
+included group or listed as an included user, or is one of the at most 2 accounts the policies exclude by name
+(counted and named). Any list not read whole (an error, @odata.nextLink still present, an @odata.count that disagrees
+with the items, an item with no id, member lists that cannot be paired with the group ids) is not read: a policy
+that includes an unread group keeps only the groups that were read. The output carries counts (membersTotal,
+membersCovered, excludedCount, uncoveredCount) and the group names; user ids, names or UPNs never appear, except the
+at most 2 excluded emergency-access accounts named when a key passes. Members left outside: see below.
 
 Members outside (WI-3a, product decision 16 Nov 2026; same rule as ismfaenforcedforusers.py): when membership was
 read whole and some enabled member accounts are reached by NO enabled Conditional Access policy that requires MFA,
@@ -56,26 +50,23 @@ False is never a guess:
 - every enabled policy whose grant includes MFA (the built-in "mfa" control or any authentication strength) counts,
   for any app, platform, client type, location or device filter, and under OR as well; only risk-only policies do
   not count;
-- a block policy counts only as a full block (full_block_reach: all apps, all client types, all platforms, no
-  location include, device filter, flow or insider-risk condition); "block legacy authentication" or "block one
-  country" does not stop a modern remote sign-in and reaches nobody;
-- enabled security defaults keep the key not evaluated. Per-user MFA is not read here (no production workflow reads
-  it): the fail reason says it may apply;
-- "All" users reaches everyone; an included group must have been read whole, or nothing fails;
-- an excluded group whose members were read excludes them; an excluded role, or an excluded group not read,
-  excludes nobody;
-- a policy that includes a directory role reaches the role's active holders, read from "roleAssignments"
-  (GET /v1.0/roleManagement/directory/roleAssignments?$expand=principal($select=id)); without that list read
-  whole, or with a holder that is a group or carries no type and is not a member account, nothing fails;
-- accounts left outside only because policies exclude them (by name, or through an excluded group read whole that
-  holds at most 2 accounts) are emergency-access accounts when there are at most 2 of them, and are not counted.
+- a block policy counts only as a full block (full_block_reach: all apps, client types and platforms, no other
+  condition); "block legacy authentication" or "block one country" reaches nobody. A block that excludes a named
+  location (not read) is undecided: its members are not counted as outside unless something else leaves a member
+  outside, and the count is then at least that many;
+- enabled security defaults keep the key not evaluated. Per-user MFA is not read here: the fail reason says it may apply;
+- "All" users reaches everyone; an unread included group fails nothing; an excluded group read whole excludes its
+  members, an excluded role or an unread excluded group nobody;
+- a policy that includes a directory role reaches its active holders, read from "roleAssignments" (GET /v1.0/
+  roleManagement/directory/roleAssignments?$expand=principal($select=id)); without that list read whole, or with a
+  holder that is a group or an untyped non-member, nothing fails;
+- accounts left outside only because policies exclude them (by name, or through an excluded group read whole of at
+  most 2 accounts, whatever the policy's location condition) are emergency access when there are at most 2: not counted.
 Members reached only by narrowed policies stay not evaluated (they are inside an MFA-requiring policy).
 
-Why a new file: isrdpprotected.py and ismfarequiredforremoteaccess.py count ANY enabled policy that
-grants mfa (or block) for all apps, whoever it targets and whatever else it is conditioned on. On
-2026-09-29 "Block legacy authentication" passed isRDPProtected at one tenant, and "Require MFA for Guest
-Users" and Microsoft-managed "MFA for risky sign-ins" passed both keys at others. None of them says that
-users must pass MFA.
+Why a new file: isrdpprotected.py and ismfarequiredforremoteaccess.py count ANY enabled policy that grants mfa (or
+block) for all apps, whoever it targets. On 2026-09-29 "Block legacy authentication", "Require MFA for Guest Users"
+and Microsoft-managed "MFA for risky sign-ins" passed them at some tenants. None of them says users must pass MFA.
 
 A workforce MFA policy is enabled (report-only does not enforce), covers all apps (includeApplications
 "All"; isRDPProtected also accepts the Remote Desktop / Windows Cloud Login app ids), targets all users
@@ -88,20 +79,16 @@ Value, per key:
   no excluded group, role, or guests/external users) with no platform, device-filter or client-type narrowing (client types "all", or both browser
   and mobileAppsAndDesktopClients), and is in force off the corporate network (no location condition,
   or includeLocations "All" with trusted or named locations excluded);
-- true, as well, when group-scoped workforce MFA policies are shown by the membership read to reach every enabled
-  member account (above);
-- false, as well, when the membership read shows enabled member accounts that no MFA-requiring policy reaches
-  (members outside, above);
-- not evaluated (dataCollection error, None): the only workforce MFA policies are scoped to user groups,
-  platforms, client types or named locations, so whether they reach every user and sign-in cannot be
-  read from this list (or the membership read was not read whole, or every member it leaves outside the
-  groups is reached by a narrowed MFA policy); or the
-  covering policies exclude a group, a role, guests/external users or more than 2 accounts; or no policy is enabled (security defaults on challenge non-admins by risk only; with
-  them off or unread, per-user MFA may apply and is not read here);
+- true, as well, when the membership read shows group-scoped workforce MFA policies reach every enabled member;
+- false, as well, when it shows enabled members that no MFA-requiring policy reaches (members outside, above);
+- not evaluated (dataCollection error, None): the only workforce MFA policies are scoped to user groups, platforms,
+  client types or named locations, so whether they reach every user and sign-in cannot be read from this list (or the
+  membership read was not whole, or every member left outside the groups is reached by a narrowed MFA policy); or the
+  covering policies exclude a group, a role, guests/external users or more than 2 accounts; or no policy is enabled
+  (security defaults on, off or unread: per-user MFA may apply and is not read here);
 - false: policies are enabled and none of them is a workforce MFA policy.
-If either key is not evaluated the whole run reports a dataCollection error, so neither key reads a
-verdict from an incomplete picture. An error or unrecognised body, or a list that still carries
-@odata.nextLink (pages left unread), is not evaluated.
+If either key is not evaluated the whole run reports a dataCollection error, so neither key reads a verdict from an
+incomplete picture. An error or unrecognised body, or a list still carrying @odata.nextLink, is not evaluated.
 """
 
 import json
@@ -641,49 +628,51 @@ def group_coverage(candidates, workforce, memberships, groups):
 ALL_CLIENT_TYPES = set(["browser", "mobileappsanddesktopclients", "exchangeactivesync", "other"])
 
 
+READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "platforms", "signInRiskLevels",
+                   "userRiskLevels", "servicePrincipalRiskLevels")
+
+
+def has_value(value):
+    """True when some leaf inside value is set (Graph returns unset conditions as null or as objects of empty lists)."""
+    if isinstance(value, dict):
+        return any([has_value(v) for k, v in value.items() if not str(k).startswith("@")])
+    if isinstance(value, list):
+        return any([has_value(v) for v in value])
+    return value is not None and str(value).strip().lower() not in ("", "none", "null")
+
+
 def location_exclusion_unread(conditions):
-    """True when a policy excludes any location but the AllTrusted exemption. Named locations are not read, so an
-    excluded country or IP range may leave users free to sign in from there (same rule as
-    areserviceaccountsinteractivesigninblocked.py)."""
+    """True when a policy excludes a location but AllTrusted: named locations are not read, so users may be free there."""
     exc = [e for e in lowered(as_dict(conditions.get("locations")).get("excludeLocations")) if e != "none"]
     return bool(exc) and exc != ["alltrusted"]
 
 
-def full_block_reach(policy, unread_ok=False):
-    """True when a block policy stops every sign-in it targets: all apps (none excluded or filtered), all client
-    app types, all platforms, no device filter, authentication flow or insider-risk condition, no risk-only firing,
-    no named-location include and no excluded location but AllTrusted (unread_ok skips that last test). A narrow block
-    ("block legacy authentication", "block one country") does not stop a modern remote sign-in. Same rule as
-    ismfaenforcedforusers.py (the sandbox forces a copy)."""
+def full_block_reach(policy):
+    """True when a block policy stops every sign-in it targets; None when it would but for an excluded location other
+    than AllTrusted (not read); else False. Fail closed: all apps, client types and platforms, no named-location
+    include, no risk-only firing, no other condition with a value. Same rule as full_block in
+    areserviceaccountsinteractivesigninblocked.py and ismfaenforcedforusers.py (test_mfa_members_outside_parity.py)."""
     conditions = as_dict(policy.get("conditions"))
     if "block" not in lowered(as_dict(policy.get("grantControls")).get("builtInControls")) or risk_only(conditions):
         return False
-    apps = as_dict(conditions.get("applications"))
-    if "all" not in lowered(apps.get("includeApplications")) or present(apps.get("excludeApplications")) \
-            or present(apps.get("applicationFilter")):
-        return False
+    apps, plat = as_dict(conditions.get("applications")), as_dict(conditions.get("platforms"))
     client = set(lowered(conditions.get("clientAppTypes")))
-    if client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client):
+    where = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
+    system = lowered(plat.get("includePlatforms"))
+    if ("all" not in lowered(apps.get("includeApplications")) or has_value(apps.get("excludeApplications"))
+            or has_value(apps.get("applicationFilter")) or has_value(plat.get("excludePlatforms"))
+            or (client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client))
+            or (where and "all" not in where) or (system and "all" not in system)
+            or any([has_value(v) for k, v in conditions.items() if k not in READ_CONDITIONS])):
         return False
-    locations = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
-    if (locations and "all" not in locations) or (location_exclusion_unread(conditions) and not unread_ok):
-        return False
-    platforms = as_dict(conditions.get("platforms"))
-    include = lowered(platforms.get("includePlatforms"))
-    if (include and "all" not in include) or present(platforms.get("excludePlatforms")):
-        return False
-    if any(present(v) for v in as_dict(conditions.get("devices")).values()):
-        return False
-    return not (present(conditions.get("authenticationFlows")) or present(conditions.get("insiderRiskLevels")))
+    return None if location_exclusion_unread(conditions) else True
 
 
-def requires_mfa_reach(policy):
-    """For the members-outside rule only: the grant asks for MFA, the built-in "mfa" control or any authentication
-    strength (whatever else it offers under OR), or is a full block of every sign-in (full_block_reach: an account
-    it covers cannot sign in remotely, so it needs no MFA). Generous on purpose for MFA grants: counting a policy
-    can only remove members from "outside", never add a False."""
+def asks_mfa(policy):
+    """The grant asks for MFA: the built-in "mfa" control or any authentication strength (generous: whatever else it
+    offers under OR; counting a policy only removes members from "outside")."""
     grant = as_dict(policy.get("grantControls"))
-    if "mfa" in lowered(grant.get("builtInControls")) or full_block_reach(policy):
+    if "mfa" in lowered(grant.get("builtInControls")):
         return True
     strength = grant.get("authenticationStrength")
     return isinstance(strength, dict) and bool(strength)
@@ -742,12 +731,12 @@ def members_outside(policies, workforce, memberships, role_body):
         return None, "the enabled member account list was not read whole"
     reached = set()
     named_excluded = set()
-    maybe_reached = set()  # reached only by a block that excludes a named location (not read)
+    maybe_reached = set()  # reached only by a block that excludes a named location
     for policy in policies:
         if str(policy.get("state") or "").lower() != "enabled":
             continue
-        unsure = not requires_mfa_reach(policy) and full_block_reach(policy, True)
-        if not unsure and not requires_mfa_reach(policy):
+        kind = True if asks_mfa(policy) else full_block_reach(policy)
+        if kind is False:
             continue
         conditions = as_dict(policy.get("conditions"))
         if risk_only(conditions):
@@ -777,16 +766,18 @@ def members_outside(policies, workforce, memberships, role_body):
             reach = reach - members
             if len(members) <= MAX_EXCLUDED_ACCOUNTS:
                 excluded = excluded | members  # a break-glass group (36B c); a larger group's members stay outside
-        if unsure:
+        named_excluded = named_excluded | excluded  # a named exclusion is named whatever the location condition says
+        if kind is None:
             maybe_reached = maybe_reached | (reach - excluded)
             continue
-        named_excluded = named_excluded | excluded
         reached = reached | (reach - excluded)
     outside = workforce - reached
     break_glass = outside & named_excluded
     if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
         outside = outside - break_glass
-    if outside & maybe_reached:
+    unsure_outside = outside & maybe_reached
+    outside = outside - maybe_reached  # a measured gap stays a FAIL (WI-3a); undecided only when nothing else is outside
+    if unsure_outside and not outside:
         return None, "a block policy excludes a named location that was not read, so whether it blocks its members is not known"
     return outside, ""
 

@@ -21,6 +21,7 @@ def load(name):
 
 COV = load("entra_ca_mfa_coverage")
 ISMFA = load("ismfaenforcedforusers")
+SVC = load("areserviceaccountsinteractivesigninblocked")
 U = ["b0000000-0000-0000-0000-00000000000%d" % i for i in range(1, 7)]  # 6 enabled members
 G_SVC = "d0000000-0000-0000-0000-000000000001"
 G_STAFF = "d0000000-0000-0000-0000-000000000002"
@@ -75,15 +76,19 @@ def outside_ismfa(b):
     return (found["outside"] if found is not None else None), why
 
 
-SVC = (G_SVC, U[3:6])
+SVC_GROUP = (G_SVC, U[3:6])
 STAFF = (G_STAFF, U[:3])
 MFA_EXCL_SVC = pol("MFA all users", include_users=["All"], exclude_groups=[G_SVC])
 BLOCK_SVC = pol("Block service accounts", grant=("block",), include_groups=[G_SVC])
 LEGACY_BLOCK = pol("Block legacy auth", grant=("block",), include_users=["All"],
                    client=("exchangeActiveSync", "other"))
 GEO_BLOCK = pol("Block one country", grant=("block",), include_users=["All"], locations=["named-location-id"])
-def block_all(*exclude):
-    return pol("Block all", grant=("block",), include_users=["All"], exclude_locations=list(exclude))
+def block_all(*exclude, exclude_groups=()):
+    return pol("Block all", grant=("block",), include_users=["All"], exclude_locations=list(exclude),
+               exclude_groups=list(exclude_groups))
+
+
+G_BIG = "d0000000-0000-0000-0000-000000000004"
 
 
 MFA_STAFF = pol("MFA staff", include_groups=[G_STAFF])
@@ -93,21 +98,28 @@ CASES = {
     "block-all-exclude-alltrusted": ([MFA_STAFF, block_all("AllTrusted")], [STAFF], set()),
     "block-all-exclude-home-country": ([MFA_STAFF, block_all("country-id")], [STAFF], None),
     "block-all-exclude-alltrusted-and-country": ([MFA_STAFF, block_all("AllTrusted", "country-id")], [STAFF], None),
+    # a named exclusion is named whatever the location condition says: break-glass credit applies to a maybe block too
+    "block-all-exclude-country-excludes-break-glass": ([MFA_STAFF, block_all("country-id", exclude_groups=[G_PAIR])],
+                                                       [(G_STAFF, U[:4]), (G_PAIR, U[4:6])], set()),
+    # members no policy reaches and the maybe block does not reach either are a measured gap: FAIL, never undecided
+    "block-all-exclude-country-excludes-big-group": ([pol("MFA staff", include_groups=[G_STAFF]),
+                                                      block_all("country-id", exclude_groups=[G_BIG])],
+                                                     [(G_STAFF, U[:2]), (G_BIG, U[3:6])], set(U[3:6])),
     "legacy-auth-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), LEGACY_BLOCK], [STAFF], set(U[3:])),
     "geo-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]), GEO_BLOCK], [STAFF], set(U[3:])),
     "full-block-all-users": ([pol("MFA staff", include_groups=[G_STAFF]),
                               pol("Block all", grant=("block",), include_users=["All"])], [STAFF], set()),
     "all-users-mfa": ([pol("MFA", include_users=["All"])], [], set()),
     "group-mfa-staff": ([pol("MFA staff", include_groups=[G_STAFF])], [STAFF], set(U[3:])),
-    "excluded-svc-group-no-block": ([MFA_EXCL_SVC], [SVC], set(U[3:])),
-    "excluded-svc-group-blocked": ([MFA_EXCL_SVC, BLOCK_SVC], [SVC], set()),
+    "excluded-svc-group-no-block": ([MFA_EXCL_SVC], [SVC_GROUP], set(U[3:])),
+    "excluded-svc-group-blocked": ([MFA_EXCL_SVC, BLOCK_SVC], [SVC_GROUP], set()),
     "block-by-name": ([pol("MFA", include_users=["All"], exclude_users=[U[5]]),
                        pol("Block", grant=("block",), include_users=[U[5]])], [], set()),
     "break-glass-pair-excluded": ([pol("MFA", include_users=["All"], exclude_groups=[G_PAIR])],
                                   [(G_PAIR, U[:2])], set()),
     "risk-only-policy": ([pol("MFA risky", include_users=["All"], risk=["high"])], [], set(U)),
     "disabled-block": ([MFA_EXCL_SVC, pol("Block", grant=("block",), include_groups=[G_SVC], state="disabled")],
-                       [SVC], set(U[3:])),
+                       [SVC_GROUP], set(U[3:])),
     "role-policy-unread": ([pol("MFA admins", roles=[ROLE_ADMIN])], [], None),
 }
 
@@ -131,6 +143,16 @@ def run_ismfa(b):
     return out["transformedResponse"]["isMFAEnforcedForUsers"], out
 
 
+@pytest.mark.parametrize("name", ["block-all-exclude-country-excludes-break-glass",
+                                  "block-all-exclude-country-excludes-big-group"])
+def test_a_maybe_block_keeps_break_glass_credit_and_never_hides_a_measured_gap(name):
+    b = body(*CASES[name][:2])
+    want = CASES[name][2]
+    for value in (run_cov(b)[0], run_cov(b, "isRDPProtected")[0], run_ismfa(b)[0]):
+        assert (value is False) == bool(want)
+    assert (run_cov(b)[0] is not False) == (not want)
+
+
 @pytest.mark.parametrize("excluded", [["country-id"], ["AllTrusted", "country-id"]])
 def test_block_excluding_a_named_location_is_undecided_in_every_key(excluded):
     b = body([MFA_STAFF, block_all(*excluded)], [STAFF])
@@ -149,14 +171,14 @@ def test_block_excluding_a_named_location_never_hides_a_failure_it_does_not_reac
 
 
 def test_excluded_group_covered_by_a_block_policy_is_not_a_failure():
-    b = body([MFA_EXCL_SVC, BLOCK_SVC], [SVC])
+    b = body([MFA_EXCL_SVC, BLOCK_SVC], [SVC_GROUP])
     for key in ("isRDPProtected", "isMFARequiredForRemoteAccess"):
         assert run_cov(b, key)[0] is not False
     assert run_ismfa(b)[0] is not False
 
 
 def test_same_exclusion_without_a_block_policy_fails_with_the_count_and_new_advice():
-    b = body([MFA_EXCL_SVC], [SVC])
+    b = body([MFA_EXCL_SVC], [SVC_GROUP])
     value, out = run_cov(b)
     text = " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
     assert value is False and "3 of 6 enabled member accounts" in text and "block them from sign-in" in text
@@ -222,3 +244,43 @@ def test_security_defaults_enabled_keeps_the_members_outside_from_failing_in_bot
                                                  "identitySecurityDefaultsEnforcementPolicy/$entity",
                                "id": "00000000-0000-0000-0000-000000000005", "isEnabled": True})
     assert run_cov(b)[0] is None and run_ismfa(b)[0] is None
+
+
+def _block(change=None, client=("all",), locs=None):
+    p = pol("Block", grant=("block",), include_users=["All"], client=client)
+    p["conditions"].update(change or {})
+    if locs is not None:
+        p["conditions"]["locations"] = {"includeLocations": ["All"], "excludeLocations": list(locs)}
+    return p
+
+
+MATRIX = (
+    [_block(c) for c in (
+        {"applications": {"includeApplications": ["All"], "excludeApplications": ["app-id"]}},
+        {"applications": {"includeApplications": ["app-id"]}},
+        {"applications": {"includeApplications": ["All"], "applicationFilter": {"rule": "x"}}},
+        {"platforms": {"includePlatforms": ["android"]}},
+        {"platforms": {"includePlatforms": ["all"], "excludePlatforms": ["iOS"]}},
+        {"devices": {"deviceFilter": {"mode": "include", "rule": "x"}}},
+        {"authenticationFlows": {"transferMethods": "deviceCodeFlow"}},
+        {"insiderRiskLevels": "elevated"},
+        {"signInRiskLevels": ["high"]},
+        {"clientApplications": {"includeServicePrincipals": ["All"]}},
+        {"someFutureCondition": {"include": ["x"]}},
+        {"someFutureCondition": {"include": []}},
+        {"devices": {"deviceFilter": None}},
+        {"signInRiskLevels": ["high", "medium", "low", "none"]},
+    )]
+    + [_block(client=c) for c in (("browser",), ("browser", "mobileAppsAndDesktopClients"),
+                                  ("browser", "mobileAppsAndDesktopClients", "exchangeActiveSync", "other"),
+                                  ("exchangeActiveSync", "other"), ("all",), ())]
+    + [_block(locs=e) for e in ([], ["none"], ["AllTrusted"], ["country-id"], ["AllTrusted", "country-id"])]
+    + [_block({"locations": {"includeLocations": ["named-location-id"]}})]
+)
+
+
+@pytest.mark.parametrize("index", range(len(MATRIX)))
+def test_the_three_files_share_one_definition_of_a_full_block(index):
+    policy = MATRIX[index]
+    assert COV.full_block_reach(policy) == ISMFA.full_block_reach(policy) == SVC.full_block(policy)
+    assert COV.full_block_reach(policy) in (True, None, False)

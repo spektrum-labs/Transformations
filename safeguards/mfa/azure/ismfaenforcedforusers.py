@@ -631,50 +631,51 @@ def per_user_mfa(data):
 ALL_CLIENT_TYPES = set(["browser", "mobileappsanddesktopclients", "exchangeactivesync", "other"])
 
 
+READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "platforms", "signInRiskLevels",
+                   "userRiskLevels", "servicePrincipalRiskLevels")
+
+
+def has_value(value):
+    """True when some leaf inside value is set (Graph returns unset conditions as null or as objects of empty lists)."""
+    if isinstance(value, dict):
+        return any([has_value(v) for k, v in value.items() if not str(k).startswith("@")])
+    if isinstance(value, list):
+        return any([has_value(v) for v in value])
+    return value is not None and str(value).strip().lower() not in ("", "none", "null")
+
+
 def location_exclusion_unread(conditions):
-    """True when a policy excludes any location but the AllTrusted exemption. Named locations are not read, so an
-    excluded country or IP range may leave users free to sign in from there (same rule as
-    areserviceaccountsinteractivesigninblocked.py)."""
+    """True when a policy excludes a location but AllTrusted: named locations are not read, so users may be free there."""
     exc = [e for e in lowered(as_dict(conditions.get("locations")).get("excludeLocations")) if e != "none"]
     return bool(exc) and exc != ["alltrusted"]
 
 
-def full_block_reach(policy, unread_ok=False):
-    """True when a block policy stops every sign-in it targets: all apps (none excluded or filtered), all client
-    app types, all platforms, no device filter, authentication flow or insider-risk condition, no risk-only firing,
-    no named-location include and no excluded location but AllTrusted (unread_ok skips that last test). A narrow block
-    ("block legacy authentication", "block one country") does not stop a modern remote sign-in. Same rule as
-    entra_ca_mfa_coverage.py (the sandbox forces a copy)."""
+def full_block_reach(policy):
+    """True when a block policy stops every sign-in it targets; None when it would but for an excluded location other
+    than AllTrusted (not read); else False. Fail closed: all apps, client types and platforms, no named-location
+    include, no risk-only firing, no other condition with a value. Same rule as full_block in
+    areserviceaccountsinteractivesigninblocked.py and entra_ca_mfa_coverage.py (test_mfa_members_outside_parity.py)."""
     conditions = as_dict(policy.get("conditions"))
     if "block" not in lowered(as_dict(policy.get("grantControls")).get("builtInControls")) or risk_only(conditions):
         return False
-    apps = as_dict(conditions.get("applications"))
-    if "all" not in lowered(apps.get("includeApplications")) or present(apps.get("excludeApplications")) \
-            or present(apps.get("applicationFilter")):
-        return False
+    apps, plat = as_dict(conditions.get("applications")), as_dict(conditions.get("platforms"))
     client = set(lowered(conditions.get("clientAppTypes")))
-    if client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client):
+    where = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
+    system = lowered(plat.get("includePlatforms"))
+    if ("all" not in lowered(apps.get("includeApplications")) or has_value(apps.get("excludeApplications"))
+            or has_value(apps.get("applicationFilter")) or has_value(plat.get("excludePlatforms"))
+            or (client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client))
+            or (where and "all" not in where) or (system and "all" not in system)
+            or any([has_value(v) for k, v in conditions.items() if k not in READ_CONDITIONS])):
         return False
-    locations = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
-    if (locations and "all" not in locations) or (location_exclusion_unread(conditions) and not unread_ok):
-        return False
-    platforms = as_dict(conditions.get("platforms"))
-    include = lowered(platforms.get("includePlatforms"))
-    if (include and "all" not in include) or present(platforms.get("excludePlatforms")):
-        return False
-    if any(present(v) for v in as_dict(conditions.get("devices")).values()):
-        return False
-    return not (present(conditions.get("authenticationFlows")) or present(conditions.get("insiderRiskLevels")))
+    return None if location_exclusion_unread(conditions) else True
 
 
-def requires_mfa_reach(policy):
-    """For the members-outside rule only: the grant asks for MFA (the built-in "mfa" control or an authentication
-    strength: built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength), or is a full
-    block of every sign-in (full_block_reach: an account it covers cannot sign in remotely, so it needs no MFA).
-    Generous on purpose for MFA grants: counting a policy can only remove members from "outside", never add a
-    False."""
+def asks_mfa(policy):
+    """The grant asks for MFA: the built-in "mfa" control or any authentication strength (generous: whatever else it
+    offers under OR; counting a policy only removes members from "outside")."""
     grant = as_dict(policy.get("grantControls"))
-    if "mfa" in lowered(grant.get("builtInControls")) or full_block_reach(policy):
+    if "mfa" in lowered(grant.get("builtInControls")):
         return True
     strength = grant.get("authenticationStrength")
     return isinstance(strength, dict) and bool(strength)
@@ -753,8 +754,8 @@ def members_outside(data, policies):
     for policy in policies:
         if not isinstance(policy, dict) or policy.get("state") != "enabled":
             continue
-        unsure = not requires_mfa_reach(policy) and full_block_reach(policy, True)
-        if not unsure and not requires_mfa_reach(policy):
+        kind = True if asks_mfa(policy) else full_block_reach(policy)
+        if kind is False:
             continue
         conditions = as_dict(policy.get("conditions"))
         if risk_only(conditions):
@@ -789,16 +790,18 @@ def members_outside(data, policies):
             reach = reach - members
             if len(members) <= MAX_EXCLUDED_ACCOUNTS:
                 excluded = excluded | members  # a break-glass group (36B c); a larger group's members stay outside
-        if unsure:
+        named_excluded = named_excluded | excluded  # a named exclusion is named whatever the location condition says
+        if kind is None:
             maybe_reached = maybe_reached | (reach - excluded)
             continue
-        named_excluded = named_excluded | excluded
         reached = reached | (reach - excluded)
     outside = workforce - reached
     break_glass = outside & named_excluded
     if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
         outside = outside - break_glass
-    if outside & maybe_reached:
+    unsure_outside = outside & maybe_reached
+    outside = outside - maybe_reached  # a measured gap stays a FAIL (WI-3a); undecided only when nothing else is outside
+    if unsure_outside and not outside:
         return None, "a block policy excludes a named location that was not read, so whether it blocks its members is not known"
     return {"outside": outside, "membersTotal": len(workforce)}, ""
 
