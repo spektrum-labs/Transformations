@@ -480,8 +480,9 @@ def full_block(policy):
 
 
 def sync_holders(body):
-    """Lower-case ids holding the Directory Synchronization Accounts role from an optional roleAssignments read
-    (principal ids); None when the part is absent or not read whole, so the exemption note stays."""
+    """Lower-case user ids holding the Directory Synchronization Accounts role from an optional roleAssignments
+    read; None when the part is absent, not read whole, lists no holder of this role (a filtered read cannot tell),
+    or a holder is not a user (a group's members are not read), so the exemption note stays."""
     if "roleAssignments" not in body:
         return None
     items, why = graph_collection(body.get("roleAssignments"), "role assignments")
@@ -491,12 +492,15 @@ def sync_holders(body):
     for item in items:
         if not isinstance(item, dict):
             return None
-        if str(item.get("roleDefinitionId") or item.get("roleTemplateId") or "").strip().lower() == DIRSYNC_ROLE:
-            pid = str(item.get("principalId") or "").strip().lower()
-            if not pid:
-                return None
-            out.add(pid)
-    return out
+        if str(item.get("roleDefinitionId") or item.get("roleTemplateId") or "").strip().lower() != DIRSYNC_ROLE:
+            continue
+        principal = item.get("principal") if isinstance(item.get("principal"), dict) else {}
+        pid = str(item.get("principalId") or principal.get("id") or "").strip().lower()
+        kind = str(principal.get("@odata.type") or "").strip().lower().rsplit(".", 1)[-1]
+        if not pid or kind != "user":
+            return None
+        out.add(pid)
+    return out or None
 
 
 def sync_role_excluded(policy):
@@ -589,11 +593,12 @@ def transform(input):
         break_glass = glass - by_signal
         service = by_signal | (carve_only - break_glass)
         holders = sync_holders(body)
-        sync_held = (service & holders) if holders is not None else set()
-        service = service - sync_held
         decided = [(p, full_block(p)) for p in policies]
         decided = [(p, d) for p, d in decided if d is not False]
         blocks = [p for p, d in decided if d]
+        # Role holders are left out only when an enabled full block excludes the role (the advised exemption).
+        sync_held = service & holders if holders and [p for p in blocks if sync_role_excluded(p)] else set()
+        service = service - sync_held
         unblocked = []
         undecided = []
         for uid in sorted(service):
@@ -606,7 +611,7 @@ def transform(input):
                    "serviceAccountsBySignInSignal": len(by_signal), "serviceAccountsByMfaExclusion": len(carve_only - break_glass),
                    "breakGlassAccountsNotJudged": len(break_glass), "fullBlockPolicies": len(blocks),
                    "trustedLocationExemption": any(location_exempt(p) for p in blocks),
-                   "syncRoleExempted": holders is None and any(sync_role_excluded(p) for p in blocks),
+                   "syncRoleExempted": not sync_held and any(sync_role_excluded(p) for p in blocks),
                    "syncRoleHoldersNotJudged": len(sync_held),
                    "unblocked": len(unblocked), "undecided": len(undecided), "signalDays": SIGNAL_DAYS}
         scope = (f"service accounts are enabled member accounts with a non-interactive sign-in and no interactive one "
@@ -618,7 +623,7 @@ def transform(input):
         exempt_note = ""
         if [p for p in blocks if location_exempt(p)]:
             exempt_note = " (at least one blocks sign-in outside trusted locations)"
-        if holders is None and [p for p in blocks if sync_role_excluded(p)]:
+        if not sync_held and [p for p in blocks if sync_role_excluded(p)]:
             exempt_note += (" (holders of the Directory Synchronization Accounts role are excluded from a block and "
                             "were not checked)")
         if unblocked:
@@ -658,9 +663,12 @@ def transform(input):
             return create_response(
                 result={KEY: True},
                 validation=validation,
-                pass_reasons=["No service account found: no enabled member account has a non-interactive sign-in and "
-                              f"no interactive one in {SIGNAL_DAYS} days, and no Conditional Access MFA policy excludes one (user list "
-                              "and sign-in activity read whole). Scope: " + scope + "."],
+                pass_reasons=[("Only holders of the Directory Synchronization Accounts role were found "
+                               f"({len(sync_held)}), and an enabled block excludes that role, so none is judged. "
+                               if sync_held else "No service account found: no enabled member account has a "
+                               f"non-interactive sign-in and no interactive one in {SIGNAL_DAYS} days, and no "
+                               "Conditional Access MFA policy excludes one (user list and sign-in activity read whole). ")
+                              + "Scope: " + scope + "."],
                 input_summary=summary,
             )
         return create_response(
