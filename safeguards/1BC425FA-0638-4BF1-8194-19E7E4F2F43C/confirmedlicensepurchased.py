@@ -3,19 +3,29 @@ Transformation: confirmedLicensePurchased
 Vendor: Sophos Central (shared by the Sophos product integrations)
 Category: Licensing
 
-Evaluates whether Sophos Central reports a licensed, configured product, from the product
-flags the healthCheck read returns: isEPPConfigured, isMDRConfigured and, when present,
-isEmailConfigured / isEmailSecurityConfigured / isFirewallConfigured. Each flag may be a
-boolean or the string "true" / "false".
+Evaluates whether Sophos Central reports a licensed, configured product. Only two things in
+the body count as licence evidence:
 
-  * every recognised product flag is explicitly false  -> False
-  * any other product-flag body (including a true flag) -> None (Not evaluated)
-  * no recognised flag, empty or error body             -> None (Not evaluated)
+  * a `licensePurchased` key holding true / false (boolean or the string "true" / "false")
+  * the Sophos healthCheck product flags: isEPPConfigured, isMDRConfigured and, when present,
+    isEmailConfigured / isEmailSecurityConfigured / isFirewallConfigured
+
+  licensePurchased true                                  -> True
+  licensePurchased false                                 -> False
+  every recognised product flag is explicitly false      -> False
+  any other product-flag body (including a true flag)    -> None (Not evaluated)
+  anything else                                          -> None (Not evaluated)
+
+"Anything else" includes a generic `status` ("ok", "success", 200), an HTTP code, an HTML or
+other non-JSON body, a bare list or populated record list, an error body, an empty body, a
+failed input validation and an exception. None of those says a Sophos licence is purchased:
+a `status` of "ok" says a request worked, and a list of records from another vendor's API
+says nothing about Sophos. This file is also wired to non-Sophos integrations, so it must
+never turn such a body into a pass.
 
 The input does not say which Sophos integration row asked, so a true flag cannot prove the
 asking product's licence (an Endpoint Protection flag must not pass Firewall): that needs a
-per-product licence read (getLicenses). A legacy `licensePurchased` key is still honoured
-first, and a body with no product flags keeps the earlier positive reading.
+per-product licence read (getLicenses).
 """
 
 import json
@@ -90,9 +100,10 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                fail_reasons=[VALIDATION_REASON],
+                api_errors=[VALIDATION_REASON]
             )
 
         pass_reasons = []
@@ -127,67 +138,25 @@ def transform(input):
         )
 
     except Exception as e:
+        # An unreadable body (HTML, plain text, broken JSON) proves nothing either way.
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            fail_reasons=[EXCEPTION_REASON],
+            api_errors=[EXCEPTION_REASON]
         )
 
 
-def affirmative_signal(data):
-    """True only when the payload POSITIVELY evidences the control.
-
-    Replaces `data is not None`, which asked whether a response arrived rather than what
-    it said -- so any 2xx body, including one describing the control as OFF, satisfied the
-    criterion and no input could ever make it false. Measured 2026-09-21.
-
-    Deliberately conservative, in this order:
-      * an unreadable, empty or error body           -> False
-      * an explicit OFF among the recognised keys    -> False   (beats any other signal)
-      * an explicit ON among the recognised keys     -> True
-      * a non-empty population of records/settings   -> True
-      * anything unrecognised                        -> False  (never True by default)
-    """
-    if isinstance(data, list):
-        # A top-level JSON array is a population of records, as {"items": [...]} already is,
-        # unless an element is an error object (Okta answers errors as {"errorCode": ...}).
-        for item in data:
-            if isinstance(item, dict) and (item.get("error") or item.get("errors") or item.get("errorCode") or item.get("errorSummary") or item.get("errorMessage")):
-                return False
-        data = {"items": [item for item in data if item]}
-    if not isinstance(data, dict) or not data:
-        return False
-    for key in ("error", "errors", "errorMessage", "errorType", "fault", "PSError"):
-        if data.get(key):
-            return False
-    on_keys = ("enabled", "isEnabled", "active", "isActive", "configured", "isConfigured",
-               "enforced", "isEnforced", "loggingEnabled", "status", "state", "licensed",
-               "licensePurchased", "subscribed", "subscription")
-    present = [data[k] for k in on_keys if k in data]
-    off_words = ("false", "disabled", "off", "inactive", "none", "expired", "cancelled")
-    on_words = ("true", "enabled", "on", "active", "success", "ok", "valid", "licensed")
-    for value in present:
-        if value is False:
-            return False
-        if isinstance(value, str) and value.strip().lower() in off_words:
-            return False
-    for value in present:
-        if value is True:
-            return True
-        if isinstance(value, str) and value.strip().lower() in on_words:
-            return True
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
-            return True
-    for key in ("value", "items", "data", "records", "results", "logs", "events", "policies",
-                "settings", "configurations", "devices", "agents", "users", "licenses"):
-        value = data.get(key)
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, dict) and value:
-            return True
-    return False
-
+VALIDATION_REASON = "Not evaluated: the response failed input validation; nothing was measured."
+EXCEPTION_REASON = "Not evaluated: the response could not be read (not JSON, or an unexpected shape); nothing was measured."
+ERROR_REASON = "Not evaluated: the licence read returned an error instead of licence data."
+NO_EVIDENCE_REASON = ("Not evaluated: the response carries no Sophos licence evidence "
+                      "(no licensePurchased value and no Sophos product flag); a generic status, "
+                      "HTTP code or record list does not show a licence was purchased.")
+BAD_LEGACY_REASON = "Not evaluated: licensePurchased is present but is not true or false."
+ERROR_KEYS = ("error", "errors", "errorCode", "errorMessage", "errorType", "fault", "PSError")
+STATUS_KEYS = ("status", "statusCode", "status_code", "httpStatus")
 
 NOT_PER_PRODUCT_REASON = ("Sophos healthCheck does not say which product is licensed; "
                           "a per-product licence read (getLicenses) is needed")
@@ -214,17 +183,37 @@ def flag_value(value):
     return None
 
 
+def is_error_body(data):
+    """True for a body that reports an error or an HTTP 4xx/5xx status."""
+    for key in ERROR_KEYS:
+        if data.get(key):
+            return True
+    for key in STATUS_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip().isdigit():
+            value = int(value.strip())
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 400:
+            return True
+    return False
+
+
 def sophos_license(data):
-    """(True | False | None, reason, {flag: value}) for the Sophos healthCheck body."""
-    if not isinstance(data, dict):
-        if affirmative_signal(data):
-            return True, "Sophos licence confirmed: the read returned a populated product list", {}
-        return None, "Not evaluated: the Sophos licence read returned no data", {}
+    """(True | False | None, reason, {flag: value}) for a Sophos licence or healthCheck body.
+
+    True only from licensePurchased true. A generic status, HTTP code, list, HTML or any
+    other shape is None: it is not Sophos licence evidence.
+    """
+    if not isinstance(data, dict) or not data:
+        return None, NO_EVIDENCE_REASON, {}
+    if is_error_body(data):
+        return None, ERROR_REASON, {}
     if "licensePurchased" in data:
-        legacy = data.get("licensePurchased")
-        if legacy:
-            return legacy, "Sophos licence confirmed (licensePurchased: true)", {}
-        return legacy, "Sophos licence not purchased (licensePurchased: false)", {}
+        legacy = flag_value(data.get("licensePurchased"))
+        if legacy is True:
+            return True, "Sophos licence confirmed (licensePurchased: true)", {}
+        if legacy is False:
+            return False, "Sophos licence not purchased (licensePurchased: false)", {}
+        return None, BAD_LEGACY_REASON, {}
 
     products = {}
     licensed = []
@@ -246,6 +235,4 @@ def sophos_license(data):
         # asking: an Endpoint Protection flag must not pass a Firewall or Email Security licence.
         return None, NOT_PER_PRODUCT_REASON, products
 
-    if affirmative_signal(data):
-        return True, "Sophos licence confirmed: the read returned an active licence signal", products
-    return None, "Not evaluated: the Sophos licence read returned no product flags", products
+    return None, NO_EVIDENCE_REASON, products
