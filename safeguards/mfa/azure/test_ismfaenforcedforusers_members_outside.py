@@ -423,3 +423,13 @@ def test_role_read_cut_off_by_the_workflow_never_fails(stats, expected):
     value, _ = run(body([policy("A"), ADMINS], [G1], [U[:5]], roleAssignments=roles((U[5], "user")),
                         paginationStats=stats))
     assert value is expected
+
+
+def test_per_user_mfa_covering_everyone_with_no_group_policy_says_so():
+    # the only policy is narrowed by a device filter, so no group-scoped policy counts (candidates == [])
+    narrowed = policy("A", extra={"devices": {"deviceFilter": {"mode": "include", "rule": "x"}}})
+    states = {u: "enforced" for u in U}
+    value, out = run(body([narrowed], [G1], [U[:5]], perUserMfaStates=per_user(states)))
+    assert value is True
+    reason = " ".join(out["additionalInfo"]["evaluation"]["passReasons"])
+    assert "per-user MFA covers all 8" in reason and "cover 0" not in reason

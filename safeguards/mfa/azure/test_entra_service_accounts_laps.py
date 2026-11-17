@@ -276,9 +276,26 @@ def test_named_location_block_never_hides_a_real_gap():
     assert value(SVC, svc_body([maybe, real]))[0] is True
 
 
-def test_sync_account_role_excluded_from_the_block_is_not_failed():
-    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["d29b2b05-8046-44ba-8758-1e26182fcf32"])
-    assert value(SVC, svc_body([pol]))[0] is None
+def test_sync_account_role_excluded_from_the_block_keeps_the_answer():
+    # excluding only the Directory Synchronization Accounts role is the advised exemption: the result is still decided
+    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["D29B2B05-8046-44ba-8758-1e26182fcf32"])
+    assert value(SVC, svc_body([pol]))[0] is True
+    other = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeRoles=["62e90394-69f5-4237-9190-012177145e10"])
+    assert value(SVC, svc_body([other]))[0] is None  # any other excluded role stays undecided
+
+
+def test_sync_account_excluded_by_name_is_failed_and_advice_names_the_role():
+    pol = with_users(ca("Block svc", groups=[G_SVC, G_SVC2]), excludeUsers=[SA1])
+    got, out = value(SVC, svc_body([pol]))
+    assert got is False
+    assert "Directory Synchronization Accounts role" in " ".join(out["additionalInfo"]["evaluation"]["recommendations"])
+
+
+def test_trusted_location_exemption_is_in_the_summary():
+    plain = value(SVC, svc_body([ca("Block svc", groups=[G_SVC, G_SVC2])]))[1]
+    assert plain["additionalInfo"]["transformation"]["inputSummary"]["trustedLocationExemption"] is False
+    exempt = ca("Block svc", groups=[G_SVC, G_SVC2], locations={"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]})
+    assert value(SVC, svc_body([exempt]))[1]["additionalInfo"]["transformation"]["inputSummary"]["trustedLocationExemption"] is True
 
 
 def test_mfa_carve_out_through_a_read_group():

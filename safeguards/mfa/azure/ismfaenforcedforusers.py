@@ -957,9 +957,12 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
             return create_response(
                 result=result, validation=validation,
                 pass_reasons=[f"MFA methods enabled: {', '.join(enabled_methods)}",
-                              f"MFA enforced for all {total} enabled member accounts: group-scoped Conditional Access "
-                              f"policies cover {total - details['perUserMfaCovered']} of them and per-user MFA covers "
-                              f"the other {details['perUserMfaCovered']} (group membership and per-user MFA read)"],
+                              f"MFA enforced for all {total} enabled member accounts: "
+                              + (f"per-user MFA covers all {details['perUserMfaCovered']} (no group-scoped Conditional "
+                                 "Access policy counts)" if not candidates else
+                                 f"group-scoped Conditional Access policies cover {total - details['perUserMfaCovered']} "
+                                 f"of them and per-user MFA covers the other {details['perUserMfaCovered']}")
+                              + " (group membership and per-user MFA read)"],
                 input_summary=input_summary)
     if not outside:
         return None

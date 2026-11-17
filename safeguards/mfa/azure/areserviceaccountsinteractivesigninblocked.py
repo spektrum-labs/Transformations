@@ -389,6 +389,9 @@ def users_of(policy):
     return cond.get("users") if isinstance(cond.get("users"), dict) else {}
 
 
+# Directory Synchronization Accounts role template: the Entra Connect sync account holds it and cannot be blocked
+# without breaking directory sync, so excluding that role alone does not make a block undecided.
+DIRSYNC_ROLE = "d29b2b05-8046-44ba-8758-1e26182fcf32"
 ALL_RISK_LEVELS = set(["high", "medium", "low", "none"])
 
 
@@ -504,7 +507,7 @@ def blocked(uid, decided, memberships):
                 excluded = True
         if excluded:
             continue
-        if strs(users.get("excludeRoles")) or has_value(users.get("excludeGuestsOrExternalUsers")):
+        if [r for r in lowered(users.get("excludeRoles")) if r != DIRSYNC_ROLE] or has_value(users.get("excludeGuestsOrExternalUsers")):
             unsure = True
         if included and not unsure and certain:
             return True
@@ -574,6 +577,7 @@ def transform(input):
         summary = {"policiesRead": len(policies), "enabledMemberAccounts": len(accounts),
                    "serviceAccountsBySignInSignal": len(by_signal), "serviceAccountsByMfaExclusion": len(carve_only - break_glass),
                    "breakGlassAccountsNotJudged": len(break_glass), "fullBlockPolicies": len(blocks),
+                   "trustedLocationExemption": any(location_exempt(p) for p in blocks),
                    "unblocked": len(unblocked), "undecided": len(undecided), "signalDays": SIGNAL_DAYS}
         scope = (f"service accounts are enabled member accounts with a non-interactive sign-in and no interactive one "
                  f"in {SIGNAL_DAYS} days, or that a Conditional Access MFA policy would reach but excludes")
@@ -598,8 +602,8 @@ def transform(input):
                                  "accounts with a Conditional Access policy that blocks all cloud apps outside your "
                                  "trusted locations. Conditional Access also applies to non-interactive sign-ins, so a "
                                  "block with no location exemption stops a working workload. Exclude the Microsoft "
-                                 "Entra Connect sync account (Directory Synchronization Accounts role) from any such "
-                                 "policy."],
+                                 "Entra Connect sync account from any such policy by excluding the Directory "
+                                 "Synchronization Accounts role, not the account by name."],
                 input_summary=summary,
             )
         if len(break_glass) > MAX_BREAK_GLASS:
