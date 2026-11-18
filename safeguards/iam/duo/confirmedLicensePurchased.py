@@ -13,6 +13,9 @@ account", for example "Duo Premier". Verdict:
     (errorCode scope_not_granted with requiredScope); a 401 -> None, the customer reconnects;
   * a summary with no edition field -> None, coded NOT-AVAILABLE;
   * an edition this check does not know, an error body or unreadable input -> None.
+Known limit: Duo's Admin API is open only to paying and trial accounts and the edition field "includes
+trials", so a trial is told from a purchase only if Duo writes "trial" in the string (unverified: no real
+edition string was read). The True verdict means "paid or trial edition".
 Every None carries dataCollection.status "error", so it is Not evaluated, never a fail.
 """
 import json
@@ -189,8 +192,9 @@ def transform(input):
         if name in PAID_EDITIONS:
             return create_response(
                 {KEY: True, "duoEdition": shown},
-                pass_reasons=["Duo reports the account edition as \"" + shown + "\", a paid Duo edition "
-                              "(" + ENDPOINT + "). Duo's edition field also reports trials and did not mark this one as a trial."],
+                pass_reasons=["Duo reports the account edition as \"" + shown + "\", a paid or trial Duo edition "
+                              "(" + ENDPOINT + "). Duo does not distinguish a trial from a purchase in this field, "
+                              "so this is evidence of an active Duo edition, not proof of a paid contract."],
                 input_summary=summary_out)
         return not_evaluated(
             "Duo reported an edition this check does not recognise: \"" + shown + "\". Nothing was graded.",
