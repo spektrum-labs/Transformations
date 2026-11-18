@@ -122,10 +122,16 @@ from datetime import datetime
 #   - an excluded group or directory role whose members are not read excludes nobody;
 #   - a policy whose grant asks for an authentication strength (Multifactor, Passwordless, Phishing-resistant or
 #     custom) reaches its included users like one that asks for the built-in "mfa" control;
-#   - any MFA policy that includes a directory role keeps the key not evaluated: its holders are not read, so a
-#     member counted as outside may be covered by it;
-#   - accounts left outside only because a policy excludes them by name are break-glass when there are at most
+#   - an MFA policy that includes a directory role reaches the role's active holders, read from "roleAssignments"
+#     (GET /v1.0/roleManagement/directory/roleAssignments?$expand=principal($select=id); WI-3a, 16 Nov 2026). Without
+#     that list read whole, or with a holder that is a group or an untyped id that is not a member account, the key
+#     stays not evaluated: a member counted as outside may hold that role and be covered by it;
+#   - accounts left outside only because a policy excludes them (by name, or through an excluded group read whole that
+#     holds at most MAX_EXCLUDED_ACCOUNTS accounts, as in 36B c) are break-glass when there are at most
 #     MAX_EXCLUDED_ACCOUNTS of them, and are not counted as outside.
+#   - WI-3a (product decision 16 Nov 2026): the rule also runs when no set-aside policy is a group candidate (every
+#     one is narrowed, excludes something, or includes a role), so a whole membership read always ends in a verdict
+#     when some member is outside every MFA policy.
 # Other evidence, read only when the merged input carries it:
 #   "securityDefaults": GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy. Enabled (or not read whole):
 #                       no False; the key stays not evaluated (security defaults are not graded here);
@@ -622,15 +628,116 @@ def per_user_mfa(data):
     return ids, seen | ids, ""
 
 
-def requires_mfa_reach(policy):
-    """For the members-outside rule only: the grant asks for MFA, either the built-in "mfa" control or an
-    authentication strength (built-in Multifactor, Passwordless or Phishing-resistant MFA, or a custom strength).
-    Generous on purpose: counting a policy can only remove members from "outside", never add a False."""
+ALL_CLIENT_TYPES = set(["browser", "mobileappsanddesktopclients", "exchangeactivesync", "other"])
+
+
+READ_CONDITIONS = ("users", "applications", "clientAppTypes", "locations", "platforms", "signInRiskLevels",
+                   "userRiskLevels", "servicePrincipalRiskLevels")
+
+
+def has_value(value):
+    """True when some leaf inside value is set (Graph returns unset conditions as null or as objects of empty lists)."""
+    if isinstance(value, dict):
+        return any([has_value(v) for k, v in value.items() if not str(k).startswith("@")])
+    if isinstance(value, list):
+        return any([has_value(v) for v in value])
+    return value is not None and str(value).strip().lower() not in ("", "none", "null")
+
+
+def location_exclusion_unread(conditions):
+    """True when a policy excludes a location but AllTrusted: named locations are not read, so users may be free there."""
+    exc = [e for e in lowered(as_dict(conditions.get("locations")).get("excludeLocations")) if e != "none"]
+    return bool(exc) and exc != ["alltrusted"]
+
+
+def full_block_reach(policy):
+    """True when a block policy stops every sign-in it targets; None when it would but for an excluded location other
+    than AllTrusted (not read); else False. Fail closed: all apps, client types and platforms, no named-location
+    include, no risk-only firing, no other condition with a value. Same rule as full_block in
+    areserviceaccountsinteractivesigninblocked.py and entra_ca_mfa_coverage.py (test_mfa_members_outside_parity.py)."""
+    conditions = as_dict(policy.get("conditions"))
+    if "block" not in lowered(as_dict(policy.get("grantControls")).get("builtInControls")) or risk_only(conditions):
+        return False
+    apps, plat = as_dict(conditions.get("applications")), as_dict(conditions.get("platforms"))
+    client = set(lowered(conditions.get("clientAppTypes")))
+    where = lowered(as_dict(conditions.get("locations")).get("includeLocations"))
+    system = lowered(plat.get("includePlatforms"))
+    if ("all" not in lowered(apps.get("includeApplications")) or has_value(apps.get("excludeApplications"))
+            or has_value(apps.get("applicationFilter")) or has_value(plat.get("excludePlatforms"))
+            or (client and "all" not in client and not ALL_CLIENT_TYPES.issubset(client))
+            or (where and "all" not in where) or (system and "all" not in system)
+            or any([has_value(v) for k, v in conditions.items()
+                     if k not in READ_CONDITIONS and not str(k).startswith("@")])):
+        return False
+    return None if location_exclusion_unread(conditions) else True
+
+
+def asks_mfa(policy):
+    """The grant asks for MFA: the built-in "mfa" control or any authentication strength (generous: whatever else it
+    offers under OR; counting a policy only removes members from "outside")."""
     grant = as_dict(policy.get("grantControls"))
     if "mfa" in lowered(grant.get("builtInControls")):
         return True
     strength = grant.get("authenticationStrength")
     return isinstance(strength, dict) and bool(strength)
+
+
+ALL_RISK_LEVELS = set(["high", "medium", "low", "none"])
+
+
+def risk_only(conditions):
+    """True when the policy fires only for some risk levels (all four levels, 'none' included, is no narrowing).
+    Same rule as entra_ca_mfa_coverage.py, for the members-outside rule only."""
+    for risk in ("signInRiskLevels", "userRiskLevels", "servicePrincipalRiskLevels"):
+        levels = set(lowered(conditions.get(risk)))
+        if levels and not ALL_RISK_LEVELS.issubset(levels):
+            return True
+    return False
+
+
+def odata_kind(obj):
+    """'user', 'serviceprincipal', 'group' or '' from an @odata.type annotation."""
+    text = str(as_dict(obj).get("@odata.type") or "").lower()
+    for kind in ("serviceprincipal", "group", "user"):
+        if text.endswith("." + kind) or text == kind:
+            return kind
+    return ""
+
+
+def role_holders(body, role_ids, workforce):
+    """Lower-case ids of the enabled Member accounts that actively hold one of role_ids (roleAssignments). None when
+    the list was not read whole, or a holder of one of these roles is a group or an untyped id that is not a member
+    account (its members are not read here). Same rule as entra_ca_mfa_coverage.py."""
+    for attempt in range(3):
+        if isinstance(body, dict) and "value" not in body:
+            nested = None
+            for key in ("apiResponse", "rawResponse", "response", "result"):
+                if isinstance(body.get(key), (dict, list)):
+                    nested = body[key]
+                    break
+            if nested is None:
+                break
+            body = nested
+    pages = list_pages(body)
+    if pages is None:
+        return None
+    out = set()
+    for page in pages:
+        for item in page["value"]:
+            if not isinstance(item, dict):
+                return None
+            rid = str(item.get("roleDefinitionId") or item.get("roleTemplateId") or "").strip().lower()
+            if rid not in role_ids:
+                continue
+            principal = as_dict(item.get("principal"))
+            pid = str(item.get("principalId") or principal.get("id") or "").strip().lower()
+            if not pid:
+                return None
+            if pid in workforce:
+                out.add(pid)
+            elif odata_kind(principal) not in ("user", "serviceprincipal"):
+                return None
+    return out
 
 
 def members_outside(data, policies):
@@ -644,20 +751,31 @@ def members_outside(data, policies):
         return None, "a group member read was refused"
     reached = set()
     named_excluded = set()
+    maybe_reached = set()  # reached only by a block that excludes a named location (not read)
     for policy in policies:
         if not isinstance(policy, dict) or policy.get("state") != "enabled":
             continue
-        if not requires_mfa_reach(policy):
+        kind = True if asks_mfa(policy) else full_block_reach(policy)
+        if kind is False:
             continue
         conditions = as_dict(policy.get("conditions"))
-        if EXCLUDE_RISK_CONDITIONED and risk_conditioned(conditions):
+        if risk_only(conditions):
             continue
         users = as_dict(conditions.get("users"))
-        if present(users.get("includeRoles")):
-            return None, ("an MFA policy includes a directory role, and role holders are not read, so members "
-                          "counted as outside may hold that role and be covered")
         include = lowered(users.get("includeUsers"))
         reach = set(workforce) if "all" in include else (object_ids(users.get("includeUsers")) & workforce)
+        roles = object_ids(users.get("includeRoles"))
+        if roles:
+            role_body = data.get("roleAssignments")
+            if "paginationStats" in data and as_dict(as_dict(data.get("paginationStats")).get("roleAssignments")).get(
+                    "paginationTruncated") is not False:
+                role_body = None  # the workflow cut the role list off at its page limit (reportPagination)
+            holders = role_holders(role_body, roles, workforce)
+            if holders is None:
+                return None, ("an MFA policy includes a directory role whose holders were not read whole (role "
+                              "assignments not read, or the role is held by a group), so members counted as outside "
+                              "may hold that role and be covered")
+            reach = reach | holders
         for gid in object_ids(users.get("includeGroups")):
             members = memberships.get(gid)
             if members is None:
@@ -665,18 +783,30 @@ def members_outside(data, policies):
             reach = reach | (members & workforce)
         if not reach:
             continue
+        excluded = object_ids(users.get("excludeUsers"))
         for gid in object_ids(users.get("excludeGroups")):
             members = memberships.get(gid)
-            if members is not None:
-                reach = reach - members
-        excluded = object_ids(users.get("excludeUsers"))
-        named_excluded = named_excluded | excluded
+            if members is None:
+                continue
+            reach = reach - members
+            if len(members) <= MAX_EXCLUDED_ACCOUNTS:
+                excluded = excluded | members  # a break-glass group (36B c); a larger group's members stay outside
+        named_excluded = named_excluded | excluded  # a named exclusion is named whatever the location condition says
+        if kind is None:
+            maybe_reached = maybe_reached | (reach - excluded)
+            continue
         reached = reached | (reach - excluded)
-    outside = workforce - reached
-    break_glass = outside & named_excluded
-    if len(break_glass) <= MAX_EXCLUDED_ACCOUNTS:
-        outside = outside - break_glass
-    return {"outside": outside, "membersTotal": len(workforce)}, ""
+    def glass(out):
+        bg = out & named_excluded
+        return out - bg if len(bg) <= MAX_EXCLUDED_ACCOUNTS else out
+
+    # Credit break-glass where every maybe block holds: that set is a subset of the other world's, so FAIL on it is a safe lower bound.
+    sure = glass(workforce - reached - maybe_reached)
+    if sure:
+        return {"outside": sure, "membersTotal": len(workforce)}, ""
+    if glass(workforce - reached):
+        return None, "a block policy excludes a named location that was not read, so whether it blocks its members is not known"
+    return {"outside": set(), "membersTotal": len(workforce)}, ""
 
 
 def candidate_reach(data, candidates):
@@ -695,7 +825,7 @@ def candidate_reach(data, candidates):
     return covered
 
 
-def coverage_detail(coverage):
+def coverage_detail(coverage, undecided=""):
     """Why the membership read did not show every enabled Member account covered."""
     notes = []
     if coverage["groupReadsRefused"]:
@@ -709,8 +839,9 @@ def coverage_detail(coverage):
         notes.append("no enabled member accounts were read")
     elif coverage["uncoveredCount"]:
         notes.append(f"{coverage['uncoveredCount']} of {coverage['membersTotal']} enabled members are outside the "
-                     "included groups that could be read, but each is reached by another MFA policy that is narrowed "
-                     "or offers another control: add them to a group the policy includes, or attest")
+                     "included groups that could be read, but "
+                     + (undecided or "each is reached by another MFA policy that is narrowed or offers another control")
+                     + ": add them to a group the policy includes, or attest")
     if coverage["excludedAccountsTotal"] > MAX_EXCLUDED_ACCOUNTS:
         notes.append(f"the policies exclude {coverage['excludedAccountsTotal']} named accounts in total (more than "
                      f"{MAX_EXCLUDED_ACCOUNTS} emergency-access accounts)")
@@ -827,9 +958,12 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
             return create_response(
                 result=result, validation=validation,
                 pass_reasons=[f"MFA methods enabled: {', '.join(enabled_methods)}",
-                              f"MFA enforced for all {total} enabled member accounts: group-scoped Conditional Access "
-                              f"policies cover {total - details['perUserMfaCovered']} of them and per-user MFA covers "
-                              f"the other {details['perUserMfaCovered']} (group membership and per-user MFA read)"],
+                              f"MFA enforced for all {total} enabled member accounts: "
+                              + (f"per-user MFA covers all {details['perUserMfaCovered']} (no group-scoped Conditional "
+                                 "Access policy counts)" if not candidates else
+                                 f"group-scoped Conditional Access policies cover {total - details['perUserMfaCovered']} "
+                                 f"of them and per-user MFA covers the other {details['perUserMfaCovered']}")
+                              + " (group membership and per-user MFA read)"],
                 input_summary=input_summary)
     if not outside:
         return None
@@ -847,9 +981,11 @@ def members_outside_verdict(criteriaKey, data, policies, candidates, coverage, e
         result=result, validation=validation,
         pass_reasons=[f"MFA methods enabled: {', '.join(enabled_methods)}"],
         fail_reasons=[f"{len(outside)} of {total} enabled member {word} not covered by any enabled Conditional Access "
-                      "policy that requires MFA: they are in none of the groups or user lists those policies include "
-                      "(group membership read), so MFA is not enforced for them"],
-        recommendations=["Add these members to a group an MFA policy includes, or target an MFA policy at All users"],
+                      "policy that requires MFA or blocks sign-in: they are in none of the groups or user lists those "
+                      "policies include (group membership read), so MFA is not enforced for them"
+                      + ("" if per_user_seen is not None else " (per-user MFA was not read: it may apply to them)")],
+        recommendations=["Add these members to a group an MFA policy includes, remove the exclusion, or block them "
+                         "from sign-in"],
         input_summary=input_summary)
 
 
@@ -1123,11 +1259,20 @@ def transform(input):
                                                   enabled_methods, validation, input_summary, details)
                 if outcome is not None:
                     return outcome
-                membership_note = "; group membership was read: " + coverage_detail(coverage)
+                membership_note = "; group membership was read: " + coverage_detail(
+                    coverage, details.get("membersOutsideUndecided", ""))
             else:
+                # WI-3a: no group candidate, but a whole membership read can still show members outside every policy.
+                coverage = group_coverage(data, [])
+                outcome = members_outside_verdict(criteriaKey, data, policies, [], coverage, enabled_methods,
+                                                  validation, input_summary, details)
+                if outcome is not None:
+                    return outcome
                 membership_note = ("; group membership was read, but no set-aside policy is one it can decide (each "
                                    "is narrowed by apps, platform, client type, location or risk, includes a role, "
                                    "or excludes a group, role or guests)")
+                if details.get("membersOutsideUndecided"):
+                    membership_note += ", and members outside cannot be counted: " + details["membersOutsideUndecided"]
         if (ALL_USERS_TARGET_MODE == "unevaluated" and methods_available and not mfa_enforced_for_users
                 and scope_unknown):
             scoped = [(name, why) for name, why in scope_unknown if why not in SPLIT_REASONS]

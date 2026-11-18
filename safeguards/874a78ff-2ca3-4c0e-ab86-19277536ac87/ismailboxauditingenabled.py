@@ -149,6 +149,37 @@ def no_data(criteriaKey, message, recommendation):
     )
 
 
+def secure_score_unreadable(data):
+    """Why a Secure Score body holds no evidence, or None when its latest score carries controlScores.
+
+    The reason names an HTTP status or Graph error code only, never message text (it can echo tenant
+    details). A PSError body is left to the PSError branch, which already reports it as a collection error.
+    """
+    if not isinstance(data, dict):
+        return "Microsoft Secure Score returned no data"
+    if "PSError" in data:
+        return None
+    status = data.get("statusCode")
+    if status is None:
+        status = data.get("status_code")
+    has_status = isinstance(status, int) and not isinstance(status, bool)
+    if data.get("error") or (has_status and status >= 400):
+        if has_status:
+            return "Microsoft Secure Score could not be read (HTTP " + str(status) + ")"
+        err = data.get("error")
+        code = err.get("code") if isinstance(err, dict) else None
+        if isinstance(code, str) and code:
+            return "Microsoft Secure Score could not be read (" + code[:60] + ")"
+        return "Microsoft Secure Score could not be read"
+    values = data.get("value")
+    if not isinstance(values, list) or len(values) == 0 or not isinstance(values[0], dict):
+        return "Microsoft Secure Score data not available"
+    control_scores = values[0].get("controlScores")
+    if not isinstance(control_scores, list) or len(control_scores) == 0:
+        return "Microsoft Secure Score has no controlScores"
+    return None
+
+
 def transform(input):
     """
     Evaluates if mailbox auditing is enabled based on Microsoft Secure Score.
@@ -175,14 +206,9 @@ def transform(input):
             return no_data(criteriaKey, "Microsoft Secure Score returned no data",
                            "Verify the Microsoft Graph integration is returning Secure Score data")
 
-        if data.get("error") or data.get("statusCode") or data.get("status_code"):
-            err = data.get("error")
-            if isinstance(err, dict):
-                raw = str(err.get("code") or "") + " " + str(err.get("message") or err.get("statusCode") or "")
-            else:
-                raw = str(err or data.get("statusCode") or data.get("status_code"))
-            api_error, recommendation = parse_api_error(raw.strip(), source="Microsoft Graph Secure Score")
-            return no_data(criteriaKey, api_error, recommendation)
+        unreadable = secure_score_unreadable(data)
+        if unreadable:
+            return no_data(criteriaKey, unreadable, "Verify the Microsoft Graph integration can read Secure Score (SecurityEvents.Read.All)")
 
         # Check for API error (e.g., OAuth failure)
         if isinstance(data, dict) and 'PSError' in data:
@@ -273,8 +299,9 @@ def transform(input):
                        "Verify the Microsoft Graph integration is returning Secure Score data")
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            transformation_errors=["Secure Score transformation error"],
+            api_errors=["Secure Score transformation error"],
+            fail_reasons=["Transformation error"]
         )
