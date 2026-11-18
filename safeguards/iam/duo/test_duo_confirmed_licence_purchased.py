@@ -1,6 +1,6 @@
 """Duo confirmedLicensePurchased reads the edition from GET /admin/v1/info/summary.
 
-Paid edition -> None (NOT-AVAILABLE: Duo does not separate trial from purchase); Duo Free or a trial -> False; a 403 refusal names the Admin API permission;
+Paid edition -> True (reason: edition as reported by Duo, Duo includes trials); Duo Free or an edition containing "trial" -> False; a 403 refusal names the Admin API permission;
 no edition field is coded NOT-AVAILABLE; anything unreadable is Not evaluated (None + dataCollection error).
 Every case also runs in the RestrictedPython sandbox production uses. Synthetic bodies only.
 """
@@ -57,19 +57,20 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
         self.assertEqual(collection["errorCode"], error_code)
         self.assertTrue(collection["errors"])
 
-    def test_paid_edition_is_not_available_never_true(self):
-        # Duo's edition field includes trials: a bare paid name cannot confirm a purchase.
+    def test_paid_edition_passes_with_the_trials_caveat(self):
         for edition in ["Duo Premier", "Duo Advantage", "Duo Essentials", "Duo MFA", "Duo Access",
                         "Duo Beyond", "Duo Federal MFA", "PLATFORM", "BEYOND", "ENTERPRISE"]:
             for wrapped in [summary(edition), {"response": summary(edition)},
                             {"stat": "OK", "response": summary(edition)},
                             json.dumps({"response": summary(edition)})]:
                 for out in self.each(wrapped):
-                    self.assert_not_evaluated(out, "not_available")
-                    collection = out["additionalInfo"]["dataCollection"]
-                    self.assertEqual(collection["duoEdition"], edition)
-                    self.assertIn("Duo does not separate trial from purchase", collection["errors"][0])
-                    self.assertEqual(out["additionalInfo"]["evaluation"]["passReasons"], [])
+                    self.assertIs(out["transformedResponse"][KEY], True)
+                    self.assertEqual(out["transformedResponse"]["duoEdition"], edition)
+                    self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+                    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
+                    self.assertIn(edition, reason)
+                    self.assertIn("edition as reported by Duo (Duo includes trials)", reason)
+                    self.assertEqual(out["additionalInfo"]["evaluation"]["failReasons"], [])
 
     def test_free_and_trial_fail(self):
         for edition in ["Duo Free", "PERSONAL", "Duo Premier Trial", "Trial"]:
@@ -77,6 +78,8 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
                 self.assertIs(out["transformedResponse"][KEY], False)
                 self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
                 self.assertTrue(out["additionalInfo"]["evaluation"]["failReasons"])
+                if "rial" in edition:
+                    self.assertIn("a trial", out["additionalInfo"]["evaluation"]["failReasons"][0])
 
     def test_forbidden_names_the_permission(self):
         for body in [FORBIDDEN, {"response": FORBIDDEN}, json.dumps(FORBIDDEN)]:
