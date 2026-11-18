@@ -95,6 +95,12 @@ def test_a_false_or_missing_marker_changes_nothing(name, flip, flipped, marker):
     assert verdict(name, body)[0] is flipped
 
 
+def strip_all_move_fields(r):
+    for a in r["actions"]:
+        if any(w in a["actionType"] for w in ("quarantine", "restore", "delete", "move")):
+            a["createTime"] = "None"
+
+
 def no_move(r):
     r["actions"] = [a for a in r["actions"]
                     if not any(w in a["actionType"] for w in ("quarantine", "restore", "delete", "move"))]
@@ -109,8 +115,9 @@ def test_move_audit_trail_on_paged_reads():
     name = "messagemoveaudittrailenabled"
     assert verdict(name, merged())[0] is True
     assert verdict(name, merged(truncated=True))[0] is True  # an audited move already read proves the trail
-    assert verdict(name, merged(strip_create_time))[0] is False
-    assert verdict(name, merged(strip_create_time, truncated=True))[0] is False  # a seen gap stays False
+    assert verdict(name, merged(strip_create_time))[0] is False  # complete read, every move lacks its fields
+    assert verdict(name, merged(strip_all_move_fields))[0] is False  # complete read, only gaps
+    assert verdict(name, merged(strip_all_move_fields, truncated=True))[0] is None  # an unread page may hold an audited move
     assert verdict(name, merged(records=[]))[0] is False
     assert verdict(name, merged(no_move))[0] is False  # complete read, no move action: proven absence
     assert verdict(name, merged(no_move, truncated=True))[0] is None  # absence on a cut-off read is unproven
