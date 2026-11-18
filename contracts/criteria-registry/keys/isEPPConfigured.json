@@ -62,7 +62,7 @@
         ],
         "files": [
           "safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_iseppconfigured.py:110",
-          "safeguards/epp/sentinelone/isEPPConfigured.py:256",
+          "safeguards/epp/sentinelone/isEPPConfigured.py:272",
           "safeguards/epp/crowdstrike-falcon/isEPPConfiguredFromHosts.py:312",
           "safeguards/epp/ninjaone-endpoint-management/isEPPConfigured.py:186",
           "safeguards/epp/manageengine/iseppconfigured.py",
