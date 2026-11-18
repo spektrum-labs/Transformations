@@ -3,8 +3,9 @@
 Integration-Service follows responseEnvelope.scrollId and hands the transform ONE merged body: every
 page's responseData, page 1's envelope with scrollId cleared to null. When it cuts the read off (page
 cap, or the scroll ending short of recordsNumber) it sets responseEnvelope.truncated (and
-paginationTruncated). A cut-off read cannot prove an absence or an "every" claim, so those read None;
-a match already seen still counts. A truncated marker that is false, missing or null changes nothing.
+paginationTruncated). A cut-off read cannot prove an absence, so that reads None; a match already
+seen still counts (for messageMoveAuditTrailEnabled, an audited move action, or a move action that lacks
+its audit fields). A truncated marker that is false, missing or null changes nothing.
 
 Built from the synthetic event page fixture; nothing here is a real tenant.
 """
@@ -94,21 +95,68 @@ def test_a_false_or_missing_marker_changes_nothing(name, flip, flipped, marker):
     assert verdict(name, body)[0] is flipped
 
 
+def no_move(r):
+    r["actions"] = [a for a in r["actions"]
+                    if not any(w in a["actionType"] for w in ("quarantine", "restore", "delete", "move"))]
+
+
+def reasons_and_code(out):
+    dc = out["additionalInfo"]["dataCollection"]
+    return out["additionalInfo"]["evaluation"]["failReasons"], dc.get("errorCode"), dc["status"]
+
+
 def test_move_audit_trail_on_paged_reads():
     name = "messagemoveaudittrailenabled"
-    assert verdict(name, merged())[0] is True  # every move action on every page carries its fields
-    assert verdict(name, merged(truncated=True))[0] is None  # "every" is unproven on a cut-off read
+    assert verdict(name, merged())[0] is True
+    assert verdict(name, merged(truncated=True))[0] is True  # an audited move already read proves the trail
     assert verdict(name, merged(strip_create_time))[0] is False
     assert verdict(name, merged(strip_create_time, truncated=True))[0] is False  # a seen gap stays False
     assert verdict(name, merged(records=[]))[0] is False
+    assert verdict(name, merged(no_move))[0] is False  # complete read, no move action: proven absence
+    assert verdict(name, merged(no_move, truncated=True))[0] is None  # absence on a cut-off read is unproven
 
 
-def test_move_audit_trail_cut_off_reason_is_specific_and_carries_no_record_text():
-    value, out = verdict("messagemoveaudittrailenabled", merged(truncated=True))
-    reasons = out["additionalInfo"]["evaluation"]["failReasons"]
-    assert value is None and reasons
+def test_move_audit_trail_cut_off_reason_is_specific_coded_and_carries_no_record_text():
+    value, out = verdict("messagemoveaudittrailenabled", merged(no_move, truncated=True))
+    reasons, code, status = reasons_and_code(out)
+    assert value is None and reasons and status == "error"
     assert "partial page" in reasons[0]
+    assert code == "partial_read"
     assert "@" not in json.dumps(reasons)
+
+
+def capped_rows(n, mutate=None):
+    rows = [copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(n)]
+    for r in rows:
+        if mutate:
+            mutate(r)
+    return rows
+
+
+def test_move_audit_trail_capped_total_keeps_a_seen_trail_and_codes_an_unproven_absence():
+    name = "messagemoveaudittrailenabled"
+    body = merged(records=capped_rows(10000))
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    assert verdict(name, body)[0] is True
+    body = merged(records=capped_rows(10000, no_move))
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    value, out = verdict(name, body)
+    reasons, code, status = reasons_and_code(out)
+    assert value is None and status == "error"
+    assert code == "vendor_count_capped"
+    assert "10000" in reasons[0]
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["vendorCountCapped"] is True
+    body["responseEnvelope"]["recordsNumber"] = 9999
+    body["responseData"] = body["responseData"][:9999]
+    assert verdict(name, body)[0] is False  # under the cap a complete read proves the absence
+
+
+def test_move_audit_trail_over_cap_rows_without_a_move_read_none():
+    body = merged(records=capped_rows(10100, no_move))
+    body["responseEnvelope"]["recordsNumber"] = 10000
+    value, out = verdict("messagemoveaudittrailenabled", body)
+    assert value is None
+    assert reasons_and_code(out)[1] == "vendor_count_capped"
 
 
 @pytest.mark.parametrize("name,flip,flipped", CASES)
@@ -129,16 +177,6 @@ def test_a_capped_total_is_a_lower_bound_never_a_complete_read(name, flip, flipp
     assert "partial page" in out["additionalInfo"]["evaluation"]["failReasons"][0]
 
 
-def test_move_audit_trail_capped_total_reads_none_and_a_smaller_total_is_exact():
-    name = "messagemoveaudittrailenabled"
-    body = merged(records=[copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10000)])
-    body["responseEnvelope"]["recordsNumber"] = 10000
-    assert verdict(name, body)[0] is None
-    body["responseEnvelope"]["recordsNumber"] = 9999
-    body["responseData"] = body["responseData"][:9999]
-    assert verdict(name, body)[0] is True
-
-
 @pytest.mark.parametrize("name,flip,flipped", CASES)
 def test_a_capped_total_with_more_rows_than_the_cap_is_still_partial(name, flip, flipped):
     """IS stops the scroll at the cap, so 10100 rows against recordsNumber 10000 is a cut read."""
@@ -153,12 +191,6 @@ def test_a_capped_total_with_more_rows_than_the_cap_is_still_partial(name, flip,
     value, out = verdict(name, body)
     assert value is None
     assert "partial page" in out["additionalInfo"]["evaluation"]["failReasons"][0]
-
-
-def test_move_audit_trail_over_cap_rows_read_none():
-    body = merged(records=[copy.deepcopy(EVENTS["responseData"][i % len(EVENTS["responseData"])]) for i in range(10100)])
-    body["responseEnvelope"]["recordsNumber"] = 10000
-    assert verdict("messagemoveaudittrailenabled", body)[0] is None
 
 
 @pytest.mark.parametrize("name,flip,flipped", CASES)
