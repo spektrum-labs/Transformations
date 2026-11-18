@@ -136,7 +136,8 @@ class MS365AdminSeparationTests(unittest.TestCase):
         self.assertFalse(result[KEY])
         self.assertEqual(result["adminsWithMailboxOrLicence"], 1)
         self.assertEqual(info["dataCollection"]["status"], "success")
-        self.assertIn("alice@contoso.com", info["evaluation"]["failReasons"][0])
+        self.assertIn("user u-alice...", info["evaluation"]["failReasons"][0])
+        self.assertNotIn("@contoso", info["evaluation"]["failReasons"][0])  # C4
 
     def test_productivity_licence_without_mail_fails(self):
         licensed = user("u-bob", "bob-admin@contoso.com", skus=[SPE_E3])
@@ -159,7 +160,8 @@ class MS365AdminSeparationTests(unittest.TestCase):
                 self.assertEqual(result["adminsWithMailboxOrLicence"], 0)
                 self.assertEqual(result["adminsWithMailAttributeOnly"], 1)
                 findings = " ".join(info["evaluation"]["additionalFindings"])
-                self.assertIn("carol-admin@contoso.com", findings)
+                self.assertIn("user u-carol...", findings)
+                self.assertNotIn("@contoso", findings)  # C4
                 self.assertIn("not a fail", findings)
 
     def test_mail_with_unclassified_sku_and_no_assigned_plans_is_not_a_pass(self):
@@ -185,7 +187,7 @@ class MS365AdminSeparationTests(unittest.TestCase):
         out, result, info = self.run_t(merged([assignment("u-alice"), assignment("u-carol")], [EVERYDAY_USER, unclassified]))
         self.assertFalse(result[KEY])
         self.assertEqual(info["dataCollection"]["status"], "success")
-        self.assertIn("carol@contoso.com", info["evaluation"]["failReasons"][0])
+        self.assertIn("user u-carol...", info["evaluation"]["failReasons"][0])
 
     def test_mail_attribute_alone_still_needs_a_complete_read(self):
         carol = {"id": "u-carol", "userPrincipalName": "carol@contoso.com", "mail": "carol@contoso.com"}
@@ -245,7 +247,7 @@ class MS365AdminSeparationTests(unittest.TestCase):
                         second["assignedLicenses"] = licences
                     body = merged([assignment("u-admin"), assignment("u-second")], [DEDICATED_ADMIN, second])
                     info = self.assert_unevaluated(body)
-                    self.assertTrue(any("assignedLicenses" in e and "second@contoso.com" in e
+                    self.assertTrue(any("assignedLicenses" in e and "user u-second..." in e
                                         for e in info["dataCollection"]["errors"]), info)
                     self.assertEqual(info["evaluation"]["passReasons"], [])
 
@@ -256,7 +258,7 @@ class MS365AdminSeparationTests(unittest.TestCase):
         self.assertFalse(result[KEY])
         self.assertEqual(info["dataCollection"]["status"], "success", info)
         self.assertIn("also unresolved", info["evaluation"]["failReasons"][0])
-        self.assertIn("second@contoso.com", info["evaluation"]["failReasons"][0])
+        self.assertIn("user u-second...", info["evaluation"]["failReasons"][0])
 
     def test_disabled_admin_with_no_licence_list_is_not_judged(self):
         disabled = {"id": "u-old", "userPrincipalName": "old@contoso.com", "mail": None, "accountEnabled": False}
