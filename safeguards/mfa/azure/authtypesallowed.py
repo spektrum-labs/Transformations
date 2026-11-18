@@ -72,6 +72,13 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+MIGRATION_STEP = "complete the authentication-methods migration"
+MIGRATION_RECOMMENDATION = ("Complete the authentication-methods migration (Entra admin center > Protection > "
+                            "Authentication methods > Policies > Manage migration > Migration complete) after "
+                            "moving the legacy MFA and SSPR settings into the authentication methods policy; until "
+                            "then the methods members may use cannot be read and this check stays not evaluated")
+
+
 def transform(input):
     criteriaKey = "authTypesAllowed"
 
@@ -257,11 +264,16 @@ def transform(input):
                             + ", ".join(e[:60] for e in external)
                             + " enforce their own factors and cannot be graded from Entra"])
 
+        # WI-3d (16 Nov 2026): while the migration is pending the legacy per-user MFA and SSPR settings decide what
+        # members may use, and Graph does not expose them. userRegistrationDetails lists what users REGISTERED, not
+        # what the legacy policies still ALLOW, so it cannot close this either way: the answer stays not evaluated
+        # and names the customer's fix (MIGRATION_STEP).
+        pending = migration.lower() in ("premigration", "migrationinprogress")
         if not allowed:
             reason = "No member authentication method is enabled in the authentication methods policy"
-            if migration.lower() in ("premigration", "migrationinprogress"):
+            if pending:
                 reason += (f" (policyMigrationState: {migration[:40]}): the legacy MFA and SSPR policies "
-                           "still apply and cannot be read here")
+                           "still apply and cannot be read here; " + MIGRATION_STEP)
             elif migration:
                 reason += (f" (policyMigrationState: {migration[:40]}): the methods members can use are not "
                            "set by this policy, so it is not evidence either way")
@@ -273,6 +285,7 @@ def transform(input):
             return create_response(
                 result={criteriaKey: False},
                 validation=validation, input_summary=input_summary, additional_findings=findings,
+                recommendations=[MIGRATION_RECOMMENDATION] if pending else [],
                 api_errors=[reason])
 
         # A pass needs this policy to be the only one in force. Until policyMigrationState is
@@ -297,11 +310,12 @@ def transform(input):
             return create_response(
                 result={criteriaKey: False},
                 validation=validation, input_summary=input_summary, additional_findings=findings,
+                recommendations=[MIGRATION_RECOMMENDATION],
                 api_errors=["Only allowed authentication methods are enabled in the authentication methods "
                             "policy (" + ", ".join(str(m.get('id'))[:60] for m in allowed) + "), but "
                             f"policyMigrationState is {migration[:40]} (not migrationComplete): the legacy "
                             "per-user MFA and SSPR policies still apply, may allow SMS, voice or other "
-                            "methods, and cannot be read here"])
+                            "methods, and cannot be read here; " + MIGRATION_STEP])
 
         pass_reasons.append("Only allowed authentication methods are enabled: "
                             + ", ".join(str(m.get('id'))[:60] for m in allowed))
