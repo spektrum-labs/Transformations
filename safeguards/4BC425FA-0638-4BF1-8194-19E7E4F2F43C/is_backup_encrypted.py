@@ -218,13 +218,26 @@ def transform(input):
 
         additional_findings = []
 
+        # No backups is not proof of encryption: every section was read and none held a backup,
+        # so there is nothing encryption could be shown on. Not evaluated, never a pass (ENG-1352).
+        total_backups = len(auto_list) + len(manual_list) + len(ebs_list)
+        if total_backups == 0:
+            reason = ("No RDS automated backups, RDS manual snapshots or EBS snapshots were found, "
+                      "so backup encryption could not be measured.")
+            return create_response(
+                result={"isBackupEncrypted": None, "isAutoBackupEncrypted": None,
+                        "isManualBackupEncrypted": None, "isEbsBackupEncrypted": None},
+                validation=validation,
+                api_errors=[reason],
+                fail_reasons=[reason],
+                recommendations=["Confirm backups exist in the regions and accounts this integration reads, "
+                                 "or upload evidence of backup encryption."],
+                input_summary={"autoBackupCount": 0, "manualSnapshotCount": 0, "ebsSnapshotCount": 0}
+            )
+
         # Primary criteria: isBackupEncrypted (all backups encrypted)
         if all_enc:
-            total_backups = len(auto_list) + len(manual_list) + len(ebs_list)
-            if total_backups > 0:
-                pass_reasons.append(f"All {total_backups} backups are encrypted")
-            else:
-                pass_reasons.append("No backups found to evaluate encryption")
+            pass_reasons.append(f"All {total_backups} backups are encrypted")
         else:
             unencrypted_total = len(unencrypted_auto) + len(unencrypted_manual) + len(unencrypted_ebs)
             fail_reasons.append(f"{unencrypted_total} backups are not encrypted")
