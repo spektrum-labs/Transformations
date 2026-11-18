@@ -80,17 +80,17 @@ def decoded(value):
     return value
 
 
-def refusal_of(value):
-    """Integration-Service's vendorErrorAsResponse marker, at the top level or one level down, else None."""
-    if not isinstance(value, dict):
+def refusal_of(value, depth=0):
+    """Integration-Service's vendorErrorAsResponse marker at any nesting (capped at 4 levels), else None."""
+    if not isinstance(value, dict) or depth > 4:
         return None
     marker = value.get("vendorErrorAsResponse")
     if isinstance(marker, dict):
         return marker
     for k in value:
-        inner = value[k]
-        if isinstance(inner, dict) and isinstance(inner.get("vendorErrorAsResponse"), dict):
-            return inner["vendorErrorAsResponse"]
+        found = refusal_of(value[k], depth + 1)
+        if found:
+            return found
     return None
 
 
