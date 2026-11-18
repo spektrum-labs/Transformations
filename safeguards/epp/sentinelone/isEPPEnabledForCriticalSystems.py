@@ -48,7 +48,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
-    if validation is None:
+    if not isinstance(validation, dict):
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
     transform_err_list = transformation_errors or []
@@ -105,18 +105,24 @@ def find_agent_list(obj):
     """(agents, pagination, error) from the getEndpoints response, whatever wrapper Token-Service hands over."""
     cur = obj
     for depth in range(6):
+        if isinstance(cur, bytes):
+            cur = cur.decode("utf-8", "replace")
         if isinstance(cur, str):
+            if not cur.strip():
+                return None, None, "The SentinelOne agent list is empty (no body was returned), so it cannot be read."
             try:
                 cur = json.loads(cur)
             except Exception:
-                return None, None, None
+                # A body cut off in transit arrives as text that stops mid-JSON (IS, Nov 2026).
+                return None, None, ("The SentinelOne agent list is not valid JSON (" + str(len(cur))
+                                    + " characters; it may have been cut off in transit), so it cannot be read.")
         if isinstance(cur, list):
             return cur, None, None
         if not isinstance(cur, dict):
             return None, None, None
         if cur.get("errors") or cur.get("error") is True:
             detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
-            return None, None, json.dumps(detail)[:300]
+            return None, None, "SentinelOne returned an error instead of an agent list: " + json.dumps(detail)[:300]
         if isinstance(cur.get("data"), list):
             pagination = cur.get("pagination")
             return cur["data"], (pagination if isinstance(pagination, dict) else None), None
@@ -140,7 +146,7 @@ def complete_agent_read(raw):
     """
     agents, pagination, error = find_agent_list(raw)
     if error is not None:
-        return None, "SentinelOne returned an error instead of an agent list: " + error
+        return None, error
     if agents is None:
         return None, "No SentinelOne agent list in the response; nothing to evaluate."
     if pagination is None:
@@ -221,18 +227,43 @@ def transform(input):
         )
 
     if critical_count == 0:
-        # No servers in the fleet; pass with a finding so reviewers understand the scope.
-        additional_findings.append(
-            f"No critical systems (machineType='server') were identified in the fleet of "
-            f"{total} agents. Either no servers are managed by SentinelOne, or critical "
-            f"classification needs a different heuristic (e.g. tag or groupName)."
+        # No servers in the fleet is not proof that critical systems are protected: a fleet of
+        # unprotected workstations used to pass here. With nothing in scope the criterion has
+        # no answer, so it is Not evaluated with the reason (ENG-1354).
+        reason = (
+            f"No critical systems (machineType='server') were found among the {total} SentinelOne "
+            f"agents, so EPP on critical systems could not be measured."
         )
-        pass_reasons.append(
-            "No critical systems identified — vacuously passes. EPP coverage on endpoints "
-            "is evaluated separately by isEPPEnabled / isEPPDeployed."
+        return create_response(
+            result={
+                "isEPPEnabledForCriticalSystems": None,
+                "criticalSystemsTotal": 0,
+                "criticalSystemsProtected": 0,
+                "criticalSystemsUnprotected": 0,
+                "fleetTotal": total,
+            },
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=[
+                "Confirm SentinelOne manages the organisation's servers. If critical systems are "
+                "identified some other way (a tag or group), upload evidence that they are protected."
+            ],
+            additional_findings=[
+                "Critical systems are identified by machineType='server'. Either no servers are "
+                "managed by SentinelOne, or critical systems need a different identifier (for "
+                "example a tag or group name). EPP coverage on all endpoints is evaluated "
+                "separately by isEPPEnabled / isEPPDeployed."
+            ],
+            input_summary={"fleetTotal": total, "criticalSystemsTotal": 0},
+            metadata={
+                "transformationId": "isEPPEnabledForCriticalSystems",
+                "vendor": "SentinelOne",
+                "category": "epp",
+            },
         )
-        is_pass = True
-    elif len(unprotected_critical) == 0:
+
+    if len(unprotected_critical) == 0:
         is_pass = True
         pass_reasons.append(
             f"All {critical_count} critical system(s) (machineType='server') have EPP "
