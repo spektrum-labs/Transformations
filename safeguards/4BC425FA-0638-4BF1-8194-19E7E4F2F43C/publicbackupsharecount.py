@@ -107,8 +107,8 @@ def partial_read(inventory, any_missing=False):
     """Why the inventory is not the whole account, or None.
 
     A count or percentage taken from a partial read is not earned: a region nobody read, a list cut at a
-    bound or a read that ran out of time can hide exactly the item the check looks for. Regions that
-    are not opted in are not part of the account and do not count as a gap.
+    bound, a read that failed or ran out of time can hide exactly the item the check looks for. A region
+    AWS refuses with OptInRequired is not part of the account and does not count as a gap.
     """
     scope = inventory["scope"]
     gaps = []
@@ -118,8 +118,8 @@ def partial_read(inventory, any_missing=False):
     else:
         regions = []
         for region in unreachable:
-            reason = str(unreachable.get(region)).replace("-", "").replace(" ", "").lower()
-            if "optin" not in reason:
+            # Only the exact AWS code for a region the account has not opted in to is exempt.
+            if str(unreachable.get(region)).strip() != "OptInRequired":
                 regions.append(str(region))
         if regions:
             gaps.append("regions not readable: " + ", ".join(sorted(regions)))
@@ -136,6 +136,14 @@ def partial_read(inventory, any_missing=False):
         elif missing:
             gaps.append("%d read action(s) were refused: %s" % (len(missing), ", ".join(sorted(
                 str(m.get("action")) for m in missing if isinstance(m, dict)))[:400]))
+    errors = scope.get("errors")
+    if not isinstance(errors, list):
+        gaps.append("the inventory does not report read errors")
+    elif errors:
+        gaps.append("%d read(s) failed: %s" % (len(errors), ", ".join(sorted(
+            "%s %s" % (e.get("service"), e.get("operation")) for e in errors if isinstance(e, dict)))[:400]))
+    if not gaps and scope.get("complete") is not True:
+        gaps.append("the inventory is not marked complete")
     if gaps:
         return "; ".join(gaps)
     return None
