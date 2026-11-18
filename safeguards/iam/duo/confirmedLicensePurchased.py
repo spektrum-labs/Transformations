@@ -125,12 +125,19 @@ def summary_of(value):
     return data
 
 
-def raw_refusal_of(value):
-    """A plain Duo FAIL body (code 40301 / 40101), top level or one level down, as a refusal marker, else None."""
-    for body in [value] + [v for v in value.values()] if isinstance(value, dict) else []:
-        if isinstance(body, dict) and body.get("code") in (40301, 40101) and \
-                str(body.get("stat", "")).upper() == "FAIL":
-            return {"status": 403 if body["code"] == 40301 else 401, "body": body}
+def raw_refusal_of(value, depth=0):
+    """A plain Duo FAIL body (code 40301 / 40101, int or string), up to 4 wrapper levels down, as a refusal marker, else None."""
+    value = decoded(value)
+    if not isinstance(value, dict) or depth > 4:
+        return None
+    code = value.get("code")
+    code = int(code) if isinstance(code, str) and code.strip().isdigit() else code
+    if code in (40301, 40101) and not isinstance(code, bool) and str(value.get("stat", "")).upper() == "FAIL":
+        return {"status": 403 if code == 40301 else 401, "body": value}
+    for k in value:
+        found = raw_refusal_of(value[k], depth + 1)
+        if found:
+            return found
     return None
 
 
