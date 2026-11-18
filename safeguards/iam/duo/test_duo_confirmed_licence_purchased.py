@@ -82,7 +82,7 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
                     self.assertIn("a trial", out["additionalInfo"]["evaluation"]["failReasons"][0])
 
     def test_forbidden_names_the_permission(self):
-        for body in [FORBIDDEN, {"response": FORBIDDEN}, json.dumps(FORBIDDEN)]:
+        for body in [FORBIDDEN, {"response": FORBIDDEN}, {"response": {"result": FORBIDDEN}}, json.dumps(FORBIDDEN)]:
             for out in self.each(body):
                 self.assert_not_evaluated(out, "scope_not_granted")
                 collection = out["additionalInfo"]["dataCollection"]
