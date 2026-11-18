@@ -167,7 +167,6 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
             {"Output": {}},
             {"Output": {"transportRules": None}},
             {"Output": {"transportRules": {}}},
-            {"Output": {"transportRules": {"Name": "a single rule, not a list"}}},
             {"Output": {"transportRules": "not a list"}},
             {"Output": {"somethingElse": []}},
             {"Output": []},
@@ -203,14 +202,93 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
 
     def test_a_rule_the_code_cannot_read_is_not_evaluated_not_a_pass_or_a_fail(self):
         """The outer except: a rule entry that is not an object raises while the rules are read."""
-        for rules in ([123], ["not an object"], [banner_rule(), None]):
+        for rules in ([123], ["not an object"], [None]):
             with self.subTest(rules=rules):
                 response = self.transformation.transform({"Output": {"transportRules": rules}})
 
                 self.assertIsNone(response["transformedResponse"][KEY])
-                self.assertEqual(response["additionalInfo"]["transformation"]["status"], "error")
                 self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
 
+    def test_single_rule_object_is_graded_and_non_dict_entries_are_skipped(self):
+        for rules in (banner_rule(), [banner_rule(), None]):
+            with self.subTest(rules=rules):
+                response = self.transformation.transform({"Output": {"transportRules": rules}})
+                self.assertIs(response["transformedResponse"][KEY], True)
+
+
+    # Error objects from the Exchange Lambda path. Synthetic shapes; none is evidence, so each is
+    # Not evaluated with a reason, never a pass or a stated-negative fail, and no vendor text is echoed.
+    COLLECTOR_ERRORS = {
+        "integration_service_502": {"result": {"apiResponse": {
+            "integrationName": "Example", "errorMessage": "An error occurred while processing your request.",
+            "vendorStatus": 502, "vendorErrorType": "vendor_error",
+            "vendorError": '{"Type": "User", "message": "example tenant.example.test"}'}}},
+        "lambda_service_body": {"Type": "User", "message": "example tenant.example.test"},
+        "handler_error": {"error": "Internal error"},
+        "script_crashed": {"Success": False, "Output": "", "Error": "example stderr tenant.example.test"},
+        "script_reported_failure": {"Success": True, "Output": {"success": False, "organizationDomain": None}},
+    }
+
+    def test_collector_error_objects_are_not_evaluated_with_a_reason(self):
+        for name, payload in self.COLLECTOR_ERRORS.items():
+            with self.subTest(name=name):
+                response = self.transformation.transform(payload)
+                collection = response["additionalInfo"]["dataCollection"]
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(collection["status"], "error")
+                self.assertEqual(len(collection["errors"]), 1)
+                self.assertTrue(response["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertNotIn("example", str(response["additionalInfo"]))
+
+    def test_a_5xx_status_is_named_as_service_unavailable(self):
+        for status in (502, 504):
+            with self.subTest(status=status):
+                payload = {"result": {"apiResponse": {"vendorStatus": status, "vendorError": "example"}}}
+                response = self.transformation.transform(payload)
+
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(
+                    response["additionalInfo"]["dataCollection"]["errors"],
+                    ["Could not read Exchange Online data: the Spektrum Exchange collector is unavailable (HTTP 5xx)"],
+                )
+                recs = " ".join(response["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertIn("contact Spektrum support", recs)
+                self.assertNotIn("credentials", recs)
+                self.assertNotIn("Microsoft 365", recs)
+                self.assertNotIn("Microsoft 365", " ".join(response["additionalInfo"]["dataCollection"]["errors"]))
+
+    def test_a_4xx_status_names_the_collector_not_microsoft(self):
+        for status in (401, 403):
+            with self.subTest(status=status):
+                payload = {"result": {"apiResponse": {"vendorStatus": status, "vendorError": "example"}}}
+                response = self.transformation.transform(payload)
+
+                self.assertIsNone(response["transformedResponse"][KEY])
+                self.assertEqual(
+                    response["additionalInfo"]["dataCollection"]["errors"],
+                    ["Could not read Exchange Online data: the Spektrum Exchange collector returned HTTP %d" % status],
+                )
+                recs = " ".join(response["additionalInfo"]["evaluation"]["recommendations"])
+                self.assertNotIn("Microsoft 365", recs)
+                self.assertNotIn("permissions", recs)
+
+    def test_a_null_error_key_beside_real_data_still_evaluates(self):
+        response = self.transformation.transform({"Success": True, "Output": {'transportRules': [banner_rule()], 'error': None}})
+
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_a_success_status_code_is_not_an_error(self):
+        response = self.transformation.transform({"statusCode": 200, 'transportRules': [banner_rule()]})
+
+        self.assertIs(response["transformedResponse"][KEY], True)
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_a_none_payload_is_not_evaluated(self):
+        response = self.transformation.transform({"Success": True, "Output": None, "Error": ""})
+
+        self.assertIsNone(response["transformedResponse"][KEY])
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
 
 if __name__ == "__main__":
     unittest.main()

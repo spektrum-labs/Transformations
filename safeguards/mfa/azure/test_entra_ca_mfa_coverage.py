@@ -357,14 +357,20 @@ class GroupMembership(unittest.TestCase):
                              [(G_SALES, members(U1)), (G_OPS, members(U2, U3))])
         self.assertIs(res["isMFARequiredForRemoteAccess"], True)
 
-    def test_one_member_outside_every_group_is_unevaluated_never_false(self):
+    def test_one_member_outside_every_mfa_policy_fails_with_the_count(self):
+        # WI-3a (16 Nov 2026): a member no MFA policy reaches, from a whole membership read, is a measured gap.
         res, info = run_members(ca(gpolicy("MFA Standard users", [G_STAFF])), workforce(U1, U2, U3, U4),
                                 [(G_STAFF, members(U1, U2, U3))])
-        self.assert_unevaluated(res, info)
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+        self.assertIs(res["isRDPProtected"], False)
+        self.assertEqual(info["dataCollection"]["status"], "success")
+        self.assertEqual(res["remoteAccessPoliciesMembersOutside"], {"membersTotal": 4, "outsideCount": 1})
         cov = res["remoteAccessPoliciesGroupCoverage"]
         self.assertEqual((cov["membersTotal"], cov["membersCovered"], cov["uncoveredCount"]), (4, 3, 1))
-        self.assertIn("1 of 4 enabled members are outside the included groups", info["dataCollection"]["errors"][0])
-        self.assertFalse(info["evaluation"]["failReasons"][2:])
+        self.assertIn("isMFARequiredForRemoteAccess: 1 of 4 enabled member account is covered by no enabled "
+                      "Conditional Access policy that requires MFA", " ".join(info["evaluation"]["failReasons"]))
+        self.assertFalse(info["evaluation"]["passReasons"])
+        self.assertNotIn(U4, str(res) + str(info))
 
     def test_users_list_with_pages_left_is_unevaluated(self):
         users = workforce(U1, U2)
@@ -434,16 +440,19 @@ class GroupMembership(unittest.TestCase):
 
     def test_excluded_group_is_unevaluated_whatever_its_members(self):
         # Master review, 3 Oct: excluded groups used to be allowed and counted. Any excluded group now keeps the key
-        # not evaluated, even one with a single (break-glass) member.
+        # not evaluated, even one with a single (break-glass) member: it never passes, and its at most 2 members
+        # are break-glass for the members-outside rule (WI-3a), so it does not fail either.
         res, info = run_members(ca(gpolicy("MFA Staff", [G_STAFF], exclude=[G_BREAKGLASS])), workforce(U1, U2, U3),
                                 [(G_STAFF, members(U1, U2)), (G_BREAKGLASS, members(U3))])
         self.assert_unevaluated(res, info)
         self.assertNotIn("remoteAccessPoliciesGroupCoverage", res)
+        self.assertNotIn("remoteAccessPoliciesMembersOutside", res)
 
     def test_member_in_both_included_and_excluded_group_is_unevaluated(self):
         res, info = run_members(ca(gpolicy("MFA Staff", [G_STAFF], exclude=[G_BREAKGLASS])), workforce(U1, U2),
                                 [(G_STAFF, members(U1, U2)), (G_BREAKGLASS, members(U2))])
         self.assert_unevaluated(res, info)
+        self.assertNotIn("remoteAccessPoliciesMembersOutside", res)
 
     def test_unread_excluded_group_makes_the_policy_count_for_nothing(self):
         res, info = run_members(ca(gpolicy("MFA Staff", [G_STAFF], exclude=[G_BREAKGLASS])), workforce(U1, U2),
@@ -609,15 +618,19 @@ class ExclusionBar(unittest.TestCase):
         self.assertEqual(info["dataCollection"]["status"], "error")
         self.assertFalse(info["evaluation"]["passReasons"])
 
-    def test_ten_user_group_include_with_990_user_group_exclude_is_unevaluated(self):
+    def test_ten_user_group_include_with_990_user_group_exclude_fails_with_the_count(self):
+        # WI-3a: the 990 accounts outside every MFA policy were read, so it is a measured gap, not a question.
         small = synthetic_ids("b", 10)
         large = synthetic_ids("c", 990)
         res, info = run_members(ca(gpolicy("MFA Pilot", [G_SALES], exclude=[G_OPS])), workforce(*(small + large)),
                                 [(G_SALES, members(*small)), (G_OPS, members(*large))])
-        self.assert_unevaluated(res, info)
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+        self.assertIs(res["isRDPProtected"], False)
         self.assertEqual(res["remoteAccessPolicies"], [])
-        error = info["dataCollection"]["errors"][1]
-        self.assertIn('policies set aside: "MFA Pilot" (excludes a group)', error)
+        self.assertEqual(res["rdpPoliciesMembersOutside"], {"membersTotal": 1000, "outsideCount": 990})
+        self.assertIn("990 of 1000 enabled member accounts are covered by no enabled Conditional Access policy",
+                      info["evaluation"]["failReasons"][0])
+        self.assertFalse(info["dataCollection"]["errors"])
 
     def test_all_users_policy_excluding_a_group_is_unevaluated(self):
         res, info = run(ca(all_users_policy("MFA everyone", excludeGroups=[G_OPS])))
@@ -649,13 +662,13 @@ class ExclusionBar(unittest.TestCase):
         self.assert_unevaluated(res, info)
         self.assertIn("exclude 3 user accounts in total", info["dataCollection"]["errors"][1])
 
-    def test_three_excluded_accounts_on_group_policies_are_unevaluated(self):
+    def test_three_excluded_accounts_on_group_policies_fail(self):
+        # WI-3a: 3 accounts excluded by name and reached by no other MFA policy are more than break-glass allows.
         x, y, z = synthetic_ids("f", 3)
         res, info = run_members(ca(gpolicy("MFA Staff", [G_STAFF], exclude_users=[x, y, z])),
                                 workforce(U1, U2, x, y, z), [(G_STAFF, members(U1, U2))])
-        self.assert_unevaluated(res, info)
-        self.assertIn("(MFA Staff) exclude 3 user accounts in total (more than 2 emergency-access accounts)",
-                      info["dataCollection"]["errors"][1])
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+        self.assertEqual(res["remoteAccessPoliciesMembersOutside"], {"membersTotal": 5, "outsideCount": 3})
         self.assertTrue(res["remoteAccessPoliciesGroupCoverage"]["coversAll"])
 
     def test_two_excluded_accounts_pass_and_are_named(self):
@@ -749,3 +762,161 @@ class ExclusionBar(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Members outside (WI-3a, product decision 16 Nov 2026). Synthetic tenant A again. A member that no enabled MFA
+# policy reaches fails the keys with the count; anything that might reach the member keeps them not evaluated.
+ROLE_GLOBAL_ADMIN = "62e90394-69f5-4237-9190-012177145e10"
+ROLE_CTX = "https://graph.microsoft.com/v1.0/$metadata#roleManagement/directory/roleAssignments(principal(id))"
+
+
+def role_assignments(*pairs, next_link=None):
+    """pairs: (role template id, principal id, principal @odata.type or None)."""
+    value = []
+    for rid, pid, kind in pairs:
+        principal = {"id": pid}
+        if kind:
+            principal["@odata.type"] = "#microsoft.graph." + kind
+        value.append({"id": "ra-" + pid[:8], "roleDefinitionId": rid, "principalId": pid, "directoryScopeId": "/",
+                      "principal": principal})
+    body = {"@odata.context": ROLE_CTX, "value": value}
+    if next_link:
+        body["@odata.nextLink"] = next_link
+    return body
+
+
+def run_outside(policies, users, group_bodies, roles=None, with_roles=True):
+    payload = {"conditionalAccessPolicies": policies, "groups": NAMED, "workforceUsers": users,
+               "caPolicyGroups": {"groupIds": [{"id": gid} for gid, _ in group_bodies]},
+               "groupMembers": [body for _, body in group_bodies]}
+    if with_roles:
+        payload["roleAssignments"] = roles
+    out = m.transform(payload)
+    return out["transformedResponse"], out["additionalInfo"]
+
+
+def role_policy(name, roles):
+    p = policy(name)
+    p["conditions"]["users"]["includeRoles"] = list(roles)
+    return p
+
+
+class MembersOutside(unittest.TestCase):
+    def assert_unevaluated(self, res, info):
+        self.assertIsNone(res["isMFARequiredForRemoteAccess"])
+        self.assertIsNone(res["isRDPProtected"])
+        self.assertEqual(info["dataCollection"]["status"], "error")
+
+    def test_real_shape_admin_role_policy_with_holders_read_fails_the_rest(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), admins), workforce(U1, U2, U3, U4),
+                                [(G_STAFF, members(U1, U2))],
+                                roles=role_assignments((ROLE_GLOBAL_ADMIN, U3, "user")))
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+        self.assertEqual(res["remoteAccessPoliciesMembersOutside"], {"membersTotal": 4, "outsideCount": 1})
+
+    def test_flipped_role_holders_cover_the_rest_so_nothing_fails(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), admins), workforce(U1, U2, U3, U4),
+                                [(G_STAFF, members(U1, U2))],
+                                roles=role_assignments((ROLE_GLOBAL_ADMIN, U3, "user"), (ROLE_GLOBAL_ADMIN, U4, None)))
+        self.assert_unevaluated(res, info)
+        self.assertNotIn("remoteAccessPoliciesMembersOutside", res)
+
+    def test_role_policy_without_the_role_read_never_fails(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        for roles, with_roles in ((None, True), ({}, True), (None, False), ({"stepError": True}, True),
+                                  (role_assignments((ROLE_GLOBAL_ADMIN, U3, "user"), next_link="https://x/next"), True),
+                                  ({"error": {"code": "Authorization_RequestDenied"}}, True)):
+            res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), admins), workforce(U1, U2, U3, U4),
+                                    [(G_STAFF, members(U1, U2))], roles=roles, with_roles=with_roles)
+            self.assert_unevaluated(res, info)
+            self.assertIn("directory role whose holders were not read whole",
+                          res["remoteAccessPoliciesMembersOutsideUndecided"])
+            self.assertIn("not failed because an MFA policy includes a directory role",
+                          info["dataCollection"]["errors"][0])
+
+    def test_role_held_by_a_group_never_fails(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), admins), workforce(U1, U2, U3),
+                                [(G_STAFF, members(U1, U2))],
+                                roles=role_assignments((ROLE_GLOBAL_ADMIN, "9" * 8 + G_OPS[8:], "group")))
+        self.assert_unevaluated(res, info)
+
+    def test_service_principal_holder_does_not_block_the_verdict(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        res, _ = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), admins), workforce(U1, U2, U3),
+                             [(G_STAFF, members(U1, U2))],
+                             roles=role_assignments((ROLE_GLOBAL_ADMIN, "5" * 8 + G_OPS[8:], "servicePrincipal")))
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+
+    def test_member_reached_by_a_narrowed_mfa_policy_stays_unevaluated(self):
+        # Inside an MFA-requiring policy, even a location-limited one: not "outside every policy".
+        trusted = {"includeLocations": ["All"], "excludeLocations": ["AllTrusted"]}
+        narrowed = policy("MFA everyone off-site (iOS only)", users=["All"])
+        narrowed["conditions"]["platforms"] = {"includePlatforms": ["iOS"]}
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF], locations=trusted), narrowed),
+                                workforce(U1, U2, U3), [(G_STAFF, members(U1, U2))])
+        self.assert_unevaluated(res, info)
+        self.assertNotIn("remoteAccessPoliciesMembersOutside", res)
+
+    def test_risk_only_policy_does_not_reach(self):
+        risky = policy("MFA for risky sign-ins", users=["All"])
+        risky["conditions"]["signInRiskLevels"] = ["high", "medium"]
+        res, _ = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), risky), workforce(U1, U2, U3),
+                             [(G_STAFF, members(U1, U2))])
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+
+    def test_authentication_strength_under_or_still_reaches(self):
+        either = policy("MFA or compliant device", users=["All"], controls=("compliantDevice",))
+        either["grantControls"]["authenticationStrength"] = {"id": "00000000-0000-0000-0000-000000000002"}
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), either), workforce(U1, U2, U3),
+                                [(G_STAFF, members(U1, U2))])
+        self.assert_unevaluated(res, info)
+
+    def test_two_named_exclusions_outside_are_break_glass(self):
+        x, y = synthetic_ids("bb", 2)
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF], exclude_users=[x, y])),
+                                workforce(U1, x, y), [(G_STAFF, members(U1, x, y))])
+        self.assertIs(res["isMFARequiredForRemoteAccess"], True)
+
+    def test_unread_included_group_never_fails(self):
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), gpolicy("MFA Sales", [G_SALES])),
+                                workforce(U1, U2, U3), [(G_STAFF, members(U1)), (G_SALES, NOT_FOUND)])
+        self.assert_unevaluated(res, info)
+        self.assertIn("group an MFA policy includes was not read whole",
+                      res["remoteAccessPoliciesMembersOutsideUndecided"])
+
+    def test_empty_none_and_error_workforce_never_fail(self):
+        for users in ({"@odata.context": USERS_CTX, "value": []}, None, {"error": {"code": "Request_Throttled"}}):
+            res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF])), users, [(G_STAFF, members(U1))])
+            self.assert_unevaluated(res, info)
+            self.assertNotIn("remoteAccessPoliciesMembersOutside", res)
+
+    def test_no_membership_read_never_fails(self):
+        res, info = run(ca(gpolicy("MFA Staff", [G_STAFF])), grp=NAMED)
+        self.assert_unevaluated(res, info)
+
+    def test_no_enabled_policy_never_fails(self):
+        res, info = run_outside(ca(gpolicy("MFA Staff", [G_STAFF], state="disabled")), workforce(U1, U2),
+                                [(G_STAFF, members(U1))])
+        self.assert_unevaluated(res, info)
+
+    def test_report_only_mfa_policy_does_not_reach(self):
+        report_only = policy("MFA everyone (report-only)", users=["All"],
+                             state="enabledForReportingButNotEnforced")
+        res, _ = run_outside(ca(gpolicy("MFA Staff", [G_STAFF]), report_only), workforce(U1, U2),
+                             [(G_STAFF, members(U1))])
+        self.assertIs(res["isMFARequiredForRemoteAccess"], False)
+
+    def test_role_read_cut_off_by_the_workflow_never_fails(self):
+        admins = role_policy("Require MFA for admins", [ROLE_GLOBAL_ADMIN])
+        roles = role_assignments((ROLE_GLOBAL_ADMIN, U3, "user"))
+        for stats, expected in (({"roleAssignments": {"paginationTruncated": True}}, None),
+                                ({"workforceUsers": {"paginationTruncated": False}}, None),
+                                ({"roleAssignments": {"paginationTruncated": False}}, False)):
+            payload = {"conditionalAccessPolicies": ca(gpolicy("MFA Staff", [G_STAFF]), admins), "groups": NAMED,
+                       "workforceUsers": workforce(U1, U2, U3, U4), "caPolicyGroups": {"groupIds": [{"id": G_STAFF}]},
+                       "groupMembers": [members(U1, U2)], "roleAssignments": roles, "paginationStats": stats}
+            res = m.transform(payload)["transformedResponse"]
+            self.assertIs(res["isMFARequiredForRemoteAccess"], expected)

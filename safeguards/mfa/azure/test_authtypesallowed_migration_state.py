@@ -144,3 +144,42 @@ def test_the_production_sandbox_gives_the_same_verdicts(path):
     assert verdict(transform(policy(["Fido2"], None))) == (False, "error")
     assert verdict(transform(policy(["Fido2"], ""))) == (False, "error")
     assert verdict(transform(policy(["Fido2", "Sms"], MISSING))) == (False, "success")
+
+
+# --- WI-3d (16 Nov 2026): the not-evaluated answer names the customer's fix --------------------------------------
+
+AZURE_COPIES = [AZURE_PATH, ONECLICK_PATH]
+
+
+@pytest.mark.parametrize("path", AZURE_COPIES)
+@pytest.mark.parametrize("state", LEGACY_STATES)
+def test_migrating_clean_list_tells_the_customer_to_complete_the_migration(path, state):
+    out = run(path, policy(["Fido2", "MicrosoftAuthenticator"], state))
+    assert verdict(out)[1] == "error"
+    assert "complete the authentication-methods migration" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert "Manage migration" in out["additionalInfo"]["evaluation"]["recommendations"][0]
+
+
+@pytest.mark.parametrize("path", AZURE_COPIES)
+@pytest.mark.parametrize("state", LEGACY_STATES)
+def test_migrating_with_no_member_method_tells_the_customer_too(path, state):
+    out = run(path, policy([], state))
+    assert verdict(out)[1] == "error"
+    assert "complete the authentication-methods migration" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    assert out["additionalInfo"]["evaluation"]["recommendations"]
+
+
+@pytest.mark.parametrize("path", AZURE_COPIES)
+@pytest.mark.parametrize("state", NO_STATES + ["migrationComplete"])
+def test_no_state_or_migrated_never_names_the_migration_step(path, state):
+    out = run(path, policy([], state))
+    errors = " ".join(out["additionalInfo"]["dataCollection"]["errors"])
+    assert "complete the authentication-methods migration" not in errors
+    assert not out["additionalInfo"]["evaluation"]["recommendations"]
+
+
+@pytest.mark.parametrize("path", AZURE_COPIES)
+def test_a_weak_method_while_migrating_still_fails_without_the_step(path):
+    out = run(path, policy(["Sms", "Fido2"], "migrationInProgress"))
+    assert verdict(out) == (False, "success")
+    assert "complete the authentication-methods migration" not in str(out["additionalInfo"]["dataCollection"])
