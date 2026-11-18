@@ -85,12 +85,13 @@ def test_admin_separation_names_licensed_admins(mode):
     assert out["transformedResponse"]["adminsWithMailLicense"] == 2
     assert "affectedAccounts" not in out["transformedResponse"]
     summary = info(out)["transformation"]["inputSummary"]
-    assert summary["affectedAccounts"] == ["admin001@example.com", "admin003@example.com"]
+    refs = ["user " + oid(1)[:8] + "...", "user " + oid(3)[:8] + "..."]  # C4: partial ids, never the UPN
+    assert summary["affectedAccounts"] == refs
     assert summary["affectedAccountCount"] == 2
     first = info(out)["evaluation"]["failReasons"][0]
     assert first == ("2 of 3 admin account(s) have mail/Exchange Online licenses; Microsoft Entra ID (privileged "
-                     "directory roles): 2 of 3 admin accounts hold a mailbox or productivity licence: "
-                     "admin001@example.com, admin003@example.com")
+                     "directory roles): 2 of 3 admin accounts hold a mailbox or productivity licence: " + ", ".join(refs))
+    assert "@example.com" not in str(info(out))
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -102,7 +103,7 @@ def test_admin_separation_cap(mode):
     assert len(summary["affectedAccounts"]) == 50
     assert summary["affectedAccountCount"] == 60
     first = info(out)["evaluation"]["failReasons"][0]
-    assert first.count("@example.com") == 20
+    assert first.count("user ") == 20 and "@example.com" not in first
     assert first.endswith("and 40 more")
 
 
