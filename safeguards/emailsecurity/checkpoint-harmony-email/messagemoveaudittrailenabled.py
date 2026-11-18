@@ -5,12 +5,11 @@ Method: queryOffice365MoveEvents (POST /app/hec-api/v1.0/event/query, requestDat
 google_mail], eventTypes = the threat types, startDate/endDate = exactly the last 30 days, every page via
 responseEnvelope.scrollId). It also reads the older queryOffice365Events answer (all event types, one page).
 
-The claim is that the vendor keeps a who-what-when trail of message moves. True when the records read hold at
-least one message-move action (quarantine, restore, delete, move) carrying actionType, createTime and
-relatedEntityId and no move action read lacks one of them. Records not read cannot undo that, so True holds on
-any page, partial or not. A move action read without its fields reads False, from any page too: no unread record
-can close that gap.
-"No move action in the window" is the only verdict that needs every record: it reads False only from a complete
+The claim is that the vendor keeps a who-what-when trail of message moves. True when at least one message-move
+action read (quarantine, restore, delete, move) carries actionType, createTime and relatedEntityId, on any page,
+partial or not: records not read cannot undo that. Move actions read without those fields are counted in
+inputSummary.moveActionsMissingAuditFields and reported in additionalFindings; they do not turn a trail that is
+evidenced into False. False (no audited move) needs every record: it reads False only from a complete
 read, and is Not evaluated (None, with a coded data-collection error) when the read is partial or holds an
 entry that cannot be read. The vendor stops recordsNumber at 10000, so a total at that cap means the window holds
 more events than can ever be read; that case carries errorCode vendor_count_capped, any other partial read
@@ -30,7 +29,7 @@ def transform(input):
     criteriaKey = "messageMoveAuditTrailEnabled"
 
     def create_response(value, pass_reasons=None, fail_reasons=None, input_summary=None,
-                        api_errors=None, transformation_errors=None, error_code=None):
+                        api_errors=None, transformation_errors=None, error_code=None, findings=None):
         collection = {"status": "error" if api_errors else "success", "errors": api_errors or []}
         if error_code and api_errors:
             collection["errorCode"] = error_code  # machine-readable beside the prose; read by the posture stream
@@ -43,7 +42,7 @@ def transform(input):
                                    "errors": transformation_errors or [],
                                    "inputSummary": input_summary or {}},
                 "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
-                               "recommendations": [], "additionalFindings": []},
+                               "recommendations": [], "additionalFindings": findings or []},
                 "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z",
                              "schemaVersion": "1.0", "transformationId": criteriaKey,
                              "vendor": "Check Point Harmony Email & Collaboration",
@@ -278,19 +277,21 @@ def transform(input):
         summary = {"recordsRead": len(records), "recordsNumber": total, "eventTypes": types,
                    "moveActions": len(moves), "moveActionsMissingAuditFields": len(incomplete),
                    "moveActionTypes": kinds, "partialRead": bool(partial or unreadable), "windowDays": 30}
+        gap = None
         if incomplete:
-            # a gap in a record already read: no unread record can close it
-            return create_response(False, fail_reasons=[str(len(incomplete)) + " of " + str(len(moves)) + " message-move "
-                                   "action(s) lack createTime or relatedEntityId, so the trail is not auditable"],
-                                   input_summary=summary)
-        if moves:
+            gap = str(len(incomplete)) + " of " + str(len(moves)) + " message-move action(s) lack createTime or relatedEntityId"
+        if len(incomplete) < len(moves):
             # the trail exists and records who-what-when; records not read cannot undo that
             scope = " in the records read (not the whole window)" if (partial or unreadable) else ""
-            return create_response(True, pass_reasons=["All " + str(len(moves)) + " message-move action(s)" + scope +
-                                   " carry actionType, createTime and relatedEntityId"], input_summary=summary)
+            return create_response(True, pass_reasons=[str(len(moves) - len(incomplete)) + " message-move action(s)" +
+                                   scope + " carry actionType, createTime and relatedEntityId"], input_summary=summary,
+                                   findings=[gap + "; other audited moves prove the trail exists"] if gap else None)
         if partial or unreadable:
+            # an unread record may still hold an audited move, so neither "no move" nor "only gaps" is proven
             capped = total is not None and total >= 10000
-            return unproven("that the window holds no message-move action", summary, partial, unreadable, capped)
+            return unproven("that the window holds an audited message-move action", summary, partial, unreadable, capped)
+        if moves:
+            return create_response(False, fail_reasons=[gap + ", so the trail is not auditable"], input_summary=summary)
         return create_response(False, fail_reasons=["No quarantine, restore, delete or move action appears in the "
                                "events read for the last 30 days, so no audit trail is evidenced"], input_summary=summary)
     except Exception as e:

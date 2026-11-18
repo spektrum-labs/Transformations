@@ -246,18 +246,31 @@ def test_complete_empty_page_still_reads_false(name):
     assert_measured(run(name, envelope([])), False)
 
 
-# --- (b) messageMoveAuditTrailEnabled: a seen gap is False and a seen trail True on any page; only an
-# absence of moves needs every record --
+# --- (b) messageMoveAuditTrailEnabled: a seen audited move is True on any page; only an
+# absence of audited moves needs every record --
 
 GOOD_MOVES = [ev(actions=[act("quarantine_email"), act("restore_email")])]
-BAD_MOVES = [ev(actions=[act("quarantine_email"), act("delete_email", create="None")])]
+BAD_MOVES = [ev(actions=[act("quarantine_email"), act("delete_email", create="None")])]  # one audited, one gap
+ONLY_GAPS = [ev(actions=[act("quarantine_email", create="None"), act("delete_email", related="None")])]
 NO_MOVES = [ev(actions=[act("add_banner_to_email")])]
 
 
 @pytest.mark.parametrize("label,make", PARTIAL_FORMS, ids=[f[0] for f in PARTIAL_FORMS])
-def test_move_audit_partial_page_with_a_gap_stays_false(label, make):
-    # the gap is on the page already read: no unread page can fix it
-    assert_measured(run(MOVE, make(BAD_MOVES)), False)
+def test_move_audit_partial_page_with_a_gap_beside_an_audited_move_is_true_and_reports_the_gap(label, make):
+    out = run(MOVE, make(BAD_MOVES))
+    assert_measured(out, True)
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["moveActionsMissingAuditFields"] == 1
+    assert "1 of 2" in out["additionalInfo"]["evaluation"]["additionalFindings"][0]
+
+
+@pytest.mark.parametrize("label,make", PARTIAL_FORMS, ids=[f[0] for f in PARTIAL_FORMS])
+def test_move_audit_partial_page_with_only_gaps_is_not_evaluated(label, make):
+    # an unread page may hold an audited move, so "no audited move" is unproven
+    assert_not_evaluated(run(MOVE, make(ONLY_GAPS)))
+
+
+def test_move_audit_complete_read_with_only_gaps_is_false():
+    assert_measured(run(MOVE, envelope(ONLY_GAPS)), False)
 
 
 @pytest.mark.parametrize("label,make", PARTIAL_FORMS, ids=[f[0] for f in PARTIAL_FORMS])
@@ -277,7 +290,8 @@ def test_move_audit_partial_page_with_no_move_is_not_evaluated(label, make):
 @pytest.mark.parametrize("label,make", COMPLETE_FORMS, ids=[f[0] for f in COMPLETE_FORMS])
 def test_move_audit_complete_page_keeps_every_verdict(label, make):
     assert_measured(run(MOVE, make(GOOD_MOVES)), True)
-    assert_measured(run(MOVE, make(BAD_MOVES)), False)
+    assert_measured(run(MOVE, make(BAD_MOVES)), True)
+    assert_measured(run(MOVE, make(ONLY_GAPS)), False)
     assert_measured(run(MOVE, make(NO_MOVES)), False)
     assert_measured(run(MOVE, make([])), False)
 
@@ -629,8 +643,9 @@ def test_move_audit_unreadable_entry_blocks_only_the_absence_verdict(label, bad,
 
 
 @pytest.mark.parametrize("label,bad", UNREADABLE_MOVE_RECORDS, ids=[u[0] for u in UNREADABLE_MOVE_RECORDS])
-def test_move_audit_gap_already_seen_stays_false_beside_an_unreadable_entry(label, bad):
-    assert_measured(run(MOVE, envelope(BAD_MOVES + [bad])), False)
+def test_move_audit_only_gaps_beside_an_unreadable_entry_is_not_evaluated(label, bad):
+    assert_not_evaluated(run(MOVE, envelope(ONLY_GAPS + [bad])))
+    assert_measured(run(MOVE, envelope(BAD_MOVES + [bad])), True)
 
 
 # --- counts: an unreadable entry makes the count None --------------------------------------------------
@@ -727,8 +742,9 @@ def test_move_audit_unreadable_total_blocks_only_the_absence_verdict(raw, flabel
     assert_measured(run(MOVE, make(GOOD_MOVES, raw)), True)
     assert_not_evaluated(run(MOVE, make(NO_MOVES, raw)))
     assert_not_evaluated(run(MOVE, make([], raw)))
-    # a gap already seen is a proven negative; no unread page can close it
-    assert_measured(run(MOVE, make(BAD_MOVES, raw)), False)
+    # a gap beside an audited move keeps the trail; only gaps cannot be called False before every record is read
+    assert_measured(run(MOVE, make(BAD_MOVES, raw)), True)
+    assert_not_evaluated(run(MOVE, make(ONLY_GAPS, raw)))
 
 
 @pytest.mark.parametrize("raw", BAD_TOTALS, ids=repr)
