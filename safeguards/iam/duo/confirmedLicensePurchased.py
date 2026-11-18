@@ -18,7 +18,7 @@ Known limit: a trial that Duo reports under a bare paid name (no "trial" in the 
 Every None carries dataCollection.status "error", so it is Not evaluated, never a fail.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "confirmedLicensePurchased"
 ENDPOINT = "GET /admin/v1/info/summary"
@@ -47,7 +47,7 @@ def create_response(result, api_errors=None, pass_reasons=None, fail_reasons=Non
                 "recommendations": recommendations or [],
                 "additionalFindings": [],
             },
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0",
                          "transformationId": META["transformationId"], "vendor": META["vendor"],
                          "category": META["category"]},
         },
@@ -125,6 +125,15 @@ def summary_of(value):
     return data
 
 
+def raw_refusal_of(value):
+    """A plain Duo FAIL body (code 40301 / 40101), top level or one level down, as a refusal marker, else None."""
+    for body in [value] + [v for v in value.values()] if isinstance(value, dict) else []:
+        if isinstance(body, dict) and body.get("code") in (40301, 40101) and \
+                str(body.get("stat", "")).upper() == "FAIL":
+            return {"status": 403 if body["code"] == 40301 else 401, "body": body}
+    return None
+
+
 def refused(marker):
     status = marker.get("status")
     body = decoded(marker.get("body"))
@@ -154,7 +163,7 @@ def refused(marker):
 def transform(input):
     try:
         raw = decoded(input)
-        marker = refusal_of(raw)
+        marker = refusal_of(raw) or raw_refusal_of(raw)
         if marker is not None:
             return refused(marker)
         summary = summary_of(raw)
