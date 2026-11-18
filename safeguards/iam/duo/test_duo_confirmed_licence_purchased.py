@@ -66,7 +66,9 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
                 for out in self.each(wrapped):
                     self.assertIs(out["transformedResponse"][KEY], True)
                     self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
-                    self.assertIn(edition, out["additionalInfo"]["evaluation"]["passReasons"][0])
+                    reason = out["additionalInfo"]["evaluation"]["passReasons"][0]
+                    self.assertIn(edition, reason)
+                    self.assertIn("does not distinguish a trial from a purchase", reason)
 
     def test_free_and_trial_fail(self):
         for edition in ["Duo Free", "PERSONAL", "Duo Premier Trial", "Trial"]:
