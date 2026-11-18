@@ -227,6 +227,52 @@ class PartialReadsAreNotAPass(unittest.TestCase):
         self.assertIn("not measured", info["evaluation"]["passReasons"][0])
 
 
+class ReadErrorsAndLooseMatches(unittest.TestCase):
+    """Second review round on #1396/#1397."""
+
+    COUNTING = PartialReadsAreNotAPass.COUNTING
+
+    def clean(self):
+        return PartialReadsAreNotAPass.clean(self)
+
+    def assert_not_evaluated(self, name, body):
+        got, info = value(name, body)
+        self.assertIsNone(got, name)
+        self.assertEqual(info["dataCollection"]["status"], "error", name)
+
+    def test_a_read_error_is_not_evaluated(self):
+        for name in self.COUNTING:
+            body = self.clean()
+            body["scope"] = dict(body["scope"], complete=False, errors=[
+                {"code": "ThrottlingException", "service": "backup", "operation": "ListBackupJobs",
+                 "region": "us-east-1"}])
+            self.assert_not_evaluated(name, body)
+
+    def test_an_inventory_not_marked_complete_is_not_evaluated(self):
+        for name in self.COUNTING:
+            body = self.clean()
+            body["scope"] = dict(body["scope"], complete=False)
+            self.assert_not_evaluated(name, body)
+
+    def test_only_the_exact_opt_in_code_is_exempt(self):
+        body = self.clean()
+        body["scope"] = dict(body["scope"], regionsUnreachable={"eu-west-1": "AccessDenied (not OptIn related)"})
+        self.assert_not_evaluated("publicbackupsharecount", body)
+
+    def test_a_rule_with_no_evaluated_flag_is_not_evaluated(self):
+        body = self.clean()
+        plan = copy.deepcopy(body["awsBackup"]["plans"][0])
+        for rule in plan["rules"]:
+            del rule["evaluated"]
+        body["awsBackup"]["plans"] = [plan]
+        self.assert_not_evaluated("missedscheduledbackups", body)
+
+    def test_a_run_status_in_any_case_or_spelling_counts(self):
+        for status in ("MISSED", "FAILED", "Missed", "skipped", None):
+            runs = [dict(INVENTORY["missedRuns"][0], status=status)]
+            self.assertEqual(value("missedscheduledbackups", inventory(missedRuns=runs))[0], 1, status)
+
+
 class Wrapping(unittest.TestCase):
 
     def test_the_engine_wrapper_and_json_text_are_read(self):

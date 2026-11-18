@@ -7,6 +7,9 @@ True only when the backup inventory saw the whole account: every enabled region 
 action was allowed, no list was cut short and nothing ran out of time. When False, the fail reasons name
 what is missing (usually IAM actions to add to the read-only policy in the setup instructions), because every other
 backup check can only speak for what was seen.
+
+Unlike the counting checks, this one also fails on a region AWS refuses with OptInRequired: the
+account lists it as enabled, so the inventory did not see all of it.
 """
 
 import json
