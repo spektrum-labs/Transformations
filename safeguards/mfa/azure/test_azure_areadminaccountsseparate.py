@@ -123,7 +123,8 @@ class AzureAdminSeparationTests(unittest.TestCase):
                     self.assert_not_evaluated(data)
                     errors = " ".join(self.run_t(data)[1]["dataCollection"]["errors"])
                     self.assertIn("assignedLicenses", errors)
-                    self.assertIn("second@contoso.com", errors)
+                    self.assertIn("user u2...", errors)
+                    self.assertNotIn("@contoso", errors)  # C4
         # An empty list is a real answer (no licences), so a clean read of that shape still passes.
         data = body([user("u1", "admin@contoso.onmicrosoft.com", skus=[ENTRA_P2]),
                      {"id": "u2", "userPrincipalName": "second@contoso.com", "assignedLicenses": []}], ["u1", "u2"])
@@ -135,7 +136,7 @@ class AzureAdminSeparationTests(unittest.TestCase):
         result, info = self.run_t(data)
         self.assertFalse(result[KEY])
         self.assertEqual(info["dataCollection"]["status"], "success", info)
-        self.assertIn("second@contoso.com", info["evaluation"]["failReasons"][0])
+        self.assertIn("user u2...", info["evaluation"]["failReasons"][0])
 
     # --- AA-3: mail alone is a finding ---------------------------------------
     def test_mail_attribute_alone_is_a_finding_not_a_fail(self):
@@ -182,7 +183,7 @@ class AzureAdminSeparationTests(unittest.TestCase):
         result, info = self.run_t(body([licensed, unclassified], ["u1", "u2"]))
         self.assertFalse(result[KEY])
         self.assertEqual(info["dataCollection"]["status"], "success")
-        self.assertIn("carol@contoso.com", info["evaluation"]["failReasons"][0])
+        self.assertIn("user u2...", info["evaluation"]["failReasons"][0])
 
     def test_productivity_sku_fails(self):
         for sku in (SPE_E3, EXCHANGE_PLAN_2):

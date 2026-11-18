@@ -21,6 +21,15 @@
 # can only answer None. This file reads the policies and rules themselves.
 
 
+KNOWLEDGE_KEYS = ["okta_password", "security_question"]
+KNOWLEDGE_METHODS = ["password", "security_question"]
+POSSESSION_KEYS = ["okta_verify", "phone_number", "okta_email", "google_otp", "webauthn", "security_key",
+                   "yubikey_token", "rsa_token", "symantec_vip", "duo", "custom_otp", "custom_app", "smart_card_idp",
+                   "onprem_mfa"]
+POSSESSION_METHODS = ["push", "totp", "signed_nonce", "sms", "voice", "email", "otp", "webauthn", "cert"]
+CHAIN_MAX_STEPS = 5
+
+
 def transform(input):
     """
     isStrongAuthRequired - True only when every path into an app demands a factor and none of those paths
@@ -35,6 +44,12 @@ def transform(input):
         possession methods, so a rule is restricted only when every constraint lists possession methods.
         Otherwise any enrolled authenticator can satisfy it and the org's ACTIVE authenticators decide: a weak
         one switched on is False, none is a pass, and an unread authenticator list is Not evaluated.
+    A rule whose verificationMethod is an AUTH_METHOD_CHAIN (verificationMethod.chains[]: each step's
+    authenticationMethods[] are alternatives {key, method, userVerification}, next[] the alternative following
+    steps) names every method it accepts, so it is judged on the chain alone: False when any alternative is weak
+    (the keys and methods above), or when any way through the chain proves fewer than two factor types (knowledge:
+    okta_password, security_question; possession: any other known authenticator, plus inherence when
+    userVerification is REQUIRED); True otherwise. A chain with an unknown authenticator or another shape is not read.
     Rule conditions (network zone, group, device) are ignored on purpose: a rule scoped to one zone that
     accepts one factor or a weak factor is still a weak path. Policies with resourceType
     END_USER_ACCOUNT_MANAGEMENT (enrolment, recovery, unlock) are not app sign-in and are reported, not judged.
@@ -50,8 +65,8 @@ def transform(input):
     False when a readable rule accepts less than a factor or names a weak factor.
     None (Not evaluated, dataCollection.status "error"), never False, when the read cannot answer: an error
     body, a non-object body, missing or misaligned policy and rule lists, an active policy with no active
-    rules, no rule that allows sign-on, a verification method this code does not read (AUTH_METHOD_CHAIN,
-    ID_PROOFING, missing) when no readable rule already fails, and a transformation error.
+    rules, no rule that allows sign-on, a verification method this code does not read (ID_PROOFING, missing, or a
+    chain it cannot classify) when no readable rule already fails, and a transformation error.
 
     Does not prove: that every user has
     enrolled a factor, or that the factors are phishing-resistant (isAdminMFAPhishingResistant,
@@ -206,6 +221,62 @@ def transform(input):
                 names.append(name)
         return names
 
+    def entry_types(entry):
+        """Factor types one chain alternative proves, or None when its authenticator is not known."""
+        entry_key = as_text(entry.get("key")).lower()
+        entry_method = as_text(entry.get("method")).lower()
+        if entry_key == "smart_card_idp":
+            return ["possession", "knowledge"]  # assumption: PIV/CAC = card plus PIN; the middleware enforces the PIN, the policy body cannot show it (Okta smart card IdP docs)
+        if entry_key in KNOWLEDGE_KEYS or entry_method in KNOWLEDGE_METHODS:
+            return ["knowledge"]
+        if entry_key in POSSESSION_KEYS or entry_method in POSSESSION_METHODS:
+            if as_text(entry.get("userVerification")).upper() == "REQUIRED":
+                return ["possession", "inherence"]
+            return ["possession"]
+        return None
+
+    def chain_factors(method):
+        """(fewest distinct factor types any way through an AUTH_METHOD_CHAIN proves, weak alternatives it accepts),
+        or None when the chain is unreadable."""
+        chains = method.get("chains")
+        if not isinstance(chains, list) or not chains:
+            return None
+        stack = [(node, [()], 1) for node in chains]
+        fewest = None
+        weak_found = []
+        while stack:
+            node, before, depth = stack.pop()
+            if not isinstance(node, dict) or depth > CHAIN_MAX_STEPS:
+                return None
+            options = node.get("authenticationMethods")
+            if not isinstance(options, list) or not options:
+                return None
+            merged = []
+            for option in options:
+                types = entry_types(option) if isinstance(option, dict) else None
+                if types is None:
+                    return None
+                entry_key = as_text(option.get("key")).lower()
+                entry_method = as_text(option.get("method")).lower()
+                if entry_key in weak_keys or entry_method in weak_methods:
+                    name = entry_key + ("/" + entry_method if entry_method else "")
+                    if name not in weak_found:
+                        weak_found.append(name)
+                for union in before:
+                    joined = tuple(sorted(set(list(union) + types)))
+                    if joined not in merged:
+                        merged.append(joined)
+            following = node.get("next")
+            if following is None or following == []:
+                count = min([len(u) for u in merged])
+                fewest = count if fewest is None else min(fewest, count)
+            elif isinstance(following, list):
+                for child in following:
+                    stack.append((child, merged, depth + 1))
+            else:
+                return None
+        return fewest, weak_found
+
     def possession_restricted(method):
         """True only when every constraint lists the possession methods it accepts. SMS, voice and email are
         possession methods, so a constraint that lists only knowledge or inherence methods leaves them open."""
@@ -283,6 +354,7 @@ def transform(input):
                     method_type = as_text(method.get("type")).upper()
                     mode = as_text(method.get("factorMode")).upper()
                     where = as_text(policy.get("name")) + " / " + as_text(rule.get("name"))
+                    found = chain_factors(method) if method_type == "AUTH_METHOD_CHAIN" else None
                     if method_type == "ASSURANCE" and mode == "2FA":
                         names = weak_names(method)
                         if names:
@@ -298,6 +370,14 @@ def transform(input):
                             strong = strong + 1
                     elif method_type == "ASSURANCE":
                         weak.append(where + " (factorMode " + (mode or "missing") + ")")
+                    elif found is not None:
+                        count, names = found
+                        if names:
+                            weak.append(where + " (authentication method chain accepts " + ", ".join(names[:4]) + ")")
+                        elif count < 2:
+                            weak.append(where + " (an authentication method chain path proves one factor type)")
+                        else:
+                            strong = strong + 1
                     else:
                         unread.append(where + " (verification method " + (method_type or "missing") + ")")
         elif signon is not None:

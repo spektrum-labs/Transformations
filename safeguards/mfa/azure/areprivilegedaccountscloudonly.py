@@ -32,9 +32,14 @@ from the expanded principal's @odata.type. A privileged principal that is not in
 carries no @odata.type is most likely a service principal, but it cannot be told apart from a user
 missing from the read, so it stays unresolved (not evaluated, fail-closed) and the reason says so
 explicitly, naming the fix (read the principal type, or supply service-principal ids). Disabled role holders
-cannot sign in; they are counted and not judged. A role-assignable GROUP holding a privileged role is
-not expanded by this read, so its members are unresolved and the result is not evaluated. Only ACTIVE
-role assignments are read (roleAssignments); PIM-eligible assignments are not in this read.
+cannot sign in; they are counted and not judged. A role-assignable GROUP holding a privileged role is expanded
+through its transitive member read (WI-3b, below): each user member is judged like a direct holder. A group whose
+member list was not read whole (no read, an error or vendor error returned as data, @odata.nextLink still set,
+a read that cannot be paired with the group ids, or a group read twice) stays unresolved and the result is not
+evaluated. Only ACTIVE role assignments are read (roleAssignments); PIM-eligible assignments are not in this read.
+
+Names (C4): reasons never echo a user principal name or display name; an account is named by the first 8
+characters of its object id ("user 1a2b3c4d..."), which is enough to find it in Entra.
 
 INPUT. Two Microsoft Graph v1.0 list reads, merged by a two-step Integration-Service workflow:
 
@@ -49,6 +54,14 @@ from
          the existing getUsersWithLicenses read does not carry it)
 
 `directoryRoles` (GET /v1.0/directoryRoles?$expand=members) is accepted as an alternative role source.
+
+Role-assignable groups (WI-3b), when the workflow supplies them:
+    "roleGroups":       {"groupIds": [{"id": ...}, ...]}  (GET /v1.0/groups?$filter=isAssignableToRole eq true
+                        &$select=id; only role-assignable groups can hold an Entra role)
+    "roleGroupMembers": one GET /v1.0/groups/{id}/transitiveMembers?$select=id,onPremisesSyncEnabled body per
+                        group id, in the same order (method getGroupTransitiveMembersSyncState)
+A member is judged from the users read (accountEnabled, onPremisesSyncEnabled), so a member missing from it is
+unresolved. Nested groups in the transitive read are skipped (their users are listed too).
 
 PERMISSIONS. Both reads need only RoleManagement.Read.Directory (or Directory.Read.All) and
 User.Read.All, which the Microsoft integrations already hold for areAdminAccountsSeparate. No new
@@ -154,6 +167,11 @@ PRIVILEGED_ROLE_IDS = [
     "b1be1c3e-b65d-4f19-8427-f6fa0d97feb9",  # Conditional Access Administrator
     "f2ef992c-3afb-46b9-b7cf-a126ee74c451",  # Global Reader (read-only but tenant-wide)
 ]
+
+
+def account_ref(pid):
+    """A partial object id for reasons: enough to find the account in Entra, no personal data (C4)."""
+    return "user " + str(pid)[:8] + "..."
 
 
 def short(value, limit=100):
@@ -374,6 +392,56 @@ def privileged_principals(assignments, directory_roles):
     return found
 
 
+def role_group_members(data):
+    """{lower-case group id: member rows read whole, or None} from roleGroups/roleGroupMembers paired by position.
+    {} when the reads are absent or cannot be paired."""
+    holder = data.get("roleGroups") if isinstance(data.get("roleGroups"), dict) else {}
+    ids = holder.get("groupIds")
+    bodies = data.get("roleGroupMembers")
+    out = {}
+    if not isinstance(ids, list) or not isinstance(bodies, list) or len(ids) != len(bodies):
+        return out
+    for index in range(len(ids)):
+        entry = ids[index]
+        gid = lower_id(entry.get("id") if isinstance(entry, dict) else entry)
+        if not gid:
+            continue
+        if gid in out:
+            out[gid] = None
+            continue
+        body = unwrap(bodies[index])
+        rows = rows_of(body)
+        if (isinstance(body, list) or error_text(body) is not None or rows is None or is_truncated(body)
+                or "vendorErrorAsResponse" in body or body.get("paginationTruncated") is True):
+            out[gid] = None
+            continue
+        if [r for r in rows if not isinstance(r, dict) or not lower_id(r.get("id"))]:
+            out[gid] = None
+            continue
+        out[gid] = rows
+    return out
+
+
+def expand_groups(principals, data):
+    """Replace each group principal whose transitive members were read whole by its members (kind 'expanded' marks
+    the group itself resolved). Returns how many principals were added through a group."""
+    expanded = role_group_members(data)
+    added = 0
+    for gid in sorted([p for p in principals if principals[p] == "group"]):
+        rows = expanded.get(gid)
+        if rows is None:
+            continue
+        principals[gid] = "expanded"
+        for member in rows:
+            mid = lower_id(member.get("id"))
+            kind = odata_kind(member)
+            if kind == "group" or mid in principals:
+                continue
+            principals[mid] = kind
+            added = added + 1
+    return added
+
+
 def not_evaluated(validation, reasons, recommendations=None, summary=None, findings=None, result=None):
     out = {CRITERIA_KEY: None, "privilegedUserCount": 0, "syncedPrivilegedAccounts": 0,
            "unresolvedPrivilegedPrincipals": 0}
@@ -424,6 +492,7 @@ def transform(input):
                 users_by_id[lower_id(user.get("id"))] = user
 
         principals = privileged_principals(assignments, directory_roles)
+        through_groups = expand_groups(principals, data)
 
         privileged_users = 0
         disabled = 0
@@ -436,11 +505,13 @@ def transform(input):
         immutable = []
         for pid in sorted(principals):
             kind = principals[pid]
+            if kind == "expanded":
+                continue
             if kind == "serviceprincipal":
                 service_principals = service_principals + 1
                 continue
             if kind == "group":
-                unresolved.append(short(pid, 60) + " (role-assignable group; members not read)")
+                unresolved.append(short(pid, 60) + " (role-assignable group; members not read whole)")
                 continue
             user = users_by_id.get(pid)
             if user is None:
@@ -456,7 +527,7 @@ def transform(input):
             if not is_enabled(user):
                 disabled = disabled + 1
                 continue
-            name = short(user.get("userPrincipalName") or user.get("displayName") or pid)
+            name = account_ref(pid)
             state = sync_state(user)
             if state == "synced":
                 synced.append(name)
@@ -476,7 +547,8 @@ def transform(input):
             "unresolvedPrivilegedPrincipals": len(unresolved),
         }
         summary = {
-            "privilegedPrincipals": len(principals),
+            "privilegedPrincipals": len([p for p in principals if principals[p] != "expanded"]),
+            "privilegedPrincipalsThroughGroups": through_groups,
             "privilegedUsers": privileged_users,
             "enabledPrivilegedUsers": enabled_users,
             "disabledPrivilegedUsers": disabled,
