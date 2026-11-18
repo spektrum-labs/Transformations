@@ -5,7 +5,8 @@ Category: Backups
 
 The number of resources whose most recent AWS Backup job ended FAILED, ABORTED, EXPIRED or PARTIAL.
 A later successful job clears the resource. Compare with isEquals 0. Not evaluated (None) when
-backup:ListBackupJobs was refused.
+backup:ListBackupJobs was refused, when the read was partial (an unreadable region, a truncated or
+timed-out list) or when the inventory has no failed-job list.
 """
 
 import json
@@ -101,6 +102,44 @@ def scope_warnings(inventory):
     return warnings
 
 
+def partial_read(inventory, any_missing=False):
+    """Why the inventory is not the whole account, or None.
+
+    A count or percentage taken from a partial read is not earned: a region nobody read, a list cut at a
+    bound or a read that ran out of time can hide exactly the item the check looks for. Regions that
+    are not opted in are not part of the account and do not count as a gap.
+    """
+    scope = inventory["scope"]
+    gaps = []
+    unreachable = scope.get("regionsUnreachable")
+    if not isinstance(unreachable, dict):
+        gaps.append("the inventory does not report unreadable regions")
+    else:
+        regions = []
+        for region in unreachable:
+            reason = str(unreachable.get(region)).replace("-", "").replace(" ", "").lower()
+            if "optin" not in reason:
+                regions.append(str(region))
+        if regions:
+            gaps.append("regions not readable: " + ", ".join(sorted(regions)))
+    for key, what in (("timedOut", "read(s) ran out of time"), ("truncated", "list(s) were cut at a bound")):
+        entries = scope.get(key)
+        if not isinstance(entries, list):
+            gaps.append("the inventory does not report " + key)
+        elif entries:
+            gaps.append("%d %s" % (len(entries), what))
+    if any_missing:
+        missing = scope.get("missingPermissions")
+        if not isinstance(missing, list):
+            gaps.append("the inventory does not report refused permissions")
+        elif missing:
+            gaps.append("%d read action(s) were refused: %s" % (len(missing), ", ".join(sorted(
+                str(m.get("action")) for m in missing if isinstance(m, dict)))[:400]))
+    if gaps:
+        return "; ".join(gaps)
+    return None
+
+
 def create_response(criteria_key, value, pass_reasons=None, fail_reasons=None, recommendations=None,
                     input_summary=None, errors=None, warnings=None, findings=None):
     measured = value is not None
@@ -142,7 +181,13 @@ def evaluate(inventory):
     refused = denied(inventory, ["backup:ListBackupJobs"])
     if refused:
         return not_evaluated(CRITERIA_KEY, "Backup jobs could not be read: refused backup:ListBackupJobs")
-    failing = [f for f in inventory.get("failedLatestAttempts") or [] if isinstance(f, dict)]
+    gap = partial_read(inventory)
+    if gap:
+        return not_evaluated(CRITERIA_KEY, "Backup jobs could not be fully read: " + gap)
+    attempts = inventory.get("failedLatestAttempts")
+    if not isinstance(attempts, list):
+        return not_evaluated(CRITERIA_KEY, "The inventory does not list failed backup jobs")
+    failing = [f for f in attempts if isinstance(f, dict)]
     fail_reasons = []
     for item in failing[:20]:
         job = item.get("job") or {}

@@ -136,6 +136,97 @@ class NotEvaluatedWhenTheEvidenceIsMissing(unittest.TestCase):
         self.assertIn("ap-east-1", " ".join(info["evaluation"]["failReasons"]))
 
 
+class PartialReadsAreNotAPass(unittest.TestCase):
+    """Review findings on #1396/#1397: a count or percentage from a partial read must not pass."""
+
+    COUNTING = ["missedscheduledbackups", "backupjobfailures", "publicbackupsharecount",
+                "backupcoveragepercentage", "lastsuccessfulbackupage_inventory"]
+
+    def assert_not_evaluated(self, name, body):
+        got, info = value(name, body)
+        self.assertIsNone(got, name)
+        self.assertEqual(info["dataCollection"]["status"], "error", name)
+
+    def clean(self):
+        # The fixture with nothing to find: a zero here would be a pass.
+        return inventory(missedRuns=[], publicShares=[], failedLatestAttempts=[],
+                         resources=[dict(r, publicShares=[]) for r in INVENTORY["resources"]])
+
+    def with_scope(self, body, **changes):
+        body["scope"] = dict(body["scope"], **changes)
+        return body
+
+    def test_the_clean_fixture_passes_when_the_read_is_whole(self):
+        self.assertEqual(value("missedscheduledbackups", self.clean())[0], 0)
+        self.assertEqual(value("backupjobfailures", self.clean())[0], 0)
+        self.assertEqual(value("publicbackupsharecount", self.clean())[0], 0)
+
+    def test_an_unreadable_region_is_not_evaluated(self):
+        for name in self.COUNTING:
+            self.assert_not_evaluated(name, self.with_scope(self.clean(), regionsUnreachable={"eu-west-1": "AccessDenied"}))
+
+    def test_a_region_that_is_not_opted_in_is_not_a_gap(self):
+        body = self.with_scope(self.clean(), regionsUnreachable={"ap-east-1": "OptInRequired"})
+        self.assertEqual(value("publicbackupsharecount", body)[0], 0)
+
+    def test_a_timed_out_or_truncated_read_is_not_evaluated(self):
+        for key, entry in (("timedOut", {"collector": "ec2", "region": "us-east-1"}),
+                           ("truncated", {"service": "ec2", "region": "us-east-1", "what": "snapshots",
+                                          "seen": 5000, "kept": 2000})):
+            for name in self.COUNTING:
+                self.assert_not_evaluated(name, self.with_scope(self.clean(), **{key: [entry]}))
+
+    def test_a_refused_listing_action_does_not_shrink_coverage_to_100(self):
+        body = inventory(resources=[r for r in INVENTORY["resources"] if r["service"] == "neptune"])
+        self.with_scope(body, missingPermissions=[{"action": "dynamodb:ListTables", "regions": ["us-east-1"]},
+                                                  {"action": "ec2:DescribeVolumes", "regions": ["us-east-1"]}])
+        self.assert_not_evaluated("backupcoveragepercentage", body)
+        self.assert_not_evaluated("lastsuccessfulbackupage_inventory", body)
+
+    def test_missing_lists_are_not_evaluated(self):
+        for name, key in (("missedscheduledbackups", "missedRuns"), ("backupjobfailures", "failedLatestAttempts"),
+                          ("publicbackupsharecount", "publicShares")):
+            for missing in (None, "absent"):
+                body = self.clean()
+                if missing == "absent":
+                    del body[key]
+                else:
+                    body[key] = None
+                self.assert_not_evaluated(name, body)
+
+    def test_a_missed_run_with_no_readable_time_still_counts(self):
+        for when in (None, "", "bogus"):
+            runs = [dict(INVENTORY["missedRuns"][0], expectedAt=when)]
+            self.assertEqual(value("missedscheduledbackups", inventory(missedRuns=runs))[0], 1, when)
+
+    def test_a_rule_that_could_not_be_checked_is_not_evaluated(self):
+        body = self.clean()
+        plan = copy.deepcopy(body["awsBackup"]["plans"][0])
+        plan["rules"][0]["evaluated"] = False
+        plan["rules"][0]["reason"] = "schedule expression not understood"
+        body["awsBackup"]["plans"] = [plan]
+        self.assert_not_evaluated("missedscheduledbackups", body)
+
+    def test_no_aws_backup_section_is_not_evaluated(self):
+        body = self.clean()
+        del body["awsBackup"]
+        self.assert_not_evaluated("missedscheduledbackups", body)
+
+    def test_a_share_known_only_by_resource_is_counted(self):
+        res = [dict(r) for r in INVENTORY["resources"]]
+        for r in res:
+            r["publicShares"] = [{"resourceId": "vol-0a1b2c3d", "sharedWith": "all"}] if r["service"] == "ec2" else []
+        self.assertEqual(value("publicbackupsharecount", inventory(publicShares=[], resources=res))[0], 1)
+
+    def test_the_same_share_listed_twice_counts_once(self):
+        self.assertEqual(value("publicbackupsharecount", inventory())[0], 1)
+
+    def test_resources_with_no_restorable_point_are_named_in_the_pass_reason(self):
+        got, info = value("lastsuccessfulbackupage_inventory", inventory())
+        self.assertEqual(info["transformation"]["inputSummary"]["unmeasured"], 1)
+        self.assertIn("not measured", info["evaluation"]["passReasons"][0])
+
+
 class Wrapping(unittest.TestCase):
 
     def test_the_engine_wrapper_and_json_text_are_read(self):

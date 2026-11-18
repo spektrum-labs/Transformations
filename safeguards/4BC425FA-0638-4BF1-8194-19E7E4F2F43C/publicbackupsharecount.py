@@ -5,7 +5,9 @@ Category: Backups
 
 The number of backups anyone on AWS can restore: EBS snapshots and AMIs shared with "all", and RDS
 snapshots whose restore attribute includes "all". Each is a copy of the data outside the account's
-control. Compare with isEquals 0. Not evaluated (None) when the reads that find them were refused.
+control. Compare with isEquals 0. Not evaluated (None) when the reads that find them were refused,
+when the read was partial (an unreadable region, a truncated or timed-out list) or when the inventory has
+no public-share list: a public snapshot in an unread region would otherwise pass.
 """
 
 import json
@@ -101,6 +103,44 @@ def scope_warnings(inventory):
     return warnings
 
 
+def partial_read(inventory, any_missing=False):
+    """Why the inventory is not the whole account, or None.
+
+    A count or percentage taken from a partial read is not earned: a region nobody read, a list cut at a
+    bound or a read that ran out of time can hide exactly the item the check looks for. Regions that
+    are not opted in are not part of the account and do not count as a gap.
+    """
+    scope = inventory["scope"]
+    gaps = []
+    unreachable = scope.get("regionsUnreachable")
+    if not isinstance(unreachable, dict):
+        gaps.append("the inventory does not report unreadable regions")
+    else:
+        regions = []
+        for region in unreachable:
+            reason = str(unreachable.get(region)).replace("-", "").replace(" ", "").lower()
+            if "optin" not in reason:
+                regions.append(str(region))
+        if regions:
+            gaps.append("regions not readable: " + ", ".join(sorted(regions)))
+    for key, what in (("timedOut", "read(s) ran out of time"), ("truncated", "list(s) were cut at a bound")):
+        entries = scope.get(key)
+        if not isinstance(entries, list):
+            gaps.append("the inventory does not report " + key)
+        elif entries:
+            gaps.append("%d %s" % (len(entries), what))
+    if any_missing:
+        missing = scope.get("missingPermissions")
+        if not isinstance(missing, list):
+            gaps.append("the inventory does not report refused permissions")
+        elif missing:
+            gaps.append("%d read action(s) were refused: %s" % (len(missing), ", ".join(sorted(
+                str(m.get("action")) for m in missing if isinstance(m, dict)))[:400]))
+    if gaps:
+        return "; ".join(gaps)
+    return None
+
+
 def create_response(criteria_key, value, pass_reasons=None, fail_reasons=None, recommendations=None,
                     input_summary=None, errors=None, warnings=None, findings=None):
     measured = value is not None
@@ -144,17 +184,27 @@ def evaluate(inventory):
     refused = denied(inventory, REQUIRED)
     if refused:
         return not_evaluated(CRITERIA_KEY, "Public shares could not be checked: refused " + ", ".join(refused))
-    shares = [s for s in inventory.get("publicShares") or [] if isinstance(s, dict)]
+    gap = partial_read(inventory)
+    if gap:
+        return not_evaluated(CRITERIA_KEY, "Public shares could not be fully checked: " + gap)
+    listed = inventory.get("publicShares")
+    if not isinstance(listed, list):
+        return not_evaluated(CRITERIA_KEY, "The inventory does not list public shares")
+    shares = []
+    seen = []
+    candidates = [s for s in listed if isinstance(s, dict)]
     for res in inventory["resources"]:
         if isinstance(res, dict):
             for share in res.get("publicShares") or []:
-                if isinstance(share, dict) and share not in shares and share.get("snapshotId"):
-                    found = False
-                    for known in shares:
-                        if known.get("snapshotId") == share.get("snapshotId"):
-                            found = True
-                    if not found:
-                        shares.append(share)
+                if isinstance(share, dict):
+                    candidates.append(share)
+    for share in candidates:
+        key = share.get("snapshotId") or share.get("resourceId")
+        if key and key in seen:
+            continue
+        if key:
+            seen.append(key)
+        shares.append(share)
     fail_reasons = ["%s %s (from %s, %s) is restorable by anyone" % (
         s.get("resourceType") or "snapshot", s.get("snapshotId") or s.get("resourceId"), s.get("resourceId"),
         s.get("region")) for s in shares[:20]]
