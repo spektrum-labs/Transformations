@@ -7,15 +7,16 @@ Evaluates: the paid Duo edition the account reports, from GET /admin/v1/info/sum
 Duo documents the summary's "edition" field as "Current edition (including trials) of the
 account", for example "Duo Premier". Verdict:
   * a paid edition (Essentials, Advantage, Premier, or the legacy MFA, Access, Beyond and
-    Federal names, or the edition codes ENTERPRISE, PLATFORM, BEYOND) -> True;
+    Federal names, or the edition codes ENTERPRISE, PLATFORM, BEYOND) -> None, coded NOT-AVAILABLE:
+    the field includes trials, so it cannot confirm a purchase and the check needs an attestation;
   * Duo Free (code PERSONAL), or an edition named as a trial -> False: no purchased licence;
   * Duo's 403 / 40301 refusal -> None, the customer grants "Grant read information"
     (errorCode scope_not_granted with requiredScope); a 401 -> None, the customer reconnects;
   * a summary with no edition field -> None, coded NOT-AVAILABLE;
   * an edition this check does not know, an error body or unreadable input -> None.
 Known limit: Duo's Admin API is open only to paying and trial accounts and the edition field "includes
-trials", so a trial is told from a purchase only if Duo writes "trial" in the string (unverified: no real
-edition string was read). The True verdict means "paid or trial edition".
+trials", so only an edition that says "trial" (unverified: no real edition string was read) or Duo Free
+can fail. The check never returns True; the key passes only through an attestation.
 Every None carries dataCollection.status "error", so it is Not evaluated, never a fail.
 """
 import json
@@ -190,12 +191,13 @@ def transform(input):
                 recommendations=["Purchase a paid Duo edition (Essentials, Advantage or Premier)."],
                 input_summary=summary_out)
         if name in PAID_EDITIONS:
-            return create_response(
-                {KEY: True, "duoEdition": shown},
-                pass_reasons=["Duo reports the account edition as \"" + shown + "\", a paid or trial Duo edition "
-                              "(" + ENDPOINT + "). Duo does not distinguish a trial from a purchase in this field, "
-                              "so this is evidence of an active Duo edition, not proof of a paid contract."],
-                input_summary=summary_out)
+            # Duo's edition field "includes trials", so a bare paid name is not proof of a purchase.
+            return not_evaluated(
+                "NOT-AVAILABLE: Duo does not separate trial from purchase. The account edition is \"" + shown
+                + "\" (" + ENDPOINT + "), a paid or trial edition, so a purchased licence cannot be confirmed "
+                "from Duo.", "not_available",
+                "Show the Duo subscription (Admin Panel > Billing) as evidence, or attest the licence.",
+                {"duoEdition": shown})
         return not_evaluated(
             "Duo reported an edition this check does not recognise: \"" + shown + "\". Nothing was graded.",
             "not_measured",
