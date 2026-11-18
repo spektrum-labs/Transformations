@@ -131,7 +131,7 @@ def raw_refusal_of(value, depth=0):
     if not isinstance(value, dict) or depth > 4:
         return None
     code = value.get("code")
-    code = int(code) if isinstance(code, str) and code.strip().isdigit() else code
+    code = int(code) if isinstance(code, str) and code.strip().isascii() and code.strip().isdigit() else code
     if code in (40301, 40101) and not isinstance(code, bool) and str(value.get("stat", "")).upper() == "FAIL":
         return {"status": 403 if code == 40301 else 401, "body": value}
     for k in value:
@@ -170,10 +170,15 @@ def refused(marker):
 def transform(input):
     try:
         raw = decoded(input)
-        marker = refusal_of(raw) or raw_refusal_of(raw)
+        marker = refusal_of(raw)
         if marker is not None:
             return refused(marker)
         summary = summary_of(raw)
+        if summary is None or not isinstance(summary.get("edition"), str):
+            # Only when no edition is readable, so a nested FAIL dict never overrides a valid edition.
+            marker = raw_refusal_of(raw)
+            if marker is not None:
+                return refused(marker)
         if summary is None:
             return not_evaluated(
                 "Duo's account summary (" + ENDPOINT + ") was not read: the body was empty, unreadable or an "

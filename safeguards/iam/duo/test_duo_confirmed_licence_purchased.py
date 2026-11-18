@@ -93,6 +93,12 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
                 self.assertEqual(collection["requiredScope"], "Grant read information")
                 self.assertIn("Grant read information", collection["errors"][0])
 
+    def test_nested_fail_does_not_override_a_valid_edition(self):
+        raw = {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}
+        for body in [{"response": summary("Duo Premier"), "note": raw}, {"response": summary("Duo Premier"), "note": json.dumps(raw)}]:
+            for out in self.each(body):
+                self.assertIs(out["transformedResponse"][KEY], True)
+
     def test_unauthorized_is_a_reconnect_not_a_permission(self):
         body = {"vendorErrorAsResponse": {"status": 401, "body": {"stat": "FAIL", "code": 40101,
                                                                   "message": "Missing request credentials"}}}
