@@ -192,15 +192,22 @@ def transform(input):
         # Only a list that was actually read (an empty one included) is evidence. A missing or non-list
         # policies value proved nothing, so it is Not evaluated, never the stated-negative False.
         policies = data.get("policies") if isinstance(data, dict) else None
-        if isinstance(policies, dict):
+        if isinstance(policies, dict) and policies:
             policies = [policies]
         if not isinstance(policies, list):
+            # An error object from the collector (IS vendorStatus >= 400) is not evidence: say why, not just "missing".
+            status = data.get("vendorStatus") if isinstance(data, dict) else None
+            api_error, recommendation = "Could not read anti-phishing policies", "Re-evaluate this check once the Exchange Online read succeeds"
+            if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
+                # vendorStatus is the HTTP status of Spektrum's own Exchange collector, not Microsoft: never blame Microsoft.
+                recommendation = "Re-evaluate this check later; if it keeps failing, contact Spektrum support"
+                api_error = "Could not read Exchange Online data: the Spektrum Exchange collector " + ("is unavailable (HTTP 5xx)" if status >= 500 else "returned HTTP %d" % status)
             return create_response(
                 result={criteria_key: None},
                 validation=validation,
-                api_errors=["Could not read anti-phishing policies"],
+                api_errors=[api_error],
                 fail_reasons=["Anti-phishing policies were not returned, so this check could not be evaluated"],
-                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"],
+                recommendations=[recommendation],
             )
 
         if any(not isinstance(policy, dict) for policy in policies):

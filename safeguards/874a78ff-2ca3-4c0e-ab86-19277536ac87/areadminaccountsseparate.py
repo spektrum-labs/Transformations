@@ -198,6 +198,11 @@ MAILBOX_OR_PRODUCTIVITY_SKU_IDS = [
 ]
 
 
+def account_ref(pid):
+    """A partial object id for reasons: enough to find the account in Entra, no personal data (C4)."""
+    return "user " + str(pid)[:8] + "..."
+
+
 def short(value, limit=100):
     """Bound tenant-supplied names before they are echoed into evaluation reasons."""
     text = str(value)
@@ -544,7 +549,7 @@ def transform(input):
                 disabled_admins = disabled_admins + 1
                 continue
             reasons = has_mailbox_or_productivity_licence(user)
-            name = short(user.get("userPrincipalName") or user.get("displayName") or pid)
+            name = account_ref(pid)  # C4: no user principal name or display name in a reason
             if reasons:
                 if has_mail_address(user):
                     reasons = ["has a mail address"] + reasons

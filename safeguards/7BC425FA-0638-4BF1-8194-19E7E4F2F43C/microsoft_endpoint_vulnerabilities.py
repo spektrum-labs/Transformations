@@ -22,8 +22,10 @@ Numbers emitted (every key, so each check's evidence shows all of them):
 Fail closed: anything that is not a complete export read returns every count as None with dataCollection
 "error" (Unevaluated): no envelope, a vendor error body, no `value` list, an @odata.nextLink still present
 (IS stopped at maxPages or a page failed, so the merge is partial), a truncated marker, an empty export
-(Defender Vulnerability Management has assessed nothing, which is not a measured zero), or a record without
-a severity -- or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
+(Defender Vulnerability Management has assessed nothing, which is not a measured zero), or, for a Critical/High record, without deviceId, cveId or a readable firstSeenTimestamp.
+A record whose vulnerabilitySeverityLevel is not Critical/High/Medium/Low (missing, blank, "None", "null",
+unknown) is skipped and counted (recordsWithoutSeverity). When more than 5% are unrated the read is Unevaluated,
+because the unrated records may be Critical and a zero from the rest would not be a measured zero.
 An exception while reading the body is Unevaluated the same way: the except path passes api_errors so
 dataCollection is "error" and Token-Service records the None as not evaluated, never as Failed.
 """
@@ -141,16 +143,19 @@ def measure(data, now):
         return None, ("The vulnerability export is empty: Defender Vulnerability Management has assessed no devices, "
                       "which is not a measured zero.")
     instances = {}
+    no_severity = 0
     for rec in records:
         if not isinstance(rec, dict):
             return None, "A Defender vulnerability record is not an object."
         severity = rec.get("vulnerabilitySeverityLevel")
-        if not isinstance(severity, str) or not severity.strip():
-            return None, "A Defender vulnerability record has no vulnerabilitySeverityLevel."
+        # Token-Service stringifies values, so a JSON null arrives as "None"/"null": only a known level is rated.
+        sev = severity.strip().lower() if isinstance(severity, str) else ""
+        if sev not in ["critical", "high", "medium", "low"]:
+            no_severity = no_severity + 1
+            continue
         status = rec.get("status")
         if isinstance(status, str) and status.strip().lower() in CLOSED_STATUSES:
             continue
-        sev = severity.strip().lower()
         if sev not in ["critical", "high"]:
             continue
         device = rec.get("deviceId")
@@ -180,6 +185,11 @@ def measure(data, now):
                 overdue = overdue + 1
         devices[inst["device"]] = True
         cves[inst["cve"]] = True
+    # Unrated records can only hide more findings, so counts from a read with more than 5% unrated are lower
+    # bounds, and a lower bound would wrongly pass a threshold criterion such as lessThan 5.
+    if no_severity * 20 > len(records):
+        return None, (str(no_severity) + " of " + str(len(records)) + " Defender vulnerability records carry no "
+                      "recognised vulnerabilitySeverityLevel, too many to rate the export.")
     numbers = {
         KEY_CRITICAL: critical,
         KEY_HIGH: high,
@@ -187,6 +197,7 @@ def measure(data, now):
         "devicesWithOpenCriticalOrHigh": len(devices),
         "distinctOpenCriticalOrHighCves": len(cves),
         "vulnerabilityRecordsRead": len(records),
+        "recordsWithoutSeverity": no_severity,
     }
     return numbers, None
 
@@ -200,7 +211,9 @@ def transform(input):
         summary = ("Defender Vulnerability Management export, all pages (" + str(numbers["vulnerabilityRecordsRead"])
                    + " records; open Critical/High on " + str(numbers["devicesWithOpenCriticalOrHigh"]) + " devices): "
                    + str(numbers[KEY_CRITICAL]) + " critical, " + str(numbers[KEY_HIGH]) + " high, "
-                   + str(numbers[KEY_OVERDUE]) + " past the BOD 19-02 window (critical > 15 days, high > 30 days).")
+                   + str(numbers[KEY_OVERDUE]) + " past the BOD 19-02 window (critical > 15 days, high > 30 days)."
+                   + (" " + str(numbers["recordsWithoutSeverity"]) + " unrated record(s) not counted."
+                      if numbers["recordsWithoutSeverity"] else ""))
         passes = []
         fails = []
         recs = []

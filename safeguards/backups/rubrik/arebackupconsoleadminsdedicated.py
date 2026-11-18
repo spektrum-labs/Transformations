@@ -7,25 +7,39 @@ API Source: listConsoleAdmins (POST https://<account>.my.rubrik.com/api/graphql,
     query RscConsoleAdmins($first: Int, $after: String) {
       usersInCurrentAndDescendantOrganization(first: $first, after: $after) {
         count pageInfo { hasNextPage endCursor }
-        nodes { id username email domain status isAccountOwner roles { id name isOrgAdmin } } } }
+        nodes { id domain status isAccountOwner roles { id name isOrgAdmin } allOrgs { id } } }
+      groupsInCurrentAndDescendantOrganization(first: 200) {
+        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } allOrgs { id } } }
+      currentOrg { id } }
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
     (type User: domain UserDomainEnum! = LOCAL | SSO | LDAP | CLIENT | PAT | SUPPORT; status UserStatus! =
-    ACTIVE | DEACTIVATED | UNKNOWN; roles [Role!]! with isOrgAdmin).
-Rule: an administrator is an active user who is the account owner, holds a role with isOrgAdmin, or holds a
-role whose name names an admin role in whole words (Administrator, Backup Admins; not Non-Admin Viewer, No
-Admin Access or Admin Read Only). LOCAL users are console accounts (dedicated); CLIENT, PAT and SUPPORT users
-are non-person accounts (dedicated); SSO and LDAP users are dedicated only when the email or username is named
-as an admin account (adm-jsmith@, jsmith.admin@, a-jsmith@, adminjsmith@ ...).
-True: every administrator is dedicated.
-None (not evaluated): a directory or SSO identity whose name carries no admin marker; empty, error or partial
-input; a GraphQL error; or no administrator in the read.
-Rubrik never returns False, by design. The shared rule gives False only when an administrator holds the role
-through a general-purpose group, and the RSC user list carries users only, never groups. An SSO or LDAP
-administrator whose name carries no admin marker reads Not evaluated, not False: J.J.'s ruling of 6 Oct 2026
-(an everyday identity and a dedicated one with an unmarked name look the same here, so the read cannot prove
-a failure). So this transform answers True or None only.
-Limits: completeness needs pageInfo; when hasNextPage is true (Integration-Service merged the pages and
-nulled endCursor) the read is complete only with an integer count and at least that many nodes.
+    ACTIVE | DEACTIVATED | UNKNOWN; roles [Role!]! with isOrgAdmin. type Group: SSO or directory groups that
+    hold roles; the query leaves out groups with no role. Group members appear as users only after they sign
+    in, so an admin role held by a group reaches identities the user list does not show.)
+Rule (separate identity per person): an administrator is an active user who is the account owner, holds a role
+with isOrgAdmin, or holds a role whose name names an admin role in whole words (Administrator, Backup Admins;
+not Non-Admin Viewer, No Admin Access or Admin Read Only). Each person must administer the console through an
+identity that is separate from their everyday sign-in: a LOCAL user is a console-only account (separate by
+construction) and CLIENT, PAT and SUPPORT users are non-person accounts. An SSO or LDAP user signs in with a
+directory identity, and RSC does not show whether that identity is a separate admin account or the person's
+everyday one. Account names are not read: a naming convention cannot prove which it is.
+Roles are read in the context organization only (roles; allOrgs lists the organizations where the account has
+roles, currentOrg is the context organization). A non-admin user or group whose allOrgs holds any
+organization other than currentOrg holds roles in a sub-organization this read cannot see (possibly an
+administrator role), so the read is not evaluated. A non-admin account with no allOrgs list is not evaluated
+either.
+True: the user and group reads are complete, no group holds an administrator role, no account holds roles only
+in a sub-organization, and every administrator is a LOCAL console account or a non-person account.
+None (not evaluated): any administrator signs in with an SSO or LDAP identity, or with an unknown domain; a group
+holds an administrator role; a group or user holds roles only in a sub-organization; empty, error or partial input; a GraphQL error on either field; or no
+administrator in the read.
+Rubrik never returns False: nothing in the RSC read shows that a directory identity is a person's everyday
+account (J.J.'s ruling of 6 Oct 2026 still holds).
+Reasons and the input summary carry counts only, never account names or email addresses; the query does not
+ask RSC for them.
+Limits: completeness needs pageInfo; when hasNextPage is true on the user list (Integration-Service merged the
+pages and nulled endCursor) the read is complete only with an integer count and at least that many nodes. The
+group list is not paged by Integration-Service, so it must fit on one page.
 """
 import json
 import re
@@ -38,52 +52,21 @@ NONE_MEANS_NOT_EVALUATED = (KEY,)
 
 WRAPPERS = ("apiResponse", "api_response", "response", "result", "Output", "_response_data")
 
-#: Words that name an account as an administrative identity (adm-jsmith, jsmith.admin, t0-jsmith,
-#: BUILTIN\Administrators, Backup-Admins). Matched only as whole words of the account name (split on every
-#: character that is not a letter or digit), never as a prefix or suffix of a longer word, so badmin, padmin
-#: and administration are not markers. "pam" and "root" are not here: both are personal names (pam.smith@,
-#: joe.root@), so they count only as a joined affix (SHORT_AFFIXES).
-ADMIN_WORDS = ("adm", "admin", "admins", "administrator", "administrators", "priv", "privileged",
-               "breakglass", "emergency", "sysadmin", "sysadmins", "superuser", "superadmin",
-               "tier0", "tier1", "t0", "t1")
+METHOD = "listConsoleAdmins"
+VENDOR = "Rubrik"
+PRODUCT = "Rubrik Security Cloud"
+FIELD = "usersInCurrentAndDescendantOrganization"
+GROUPS_FIELD = "groupsInCurrentAndDescendantOrganization"
 
-#: Product- or function-prefixed admin words, listed one by one (VBR01\veeamadmin, rubrikadmin@). A word that
-#: only ends in "admin" is not a marker unless it is listed here.
-PREFIXED_ADMIN_WORDS = ("veeamadmin", "veeamadmins", "vbradmin", "vspcadmin", "vspcadmins", "rubrikadmin",
-                        "rubrikadmins", "rscadmin", "cohesityadmin", "cohesityadmins", "heliosadmin",
-                        "commvaultadmin", "commvaultadmins", "cvadmin", "cvadmins", "backupadmin", "backupadmins",
-                        "bkpadmin", "localadmin", "domainadmin", "domainadmins")
+#: How each RSC user domain signs in: a console-only account, a non-person account, or a directory identity.
+SEPARATE_DOMAINS = ("LOCAL",)
+NON_PERSON_DOMAINS = ("CLIENT", "PAT", "SUPPORT")
+DIRECTORY_DOMAINS = ("SSO", "LDAP")
 
-#: "admin" written straight onto a name (adminjsmith, admin01) is a common admin-account convention, and no
-#: common given name or surname starts with "admin". Such a word counts when any digits or at least three more
-#: characters follow "admin". The English words that start with "admin" (administer, administration,
-#: administrative, adminicle) all start with "administ" or "adminic", and those do not count.
-ADMIN_PREFIX = "admin"
-NOT_ADMIN_PREFIXED = ("administ", "adminic")
-
-#: Words that name a user as a non-person service or console account (svc-backup, veeam.service).
-#: Accepted for users only: a group named after the product ("Veeam Users") is not an admin group.
-SERVICE_WORDS = ("svc", "service", "services", "serviceaccount", "backup", "backups", "bkp",
-                 "veeam", "rubrik", "cohesity", "commvault", "helios", "vspc", "vbr", "rsc")
-
-#: Short or ambiguous tier prefixes or suffixes (a-jsmith, jsmith_a, pa-jsmith, pam-jsmith, root_backup). Only
-#: when joined to the rest of the account with a hyphen or an underscore, never a dot and never alone, so a
-#: surname plus initial (smith.a) and a person named Pam or Root (pam.smith@, pam@, joe.root@) are not read
-#: as admin accounts.
-SHORT_AFFIXES = ("a", "pa", "da", "ea", "sa", "x", "pam", "root")
-
-#: Whole words of a domain label that name an admin directory or tier (jsmith@admin.corp.example, ADM\jsmith,
-#: CORP-ADM\jsmith, jsmith@t0.corp.example). Matched only as whole words, never as a prefix or suffix, so
-#: PRIVATECO\, jdoe@cityadm.gov and jdoe@adminsoft.com are not markers.
-DOMAIN_ADMIN_WORDS = ("adm", "admin", "admins", "priv", "privileged", "t0", "tier0")
-
-#: Second-level labels under a two-letter country code (example.co.uk, example.com.au). The registrable domain
-#: is the organisation's own name and is never read as a marker: jdoe@admin.ch is an everyday address.
-SECOND_LEVEL_LABELS = ("co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "gub", "mil", "ltd",
-                       "plc", "gouv", "gv", "gc", "govt", "sch", "nhs", "res", "nic", "int", "gen", "firm", "biz",
-                       "info", "nom", "med", "police", "mod", "judiciary", "parliament", "lg", "ed")
-
-MAX_LISTED = 25
+RECOMMENDATION = ("Give each administrator a separate admin identity: a local RSC console account per person, or a "
+                  "service account for automation, and remove administrator roles from SSO and LDAP identities and "
+                  "groups. Where administrators must sign in through the identity provider, attest that each is a "
+                  "separate admin account there, not the person's everyday sign-in.")
 
 
 def to_obj(raw):
@@ -200,194 +183,9 @@ def not_measured(validation, reason, recommendation=None, summary=None):
     )
 
 
-def split_identity(name):
-    """(account, domain) from DOMAIN\\account, account@domain or a bare account name, lower-cased."""
-    text = str(name or "").strip().lower()
-    domain = ""
-    if "\\" in text:
-        parts = text.split("\\")
-        domain = parts[0]
-        text = parts[-1]
-    if "@" in text:
-        parts = text.split("@")
-        text = parts[0]
-        domain = parts[-1]
-    return text, domain
-
-
-def word_is_admin(word):
-    """True for a whole admin word, a listed product-prefixed admin word, or "admin" written onto a name."""
-    if word in ADMIN_WORDS or word in PREFIXED_ADMIN_WORDS:
-        return True
-    if not word.startswith(ADMIN_PREFIX):
-        return False
-    for p in NOT_ADMIN_PREFIXED:
-        if word.startswith(p):
-            return False
-    rest = word[len(ADMIN_PREFIX):]
-    return rest.isdigit() or len(rest) >= 3
-
-
-def domain_labels(domain):
-    """The domain labels that may name an admin directory: a NetBIOS name (CORP-ADM) as it is, or the
-    subdomain labels of a DNS name (admin in admin.corp.example). Never the registrable domain itself."""
-    labels = [x for x in domain.split(".") if x]
-    if len(labels) <= 1:
-        return labels
-    keep = 2
-    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in SECOND_LEVEL_LABELS:
-        keep = 3
-    return labels[:-keep]
-
-
-def has_admin_marker(name, allow_service):
-    """True when the name itself marks the account as an administrative (or, for users, service) identity."""
-    account, domain = split_identity(name)
-    if account == "":
-        return False
-    words = [w for w in re.split(r"[^a-z0-9]+", account) if w]
-    for w in words:
-        if word_is_admin(w):
-            return True
-        if allow_service and w in SERVICE_WORDS:
-            return True
-    for a in SHORT_AFFIXES:
-        if account.startswith(a + "-") or account.startswith(a + "_"):
-            return True
-        if account.endswith("-" + a) or account.endswith("_" + a):
-            return True
-    for label in domain_labels(domain):
-        for w in re.split(r"[^a-z0-9]+", label):
-            if w in DOMAIN_ADMIN_WORDS:
-                return True
-    return False
-
-
-def classify(names, principal, identity):
-    """How one console administrator is held.
-
-    principal: "user" or "group". identity: "local" (an account that exists only in the console),
-    "service" (a non-person API or service account), "directory" (a directory account such as
-    DOMAIN\\user), "sso" (an identity-provider identity) or "unknown" (the API does not say).
-    Returns one of: local, service, named (a directory or SSO identity named as an admin account),
-    group (a group named as an admin group), unmarked (a directory or SSO identity with no admin
-    marker: dedicated versus everyday cannot be told from the name), everyday-group, unclassified.
-    """
-    marked_admin = False
-    marked_service = False
-    for n in names:
-        if n and has_admin_marker(n, False):
-            marked_admin = True
-        if n and has_admin_marker(n, True):
-            marked_service = True
-    if principal == "group":
-        return "group" if marked_admin else "everyday-group"
-    if identity == "local":
-        return "local"
-    if identity == "service":
-        return "service"
-    if marked_service:
-        return "named"
-    if identity in ("directory", "sso"):
-        return "unmarked"
-    return "unclassified"
-
-
-def first_name(names):
-    for n in names:
-        if n:
-            return str(n)
-    return "(unnamed)"
-
-
-def verdict(validation, admins, role_label, summary_extra=None):
-    """The criterion from the console administrators found in a complete read.
-
-    admins: list of {"name", "class", "role"}. False when any administrator is an everyday group; None
-    when none was found, any directory or SSO identity carries no admin marker, or any could not be
-    classified; True only when every
-    administrator is a local console account, a service account, an admin-named identity or an
-    admin-named group.
-    """
-    counts = {}
-    for c in ("local", "service", "named", "group", "unmarked", "everyday-group", "unclassified"):
-        counts[c] = 0
-    for a in admins:
-        counts[a["class"]] = counts.get(a["class"], 0) + 1
-    everyday = [a["name"] for a in admins if a["class"] == "everyday-group"]
-    unmarked = [a["name"] for a in admins if a["class"] == "unmarked"]
-    unclassified = [a["name"] for a in admins if a["class"] == "unclassified"]
-    summary = {
-        "consoleAdministrators": len(admins),
-        "localConsoleAccounts": counts["local"],
-        "serviceAccounts": counts["service"],
-        "adminNamedIdentities": counts["named"],
-        "adminNamedGroups": counts["group"],
-        "unmarkedIdentities": counts["unmarked"],
-        "everydayGroups": counts["everyday-group"],
-        "unclassified": counts["unclassified"],
-        "everydayAdministrators": everyday[:MAX_LISTED],
-        "unmarkedAdministrators": unmarked[:MAX_LISTED],
-        "unclassifiedAdministrators": unclassified[:MAX_LISTED],
-    }
-    if summary_extra:
-        summary.update(summary_extra)
-    if len(admins) == 0:
-        return not_measured(validation,
-                            "The read listed no account or group holding " + role_label + ". Every console has at least "
-                            "one administrator, so the administrators were not in what was read; the control's state is unknown.",
-                            "Give the integration account read access to the console's users and roles.", summary)
-    if len(everyday) > 0:
-        return create_response(
-            result={KEY: False},
-            validation=validation,
-            fail_reasons=[str(len(everyday)) + " of " + str(len(admins)) + " console administrators hold " + role_label +
-                          " through a general-purpose group (a group not named as a dedicated admin group): " + ", ".join(everyday[:10]) + ("" if len(everyday) <= 10 else ", ...")],
-            recommendations=["Grant " + role_label + " only to dedicated admin accounts: a local console account, a "
-                             "service account, or a separate directory or SSO identity named as an admin account "
-                             "(for example adm-<name>), or a dedicated admin group. Remove it from everyday identities "
-                             "and general-purpose groups."],
-            input_summary=summary,
-        )
-    if len(unmarked) > 0:
-        return not_measured(validation,
-                            str(len(unmarked)) + " of " + str(len(admins)) + " console administrators are directory or "
-                            "SSO identities whose names carry no admin marker (" + ", ".join(unmarked[:10]) +
-                            "). A dedicated admin identity and an everyday one look the same here, so dedicated versus "
-                            "everyday cannot be shown.",
-                            "Name dedicated admin identities distinctly (for example adm-<name>), or provide the "
-                            "identity provider's record showing these are separate admin accounts.", summary)
-    if len(unclassified) > 0:
-        return not_measured(validation,
-                            str(len(unclassified)) + " of " + str(len(admins)) + " console administrators could not be "
-                            "classified: the API does not say whether they sign in with a console account or an SSO "
-                            "identity, and the name does not mark them as admin accounts (" +
-                            ", ".join(unclassified[:10]) + "). Dedicated versus everyday cannot be shown.",
-                            "Name dedicated admin accounts distinctly (for example adm-<name>), or provide the console's "
-                            "user list showing how each administrator signs in.", summary)
-    return create_response(
-        result={KEY: True},
-        validation=validation,
-        pass_reasons=["All " + str(len(admins)) + " holders of " + role_label + " are dedicated admin accounts: " +
-                      str(counts["local"]) + " local console account(s), " + str(counts["service"]) +
-                      " service account(s), " + str(counts["named"]) + " directory or SSO identity(ies) named as admin "
-                      "accounts and " + str(counts["group"]) + " admin-named group(s)."],
-        input_summary=summary,
-    )
-
-
-METHOD = "listConsoleAdmins"
-VENDOR = "Rubrik"
-PRODUCT = "Rubrik Security Cloud"
-FIELD = "usersInCurrentAndDescendantOrganization"
-ROLE_LABEL = "an RSC administrator role"
-
-ADMIN_IDENTITY = {"LOCAL": "local", "CLIENT": "service", "PAT": "service", "SUPPORT": "service",
-                  "SSO": "sso", "LDAP": "directory"}
-
 
 def graphql_errors(body):
-    """Messages of GraphQL errors on the users field or on the whole request."""
+    """Messages of GraphQL errors on the users or groups field or on the whole request."""
     out = []
     errs = body.get("errors") if isinstance(body, dict) else None
     if not isinstance(errs, list):
@@ -398,13 +196,13 @@ def graphql_errors(body):
             continue
         path = e.get("path")
         top = path[0] if isinstance(path, list) and len(path) > 0 else None
-        if top is None or top == FIELD:
+        if top is None or top in (FIELD, GROUPS_FIELD):
             out.append(str(e.get("message", ""))[:300])
     return out
 
 
-def users_connection(body):
-    """(nodes, None) for a complete read of the users connection, else (None, reason).
+def connection(body, field, label):
+    """(nodes, None) for a complete read of one GraphQL connection, else (None, reason).
 
     Integration-Service cursor pagination merges the pages into one nodes list, keeps page-1 pageInfo
     with endCursor nulled, and adds pageInfo.truncated when maxPages stopped it."""
@@ -412,33 +210,34 @@ def users_connection(body):
         return None, "the response is not a GraphQL object"
     root = body.get("data")
     if not isinstance(root, dict):
-        root = body if FIELD in body else None
+        root = body if field in body else None
     if root is None:
         return None, "no GraphQL data in the response"
-    conn = root.get(FIELD)
+    conn = root.get(field)
     if not isinstance(conn, dict) or not isinstance(conn.get("nodes"), list):
-        return None, "no " + FIELD + ".nodes list in the response"
+        return None, "no " + field + ".nodes list in the response"
     nodes = conn.get("nodes")
     info = conn.get("pageInfo")
     if not isinstance(info, dict):
-        return None, "no pageInfo, so a complete read cannot be shown"
+        return None, "no " + label + " pageInfo, so a complete read cannot be shown"
     if info.get("truncated") is True:
-        return None, "the user list was truncated at the page limit; the remaining pages were not read"
+        return None, "the " + label + " list was truncated at the page limit; the remaining pages were not read"
     if info.get("hasNextPage") is True and info.get("endCursor") is not None:
-        return None, "only the first page of users was read"
+        return None, "only the first page of " + label + "s was read"
     if info.get("hasNextPage") not in (True, False):
-        return None, "pageInfo.hasNextPage is missing, so a complete read cannot be shown"
+        return None, "pageInfo.hasNextPage is missing on the " + label + " list, so a complete read cannot be shown"
     count = conn.get("count")
     has_count = isinstance(count, int) and not isinstance(count, bool)
     if info.get("hasNextPage") is True and not has_count:
-        return None, ("pageInfo.hasNextPage is true and no count was returned, so the merged pages cannot be shown "
-                      "to be complete")
+        return None, ("pageInfo.hasNextPage is true on the " + label + " list and no count was returned, so the "
+                      "merged pages cannot be shown to be complete")
     if has_count and len(nodes) < count:
-        return None, "read " + str(len(nodes)) + " of " + str(count) + " users; the rest were not read"
+        return None, "read " + str(len(nodes)) + " of " + str(count) + " " + label + "s; the rest were not read"
     for n in nodes:
         if not isinstance(n, dict):
-            return None, "a user entry is not an object"
+            return None, "a " + label + " entry is not an object"
     return nodes, None
+
 
 
 #: Whole words of a role name that name an administrator role (Super Admin, COHESITY_ADMIN, Backup Admins).
@@ -498,6 +297,62 @@ def is_admin(node):
     return False
 
 
+
+def sub_org_roles(n, ctx):
+    """True / False, or None when allOrgs is missing: does a non-admin account hold roles in an organization
+    other than the context one (or, with no context id, in any organization)?"""
+    orgs = n.get("allOrgs")
+    if not isinstance(orgs, list):
+        return None
+    for o in orgs:
+        oid = o.get("id") if isinstance(o, dict) else o
+        if oid is None or oid != ctx:
+            return True
+    return False
+
+
+def verdict(validation, counts, summary):
+    """The criterion from complete user and group reads. counts: administrators by sign-in kind."""
+    admins = counts["separate"] + counts["nonPerson"] + counts["directory"] + counts["unknown"]
+    if counts["adminGroups"] > 0:
+        return not_measured(validation,
+                            str(counts["adminGroups"]) + " SSO or directory group(s) hold an RSC administrator role. "
+                            "Every member of such a group can administer the console with the identity it signs in "
+                            "with, and RSC does not list those members until they sign in, so a separate admin "
+                            "identity per person cannot be shown.", RECOMMENDATION, summary)
+    if counts["subOrgGroups"] > 0 or counts["subOrgUsers"] > 0:
+        return not_measured(validation,
+                            str(counts["subOrgGroups"]) + " group(s) and " + str(counts["subOrgUsers"]) + " user(s) "
+                            "hold roles only in sub-organizations, which this read cannot see, so who administers "
+                            "the console cannot be shown.", RECOMMENDATION, summary)
+    if admins == 0:
+        return not_measured(validation,
+                            "The read listed no account holding an RSC administrator role. Every console has at least "
+                            "one administrator, so the administrators were not in what was read; the control's state "
+                            "is unknown.", "Give the integration account read access to the console's users and roles.",
+                            summary)
+    if counts["directory"] > 0:
+        return not_measured(validation,
+                            str(counts["directory"]) + " of " + str(admins) + " console administrators sign in with an "
+                            "SSO or LDAP identity. RSC does not show whether that identity is a separate admin account "
+                            "or the person's everyday sign-in, so a separate admin identity per person cannot be "
+                            "shown.", RECOMMENDATION, summary)
+    if counts["unknown"] > 0:
+        return not_measured(validation,
+                            str(counts["unknown"]) + " of " + str(admins) + " console administrators have a user domain "
+                            "this check does not recognise, so how they sign in cannot be shown.", RECOMMENDATION,
+                            summary)
+    return create_response(
+        result={KEY: True},
+        validation=validation,
+        pass_reasons=["All " + str(admins) + " console administrators use an identity separate from any everyday "
+                      "sign-in: " + str(counts["separate"]) + " local RSC console account(s) and " +
+                      str(counts["nonPerson"]) + " non-person account(s); no SSO or directory group holds an "
+                      "administrator role."],
+        input_summary=summary,
+    )
+
+
 def transform(input):
     # Reading input.get("data") marks this transform as new-format for Token-Service, which then hands it the
     # undrilled response as {"data": <response>, "validation": ...}. Without it Token-Service drills through
@@ -518,12 +373,36 @@ def transform(input):
                                 "result, not a finding.", "Check the RSC URL and service account in the integration settings.")
         errs = graphql_errors(body)
         if errs:
-            return not_measured(validation, "Rubrik Security Cloud returned a GraphQL error for the user list: " +
-                                "; ".join(errs), "Grant the RSC service account read access to Users and Roles.")
-        nodes, why = users_connection(body)
+            return not_measured(validation, "Rubrik Security Cloud returned a GraphQL error for the user or group list: " +
+                                "; ".join(errs), "Grant the RSC service account read access to Users, "
+                                "Groups and Roles.")
+        nodes, why = connection(body, FIELD, "user")
         if why:
             return not_measured(validation, "Rubrik Security Cloud: " + why + ".")
-        admins = []
+        groups, why = connection(body, GROUPS_FIELD, "group")
+        if why:
+            return not_measured(validation, "Rubrik Security Cloud: " + why + ". Groups that hold an administrator "
+                                "role must be read to show who can administer the console.",
+                                "Grant the RSC service account read access to Groups and Roles.")
+        root = body.get("data") if isinstance(body.get("data"), dict) else body
+        cur = root.get("currentOrg")
+        ctx = cur.get("id") if isinstance(cur, dict) else None
+        counts = {"separate": 0, "nonPerson": 0, "directory": 0, "unknown": 0, "adminGroups": 0,
+                  "subOrgGroups": 0, "subOrgUsers": 0}
+        for g in groups:
+            admin = is_admin(g)
+            if admin is None:
+                return not_measured(validation, "A group entry carries no roles list, so whether it holds an "
+                                    "administrator role cannot be read.")
+            if admin:
+                counts["adminGroups"] = counts["adminGroups"] + 1
+            else:
+                sub = sub_org_roles(g, ctx)
+                if sub is None:
+                    return not_measured(validation, "A group entry carries no organization list, so roles held in "
+                                        "sub-organizations cannot be read.")
+                if sub:
+                    counts["subOrgGroups"] = counts["subOrgGroups"] + 1
         for n in nodes:
             if str(n.get("status") or "").upper() == "DEACTIVATED":
                 continue
@@ -532,11 +411,35 @@ def transform(input):
                 return not_measured(validation, "A user entry carries no roles list, so who administers the console "
                                     "cannot be read.")
             if not admin:
+                sub = sub_org_roles(n, ctx)
+                if sub is None:
+                    return not_measured(validation, "A user entry carries no organization list, so roles held in "
+                                        "sub-organizations cannot be read.")
+                if sub:
+                    counts["subOrgUsers"] = counts["subOrgUsers"] + 1
                 continue
             domain = str(n.get("domain") or "").upper()
-            identity = ADMIN_IDENTITY.get(domain, "unknown")
-            names = [n.get("email"), n.get("username")]
-            admins.append({"name": first_name(names), "class": classify(names, "user", identity)})
-        return verdict(validation, admins, ROLE_LABEL, {"usersRead": len(nodes)})
+            if domain in SEPARATE_DOMAINS:
+                kind = "separate"
+            elif domain in NON_PERSON_DOMAINS:
+                kind = "nonPerson"
+            elif domain in DIRECTORY_DOMAINS:
+                kind = "directory"
+            else:
+                kind = "unknown"
+            counts[kind] = counts[kind] + 1
+        summary = {
+            "usersRead": len(nodes),
+            "groupsRead": len(groups),
+            "consoleAdministrators": counts["separate"] + counts["nonPerson"] + counts["directory"] + counts["unknown"],
+            "localConsoleAccounts": counts["separate"],
+            "nonPersonAccounts": counts["nonPerson"],
+            "directoryIdentities": counts["directory"],
+            "unknownDomain": counts["unknown"],
+            "adminGroups": counts["adminGroups"],
+            "subOrgGroups": counts["subOrgGroups"],
+            "subOrgUsers": counts["subOrgUsers"],
+        }
+        return verdict(validation, counts, summary)
     except Exception as e:
         return not_measured(validation, "Transformation error: " + str(e)[:300])
