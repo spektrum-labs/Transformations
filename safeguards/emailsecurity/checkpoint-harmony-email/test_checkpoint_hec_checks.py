@@ -80,11 +80,10 @@ EVENT_CASES = [
     # (file, verdict on the real partial page, flip, flipped verdict on the partial page,
     #  flipped verdict once the page is complete)
     # A partial page cannot prove an absence: a flip that removes the match reads None there and
-    # False only on a complete page. messageMoveAuditTrailEnabled says "every move action is
-    # auditable", which a partial page cannot prove, but a move action seen without its audit
-    # fields is a negative the unread pages cannot undo.
+    # False only on a complete page. messageMoveAuditTrailEnabled is the same, and a move action
+    # seen without its audit fields is a negative the unread pages cannot undo.
     ("isemailsecurityloggingenabled", True, drop_actions, None, False),
-    ("messagemoveaudittrailenabled", None, strip_create_time, False, False),
+    ("messagemoveaudittrailenabled", True, strip_create_time, False, False),
     ("ispostdeliveryquarantineenabled", True, no_quarantine, None, False),
     ("isimposteremaildetectionenabled", True, ms_only, None, False),
 ]
