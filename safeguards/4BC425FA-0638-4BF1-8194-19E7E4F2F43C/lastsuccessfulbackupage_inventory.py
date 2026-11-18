@@ -8,8 +8,13 @@ the best. The getBackups version of this check returned the age of the newest ba
 resources, so one database with continuous backups held the value near 0 while other resources, or a
 plan's runs, went stale. Resources with no backup at all are counted by backupCoveragePercentage.
 
+Only resources with a restorable point are measured: one whose last backup aged out of retention drops
+out, so the value can go down when that happens. The pass reason says how many were not measured, and
+backupCoveragePercentage fails them.
+
 Compare with lessThan (inclusive) the hours you allow. Not evaluated (None) when no resource has a
-restorable point.
+restorable point, or when the read was partial (refused actions, unreadable regions, truncated or
+timed-out lists), because the stalest resource may be one nobody read.
 """
 
 import json
@@ -105,6 +110,44 @@ def scope_warnings(inventory):
     return warnings
 
 
+def partial_read(inventory, any_missing=False):
+    """Why the inventory is not the whole account, or None.
+
+    A count or percentage taken from a partial read is not earned: a region nobody read, a list cut at a
+    bound or a read that ran out of time can hide exactly the item the check looks for. Regions that
+    are not opted in are not part of the account and do not count as a gap.
+    """
+    scope = inventory["scope"]
+    gaps = []
+    unreachable = scope.get("regionsUnreachable")
+    if not isinstance(unreachable, dict):
+        gaps.append("the inventory does not report unreadable regions")
+    else:
+        regions = []
+        for region in unreachable:
+            reason = str(unreachable.get(region)).replace("-", "").replace(" ", "").lower()
+            if "optin" not in reason:
+                regions.append(str(region))
+        if regions:
+            gaps.append("regions not readable: " + ", ".join(sorted(regions)))
+    for key, what in (("timedOut", "read(s) ran out of time"), ("truncated", "list(s) were cut at a bound")):
+        entries = scope.get(key)
+        if not isinstance(entries, list):
+            gaps.append("the inventory does not report " + key)
+        elif entries:
+            gaps.append("%d %s" % (len(entries), what))
+    if any_missing:
+        missing = scope.get("missingPermissions")
+        if not isinstance(missing, list):
+            gaps.append("the inventory does not report refused permissions")
+        elif missing:
+            gaps.append("%d read action(s) were refused: %s" % (len(missing), ", ".join(sorted(
+                str(m.get("action")) for m in missing if isinstance(m, dict)))[:400]))
+    if gaps:
+        return "; ".join(gaps)
+    return None
+
+
 def create_response(criteria_key, value, pass_reasons=None, fail_reasons=None, recommendations=None,
                     input_summary=None, errors=None, warnings=None, findings=None):
     measured = value is not None
@@ -146,7 +189,11 @@ def evaluate(inventory):
     collected = parse_time(inventory.get("collectedAt"))
     if collected is None:
         return not_evaluated(CRITERIA_KEY, "The inventory has no collection time")
+    gap = partial_read(inventory, any_missing=True)
+    if gap:
+        return not_evaluated(CRITERIA_KEY, "The stalest resource cannot be known from a partial read: " + gap)
     ages = []
+    unmeasured = 0
     for res in inventory["resources"]:
         if not isinstance(res, dict) or res.get("backupCapable") is False:
             continue
@@ -154,6 +201,8 @@ def evaluate(inventory):
         if last is not None:
             hours = int(max(0, (collected - last).total_seconds()) // 3600)
             ages.append((hours, res))
+        else:
+            unmeasured = unmeasured + 1
     if not ages:
         return not_evaluated(CRITERIA_KEY, "No resource has a restorable point to measure")
     ages.sort(key=lambda pair: pair[0])
@@ -161,9 +210,12 @@ def evaluate(inventory):
     stale = [pair for pair in ages if pair[0] > 26]
     findings = ["Stale: %s, %d hours" % (label(res), hours) for hours, res in stale[-15:]]
     return create_response(CRITERIA_KEY, worst_hours,
-                           ["Stalest protected resource is %s, newest restorable point %d hours old"
-                            % (label(worst), worst_hours)], [], [],
-                           {"protectedResources": len(ages), "stalest": label(worst),
+                           ["Stalest protected resource is %s, newest restorable point %d hours old%s"
+                            % (label(worst), worst_hours,
+                               ("; %d backup-capable resource(s) have no restorable point and are not measured "
+                                "here (see backupCoveragePercentage)" % unmeasured) if unmeasured else "")],
+                           [], [],
+                           {"protectedResources": len(ages), "unmeasured": unmeasured, "stalest": label(worst),
                             "stalestLastGoodAt": worst.get("lastGoodAt"), "olderThan26h": len(stale)},
                            warnings=scope_warnings(inventory), findings=findings)
 

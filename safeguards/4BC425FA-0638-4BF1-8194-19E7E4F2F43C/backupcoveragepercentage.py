@@ -10,8 +10,9 @@ a resource with no backup at all counts against the share. Memcached clusters ho
 not counted.
 
 Compare with greaterThan (inclusive) the coverage you require, for example 100. Not evaluated (None)
-when the account has no backup-capable resource or the inventory could not be read. Refused list
-actions are named in the warnings; isBackupInventoryComplete fails on them.
+when the account has no backup-capable resource, the inventory could not be read, or the read was
+partial: a refused action, an unreadable region or a truncated or timed-out list shrinks the population
+and could read 100% while the unprotected resources go unlisted.
 """
 
 import json
@@ -107,6 +108,44 @@ def scope_warnings(inventory):
     return warnings
 
 
+def partial_read(inventory, any_missing=False):
+    """Why the inventory is not the whole account, or None.
+
+    A count or percentage taken from a partial read is not earned: a region nobody read, a list cut at a
+    bound or a read that ran out of time can hide exactly the item the check looks for. Regions that
+    are not opted in are not part of the account and do not count as a gap.
+    """
+    scope = inventory["scope"]
+    gaps = []
+    unreachable = scope.get("regionsUnreachable")
+    if not isinstance(unreachable, dict):
+        gaps.append("the inventory does not report unreadable regions")
+    else:
+        regions = []
+        for region in unreachable:
+            reason = str(unreachable.get(region)).replace("-", "").replace(" ", "").lower()
+            if "optin" not in reason:
+                regions.append(str(region))
+        if regions:
+            gaps.append("regions not readable: " + ", ".join(sorted(regions)))
+    for key, what in (("timedOut", "read(s) ran out of time"), ("truncated", "list(s) were cut at a bound")):
+        entries = scope.get(key)
+        if not isinstance(entries, list):
+            gaps.append("the inventory does not report " + key)
+        elif entries:
+            gaps.append("%d %s" % (len(entries), what))
+    if any_missing:
+        missing = scope.get("missingPermissions")
+        if not isinstance(missing, list):
+            gaps.append("the inventory does not report refused permissions")
+        elif missing:
+            gaps.append("%d read action(s) were refused: %s" % (len(missing), ", ".join(sorted(
+                str(m.get("action")) for m in missing if isinstance(m, dict)))[:400]))
+    if gaps:
+        return "; ".join(gaps)
+    return None
+
+
 def create_response(criteria_key, value, pass_reasons=None, fail_reasons=None, recommendations=None,
                     input_summary=None, errors=None, warnings=None, findings=None):
     measured = value is not None
@@ -149,6 +188,10 @@ def evaluate(inventory):
     collected = parse_time(inventory.get("collectedAt"))
     if collected is None:
         return not_evaluated(CRITERIA_KEY, "The inventory has no collection time")
+    gap = partial_read(inventory, any_missing=True)
+    if gap:
+        return not_evaluated(CRITERIA_KEY, "Coverage needs every resource in the account, and the read was "
+                             "partial: " + gap)
     oldest_ok = collected - timedelta(days=MAX_AGE_DAYS)
     capable = [r for r in inventory["resources"] if isinstance(r, dict) and r.get("backupCapable") is not False]
     if not capable:
