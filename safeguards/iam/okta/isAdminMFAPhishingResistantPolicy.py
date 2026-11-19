@@ -24,7 +24,7 @@ authenticator on every way in, as part of two factor types:
   AUTH_METHOD_CHAIN: every path proves two factor types and has a step whose every alternative is phishing
     resistant (phishingResistant REQUIRED, or a webauthn / smart_card_idp authenticator).
 False when a readable ALLOW rule lets an admin in without that. None (not evaluated) when the Admin Console app is not in
-the app list (errorCode not_available: Okta hides it from an OAuth service app, so the check routes to product; a list
+the app list (errorCode not_available: likely Okta hiding it from an OAuth service app, so the check routes to product; a list
 cut short at the 200-app limit is uncoded), its policy is not found, the policy's rule list has no system Catch-all Rule (cut
 short), no rule allows sign-in, or a rule's verification method cannot be read and no rule already fails.
 
@@ -189,11 +189,11 @@ def evaluate(data):
         if len(apps) >= APP_LIST_LIMIT:
             return unevaluated("The Okta app list was cut short at " + str(APP_LIST_LIMIT) + " apps and does not "
                                "include the Admin Console app, so the policy admins sign in under cannot be read.")
-        # Okta hides the Admin Console app from an OAuth service app, even by an exact name filter; the connection
-        # cannot read it, which is a vendor limit (routes to product), not a defect to engineer around.
+        # Most likely Okta hides the Admin Console app from an OAuth service app, even by an exact name filter; the
+        # connection cannot read it, a vendor limit (routes to product), not a defect to engineer around.
         return unevaluated("NOT-AVAILABLE: Okta does not expose the Admin Console app's sign-in policy to this "
-                           "connection (Okta hides the Admin Console app from an OAuth service app, the likely cause), so the policy "
-                           "admins sign in under cannot be read.", None, "not_available")
+                           "connection (Okta hides the Admin Console app from an OAuth service app, the likely "
+                           "cause), so the policy admins sign in under cannot be read.", None, "not_available")
     href = policy_text(policy_dict(policy_dict(console[0].get("_links")).get("accessPolicy")).get("href"))
     policy_id = href.split("?")[0].rstrip("/").split("/policies/")[1].split("/")[0] if "/policies/" in href else ""
     if not policy_id:
