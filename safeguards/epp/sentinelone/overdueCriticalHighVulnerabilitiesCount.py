@@ -1,9 +1,10 @@
 """Transformation: overdueCriticalHighVulnerabilitiesCount (SentinelOne Singularity Vulnerability Management, vendor counts).
 
 Vendor: SentinelOne  |  Category: Endpoint Security  |  Integration: SentinelOne (2bc425fa)
-Same keys and meaning as safeguards/epp/crowdstrike-falcon/*FromSpotlightCounts.py and
-safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_vulnerabilities.py, so bundles compare
-SentinelOne, Falcon and Defender tenants the same way.
+Same keys as safeguards/epp/crowdstrike-falcon/*FromSpotlightCounts.py and
+safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_vulnerabilities.py; the unit differs: one
+SentinelOne application risk row (CVE x endpoint x application), so a count can exceed the Falcon/Defender
+CVE-on-endpoint count for the same estate. It never undercounts it.
 
 WHY COUNTS AND NOT ROWS. The earlier version paged every row of GET /web/api/v2.1/application-management/risks
 (1000 per page, at most 50 pages). Large tenants hold several hundred thousand rows, so the read stopped at the page
@@ -59,16 +60,21 @@ def parse(value):
 
 def error_of(obj):
     """The error a wrapper or vendor body reports, or None."""
-    if obj.get("errors") or obj.get("error") is True:
-        return json.dumps(obj.get("errors") or obj.get("message") or obj.get("errorMessage") or "error")[:300]
+    error = obj.get("error")
+    if obj.get("errors") or error is True or obj.get("stepError") is True or (isinstance(error, str) and error.strip()):
+        return json.dumps(obj.get("errors") or obj.get("message") or obj.get("errorMessage") or error or "error")[:300]
     status = obj.get("statusCode") or obj.get("status_code")
-    if isinstance(status, int) and status >= 400:
+    if isinstance(status, str) and status.strip().isdigit():
+        status = int(status.strip())
+    if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
         return "HTTP " + str(status)
+    if str(obj.get("status") or "").strip().lower() in ("error", "failed"):
+        return "status " + str(obj.get("status"))
     return None
 
 
-def find_blocks(obj):
-    """(blocks, error): the dict holding the workflow's count blocks, whatever wrapper arrives."""
+def descend(obj, done):
+    """(dict, error): the first dict under the usual wrappers for which done(dict) holds; (None, None) if none."""
     cur = obj
     for depth in range(6):
         try:
@@ -80,7 +86,7 @@ def find_blocks(obj):
         error = error_of(cur)
         if error is not None:
             return None, error
-        if any(name in cur for name in BLOCKS):
+        if done(cur):
             return cur, None
         nxt = None
         for key in WRAPPERS:
@@ -91,6 +97,14 @@ def find_blocks(obj):
             return None, None
         cur = nxt
     return None, None
+
+
+def has_block(obj):
+    return any(name in obj for name in BLOCKS)
+
+
+def has_pagination(obj):
+    return "pagination" in obj
 
 
 def to_count(value):
@@ -105,27 +119,12 @@ def to_count(value):
 
 def block_total(name, block):
     """(total, None) for one vendor count, or (None, problem)."""
-    try:
-        block = parse(block)
-    except Exception:
-        block = None
-    for depth in range(3):
-        if not isinstance(block, dict) or "pagination" in block or error_of(block) is not None:
-            break
-        nxt = None
-        for key in ["apiResponse", "api_response", "response", "result"]:
-            if isinstance(block.get(key), dict):
-                nxt = block.get(key)
-                break
-        if nxt is None:
-            break
-        block = nxt
-    if not isinstance(block, dict):
-        return None, "The " + name + " risk count is missing; the workflow did not deliver every count."
-    error = error_of(block)
+    body, error = descend(block, has_pagination)
     if error is not None:
         return None, "SentinelOne returned an error for the " + name + " risk count: " + error
-    pagination = block.get("pagination")
+    if body is None:
+        return None, "The " + name + " risk count is missing; the workflow did not deliver every count."
+    pagination = body.get("pagination")
     total = to_count(pagination.get("totalItems")) if isinstance(pagination, dict) else None
     if total is None:
         return None, "The " + name + " risk count has no whole-number pagination.totalItems; nothing was measured."
@@ -134,15 +133,13 @@ def block_total(name, block):
 
 def measure(raw):
     """(totals, None) for five complete, consistent counts, or (None, problem)."""
-    blocks, error = find_blocks(raw)
+    blocks, error = descend(raw, has_block)
     if error is not None:
         return None, "SentinelOne returned an error instead of the application risk counts: " + error
     if blocks is None:
         return None, "No SentinelOne application risk counts in the response; nothing to evaluate."
     totals = {}
     for name in BLOCKS:
-        if name not in blocks:
-            return None, "The " + name + " risk count is missing; the workflow did not deliver every count."
         total, problem = block_total(name, blocks.get(name))
         if problem:
             return None, problem
@@ -197,15 +194,12 @@ def transform(input):
             return unevaluated(problem)
         counts = {KEY_CRITICAL: totals["critical"], KEY_HIGH: totals["high"],
                   KEY_OVERDUE: totals["overdueCritical"] + totals["overdueHigh"]}
-        result = {KEY: counts[KEY]}
-        for k in counts:
-            result[k] = counts[k]
         line = (str(counts[KEY_CRITICAL]) + " critical and " + str(counts[KEY_HIGH]) + " high application risks; "
                 + str(counts[KEY_OVERDUE]) + " past the window (" + str(totals["overdueCritical"])
                 + " critical > 15 days, " + str(totals["overdueHigh"]) + " high > 30 days), from SentinelOne's counts "
                 + "over " + str(totals["allRisks"]) + " risks in scope")
         if counts[KEY] == 0:
-            return respond(result, pass_reasons=[line], summary=totals)
-        return respond(result, fail_reasons=[line], summary=totals)
+            return respond(counts, pass_reasons=[line], summary=totals)
+        return respond(counts, fail_reasons=[line], summary=totals)
     except Exception as e:
         return unevaluated("Transformation error: " + str(e))

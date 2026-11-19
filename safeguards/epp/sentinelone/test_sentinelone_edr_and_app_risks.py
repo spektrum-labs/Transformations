@@ -157,7 +157,7 @@ def test_vuln_clean_tenant_reads_zero(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_vuln_overdue_only_fails_its_own_key(mode):
+def test_vuln_open_critical_does_not_fail_overdue(mode):
     body = counts(critical=3, high=0, overdue_critical=0, overdue_high=0)
     assert run("overdueCriticalHighVulnerabilitiesCount", "overdueCriticalHighVulnerabilitiesCount", ts(body), mode)[:2] == (0, "success")
     assert run("openCriticalVulnerabilitiesCount", "openCriticalVulnerabilitiesCount", ts(body), mode)[:2] == (3, "success")
@@ -176,6 +176,11 @@ BAD = [counts(all_risks=0, critical=0, high=0, overdue_critical=0, overdue_high=
        dict(counts(), critical={"errors": [{"code": 4000010, "title": "Validation Error"}]}),
        dict(counts(), critical={"error": True, "statusCode": 400, "message": "Bad Request"}),
        dict(counts(), high=None),
+       dict(counts(), critical={"stepError": True, "statusCode": 400, "pagination": {"totalItems": 0}}),
+       dict(counts(), critical={"error": "Bad Request", "pagination": {"totalItems": 0}}),
+       dict(counts(), critical={"statusCode": "400", "pagination": {"totalItems": 0}}),
+       dict(counts(), critical={"status": "failed", "pagination": {"totalItems": 0}}),
+       dict(counts(), critical={"apiResponse": '{"errors": [{"code": 400}]}'}),
        dict(counts(), high="not json"),
        {"data": [], "pagination": {"totalItems": 5}},                                # old row-shaped input
        agents_body([agent(1)])] + [without(counts(), n) for n in counts()] + NO_EVIDENCE
