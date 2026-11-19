@@ -146,6 +146,40 @@ def test_exclusions_beyond_break_glass_are_unknown(mode):
     assert pair(out) == (None, "error")
 
 
+LOCATION_A = "00000000-0000-4000-8000-0000000000b1"
+LOCATION_B = "00000000-0000-4000-8000-0000000000b2"
+
+
+def with_locations(exclude, include=("All",)):
+    p = policy()
+    p["conditions"]["locations"] = {"includeLocations": list(include), "excludeLocations": exclude}
+    return p
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("exclude, count", [([LOCATION_A], "1"), ([LOCATION_A, LOCATION_B], "2"),
+                                            (["AllTrusted"], "1"), (["alltrusted", LOCATION_A], "2"),
+                                            ("AllTrusted", "1")])
+def test_an_excluded_location_is_a_measured_fail_that_counts_locations(mode, exclude, count):
+    out = load(mode)(graph(with_locations(exclude)))
+    assert pair(out) == (False, "success")
+    evaluation = out["additionalInfo"]["evaluation"]
+    assert "exclude " + count + " location(s)" in " ".join(evaluation["failReasons"])
+    text = json.dumps(out)
+    assert LOCATION_A not in text and LOCATION_B not in text
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("exclude", [[], ["None"], ["none", ""]])
+def test_no_excluded_location_still_passes(mode, exclude):
+    assert pair(load(mode)(graph(with_locations(exclude)))) == (True, "success")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_an_unconditional_policy_beside_a_location_excluded_one_passes(mode):
+    assert pair(load(mode)(graph(with_locations([LOCATION_A]), policy()))) == (True, "success")
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_partial_page_without_coverage_is_unknown(mode):
     assert pair(load(mode)(graph(policy(roles=(SECURITY_ADMIN,)), next_link=True))) == (None, "error")
