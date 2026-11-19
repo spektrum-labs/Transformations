@@ -165,6 +165,17 @@ def transform(input):
                     recommendations=["Verify the Qualys API credentials and base URL are correct"]
                 )
 
+        if isinstance(data, dict) and "HOST_LIST_OUTPUT" in data and "HOST_LIST_VM_DETECTION_OUTPUT" not in data:
+            # The workflow feeds this key getHostList, whose reply has no detection list: reading it as one
+            # found no host and failed every estate. Nothing was measured, and the wiring is ours to fix.
+            reason = ("Spektrum's Qualys read does not yet include patched detections, so patch management "
+                      "could not be checked.")
+            response = create_response(
+                result={criteriaKey: None}, validation=validation, api_errors=[reason], fail_reasons=[reason],
+                recommendations=["Nothing is needed from you; this is on Spektrum's side."])
+            response["additionalInfo"]["dataCollection"]["errorCode"] = "not_measured"
+            return response
+
         pass_reasons = []
         fail_reasons = []
         recommendations = []

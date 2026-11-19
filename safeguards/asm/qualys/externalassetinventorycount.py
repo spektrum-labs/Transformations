@@ -25,7 +25,9 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-RECOMMENDATION = "Confirm the Qualys account can list hosts and that the host list request returned all of them."
+# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
+NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
+NOT_LISTED = "Confirm the hosts in scope are in your Qualys host list."
 
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
@@ -45,13 +47,15 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def not_measured(criteria_key, reason, validation=None, transformation_errors=None, findings=None):
-    """criteria_key None plus a dataCollection error, so the evaluator records Not evaluated."""
-    return create_response(
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None):
+    """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
+    response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
         additional_findings=findings,
-        recommendations=[RECOMMENDATION])
+        recommendations=[NOT_LISTED if error_code == "no_data" else NOT_OURS_TO_ASK])
+    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
 
 
 def evaluate(data):
@@ -60,7 +64,7 @@ def evaluate(data):
         output = data.get('HOST_LIST_OUTPUT') if isinstance(data, dict) else None
         response = output.get('RESPONSE') if isinstance(output, dict) else None
         if not isinstance(response, dict):
-            return {"externalAssetInventoryCount": None,
+            return {"externalAssetInventoryCount": None, "errorCode": "not_measured",
                     "notMeasured": "Qualys returned no host list, so the asset inventory could not be counted."}
         host_list = response.get('HOST_LIST')
         hosts = host_list.get('HOST', []) if isinstance(host_list, dict) else []
@@ -71,12 +75,12 @@ def evaluate(data):
         warnings = warning if isinstance(warning, list) else [warning]
         if any(isinstance(w, dict) and str(w.get('CODE', '')).strip() == '1980' for w in warnings):
             # A truncated read is a lower bound, and a transform is never told the bar it is graded against.
-            return {"externalAssetInventoryCount": None, "sampleCount": count,
-                    "notMeasured": "Qualys stopped the host list at " + str(count) + " records (warning 1980), "
-                                   "so the asset inventory count is a lower bound and is not graded."}
+            return {"externalAssetInventoryCount": None, "sampleCount": count, "errorCode": "partial_read",
+                    "notMeasured": "Spektrum's Qualys read stopped at " + str(count) + " hosts, so the asset "
+                                   "inventory count is a lower bound and is not graded."}
         if count == 0:
             # An empty host list is nothing assessed, not a measured zero (as ENG-1353 for its siblings).
-            return {"externalAssetInventoryCount": None,
+            return {"externalAssetInventoryCount": None, "errorCode": "no_data",
                     "notMeasured": "Qualys lists no hosts, so the asset inventory count could not be graded."}
         return {"externalAssetInventoryCount": count}
     except Exception:
@@ -93,14 +97,15 @@ def transform(input):
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
             return not_measured(criteriaKey, "The Qualys response failed validation, so the asset inventory count could not be measured.",
-                                validation=validation)
+                                "not_measured", validation=validation)
         eval_result = evaluate(data)
         if eval_result.get("notMeasured"):
-            return not_measured(criteriaKey, eval_result["notMeasured"], validation=validation,
-                                findings=[f"{k}: {v}" for k, v in eval_result.items() if k not in (criteriaKey, "notMeasured")])
+            return not_measured(criteriaKey, eval_result["notMeasured"], eval_result["errorCode"], validation=validation,
+                                findings=[f"{k}: {v}" for k, v in eval_result.items()
+                                          if k not in (criteriaKey, "notMeasured", "errorCode")])
         if "error" in eval_result or eval_result.get(criteriaKey) is None:
             return not_measured(criteriaKey, "The Qualys response could not be read, so the asset inventory count could not be measured.",
-                                validation=validation, transformation_errors=[eval_result.get("error", "no value")])
+                                "not_measured", validation=validation, transformation_errors=[eval_result.get("error", "no value")])
         result_value = eval_result[criteriaKey]
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey}
         summary = ["externalAssetInventoryCount: " + str(result_value)] + [f"{k}: {v}" for k, v in extra_fields.items()]
@@ -110,5 +115,5 @@ def transform(input):
             input_summary={criteriaKey: result_value, **extra_fields})
     except Exception:
         return not_measured(criteriaKey, "The Qualys response could not be read, so the asset inventory count could not be measured.",
-                            validation={"status": "error", "errors": [], "warnings": []},
+                            "not_measured", validation={"status": "error", "errors": [], "warnings": []},
                             transformation_errors=["unreadable value in the Qualys reply"])
