@@ -126,6 +126,11 @@ def test_move_audit_ignores_non_move_actions():
     assert verdict("messagemoveaudittrailenabled", events(headers_only)) is None
 
 
+def test_move_audit_metadata_names_the_move_method():
+    out = load("messagemoveaudittrailenabled").transform(events())
+    assert out["additionalInfo"]["metadata"]["method"] == "queryOffice365MoveEvents"
+
+
 def test_logging_needs_events_with_core_fields():
     def blank(r):
         r["eventCreated"] = "None"
