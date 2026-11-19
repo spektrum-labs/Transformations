@@ -74,6 +74,9 @@ class NothingScanned(unittest.TestCase):
                                   detection(5, "Fixed")])])
         self.assertEqual(self.run_case("criticalvulnerabilitycount", "criticalVulnerabilityCount", payload),
                          (2, "success"))
+        # A share of fixed detections is graded only when Qualys echoes a filter naming open and fixed.
+        payload["HOST_LIST_VM_DETECTION_OUTPUT"]["REQUEST"] = {"PARAM_LIST": {"PARAM": [
+            {"KEY": "status", "VALUE": "New,Active,Re-Opened,Fixed"}]}}
         self.assertEqual(self.run_case("patchcompliancepercentage", "patchCompliancePercentage", payload),
                          ("25", "success"))
 

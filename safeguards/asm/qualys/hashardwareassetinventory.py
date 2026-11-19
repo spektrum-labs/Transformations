@@ -46,12 +46,13 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
 
 
-def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None):
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None,
+                 recommendations=(NOT_OURS_TO_ASK,)):
     """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
     response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
-        recommendations=[NOT_OURS_TO_ASK])
+        additional_findings=findings, recommendations=list(recommendations))
     response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
 
@@ -77,7 +78,9 @@ def evaluate(data):
             hosts = [hosts]
         records = [h for h in hosts if isinstance(h, dict)]
         if not hosts:
-            # Qualys omits HOST_LIST when it inventories nothing: no host is a measured "no inventory".
+            # Qualys omits HOST_LIST when it inventories nothing: no host is a measured "no inventory". A False
+            # fails, so it cannot pass unearned; externalAssetInventoryCount leaves the same reply ungraded
+            # because its 0 would pass an inclusive "greaterThan 0".
             return {"hasHardwareAssetInventory": False, "hardwareAssetCount": 0}
         if not records:
             return {"hasHardwareAssetInventory": None, "errorCode": "not_measured",

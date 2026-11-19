@@ -46,13 +46,14 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
 
 
-def not_measured(criteria_key, reason, validation=None, transformation_errors=None):
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None,
+                 recommendations=(NOT_OURS_TO_ASK,)):
     """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
     response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
-        recommendations=[NOT_OURS_TO_ASK])
-    response["additionalInfo"]["dataCollection"]["errorCode"] = "not_measured"
+        additional_findings=findings, recommendations=list(recommendations))
+    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
 
 
@@ -71,12 +72,24 @@ def evaluate(data):
             return {"endOfLifeSoftwareDetected": None,
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
-        eol_found = any(
-            sw.get('lifecycle') == 'EOL'
-            for asset in assets
-            for sw in asset.get('softwareListData', {}).get('software', [])
-        )
-        return {"endOfLifeSoftwareDetected": eol_found, "assetsScanned": len(assets)}
+        stages = []
+        for asset in assets:
+            software_list = asset.get('softwareListData') if isinstance(asset, dict) else None
+            software = software_list.get('software') if isinstance(software_list, dict) else None
+            if isinstance(software, dict):
+                software = [software]
+            for sw in software if isinstance(software, list) else []:
+                lifecycle = sw.get('lifecycle') if isinstance(sw, dict) else None
+                stage = lifecycle.get('stage') if isinstance(lifecycle, dict) else lifecycle
+                if isinstance(stage, str) and stage.strip() and stage.strip().lower() != 'unknown':
+                    stages.append(stage.strip().lower())
+        if not stages:
+            # Assets with no readable software lifecycle prove nothing about end-of-life software.
+            return {"endOfLifeSoftwareDetected": None,
+                    "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
+                                   "end-of-life software could not be checked."}
+        eol_found = any('eol' in stage for stage in stages)
+        return {"endOfLifeSoftwareDetected": eol_found, "assetsScanned": len(assets), "softwareRead": len(stages)}
     except Exception:
         return {"endOfLifeSoftwareDetected": None, "error": "unreadable value in the Qualys reply"}
 
@@ -91,14 +104,14 @@ def transform(input):
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
             return not_measured(criteriaKey, "The Qualys response failed validation, so end-of-life software "
-                                "could not be checked.", validation=validation)
+                                "could not be checked.", "not_measured", validation=validation)
         eval_result = evaluate(data)
         if eval_result.get("notMeasured"):
-            return not_measured(criteriaKey, eval_result["notMeasured"], validation=validation)
+            return not_measured(criteriaKey, eval_result["notMeasured"], "not_measured", validation=validation)
         result_value = eval_result.get(criteriaKey)
         if not isinstance(result_value, bool):
             return not_measured(criteriaKey, "The Qualys response could not be read, so end-of-life software "
-                                "could not be checked.", validation=validation,
+                                "could not be checked.", "not_measured", validation=validation,
                                 transformation_errors=[eval_result.get("error", "no value")])
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey}
         reason = ("End-of-life software is installed on assets Qualys inventories." if result_value
@@ -109,6 +122,6 @@ def transform(input):
             input_summary={criteriaKey: result_value, **extra_fields})
     except Exception:
         return not_measured(criteriaKey, "The Qualys response could not be read, so end-of-life software "
-                            "could not be checked.",
+                            "could not be checked.", "not_measured",
                             validation={"status": "error", "errors": [], "warnings": []},
                             transformation_errors=["unreadable value in the Qualys reply"])

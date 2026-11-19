@@ -105,13 +105,48 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def extract_hosts(data):
-    """Extract HOST list from HOST_LIST_VM_DETECTION_OUTPUT response."""
-    response = {}
-    if isinstance(data, dict):
-        output = data.get("HOST_LIST_VM_DETECTION_OUTPUT", data)
-        response = output.get("RESPONSE", output)
+# Same reply helpers as safeguards/asm/qualys/patchcompliancepercentage.py; keep them in step.
+OPEN_STATUSES = {'new', 'active', 'reopened'}
 
+
+def detection_response(data):
+    """HOST_LIST_VM_DETECTION_OUTPUT.RESPONSE, or None when the body is not a detection reply."""
+    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT') if isinstance(data, dict) else None
+    response = output.get('RESPONSE') if isinstance(output, dict) else None
+    return response if isinstance(response, dict) else None
+
+
+def status_token(value):
+    """One status spelling: Qualys writes Re-Opened, REOPENED and Fixed, FIXED for the same state."""
+    return str(value).strip().lower().replace('-', '').replace('_', '').replace(' ', '')
+
+
+def echoed_statuses(data):
+    """The detection statuses Qualys says it applied, or None when the reply carries no request echo.
+
+    Qualys returns only New, Active and Re-Opened detections unless status= names others. With
+    echo_request=1 it repeats the parameters it applied under HOST_LIST_VM_DETECTION_OUTPUT.REQUEST.
+    That echo is the only proof of the filter: a definition can name Fixed and never send it
+    (inputParameters on a GET without parametersIn "query" travel as an ignored body). An echo with
+    no status parameter means Qualys applied its default.
+    """
+    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT') if isinstance(data, dict) else None
+    request = output.get('REQUEST') if isinstance(output, dict) else None
+    param_list = request.get('PARAM_LIST') if isinstance(request, dict) else None
+    params = param_list.get('PARAM') if isinstance(param_list, dict) else None
+    if isinstance(params, dict):
+        params = [params]
+    if not isinstance(params, list):
+        return None
+    for param in params:
+        if isinstance(param, dict) and str(param.get('KEY', '')).strip().lower() == 'status':
+            return {status_token(v) for v in str(param.get('VALUE', '')).split(',') if v.strip()}
+    return set(OPEN_STATUSES)
+
+
+
+def extract_hosts(response):
+    """HOST records from a detection RESPONSE; Qualys omits HOST_LIST when nothing matched."""
     host_list = response.get("HOST_LIST", None)
     if host_list is None:
         return [], response.get("DATETIME", "")
@@ -123,17 +158,38 @@ def extract_hosts(data):
     return hosts, response.get("DATETIME", "")
 
 
-def count_detections(hosts):
-    """Count total patchable detections across all hosts."""
+# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
+NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
+
+
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None,
+                 recommendations=(NOT_OURS_TO_ASK,)):
+    """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
+    response = create_response(
+        result={criteria_key: None}, validation=validation,
+        api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
+        additional_findings=findings, recommendations=list(recommendations))
+    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
+
+
+NOT_READ = ("Spektrum's Qualys read does not yet include patched detections, so patch management "
+            "could not be checked.")
+
+
+def count_fixed(hosts):
+    """Fixed detections across all hosts: a host listed with only open rows proves no patching."""
     total = 0
     for host in hosts:
-        detection_list = host.get("DETECTION_LIST", {})
-        if not detection_list:
+        detection_list = host.get("DETECTION_LIST", {}) if isinstance(host, dict) else {}
+        if not isinstance(detection_list, dict):
             continue
         detections = detection_list.get("DETECTION", [])
         if isinstance(detections, dict):
             detections = [detections]
-        total = total + len(detections)
+        if not isinstance(detections, list):
+            continue
+        total = total + len([d for d in detections if isinstance(d, dict) and status_token(d.get("STATUS", "")) == "fixed"])
     return total
 
 
@@ -165,26 +221,25 @@ def transform(input):
                     recommendations=["Verify the Qualys API credentials and base URL are correct"]
                 )
 
-        if isinstance(data, dict) and "HOST_LIST_OUTPUT" in data and "HOST_LIST_VM_DETECTION_OUTPUT" not in data:
-            # The workflow feeds this key getHostList, whose reply has no detection list: reading it as one
-            # found no host and failed every estate. Nothing was measured, and the wiring is ours to fix.
-            reason = ("Spektrum's Qualys read does not yet include patched detections, so patch management "
-                      "could not be checked.")
-            response = create_response(
-                result={criteriaKey: None}, validation=validation, api_errors=[reason], fail_reasons=[reason],
-                recommendations=["Nothing is needed from you; this is on Spektrum's side."])
-            response["additionalInfo"]["dataCollection"]["errorCode"] = "not_measured"
-            return response
+        response = detection_response(data)
+        if response is None:
+            # The workflow feeds this key getHostList, whose reply has no detection list, and an error body has
+            # none either: nothing was measured, and the read is ours to fix.
+            return not_measured(criteriaKey, NOT_READ, "not_measured", validation=validation)
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        hosts, response_datetime = extract_hosts(data)
+        hosts, response_datetime = extract_hosts(response)
         host_count = len(hosts)
-        detection_count = count_detections(hosts)
+        detection_count = count_fixed(hosts)
 
-        is_enabled = host_count > 0
+        if detection_count == 0 and 'fixed' not in (echoed_statuses(data) or set()):
+            # No Fixed row is "nothing patched" only when the echo proves Fixed was asked for.
+            return not_measured(criteriaKey, NOT_READ, "not_measured", validation=validation)
+
+        is_enabled = detection_count > 0
 
         if is_enabled:
             pass_reasons.append(

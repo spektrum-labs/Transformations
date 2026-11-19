@@ -25,10 +25,6 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
-NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
-
-
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
@@ -46,26 +42,8 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def fixed_requested(data):
-    """True when Qualys echoes a status filter that includes Fixed.
-
-    Qualys returns only New, Active and Re-Opened detections unless the request names Fixed. With
-    echo_request=1 it repeats the parameters it applied in HOST_LIST_VM_DETECTION_OUTPUT.REQUEST.
-    That echo is the only proof Fixed was asked for: a definition can name Fixed and still never
-    send it (inputParameters on a GET without parametersIn "query" travel as an ignored body).
-    """
-    try:
-        params = data['HOST_LIST_VM_DETECTION_OUTPUT']['REQUEST']['PARAM_LIST']['PARAM']
-    except Exception:
-        return False
-    if isinstance(params, dict):
-        params = [params]
-    if not isinstance(params, list):
-        return False
-    for param in params:
-        if isinstance(param, dict) and str(param.get('KEY', '')).strip().lower() == 'status':
-            return any(v.strip().lower() == 'fixed' for v in str(param.get('VALUE', '')).split(','))
-    return False
+# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
+NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
 
 
 def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None,
@@ -74,16 +52,69 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
     response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
-        additional_findings=findings,
-        recommendations=list(recommendations))
+        additional_findings=findings, recommendations=list(recommendations))
     response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
+
+
+# --- Qualys detection reply: byte-identical in patchcompliancepercentage.py and meantimetoremediatecritical.py
+OPEN_STATUSES = {'new', 'active', 'reopened'}
+
+
+def detection_response(data):
+    """HOST_LIST_VM_DETECTION_OUTPUT.RESPONSE, or None when the body is not a detection reply."""
+    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT') if isinstance(data, dict) else None
+    response = output.get('RESPONSE') if isinstance(output, dict) else None
+    return response if isinstance(response, dict) else None
+
+
+def status_token(value):
+    """One status spelling: Qualys writes Re-Opened, REOPENED and Fixed, FIXED for the same state."""
+    return str(value).strip().lower().replace('-', '').replace('_', '').replace(' ', '')
+
+
+def echoed_statuses(data):
+    """The detection statuses Qualys says it applied, or None when the reply carries no request echo.
+
+    Qualys returns only New, Active and Re-Opened detections unless status= names others. With
+    echo_request=1 it repeats the parameters it applied under HOST_LIST_VM_DETECTION_OUTPUT.REQUEST.
+    That echo is the only proof of the filter: a definition can name Fixed and never send it
+    (inputParameters on a GET without parametersIn "query" travel as an ignored body). An echo with
+    no status parameter means Qualys applied its default.
+    """
+    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT') if isinstance(data, dict) else None
+    request = output.get('REQUEST') if isinstance(output, dict) else None
+    param_list = request.get('PARAM_LIST') if isinstance(request, dict) else None
+    params = param_list.get('PARAM') if isinstance(param_list, dict) else None
+    if isinstance(params, dict):
+        params = [params]
+    if not isinstance(params, list):
+        return None
+    for param in params:
+        if isinstance(param, dict) and str(param.get('KEY', '')).strip().lower() == 'status':
+            return {status_token(v) for v in str(param.get('VALUE', '')).split(',') if v.strip()}
+    return set(OPEN_STATUSES)
+
+
+def truncated(response):
+    """True when Qualys stopped the host list at its record limit (WARNING code 1980)."""
+    warning = response.get('WARNING')
+    warnings = warning if isinstance(warning, list) else [warning]
+    return any(isinstance(w, dict) and str(w.get('CODE', '')).strip() == '1980' for w in warnings)
+# --- end Qualys detection reply ----------------------------------------------------------------------------
 
 
 def evaluate(data):
     """Core evaluation logic."""
     try:
-        hosts = data.get('HOST_LIST_VM_DETECTION_OUTPUT', {}).get('RESPONSE', {}).get('HOST_LIST', {}).get('HOST', [])
+        response = detection_response(data)
+        if response is None:
+            return {"meanTimeToRemediateCritical": None, "error": "no detection reply"}
+        if truncated(response):
+            return {"meanTimeToRemediateCritical": None, "errorCode": "partial_read",
+                    "notMeasured": "Spektrum's Qualys read stopped at a page limit, so mean time to remediate is not graded."}
+        host_list = response.get('HOST_LIST')
+        hosts = host_list.get('HOST', []) if isinstance(host_list, dict) else []
         if isinstance(hosts, dict):
             hosts = [hosts]
         deltas = []
@@ -93,7 +124,7 @@ def evaluate(data):
             if isinstance(detections, dict):
                 detections = [detections]
             for d in detections:
-                is_fixed = isinstance(d, dict) and str(d.get('STATUS', '')).lower() == 'fixed'
+                is_fixed = isinstance(d, dict) and status_token(d.get('STATUS', '')) == 'fixed'
                 any_fixed = any_fixed or is_fixed
                 if is_fixed and int(d.get('SEVERITY', 0)) >= 4:
                     found = d.get('FIRST_FOUND_DATETIME', '')
@@ -105,7 +136,8 @@ def evaluate(data):
                             deltas.append((t_fixed - t_found).days)
         if not deltas:
             # No remediated critical detection to average is not a 0-day remediation time.
-            if not any_fixed and not fixed_requested(data):  # a Fixed row of any severity proves Fixed was asked for
+            # A Fixed row of any severity, or the echoed filter, proves Fixed was asked for.
+            if not any_fixed and 'fixed' not in (echoed_statuses(data) or set()):
                 return {"meanTimeToRemediateCritical": None, "sampleSize": 0, "errorCode": "not_measured",
                         "notMeasured": "Spektrum's Qualys read does not yet include fixed detections, so mean "
                                        "time to remediate could not be measured."}

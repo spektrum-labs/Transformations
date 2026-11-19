@@ -90,7 +90,10 @@ def test_open_detections_only_is_not_a_patch_compliance_of_zero():
 
 
 def test_patch_compliance_is_computed_when_fixed_detections_are_present():
-    value, collection = answer("patchcompliancepercentage", detections(OPEN_CRITICAL, FIXED_CRITICAL))
+    payload = detections(OPEN_CRITICAL, FIXED_CRITICAL)
+    payload["HOST_LIST_VM_DETECTION_OUTPUT"]["REQUEST"] = {"PARAM_LIST": {"PARAM": [
+        {"KEY": "status", "VALUE": "New,Active,Re-Opened,Fixed"}]}}  # graded only when Qualys echoes the full filter
+    value, collection = answer("patchcompliancepercentage", payload)
     assert value == "50" and collection["status"] == "success"
 
 
