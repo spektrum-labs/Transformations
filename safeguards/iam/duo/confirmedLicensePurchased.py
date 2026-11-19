@@ -18,7 +18,7 @@ Known limit: a trial that Duo reports under a bare paid name (no "trial" in the 
 Every None carries dataCollection.status "error", so it is Not evaluated, never a fail.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "confirmedLicensePurchased"
 ENDPOINT = "GET /admin/v1/info/summary"
@@ -47,7 +47,7 @@ def create_response(result, api_errors=None, pass_reasons=None, fail_reasons=Non
                 "recommendations": recommendations or [],
                 "additionalFindings": [],
             },
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0",
                          "transformationId": META["transformationId"], "vendor": META["vendor"],
                          "category": META["category"]},
         },
@@ -80,17 +80,17 @@ def decoded(value):
     return value
 
 
-def refusal_of(value, depth=0):
-    """Integration-Service's vendorErrorAsResponse marker at any nesting (capped at 4 levels), else None."""
-    if not isinstance(value, dict) or depth > 4:
+def refusal_of(value):
+    """Integration-Service's vendorErrorAsResponse marker, at the top level or one level down, else None."""
+    if not isinstance(value, dict):
         return None
     marker = value.get("vendorErrorAsResponse")
     if isinstance(marker, dict):
         return marker
     for k in value:
-        found = refusal_of(value[k], depth + 1)
-        if found:
-            return found
+        inner = value[k]
+        if isinstance(inner, dict) and isinstance(inner.get("vendorErrorAsResponse"), dict):
+            return inner["vendorErrorAsResponse"]
     return None
 
 
@@ -123,6 +123,22 @@ def summary_of(value):
     if not isinstance(data, dict) or is_error_body(data) or len(data) == 0:
         return None
     return data
+
+
+def raw_refusal_of(value, depth=0):
+    """A plain Duo FAIL body (code 40301 / 40101, int or string), up to 4 wrapper levels down, as a refusal marker, else None."""
+    value = decoded(value)
+    if not isinstance(value, dict) or depth > 4:
+        return None
+    code = value.get("code")
+    code = int(code) if isinstance(code, str) and code.strip().isascii() and code.strip().isdigit() else code
+    if code in (40301, 40101) and not isinstance(code, bool) and str(value.get("stat", "")).upper() == "FAIL":
+        return {"status": 403 if code == 40301 else 401, "body": value}
+    for k in value:
+        found = raw_refusal_of(value[k], depth + 1)
+        if found:
+            return found
+    return None
 
 
 def refused(marker):
@@ -158,6 +174,11 @@ def transform(input):
         if marker is not None:
             return refused(marker)
         summary = summary_of(raw)
+        if summary is None or not isinstance(summary.get("edition"), str):
+            # Only when no edition is readable, so a nested FAIL dict never overrides a valid edition.
+            marker = raw_refusal_of(raw)
+            if marker is not None:
+                return refused(marker)
         if summary is None:
             return not_evaluated(
                 "Duo's account summary (" + ENDPOINT + ") was not read: the body was empty, unreadable or an "
