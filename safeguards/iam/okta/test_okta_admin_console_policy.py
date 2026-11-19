@@ -170,7 +170,7 @@ class AdminConsolePolicyTests(unittest.TestCase):
                 self.assertEqual(collection["status"], "error")
                 self.assertEqual(collection["errorCode"], "not_available")
                 self.assertTrue(collection["errors"][0].startswith("NOT-AVAILABLE:"))
-                self.assertIn("OAuth service app cannot see the Admin Console app", collection["errors"][0])
+                self.assertIn("Okta hides the Admin Console app from an OAuth service app", collection["errors"][0])
                 self.assertNotIn("Classic Engine", collection["errors"][0])
 
     def test_app_list_cut_short_is_not_available_free(self):
