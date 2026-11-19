@@ -68,7 +68,8 @@ def evaluate(data):
             hosts = [hosts]
         count = len([h for h in hosts if isinstance(h, dict)]) if isinstance(hosts, list) else 0
         warning = response.get('WARNING')
-        if isinstance(warning, dict) and str(warning.get('CODE', '')).strip() == '1980':
+        warnings = warning if isinstance(warning, list) else [warning]
+        if any(isinstance(w, dict) and str(w.get('CODE', '')).strip() == '1980' for w in warnings):
             # A truncated read is a lower bound, and a transform is never told the bar it is graded against.
             return {"externalAssetInventoryCount": None, "sampleCount": count,
                     "notMeasured": "Qualys stopped the host list at " + str(count) + " records (warning 1980), "

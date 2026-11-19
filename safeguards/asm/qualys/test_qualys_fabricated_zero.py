@@ -75,6 +75,11 @@ def test_a_truncated_host_list_is_not_measured():
     assert_not_measured(value, collection)
 
 
+def test_a_truncation_warning_in_list_form_is_still_seen():
+    warning = [{"CODE": "1980", "TEXT": "1000 record limit exceeded."}]
+    assert_not_measured(*answer("externalassetinventorycount", host_list(1000, warning)))
+
+
 @pytest.mark.parametrize("payload", [{}, {"count": 5}, {"HOST_LIST_OUTPUT": None}, None, "not json"])
 def test_no_host_list_reply_is_not_measured(payload):
     assert_not_measured(*answer("externalassetinventorycount", payload))
