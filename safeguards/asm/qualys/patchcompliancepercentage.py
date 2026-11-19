@@ -91,8 +91,8 @@ def evaluate(data):
                                    "compare against, so patch compliance could not be measured."}
         compliance = int((fixed / total) * 100) if total > 0 else 100
         return {"patchCompliancePercentage": str(compliance), "totalDetections": total, "fixedDetections": fixed}
-    except Exception as e:
-        return {"patchCompliancePercentage": None, "error": str(e)}
+    except Exception:
+        return {"patchCompliancePercentage": None, "error": "unreadable value in the Qualys reply"}
 
 
 def transform(input):
@@ -122,7 +122,7 @@ def transform(input):
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
             additional_findings=summary,
             input_summary={criteriaKey: result_value, **extra_fields})
-    except Exception as e:
+    except Exception:
         return not_measured(criteriaKey, "The Qualys response could not be read, so patch compliance could not be measured.",
                             validation={"status": "error", "errors": [], "warnings": []},
-                            transformation_errors=[str(e)])
+                            transformation_errors=["unreadable value in the Qualys reply"])

@@ -66,13 +66,14 @@ def evaluate(data):
             if isinstance(detections, dict):
                 detections = [detections]
             for d in detections:
-                if int(d.get('SEVERITY', 0)) >= 4 and d.get('STATUS') == 'Fixed':
+                if int(d.get('SEVERITY', 0)) >= 4 and str(d.get('STATUS', '')).lower() == 'fixed':
                     found = d.get('FIRST_FOUND_DATETIME', '')
                     fixed_dt = d.get('LAST_FIXED_DATETIME', '')
                     if found and fixed_dt:
                         t_found = datetime.fromisoformat(found.replace('Z', '+00:00'))
                         t_fixed = datetime.fromisoformat(fixed_dt.replace('Z', '+00:00'))
-                        deltas.append((t_fixed - t_found).days)
+                        if t_fixed >= t_found:  # a fix dated before the finding is not a remediation time
+                            deltas.append((t_fixed - t_found).days)
         if not deltas:
             # No remediated critical detection to average is not a 0-day remediation time.
             return {"meanTimeToRemediateCritical": None, "sampleSize": 0,
@@ -80,8 +81,8 @@ def evaluate(data):
                                    "so mean time to remediate could not be measured."}
         mttr = int(sum(deltas) / len(deltas))
         return {"meanTimeToRemediateCritical": str(mttr), "averageDays": mttr, "sampleSize": len(deltas)}
-    except Exception as e:
-        return {"meanTimeToRemediateCritical": None, "error": str(e)}
+    except Exception:
+        return {"meanTimeToRemediateCritical": None, "error": "unreadable value in the Qualys reply"}
 
 
 def transform(input):
@@ -109,7 +110,7 @@ def transform(input):
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
             additional_findings=summary,
             input_summary={criteriaKey: result_value, **extra_fields})
-    except Exception as e:
+    except Exception:
         return not_measured(criteriaKey, "The Qualys response could not be read, so mean time to remediate could not be measured.",
                             validation={"status": "error", "errors": [], "warnings": []},
-                            transformation_errors=[str(e)])
+                            transformation_errors=["unreadable value in the Qualys reply"])
