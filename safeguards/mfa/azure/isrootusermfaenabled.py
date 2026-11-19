@@ -7,7 +7,8 @@ Conditional Access, with at most break-glass accounts excluded.
 "Root user" is an AWS term. Microsoft has no root user; its equivalent is the Global Administrator role
 (product decision, 2026-11-16: map isRootUserMFAEnabled to Global Administrator / break-glass MFA). This is
 Azure AD's isMFAConfiguredForSecurityAdmins (safeguards/mfa/azure/ismfaconfiguredforsecurityadmins.py)
-narrowed to that one role: same policy rules, same break-glass limits, same None cases. Keep the two in step.
+narrowed to that one role: same policy rules, same break-glass limits, same None cases, except that here any
+excluded location disqualifies a policy (the other file only notes it). Keep the two in step.
 The per-account naming that file can add is left out: it would put user names in the reason.
 
 A role is covered by a policy that is enabled, requires MFA (via builtInControls
