@@ -85,8 +85,10 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
         raw = {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}
         strcode = dict(raw, code="40301")
         deep = {"data": {"response": {"result": raw}}}
+        html = {"vendorErrorAsResponse": {"status": 403, "body": "<html>Forbidden</html>"}}
         for body in [FORBIDDEN, {"response": FORBIDDEN}, json.dumps(FORBIDDEN), raw, {"response": raw}, json.dumps(raw),
-                     strcode, {"response": strcode}, deep, json.dumps(deep)]:
+                     strcode, {"response": strcode}, deep, json.dumps(deep),
+                     {"response": {"result": FORBIDDEN}}, {"response": {"result": html}}]:
             for out in self.each(body):
                 self.assert_not_evaluated(out, "scope_not_granted")
                 collection = out["additionalInfo"]["dataCollection"]
@@ -96,6 +98,11 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
     def test_nested_fail_does_not_override_a_valid_edition(self):
         raw = {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}
         for body in [{"response": summary("Duo Premier"), "note": raw}, {"response": summary("Duo Premier"), "note": json.dumps(raw)}]:
+            for out in self.each(body):
+                self.assertIs(out["transformedResponse"][KEY], True)
+
+    def test_nested_marker_does_not_override_a_valid_edition(self):
+        for body in [{"response": summary("Duo Premier"), "note": {"result": FORBIDDEN}}]:
             for out in self.each(body):
                 self.assertIs(out["transformedResponse"][KEY], True)
 
