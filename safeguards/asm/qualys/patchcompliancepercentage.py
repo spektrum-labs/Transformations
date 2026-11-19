@@ -62,13 +62,42 @@ def host_list(data):
     return hosts or None
 
 
-def not_measured(criteria_key, reason, validation=None, transformation_errors=None):
-    """criteria_key None plus a dataCollection error, so the evaluator records Not evaluated."""
-    return create_response(
+def fixed_requested(data):
+    """True when Qualys echoes a status filter that includes Fixed.
+
+    Qualys returns only New, Active and Re-Opened detections unless the request names Fixed. With
+    echo_request=1 it repeats the parameters it applied in HOST_LIST_VM_DETECTION_OUTPUT.REQUEST.
+    That echo is the only proof Fixed was asked for: a definition can name Fixed and still never
+    send it (inputParameters on a GET without parametersIn "query" travel as an ignored body).
+    """
+    try:
+        params = data['HOST_LIST_VM_DETECTION_OUTPUT']['REQUEST']['PARAM_LIST']['PARAM']
+    except Exception:
+        return False
+    if isinstance(params, dict):
+        params = [params]
+    if not isinstance(params, list):
+        return False
+    for param in params:
+        if isinstance(param, dict) and str(param.get('KEY', '')).strip().lower() == 'status':
+            return any(v.strip().lower() == 'fixed' for v in str(param.get('VALUE', '')).split(','))
+    return False
+
+
+# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
+NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
+NOT_SCANNED = "Confirm Qualys has scanned the hosts in scope."
+
+
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None,
+                 recommendation=NOT_OURS_TO_ASK):
+    """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
+    response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
-        recommendations=['Confirm Qualys has scanned hosts in scope and that the detection list '
-                         'request returned them.'])
+        recommendations=[recommendation])
+    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
 
 
 def evaluate(data):
@@ -83,12 +112,11 @@ def evaluate(data):
                 detections = [detections]
             total += len(detections)
             fixed += sum(1 for d in detections if isinstance(d, dict) and str(d.get('STATUS', '')).lower() == 'fixed')
-        if total > 0 and fixed == 0:
-            # shortcut: cannot tell "nothing fixed" from "Fixed not requested"; getVulnerabilities
-            # sends no status filter, so Qualys returns open detections only. Grade 0 once it asks for Fixed.
+        if total > 0 and fixed == 0 and not fixed_requested(data):
+            # Open detections only, and nothing shows Fixed was asked for: "none fixed" is unproven.
             return {"patchCompliancePercentage": None, "totalDetections": total, "fixedDetections": 0,
-                    "notMeasured": "The Qualys detection list holds open detections only, with no Fixed ones to "
-                                   "compare against, so patch compliance could not be measured."}
+                    "notMeasured": "Spektrum's Qualys read does not yet include fixed detections, so patch "
+                                   "compliance could not be measured."}
         compliance = int((fixed / total) * 100) if total > 0 else 100
         return {"patchCompliancePercentage": str(compliance), "totalDetections": total, "fixedDetections": fixed}
     except Exception:
@@ -105,16 +133,16 @@ def transform(input):
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
             return not_measured(criteriaKey, "The Qualys response failed validation, so patch compliance could not be measured.",
-                                validation=validation)
+                                "not_measured", validation=validation)
         if host_list(data) is None:
             return not_measured(criteriaKey, "Qualys returned no assessed hosts, so patch compliance could not be measured.",
-                                validation=validation)
+                                "no_data", validation=validation, recommendation=NOT_SCANNED)
         eval_result = evaluate(data)
         if eval_result.get("notMeasured"):
-            return not_measured(criteriaKey, eval_result["notMeasured"], validation=validation)
+            return not_measured(criteriaKey, eval_result["notMeasured"], "not_measured", validation=validation)
         if "error" in eval_result or eval_result.get(criteriaKey) is None:
             return not_measured(criteriaKey, "The Qualys detection list could not be read, so patch compliance could not be measured.",
-                                validation=validation, transformation_errors=[eval_result.get("error", "no value")])
+                                "not_measured", validation=validation, transformation_errors=[eval_result.get("error", "no value")])
         result_value = eval_result[criteriaKey]
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey}
         summary = ["patchCompliancePercentage: " + str(result_value)] + [f"{k}: {v}" for k, v in extra_fields.items()]
@@ -124,5 +152,5 @@ def transform(input):
             input_summary={criteriaKey: result_value, **extra_fields})
     except Exception:
         return not_measured(criteriaKey, "The Qualys response could not be read, so patch compliance could not be measured.",
-                            validation={"status": "error", "errors": [], "warnings": []},
+                            "not_measured", validation={"status": "error", "errors": [], "warnings": []},
                             transformation_errors=["unreadable value in the Qualys reply"])

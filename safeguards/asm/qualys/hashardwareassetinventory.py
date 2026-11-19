@@ -1,7 +1,7 @@
 """
 Transformation: hasHardwareAssetInventory
 Vendor: Qualys  |  Category: Attack Surface Management
-Evaluates: Whether hardware asset discovery/inventory is active.
+Evaluates: Whether the Qualys host list (HOST_LIST_OUTPUT) holds any host.
 """
 import json
 from datetime import datetime
@@ -42,13 +42,50 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
+NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
+
+
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None):
+    """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
+    response = create_response(
+        result={criteria_key: None}, validation=validation,
+        api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
+        recommendations=[NOT_OURS_TO_ASK])
+    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    return response
+
+
 def evaluate(data):
-    """Core evaluation logic."""
+    """Hosts in the Qualys host list (HOST_LIST_OUTPUT), the reply getHostList returns.
+
+    It used to read data['count'], a key that reply never has, so it answered False for every estate.
+    """
     try:
-        count = data.get('count', 0)
-        return {"hasHardwareAssetInventory": count > 0, "hardwareAssetCount": count}
-    except Exception as e:
-        return {"hasHardwareAssetInventory": False, "error": str(e)}
+        output = data.get('HOST_LIST_OUTPUT') if isinstance(data, dict) else None
+        response = output.get('RESPONSE') if isinstance(output, dict) else None
+        if not isinstance(response, dict):
+            return {"hasHardwareAssetInventory": None, "errorCode": "not_measured",
+                    "notMeasured": "Qualys returned no host list, so the hardware asset inventory could not be checked."}
+        host_list = response.get('HOST_LIST')
+        if host_list is not None and not isinstance(host_list, dict):
+            host_list = {'HOST': [host_list]}  # present but not a record: unreadable, never "no hosts"
+        hosts = host_list.get('HOST', []) if isinstance(host_list, dict) else []
+        if isinstance(hosts, dict):
+            hosts = [hosts]
+        if not isinstance(hosts, list):
+            hosts = [hosts]
+        records = [h for h in hosts if isinstance(h, dict)]
+        if not hosts:
+            # Qualys omits HOST_LIST when it inventories nothing: no host is a measured "no inventory".
+            return {"hasHardwareAssetInventory": False, "hardwareAssetCount": 0}
+        if not records:
+            return {"hasHardwareAssetInventory": None, "errorCode": "not_measured",
+                    "notMeasured": "The Qualys host list could not be read, so the hardware asset inventory could not be checked."}
+        # A truncated list (WARNING 1980) still holds these hosts, and one host is all True claims, so it stays True.
+        return {"hasHardwareAssetInventory": True, "hardwareAssetCount": len(records)}
+    except Exception:
+        return {"hasHardwareAssetInventory": None, "error": "unreadable value in the Qualys reply"}
 
 
 def transform(input):
@@ -60,27 +97,25 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+            return not_measured(criteriaKey, "The Qualys response failed validation, so the hardware asset inventory could not be checked.",
+                                "not_measured", validation=validation)
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
+        if eval_result.get("notMeasured"):
+            return not_measured(criteriaKey, eval_result["notMeasured"], eval_result["errorCode"], validation=validation)
+        result_value = eval_result.get(criteriaKey)
+        if not isinstance(result_value, bool):
+            return not_measured(criteriaKey, "The Qualys response could not be read, so the hardware asset inventory could not be checked.",
+                                "not_measured", validation=validation,
+                                transformation_errors=[eval_result.get("error", "no value")])
+        count = eval_result["hardwareAssetCount"]
+        summary = {criteriaKey: result_value, "hardwareAssetCount": count}
         if result_value:
-            pass_reasons.append(f"{criteriaKey} check passed")
-            for k, v in extra_fields.items():
-                pass_reasons.append(f"{k}: {v}")
-        else:
-            fail_reasons.append(f"{criteriaKey} check failed")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Qualys configuration for {criteriaKey}")
-        return create_response(
-            result={criteriaKey: result_value, **extra_fields}, validation=validation,
-            pass_reasons=pass_reasons, fail_reasons=fail_reasons, recommendations=recommendations,
-            input_summary={criteriaKey: result_value, **extra_fields})
-    except Exception as e:
-        return create_response(
-            result={criteriaKey: False}, validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {str(e)}"])
+            return create_response(result=summary, validation=validation, input_summary=summary,
+                                   pass_reasons=["Qualys lists " + str(count) + " hosts in its asset inventory."])
+        return create_response(result=summary, validation=validation, input_summary=summary,
+                               fail_reasons=["Qualys lists no hosts in its asset inventory."],
+                               recommendations=["Add the hosts in scope to Qualys asset inventory."])
+    except Exception:
+        return not_measured(criteriaKey, "The Qualys response could not be read, so the hardware asset inventory could not be checked.",
+                            "not_measured", validation={"status": "error", "errors": [], "warnings": []},
+                            transformation_errors=["unreadable value in the Qualys reply"])
