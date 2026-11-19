@@ -96,7 +96,9 @@ def refusal_of(value):
 
 def deep_refusal_of(value, depth=0):
     """A vendorErrorAsResponse marker at any nesting (capped at 4 levels), else None. Only read when no edition is
-    readable, so a marker nested beside a valid summary never overrides it."""
+    readable, so a marker nested beside a valid summary never overrides it. Decodes JSON-string layers, as
+    raw_refusal_of does; an empty {} marker counts at every depth, as it does at the top level."""
+    value = decoded(value)
     if not isinstance(value, dict) or depth > 4:
         return None
     marker = value.get("vendorErrorAsResponse")
@@ -104,7 +106,7 @@ def deep_refusal_of(value, depth=0):
         return marker
     for k in value:
         found = deep_refusal_of(value[k], depth + 1)
-        if found:
+        if found is not None:
             return found
     return None
 
@@ -151,7 +153,7 @@ def raw_refusal_of(value, depth=0):
         return {"status": 403 if code == 40301 else 401, "body": value}
     for k in value:
         found = raw_refusal_of(value[k], depth + 1)
-        if found:
+        if found is not None:
             return found
     return None
 
@@ -191,7 +193,9 @@ def transform(input):
         summary = summary_of(raw)
         if summary is None or not isinstance(summary.get("edition"), str):
             # Only when no edition is readable, so a nested FAIL dict never overrides a valid edition.
-            marker = deep_refusal_of(raw) or raw_refusal_of(raw)
+            marker = deep_refusal_of(raw)
+            if marker is None:
+                marker = raw_refusal_of(raw)
             if marker is not None:
                 return refused(marker)
         if summary is None:
