@@ -3,8 +3,8 @@
 Vendor: SentinelOne  |  Category: Endpoint Security  |  Integration: SentinelOne (2bc425fa)
 Same keys as safeguards/epp/crowdstrike-falcon/*FromSpotlightCounts.py and
 safeguards/7BC425FA-0638-4BF1-8194-19E7E4F2F43C/microsoft_endpoint_vulnerabilities.py; the unit differs: one
-SentinelOne application risk row (CVE x endpoint x application), so a count can exceed the Falcon/Defender
-CVE-on-endpoint count for the same estate. It never undercounts it.
+SentinelOne application risk row (CVE x endpoint x application), so a count is at least SentinelOne's own
+CVE-on-endpoint count (one row per affected application) and is not directly comparable with Falcon/Defender totals.
 
 WHY COUNTS AND NOT ROWS. The earlier version paged every row of GET /web/api/v2.1/application-management/risks
 (1000 per page, at most 50 pages). Large tenants hold several hundred thousand rows, so the read stopped at the page
@@ -62,7 +62,10 @@ def error_of(obj):
     """The error a wrapper or vendor body reports, or None."""
     error = obj.get("error")
     if obj.get("errors") or error is True or obj.get("stepError") is True or (isinstance(error, str) and error.strip()):
-        return json.dumps(obj.get("errors") or obj.get("message") or obj.get("errorMessage") or error or "error")[:300]
+        inner = obj.get("apiResponse")
+        inner_message = inner.get("errorMessage") if isinstance(inner, dict) else None
+        return json.dumps(obj.get("errors") or obj.get("message") or obj.get("errorMessage")
+                          or (error if isinstance(error, str) else None) or inner_message or "error")[:300]
     status = obj.get("statusCode") or obj.get("status_code")
     if isinstance(status, str) and status.strip().isdigit():
         status = int(status.strip())
