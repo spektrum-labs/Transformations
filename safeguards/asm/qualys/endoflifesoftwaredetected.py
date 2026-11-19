@@ -63,6 +63,19 @@ END_OF_LIFE_TOKENS = ('eol', 'eos', 'obsolete', 'end of life', 'end-of-life', 'e
 CURRENT_STAGES = ('ga', 'general availability', 'pre-ga', 'beta')
 
 
+def lifecycle_kind(lifecycle):
+    """'eol', 'current' or 'unread' for one software lifecycle (a stage string or {"stage": ...})."""
+    stage = lifecycle.get('stage') if isinstance(lifecycle, dict) else lifecycle
+    if not isinstance(stage, str):
+        return 'unread'
+    parts = [part.strip() for part in stage.lower().replace(',', '/').split('/') if part.strip()]
+    if any(part in END_OF_LIFE_TOKENS for part in parts):
+        return 'eol'
+    if parts and all(part in CURRENT_STAGES for part in parts):
+        return 'current'
+    return 'unread'
+
+
 def evaluate(data):
     """End-of-life software, when the reply carries the asset inventory (assetListData).
 
@@ -78,8 +91,7 @@ def evaluate(data):
             return {"endOfLifeSoftwareDetected": None,
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
-        stages = []
-        unread = 0
+        kinds = {}
         assets_read = 0
         for asset in assets:
             software_list = asset.get('softwareListData') if isinstance(asset, dict) else None
@@ -90,23 +102,18 @@ def evaluate(data):
                 continue
             assets_read += 1
             for sw in software:
-                lifecycle = sw.get('lifecycle') if isinstance(sw, dict) else None
-                stage = lifecycle.get('stage') if isinstance(lifecycle, dict) else lifecycle
-                parts = [p.strip() for p in str(stage).lower().replace(',', '/').split('/')] if isinstance(stage, str) else []
-                parts = [p for p in parts if p and p != 'unknown']
-                if parts:
-                    stages.append(parts)
-                else:
-                    unread += 1
-        if any(part in END_OF_LIFE_TOKENS for parts in stages for part in parts):
+                kind = lifecycle_kind(sw.get('lifecycle') if isinstance(sw, dict) else None)
+                kinds[kind] = kinds.get(kind, 0) + 1
+        unread = kinds.get('unread', 0)
+        if kinds.get('eol'):
             return {"endOfLifeSoftwareDetected": True, "assetsScanned": assets_read}
-        if not stages:
-            # Assets with no readable software lifecycle prove nothing about end-of-life software.
+        if not kinds:
+            # Assets with no software list prove nothing about end-of-life software.
             return {"endOfLifeSoftwareDetected": None,
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
-        if unread or any(part not in CURRENT_STAGES for parts in stages for part in parts):
-            # Software with an unknown or unrecognised stage is not proof the software is current.
+        if unread:
+            # Software whose stage is Unknown or unrecognised is not proof it is current.
             return {"endOfLifeSoftwareDetected": None, "unreadLifecycles": unread,
                     "notMeasured": "Qualys reported software whose lifecycle Spektrum could not read, so "
                                    "end-of-life software could not be checked."}

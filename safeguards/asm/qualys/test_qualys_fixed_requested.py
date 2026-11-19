@@ -390,8 +390,8 @@ def test_a_fix_dated_before_its_finding_is_not_averaged_away():
 
 def test_an_integration_error_is_not_a_patch_management_no():
     value, info = run("is_patch_management_enabled", {"error": True, "message": "Integration execution error: HTTP 401"})
-    assert value is None and info["dataCollection"]["status"] == "error"
-    assert "errorCode" not in info["dataCollection"]  # Token-Service copies the relayed reason
+    assert value is None
+    assert_ours(info)
 
 
 @pytest.mark.parametrize("host_list_value", ["junk", {"HOST": "junk"}, {"HOST": ["junk"]}, {"HOST": []}])
@@ -404,9 +404,21 @@ def test_an_unreadable_host_list_is_ours_not_nothing_scanned(host_list_value):
 
 @pytest.mark.parametrize("software", [[{"lifecycle": "Not EOL"}], [{"lifecycle": "GA"}, {"lifecycle": "Unknown"}],
                                       [{"lifecycle": "GA"}, {"name": "no lifecycle"}],
-                                      [{"lifecycle": {"stage": "Geolocated"}}]])
+                                      [{"lifecycle": {"stage": "Geolocated"}}], [{"lifecycle": "GA, Unknown"}],
+                                      [{"lifecycle": "GA/Unknown"}]])
 def test_an_unread_lifecycle_is_not_a_no(software):
     value, info = run("endoflifesoftwaredetected", {"assetListData": {"asset": [{"softwareListData": {"software": software}}]}})
+    assert value is None
+    assert_ours(info)
+
+
+@pytest.mark.parametrize("name", ["patchcompliancepercentage", "criticalvulnerabilitycount",
+                                  "meantimetoremediatecritical", "is_patch_management_enabled"])
+@pytest.mark.parametrize("host_list_value", [{"HOST": ["junk"]}, {"HOST": "junk"}, {"HOST": []}, "",
+                                             {"HOST": [{"ID": "1", "DETECTION_LIST": {"DETECTION": [FIXED_LOW]}}, "junk"]}])
+def test_an_unreadable_host_list_is_ours_in_every_reader(name, host_list_value):
+    payload = {"HOST_LIST_VM_DETECTION_OUTPUT": {"REQUEST": echo(ALL_STATUSES), "RESPONSE": {"HOST_LIST": host_list_value}}}
+    value, info = run(name, payload)
     assert value is None
     assert_ours(info)
 
@@ -444,6 +456,15 @@ def comparable(result):
     ("knownexploitedvulncount", detections(OPEN_CRITICAL)),
     ("endoflifesoftwaredetected", host_list(2)),
     ("is_patch_management_enabled", host_list(2)),
+    ("is_patch_management_enabled", detections(FIXED_LOW, request=echo(ALL_STATUSES))),
+    ("is_patch_management_enabled", detections(FIXED_LOW, "junk")),
+    ("patchcompliancepercentage", detections(FIXED_LOW, "junk", request=echo(ALL_STATUSES))),
+    ("meantimetoremediatecritical", detections(dict(FIXED_LOW, SEVERITY="5"), request=echo(ALL_STATUSES))),
+    ("criticalvulnerabilitycount", {"HOST_LIST_VM_DETECTION_OUTPUT": {"RESPONSE": {"HOST_LIST": {"HOST": ["junk"]}}}}),
+    ("endoflifesoftwaredetected", {"assetListData": {"asset": [{"softwareListData": {"software": [
+        {"lifecycle": "GA"}, {"lifecycle": {"stage": "EOL/EOS"}}]}}]}}),
+    ("endoflifesoftwaredetected", {"assetListData": {"asset": [{"softwareListData": {"software": [
+        {"lifecycle": "GA"}, {"lifecycle": "GA/Unknown"}]}}]}}),
 ])
 def test_each_transform_answers_the_same_in_the_sandbox(name, payload):
     boxed = sandboxed(name)(copy.deepcopy(payload))

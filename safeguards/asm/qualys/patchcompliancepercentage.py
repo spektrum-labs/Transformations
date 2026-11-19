@@ -42,26 +42,6 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def host_list(data):
-    """The assessed hosts, or None when the reply carries no host list.
-
-    No HOST_LIST means nothing was assessed, which is not 100% compliant and not a measured
-    zero (ENG-1353). Hosts present with no open detections is a real measurement.
-    """
-    if not isinstance(data, dict):
-        return None
-    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT')
-    response = output.get('RESPONSE') if isinstance(output, dict) else None
-    hl = response.get('HOST_LIST') if isinstance(response, dict) else None
-    hosts = hl.get('HOST') if isinstance(hl, dict) else None
-    if isinstance(hosts, dict):
-        hosts = [hosts]
-    if not isinstance(hosts, list):
-        return None
-    hosts = [h for h in hosts if isinstance(h, dict)]
-    return hosts or None
-
-
 NOT_SCANNED = "Confirm Qualys has scanned the hosts in scope."
 # The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
 NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
@@ -117,6 +97,26 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+EMPTY = (None, '', [])  # xmltodict writes an empty element as None
+
+
+def detection_hosts(response):
+    """Host records in a detection RESPONSE; none when Qualys omits HOST_LIST, which means nothing assessed.
+
+    A HOST_LIST that is present but empty, or holds anything but host records, raises: that is our read
+    failing, not "nothing scanned", and grading the readable hosts would grade an unstated subset.
+    """
+    host_list = response.get('HOST_LIST')
+    if host_list is None:
+        return []
+    hosts = host_list.get('HOST') if isinstance(host_list, dict) else None
+    if isinstance(hosts, dict):
+        hosts = [hosts]
+    if not isinstance(hosts, list) or not hosts or any(not isinstance(host, dict) for host in hosts):
+        raise ValueError("unreadable host list")
+    return hosts
+
+
 def detection_rows(host):
     """A host's detection records; none when DETECTION_LIST or DETECTION is empty.
 
@@ -126,12 +126,12 @@ def detection_rows(host):
     if not isinstance(host, dict):
         raise ValueError("unreadable host record")
     detection_list = host.get('DETECTION_LIST')
-    if not detection_list:
+    if detection_list in EMPTY:
         return []
     if not isinstance(detection_list, dict):
         raise ValueError("unreadable detection list")
     rows = detection_list.get('DETECTION')
-    if not rows:
+    if rows in EMPTY:
         return []
     if isinstance(rows, dict):
         rows = [rows]
@@ -154,13 +154,13 @@ def evaluate(data):
         if truncated(detection_response(data)):
             return {"patchCompliancePercentage": None, "errorCode": "partial_read",
                     "notMeasured": "Spektrum's Qualys read stopped at a page limit, so patch compliance is not graded."}
-        hosts = host_list(data) or []
+        hosts = detection_hosts(detection_response(data))
         total = 0
         fixed = 0
         for host in hosts:
             detections = detection_rows(host)
             total += len(detections)
-            fixed += sum(1 for d in detections if isinstance(d, dict) and status_token(d.get('STATUS', '')) == 'fixed')
+            fixed += sum(1 for d in detections if status_token(d.get('STATUS', '')) == 'fixed')
         statuses = echoed_statuses(data)
         if statuses is None and total == 0:
             statuses = set(OPEN_STATUSES)  # no echo: Qualys applied its default, and no open detection is a measured 100
@@ -187,10 +187,11 @@ def transform(input):
         if validation.get("status") == "failed":
             return not_measured(criteriaKey, "The Qualys response failed validation, so patch compliance could not be measured.",
                                 "not_measured", validation=validation)
-        if detection_response(data) is None:
+        response = detection_response(data)
+        if response is None:
             return not_measured(criteriaKey, "The Qualys response could not be read, so patch compliance could not be measured.",
                                 "not_measured", validation=validation)
-        if host_list(data) is None:
+        if not detection_hosts(response):  # raises on an unreadable list, which the except below reports
             return not_measured(criteriaKey, "Qualys returned no assessed hosts, so patch compliance could not be measured.",
                                 "no_data", validation=validation, recommendations=(NOT_SCANNED,))
         eval_result = evaluate(data)

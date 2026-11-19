@@ -144,6 +144,26 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+EMPTY = (None, '', [])  # xmltodict writes an empty element as None
+
+
+def detection_hosts(response):
+    """Host records in a detection RESPONSE; none when Qualys omits HOST_LIST, which means nothing assessed.
+
+    A HOST_LIST that is present but empty, or holds anything but host records, raises: that is our read
+    failing, not "nothing scanned", and grading the readable hosts would grade an unstated subset.
+    """
+    host_list = response.get('HOST_LIST')
+    if host_list is None:
+        return []
+    hosts = host_list.get('HOST') if isinstance(host_list, dict) else None
+    if isinstance(hosts, dict):
+        hosts = [hosts]
+    if not isinstance(hosts, list) or not hosts or any(not isinstance(host, dict) for host in hosts):
+        raise ValueError("unreadable host list")
+    return hosts
+
+
 def detection_rows(host):
     """A host's detection records; none when DETECTION_LIST or DETECTION is empty.
 
@@ -153,12 +173,12 @@ def detection_rows(host):
     if not isinstance(host, dict):
         raise ValueError("unreadable host record")
     detection_list = host.get('DETECTION_LIST')
-    if not detection_list:
+    if detection_list in EMPTY:
         return []
     if not isinstance(detection_list, dict):
         raise ValueError("unreadable detection list")
     rows = detection_list.get('DETECTION')
-    if not rows:
+    if rows in EMPTY:
         return []
     if isinstance(rows, dict):
         rows = [rows]
@@ -175,19 +195,6 @@ def truncated(response):
 # --- end Qualys detection reply ----------------------------------------------------------------------------
 
 
-def extract_hosts(response):
-    """HOST records from a detection RESPONSE; Qualys omits HOST_LIST when nothing matched."""
-    host_list = response.get("HOST_LIST", None)
-    if host_list is None:
-        return [], response.get("DATETIME", "")
-    hosts = host_list.get("HOST") if isinstance(host_list, dict) else None
-    if isinstance(hosts, dict):
-        hosts = [hosts]
-    if not isinstance(hosts, list) or not hosts or any(not isinstance(h, dict) for h in hosts):
-        raise ValueError("unreadable host list")  # present but unreadable is our read, not "nothing scanned"
-    return hosts, response.get("DATETIME", "")
-
-
 # The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
 NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
 
@@ -199,8 +206,7 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
         additional_findings=findings, recommendations=list(recommendations))
-    if error_code:  # an error relayed from Integration-Service keeps its own reason code
-        response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
 
 
@@ -234,16 +240,9 @@ def transform(input):
             return not_measured(criteriaKey, "The Qualys response failed validation, so patch management could not be checked.",
                                 "not_measured", validation=validation)
 
-        # Check for integration execution errors
-        if isinstance(data, dict) and (data.get("error") or str(data.get("message", "")).startswith("Integration execution error")):
-            # The call failed, so nothing was measured. No errorCode here: Token-Service copies the relayed reason.
-            return not_measured(criteriaKey, "The Qualys call returned an error, so patch management could not be checked.",
-                                None, validation=validation,
-                                recommendations=("Verify the Qualys API credentials and base URL are correct",))
-
         response = detection_response(data)
         if response is None:
-            # The workflow feeds this key getHostList, whose reply has no detection list, and an error body has
+            # The workflow feeds this key getHostList, whose reply has no detection list, and an error envelope has
             # none either: nothing was measured, and the read is ours to fix.
             return not_measured(criteriaKey, NOT_READ, "not_measured", validation=validation)
 
@@ -251,7 +250,8 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        hosts, response_datetime = extract_hosts(response)
+        hosts = detection_hosts(response)
+        response_datetime = response.get("DATETIME", "")
         host_count = len(hosts)
         statuses = tally_statuses(hosts)
         detection_count = statuses.get("fixed", 0)
