@@ -205,6 +205,68 @@ class CAAuthStrengthTests(unittest.TestCase):
         no_combos = pol(users=["All"], the_strength={"id": "x"}, name="odd")
         self.assertEqual(self.values(body(no_combos, pol(users=["All"]))), (True, True))
 
+    # ENG-1335: a FAIL names the Report-only or off policy that would have met the check
+    def reasons(self, res):
+        ev = res["additionalInfo"]["evaluation"]
+        return ev["failReasons"], ev["recommendations"]
+
+    def test_report_only_policy_is_named_in_the_fail_reason(self):
+        res = self.run_t(REAL)
+        self.assertEqual((res["transformedResponse"][KEY], res["transformedResponse"][ADMIN]), (False, False))
+        failed, recs = self.reasons(res)
+        self.assertIn("Policy 'Report-only phishing-resistant' requires a phishing-resistant authentication strength "
+                      "but is in Report-only mode, so it does not enforce anything", failed)
+        self.assertTrue(recs[0].startswith("Switch 'Report-only phishing-resistant' to On"))
+        self.assertEqual(res["transformedResponse"]["policiesNotEnforced"], ["Report-only phishing-resistant"])
+
+    def test_disabled_policy_is_named_as_turned_off(self):
+        res = self.run_t(body(pol(users=["All"], state="disabled", name="Off policy")))
+        self.assertEqual((res["transformedResponse"][KEY], res["transformedResponse"][ADMIN]), (False, False))
+        self.assertIn("Policy 'Off policy' requires a phishing-resistant authentication strength but is turned off, "
+                      "so it does not enforce anything", self.reasons(res)[0])
+
+    def test_report_only_policy_without_a_resistant_strength_is_not_named(self):
+        for p in (pol(users=["All"], state="enabledForReportingButNotEnforced", combos=PR + ["deviceBasedPush"]),
+                  pol(users=["All"], state="enabledForReportingButNotEnforced", builtin=["mfa"], the_strength=None)):
+            with self.subTest(p=p["grantControls"]["authenticationStrength"] is None):
+                res = self.run_t(body(p))
+                self.assertEqual(self.values(body(p)), (False, False))
+                self.assertFalse([r for r in self.reasons(res)[0] if r.startswith("Policy '")])
+                self.assertEqual(res["transformedResponse"]["policiesNotEnforced"], [])
+
+    def test_report_only_policy_never_changes_a_pass(self):
+        res = self.run_t(body(pol(users=["All"]), pol(users=["All"], state="enabledForReportingButNotEnforced",
+                                                      name="Trial copy")))
+        self.assertEqual((res["transformedResponse"][KEY], res["transformedResponse"][ADMIN]), (True, True))
+        self.assertEqual(self.reasons(res), ([], []))
+
+    def test_many_report_only_policies_are_capped(self):
+        many = [pol(users=["All"], state="enabledForReportingButNotEnforced", name="RO " + str(i)) for i in range(7)]
+        failed = self.reasons(self.run_t(body(*many)))[0]
+        self.assertEqual(len([r for r in failed if r.startswith("Policy 'RO ")]), 5)
+        self.assertIn("2 more such policies are not enforced", failed)
+        res = self.run_t(body(*many))
+        rec = self.reasons(res)[1][0]
+        self.assertIn("'RO 4' and 2 more to On", rec)
+        self.assertTrue(rec.endswith("which sign-ins they would block"))
+        self.assertEqual(len(res["transformedResponse"]["policiesNotEnforced"]), 5)
+
+    def test_report_only_policy_that_would_not_qualify_is_not_named(self):
+        ro = "enabledForReportingButNotEnforced"
+        for p in (pol(groups=["22222222-0000-0000-0000-000000000009"], state=ro, name="Pilot group"),
+                  pol(users=["All"], apps=["00000003-0000-0ff1-ce00-000000000000"], state=ro, name="One app"),
+                  pol(users=["All"], platforms={"includePlatforms": ["iOS"]}, state=ro, name="iOS only")):
+            with self.subTest(name=p["displayName"]):
+                res = self.run_t(body(p))
+                self.assertFalse([r for r in self.reasons(res)[0] if r.startswith("Policy '")])
+                self.assertEqual(res["transformedResponse"]["policiesNotEnforced"], [])
+
+    def test_report_only_admin_role_policy_is_named(self):
+        res = self.run_t(body(pol(roles=ROLES, state="enabledForReportingButNotEnforced", name="Admins RO")))
+        self.assertIn("Policy 'Admins RO' requires a phishing-resistant authentication strength but is in Report-only "
+                      "mode, so it does not enforce anything", self.reasons(res)[0])
+        self.assertTrue(self.reasons(res)[1][0].endswith("which sign-ins it would block"))
+
 
 try:
     import RestrictedPython  # noqa: F401

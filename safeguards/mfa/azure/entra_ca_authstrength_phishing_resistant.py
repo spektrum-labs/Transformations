@@ -29,7 +29,10 @@ Results:
   cover every directory role in Microsoft's "Require phishing-resistant MFA for administrators" template (or a
   qualifying all-users policy exists), with none of those roles excluded. The same exclusion bounds apply (at most
   two excluded user accounts in total, named; no group, role or guest/external exclusion), else None.
-- False: the complete policy list was read and no qualifying policy gives that coverage. For the admin result,
+- False: the complete policy list was read and no qualifying policy gives that coverage. When a Report-only or
+  disabled policy would qualify if switched on, the failure reason names it ("Policy 'X' ... is in
+  Report-only mode, so it does not enforce anything") and the recommendation says to switch it on (ENG-1335). Such a
+  policy never changes the result. For the admin result,
   an enabled phishing-resistant strength scoped to groups, named users or some sign-ins (for example PIM elevation
   through an authentication context) makes it None instead: mapping groups to roles needs reads this key does
   not make, so that is not a proven FAIL.
@@ -159,6 +162,50 @@ def strength_state(grant):
     return "weak"
 
 
+OFF_STATE_WORDS = {"enabledforreportingbutnotenforced": "is in Report-only mode", "disabled": "is turned off"}
+
+
+MAX_NAMED = 5
+
+
+def would_qualify(policy):
+    """True when a Report-only or off policy would count if it were switched on: a phishing-resistant strength for
+    every cloud app and sign-in, for all users or for at least one admin-template role. Exclusions are not judged
+    here; the enabled path judges them once it is on."""
+    if strength_state(policy.get("grantControls")) != "resistant":
+        return False
+    conditions = policy.get("conditions")
+    if not isinstance(conditions, dict) or narrowing(conditions) != []:
+        return False
+    users = conditions.get("users")
+    if not isinstance(users, dict):
+        return False
+    include_users = strings(users.get("includeUsers"))
+    include_roles = strings(users.get("includeRoles"))
+    if include_users is None or include_roles is None:
+        return False
+    return "all" in include_users or any(r in ADMIN_ROLES for r in include_roles)
+
+
+def not_enforced_reasons(not_enforced):
+    """One reason per Report-only or off policy that would meet the check if switched on, so the customer sees which
+    policy to switch on (ENG-1335). It never changes the result: such a policy enforces nothing."""
+    reasons = ["Policy '" + name + "' requires a phishing-resistant authentication strength but "
+               + OFF_STATE_WORDS[state] + ", so it does not enforce anything" for name, state in not_enforced[:MAX_NAMED]]
+    if len(not_enforced) > MAX_NAMED:
+        reasons.append(str(len(not_enforced) - MAX_NAMED) + " more such policies are not enforced")
+    return reasons
+
+
+def switch_on_recommendation(not_enforced):
+    names = ["'" + n + "'" for n, _ in not_enforced[:MAX_NAMED]]
+    more = len(not_enforced) - MAX_NAMED
+    listed = ", ".join(names) + (" and " + str(more) + " more" if more > 0 else "")
+    pronoun = "it" if len(not_enforced) == 1 else "they"
+    return ("Switch " + listed + " to On in Entra ID > Conditional Access, after checking which sign-ins "
+            + pronoun + " would block")
+
+
 def narrowing(conditions):
     """Names of the conditions that limit the policy to some sign-ins, or None when the shape is unreadable."""
     found = []
@@ -228,8 +275,13 @@ def transform(input):
     all_users_policies, admin_policies, findings, unknown, maybe_admin, near_all = [], [], [], [], [], []
     all_users_excluded, admin_excluded = set(), set()
     covered_roles = set()
+    not_enforced = []
     for policy in policies:
-        if str(policy.get("state") or "").lower() != "enabled":
+        policy_state = str(policy.get("state") or "").lower()
+        if policy_state != "enabled":
+            # never counts; named in the failure reason when switching it on would meet the check (ENG-1335)
+            if policy_state in OFF_STATE_WORDS and would_qualify(policy):
+                not_enforced.append((name_of(policy), policy_state))
             continue
         state = strength_state(policy.get("grantControls"))
         if state == "unknown":
@@ -308,7 +360,8 @@ def transform(input):
     summary = {"policiesRead": len(policies), "qualifyingAllUsersPolicies": all_users_policies if all_users else [],
                "qualifyingAdminPolicies": admin_policies, "adminRolesNotCovered": [] if all_users else missing_roles,
                "excludedEmergencyAccessAccounts": sorted(e[:40] for e in admin_set) if (all_users or admins) else [],
-               "unreadablePolicies": unknown}
+               "unreadablePolicies": unknown,
+               "policiesNotEnforced": [n for n, _ in not_enforced[:MAX_NAMED]]}
     if unknown and not (all_users and admins):
         return not_evaluated("Enabled Conditional Access polic(ies) " + ", ".join(unknown[:5]) + " have a grant or "
                              "condition shape that cannot be read, so the absence of a phishing-resistant "
@@ -345,7 +398,10 @@ def transform(input):
     elif admin_value is False:
         failed.append("Administrator roles without a required phishing-resistant authentication strength: "
                       + ", ".join(missing_roles))
+    if failed and not_enforced:
+        failed.extend(not_enforced_reasons(not_enforced))
     return create_response(result, validation, passed=passed, failed=failed, findings=findings, summary=summary,
-                           recommendations=[] if all_users else [
+                           recommendations=[] if all_users else (
+                               [switch_on_recommendation(not_enforced)] if failed and not_enforced else []) + [
                                "Create an enabled Conditional Access policy for all users and all cloud apps that "
                                "grants access only with the built-in 'Phishing-resistant MFA' authentication strength"])
