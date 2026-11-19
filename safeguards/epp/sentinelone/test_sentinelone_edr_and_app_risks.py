@@ -82,9 +82,10 @@ def count(total):
     return {"data": [], "pagination": {"totalItems": total, "nextCursor": None}}
 
 
-def counts(all_risks=500, critical=7, high=40, overdue_critical=2, overdue_high=11):
+def counts(all_risks=500, critical=7, high=40, overdue_critical=2, overdue_high=11, before_now=None):
     return {"allRisks": count(all_risks), "critical": count(critical), "high": count(high),
-            "overdueCritical": count(overdue_critical), "overdueHigh": count(overdue_high)}
+            "overdueCritical": count(overdue_critical), "overdueHigh": count(overdue_high),
+            "beforeNow": count(all_risks if before_now is None else before_now)}
 
 
 def without(body, name):
@@ -167,6 +168,8 @@ BAD = [counts(all_risks=0, critical=0, high=0, overdue_critical=0, overdue_high=
        counts(all_risks=40, critical=40, high=40),                                  # severity filter ignored
        counts(critical=5, overdue_critical=6),                                      # date filter widened
        counts(high=5, overdue_high=6),
+       counts(before_now=0),                                                        # timestamp read as too early
+       dict(counts(), critical={"error": {"code": 403, "message": "Forbidden"}, "pagination": {"totalItems": 0}}),
        dict(counts(), critical={"data": [], "pagination": {}}),
        dict(counts(), high={"data": []}),
        dict(counts(), allRisks={"pagination": {"totalItems": -1}}),
