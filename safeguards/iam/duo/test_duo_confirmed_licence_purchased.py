@@ -106,6 +106,19 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
             for out in self.each(body):
                 self.assertIs(out["transformedResponse"][KEY], True)
 
+    def test_marker_inside_a_json_string_wrapper_names_the_permission(self):
+        html = {"vendorErrorAsResponse": {"status": 403, "body": "<html>x</html>"}}
+        for body in [{"response": {"result": json.dumps(html)}}, {"response": json.dumps({"result": html})}]:
+            for out in self.each(body):
+                self.assert_not_evaluated(out, "scope_not_granted")
+
+    def test_empty_marker_is_a_refusal_at_every_depth(self):
+        for body in [{"vendorErrorAsResponse": {}}, {"response": {"vendorErrorAsResponse": {}}},
+                     {"response": {"result": {"vendorErrorAsResponse": {}}}},
+                     {"response": {"result": json.dumps({"vendorErrorAsResponse": {}})}}]:
+            for out in self.each(body):
+                self.assert_not_evaluated(out, "vendor_refusal")
+
     def test_unauthorized_is_a_reconnect_not_a_permission(self):
         body = {"vendorErrorAsResponse": {"status": 401, "body": {"stat": "FAIL", "code": 40101,
                                                                   "message": "Missing request credentials"}}}
