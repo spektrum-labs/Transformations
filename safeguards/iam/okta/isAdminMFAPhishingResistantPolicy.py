@@ -192,7 +192,7 @@ def evaluate(data):
         # Okta hides the Admin Console app from an OAuth service app, even by an exact name filter; the connection
         # cannot read it, which is a vendor limit (routes to product), not a defect to engineer around.
         return unevaluated("NOT-AVAILABLE: Okta does not expose the Admin Console app's sign-in policy to this "
-                           "connection (Okta hides the Admin Console app from an OAuth service app), so the policy "
+                           "connection (Okta hides the Admin Console app from an OAuth service app, the likely cause), so the policy "
                            "admins sign in under cannot be read.", None, "not_available")
     href = policy_text(policy_dict(policy_dict(console[0].get("_links")).get("accessPolicy")).get("href"))
     policy_id = href.split("?")[0].rstrip("/").split("/policies/")[1].split("/")[0] if "/policies/" in href else ""
