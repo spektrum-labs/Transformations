@@ -140,7 +140,7 @@ def block_total(name, block):
 
 
 def measure(raw):
-    """(totals, None) for five complete, consistent counts, or (None, problem)."""
+    """(totals, None) for six complete, consistent counts, or (None, problem)."""
     blocks, error = descend(raw, has_block)
     if error is not None:
         return None, "SentinelOne returned an error instead of the application risk counts: " + error
