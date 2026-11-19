@@ -23,8 +23,9 @@ authenticator on every way in, as part of two factor types:
     possession also requires userVerification (a FIDO2 key or FastPass with biometrics/PIN is two factors).
   AUTH_METHOD_CHAIN: every path proves two factor types and has a step whose every alternative is phishing
     resistant (phishingResistant REQUIRED, or a webauthn / smart_card_idp authenticator).
-False when a readable ALLOW rule lets an admin in without that. None (not evaluated) when the Admin Console app or
-its policy is not found (Classic Engine, a cut app list), the policy's rule list has no system Catch-all Rule (cut
+False when a readable ALLOW rule lets an admin in without that. None (not evaluated) when the Admin Console app is not in
+the app list (errorCode not_available: Okta hides it from an OAuth service app, so the check routes to product; a list
+cut short at the 200-app limit is uncoded), its policy is not found, the policy's rule list has no system Catch-all Rule (cut
 short), no rule allows sign-in, or a rule's verification method cannot be read and no rule already fails.
 
 Output: every return carries {isAdminMFAPhishingResistant, phishingResistantRules, weakRules}; the two counts are
@@ -35,6 +36,7 @@ from datetime import datetime
 
 KEY = "isAdminMFAPhishingResistant"
 ADMIN_CONSOLE_APP = "saasure"
+APP_LIST_LIMIT = 200  # the workflow reads GET /api/v1/apps?limit=200
 POLICY_PR_KEYS = ["webauthn", "smart_card_idp"]
 # The factor tables below are the same as in ismfaenforcedforusers.py and isstrongauthrequired.py (the sandbox
 # forbids shared imports); test_okta_auth_method_chain_parity.py keeps the three copies in line.
@@ -79,12 +81,14 @@ def extract_input(input_data):
     return data
 
 
-def respond(value, passes, fails, summary, recommendations, strong, weak):
+def respond(value, passes, fails, summary, recommendations, strong, weak, error_code=None):
+    collection = {"status": "error" if value is None else "success", "errors": fails if value is None else []}
+    if error_code:
+        collection["errorCode"] = error_code
     return {
         "transformedResponse": {KEY: value, "phishingResistantRules": strong, "weakRules": weak},
         "additionalInfo": {
-            "dataCollection": {"status": "error" if value is None else "success",
-                               "errors": fails if value is None else []},
+            "dataCollection": collection,
             "validation": {"status": "success", "errors": [], "warnings": []},
             "transformation": {"status": "success", "errors": [], "inputSummary": summary},
             "evaluation": {"passReasons": passes, "failReasons": fails, "recommendations": recommendations,
@@ -95,8 +99,8 @@ def respond(value, passes, fails, summary, recommendations, strong, weak):
     }
 
 
-def unevaluated(message, summary=None):
-    return respond(None, [], [message], summary or {}, [], None, None)
+def unevaluated(message, summary=None, error_code=None):
+    return respond(None, [], [message], summary or {}, [], None, None, error_code)
 
 
 def assurance_resistant(method):
@@ -182,9 +186,14 @@ def evaluate(data):
                                                 "Console's authentication policy cannot be found.")
     console = [a for a in apps if policy_text(a.get("name")).lower() == ADMIN_CONSOLE_APP]
     if not console:
-        return unevaluated("The Okta Admin Console app is not in the app list (a Classic Engine "
-                                                "org, or a list cut short), so the policy admins sign in under "
-                                                "cannot be read.")
+        if len(apps) >= APP_LIST_LIMIT:
+            return unevaluated("The Okta app list was cut short at " + str(APP_LIST_LIMIT) + " apps and does not "
+                               "include the Admin Console app, so the policy admins sign in under cannot be read.")
+        # Okta hides the Admin Console app from an OAuth service app, even by an exact name filter; the connection
+        # cannot read it, which is a vendor limit (routes to product), not a defect to engineer around.
+        return unevaluated("NOT-AVAILABLE: Okta does not expose the Admin Console app's sign-in policy to this "
+                           "connection (an OAuth service app cannot see the Admin Console app), so the policy "
+                           "admins sign in under cannot be read.", None, "not_available")
     href = policy_text(policy_dict(policy_dict(console[0].get("_links")).get("accessPolicy")).get("href"))
     policy_id = href.split("?")[0].rstrip("/").split("/policies/")[1].split("/")[0] if "/policies/" in href else ""
     if not policy_id:
