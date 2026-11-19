@@ -66,16 +66,20 @@ def evaluate(data):
         hosts = host_list.get('HOST', []) if isinstance(host_list, dict) else []
         if isinstance(hosts, dict):
             hosts = [hosts]
-        count = len(hosts) if isinstance(hosts, list) else 0
+        count = len([h for h in hosts if isinstance(h, dict)]) if isinstance(hosts, list) else 0
         warning = response.get('WARNING')
         if isinstance(warning, dict) and str(warning.get('CODE', '')).strip() == '1980':
             # A truncated read is a lower bound, and a transform is never told the bar it is graded against.
             return {"externalAssetInventoryCount": None, "sampleCount": count,
                     "notMeasured": "Qualys stopped the host list at " + str(count) + " records (warning 1980), "
                                    "so the asset inventory count is a lower bound and is not graded."}
-        return {"externalAssetInventoryCount": count, "assetCount": count}
-    except Exception as e:
-        return {"externalAssetInventoryCount": None, "error": str(e)}
+        if count == 0:
+            # An empty host list is nothing assessed, not a measured zero (as ENG-1353 for its siblings).
+            return {"externalAssetInventoryCount": None,
+                    "notMeasured": "Qualys lists no hosts, so the asset inventory count could not be graded."}
+        return {"externalAssetInventoryCount": count}
+    except Exception:
+        return {"externalAssetInventoryCount": None, "error": "unreadable value in the Qualys reply"}
 
 
 def transform(input):
@@ -103,7 +107,7 @@ def transform(input):
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
             additional_findings=summary,
             input_summary={criteriaKey: result_value, **extra_fields})
-    except Exception as e:
+    except Exception:
         return not_measured(criteriaKey, "The Qualys response could not be read, so the asset inventory count could not be measured.",
                             validation={"status": "error", "errors": [], "warnings": []},
-                            transformation_errors=[str(e)])
+                            transformation_errors=["unreadable value in the Qualys reply"])

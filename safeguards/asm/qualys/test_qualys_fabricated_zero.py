@@ -51,15 +51,22 @@ def assert_not_measured(value, collection):
     assert collection["status"] == "error" and collection["errors"]
 
 
-@pytest.mark.parametrize("n", [0, 1, 197])
+@pytest.mark.parametrize("n", [1, 197])
 def test_asset_count_is_the_number_of_hosts(n):
     value, collection = answer("externalassetinventorycount", host_list(n))
     assert value == n and collection["status"] == "success"
 
 
-def test_a_reply_without_a_host_list_counts_zero_hosts():
-    value, _ = answer("externalassetinventorycount", {"HOST_LIST_OUTPUT": {"RESPONSE": {"DATETIME": "x"}}})
-    assert value == 0
+@pytest.mark.parametrize("response", [{"DATETIME": "x"}, {}, {"HOST_LIST": "x"}, {"HOST_LIST": {"HOST": "x"}},
+                                      {"HOST_LIST": {"HOST": [1, 2]}}, {"HOST_LIST": {"HOST": []}}])
+def test_no_listed_host_is_not_a_measured_zero(response):
+    assert_not_measured(*answer("externalassetinventorycount", {"HOST_LIST_OUTPUT": {"RESPONSE": response}}))
+
+
+def test_only_host_records_are_counted():
+    payload = host_list(2)
+    payload["HOST_LIST_OUTPUT"]["RESPONSE"]["HOST_LIST"]["HOST"] += ["junk", 3]
+    assert answer("externalassetinventorycount", payload)[0] == 2
 
 
 def test_a_truncated_host_list_is_not_measured():
@@ -89,6 +96,21 @@ def test_no_remediated_critical_is_not_a_zero_day_remediation_time():
 def test_remediation_time_is_averaged_over_fixed_criticals():
     value, collection = answer("meantimetoremediatecritical", detections(OPEN_CRITICAL, FIXED_CRITICAL))
     assert value == "10" and collection["status"] == "success"
+
+
+def test_a_fix_dated_before_the_finding_is_not_a_remediation_time():
+    backwards = dict(FIXED_CRITICAL, LAST_FIXED_DATETIME="2025-12-01T00:00:00Z")
+    assert_not_measured(*answer("meantimetoremediatecritical", detections(backwards)))
+
+
+def test_a_lowercase_fixed_status_still_counts():
+    value, _ = answer("meantimetoremediatecritical", detections(dict(FIXED_CRITICAL, STATUS="FIXED")))
+    assert value == "10"
+
+
+def test_vendor_text_does_not_reach_the_errors():
+    out = load("meantimetoremediatecritical").transform(detections({"STATUS": "Fixed", "SEVERITY": "DO-NOT-ECHO"}))
+    assert "DO-NOT-ECHO" not in str(out)
 
 
 @pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical"])
