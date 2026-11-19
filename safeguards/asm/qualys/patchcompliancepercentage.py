@@ -78,7 +78,7 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
     return response
 
 
-# --- Qualys detection reply: byte-identical in patchcompliancepercentage.py and meantimetoremediatecritical.py
+# --- Qualys detection reply: byte-identical in every transform that reads it (a test compares the copies) ---
 OPEN_STATUSES = {'new', 'active', 'reopened'}
 
 
@@ -138,6 +138,7 @@ def evaluate(data):
             detections = host.get('DETECTION_LIST', {}).get('DETECTION', [])
             if isinstance(detections, dict):
                 detections = [detections]
+            detections = [d for d in detections if isinstance(d, dict)]  # a junk row is no detection either way
             total += len(detections)
             fixed += sum(1 for d in detections if isinstance(d, dict) and status_token(d.get('STATUS', '')) == 'fixed')
         statuses = echoed_statuses(data)

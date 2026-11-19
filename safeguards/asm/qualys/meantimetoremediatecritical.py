@@ -57,7 +57,7 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
     return response
 
 
-# --- Qualys detection reply: byte-identical in patchcompliancepercentage.py and meantimetoremediatecritical.py
+# --- Qualys detection reply: byte-identical in every transform that reads it (a test compares the copies) ---
 OPEN_STATUSES = {'new', 'active', 'reopened'}
 
 
@@ -119,6 +119,7 @@ def evaluate(data):
             hosts = [hosts]
         deltas = []
         any_fixed = False
+        undated = False
         for host in hosts:
             detections = host.get('DETECTION_LIST', {}).get('DETECTION', [])
             if isinstance(detections, dict):
@@ -129,11 +130,18 @@ def evaluate(data):
                 if is_fixed and int(d.get('SEVERITY', 0)) >= 4:
                     found = d.get('FIRST_FOUND_DATETIME', '')
                     fixed_dt = d.get('LAST_FIXED_DATETIME', '')
-                    if found and fixed_dt:
+                    if not (found and fixed_dt):
+                        undated = True
+                    else:
                         t_found = datetime.fromisoformat(found.replace('Z', '+00:00'))
                         t_fixed = datetime.fromisoformat(fixed_dt.replace('Z', '+00:00'))
                         if t_fixed >= t_found:  # a fix dated before the finding is not a remediation time
                             deltas.append((t_fixed - t_found).days)
+        if undated:
+            # A remediated critical with no dates leaves the average over an unstated subset, so none is graded.
+            return {"meanTimeToRemediateCritical": None, "sampleSize": 0, "errorCode": "not_measured",
+                    "notMeasured": "Spektrum's Qualys read does not yet include remediation dates, so mean "
+                                   "time to remediate could not be measured."}
         if not deltas:
             # No remediated critical detection to average is not a 0-day remediation time.
             # A Fixed row of any severity, or the echoed filter, proves Fixed was asked for.

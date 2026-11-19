@@ -105,7 +105,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-# Same reply helpers as safeguards/asm/qualys/patchcompliancepercentage.py; keep them in step.
+# --- Qualys detection reply: byte-identical in every transform that reads it (a test compares the copies) ---
 OPEN_STATUSES = {'new', 'active', 'reopened'}
 
 
@@ -144,6 +144,13 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+def truncated(response):
+    """True when Qualys stopped the host list at its record limit (WARNING code 1980)."""
+    warning = response.get('WARNING')
+    warnings = warning if isinstance(warning, list) else [warning]
+    return any(isinstance(w, dict) and str(w.get('CODE', '')).strip() == '1980' for w in warnings)
+# --- end Qualys detection reply ----------------------------------------------------------------------------
+
 
 def extract_hosts(response):
     """HOST records from a detection RESPONSE; Qualys omits HOST_LIST when nothing matched."""
@@ -151,9 +158,10 @@ def extract_hosts(response):
     if host_list is None:
         return [], response.get("DATETIME", "")
 
-    hosts = host_list.get("HOST", [])
+    hosts = host_list.get("HOST", []) if isinstance(host_list, dict) else []
     if isinstance(hosts, dict):
         hosts = [hosts]
+    hosts = [h for h in hosts if isinstance(h, dict)] if isinstance(hosts, list) else []
 
     return hosts, response.get("DATETIME", "")
 
@@ -205,11 +213,8 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False},
-                validation=validation,
-                fail_reasons=["Input validation failed: " + "; ".join(validation.get("errors", []))]
-            )
+            return not_measured(criteriaKey, "The Qualys response failed validation, so patch management could not be checked.",
+                                "not_measured", validation=validation)
 
         # Check for integration execution errors
         if isinstance(data, dict) and "error" in data and "message" in data:
@@ -235,6 +240,15 @@ def transform(input):
         host_count = len(hosts)
         detection_count = count_fixed(hosts)
 
+        if host_count == 0:
+            # No HOST_LIST is nothing assessed under ENG-1353, as in the asm/qualys siblings, not a measured No.
+            return not_measured(criteriaKey, "Qualys returned no assessed hosts, so patch management could not be checked.",
+                                "no_data", validation=validation,
+                                recommendations=("Confirm Qualys has scanned the hosts in scope.",))
+        if detection_count == 0 and truncated(response):
+            # One page with no Fixed row says nothing about the hosts Qualys cut off.
+            return not_measured(criteriaKey, "Spektrum's Qualys read stopped at a page limit, so patch management "
+                                "could not be checked.", "partial_read", validation=validation)
         if detection_count == 0 and 'fixed' not in (echoed_statuses(data) or set()):
             # No Fixed row is "nothing patched" only when the echo proves Fixed was asked for.
             return not_measured(criteriaKey, NOT_READ, "not_measured", validation=validation)
@@ -257,14 +271,16 @@ def transform(input):
         if host_count > 0:
             statuses = {}
             for host in hosts:
-                detection_list = host.get("DETECTION_LIST", {})
-                if not detection_list:
+                detection_list = host.get("DETECTION_LIST", {}) if isinstance(host, dict) else {}
+                if not isinstance(detection_list, dict):
                     continue
                 detections = detection_list.get("DETECTION", [])
                 if isinstance(detections, dict):
                     detections = [detections]
-                for det in detections:
-                    status = det.get("STATUS", "Unknown")
+                for det in detections if isinstance(detections, list) else []:
+                    if not isinstance(det, dict):
+                        continue
+                    status = str(det.get("STATUS", "Unknown"))[:32]
                     count = statuses.get(status, 0)
                     statuses[status] = count + 1
 
@@ -294,16 +310,7 @@ def transform(input):
             }
         )
 
-    except json.JSONDecodeError as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [f"Invalid JSON: {str(e)}"], "warnings": []},
-            fail_reasons=["Could not parse input as valid JSON"]
-        )
-    except Exception as e:
-        return create_response(
-            result={criteriaKey: False},
-            validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
-        )
+    except Exception:
+        return not_measured(criteriaKey, "The Qualys response could not be read, so patch management could not be checked.",
+                            "not_measured", validation={"status": "error", "errors": [], "warnings": []},
+                            transformation_errors=["unreadable value in the Qualys reply"])

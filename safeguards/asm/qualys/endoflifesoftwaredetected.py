@@ -57,6 +57,11 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
     return response
 
 
+# Qualys CSAM lifecycle stages. Only a stage named here as current can answer "no end-of-life software".
+END_OF_LIFE_TOKENS = ('eol', 'eos', 'obsolete', 'end of life', 'end-of-life', 'end of support', 'end-of-support')
+CURRENT_STAGES = ('ga', 'general availability', 'pre-ga', 'beta')
+
+
 def evaluate(data):
     """End-of-life software, when the reply carries the asset inventory (assetListData).
 
@@ -73,23 +78,33 @@ def evaluate(data):
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
         stages = []
+        assets_read = 0
         for asset in assets:
             software_list = asset.get('softwareListData') if isinstance(asset, dict) else None
             software = software_list.get('software') if isinstance(software_list, dict) else None
             if isinstance(software, dict):
                 software = [software]
+            read_before = len(stages)
             for sw in software if isinstance(software, list) else []:
                 lifecycle = sw.get('lifecycle') if isinstance(sw, dict) else None
                 stage = lifecycle.get('stage') if isinstance(lifecycle, dict) else lifecycle
                 if isinstance(stage, str) and stage.strip() and stage.strip().lower() != 'unknown':
                     stages.append(stage.strip().lower())
+            if len(stages) > read_before:
+                assets_read += 1
         if not stages:
             # Assets with no readable software lifecycle prove nothing about end-of-life software.
             return {"endOfLifeSoftwareDetected": None,
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
-        eol_found = any('eol' in stage for stage in stages)
-        return {"endOfLifeSoftwareDetected": eol_found, "assetsScanned": len(assets), "softwareRead": len(stages)}
+        if any(any(token in stage for token in END_OF_LIFE_TOKENS) for stage in stages):
+            return {"endOfLifeSoftwareDetected": True, "assetsScanned": assets_read}
+        if any(stage not in CURRENT_STAGES for stage in stages):
+            # A stage we do not recognise is not proof the software is current.
+            return {"endOfLifeSoftwareDetected": None,
+                    "notMeasured": "Qualys reported a software lifecycle stage Spektrum does not yet read, so "
+                                   "end-of-life software could not be checked."}
+        return {"endOfLifeSoftwareDetected": False, "assetsScanned": assets_read}
     except Exception:
         return {"endOfLifeSoftwareDetected": None, "error": "unreadable value in the Qualys reply"}
 
@@ -115,7 +130,7 @@ def transform(input):
                                 transformation_errors=[eval_result.get("error", "no value")])
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey}
         reason = ("End-of-life software is installed on assets Qualys inventories." if result_value
-                  else "No end-of-life software on the " + str(eval_result["assetsScanned"]) + " assets Qualys inventories.")
+                  else "No end-of-life software on the " + str(eval_result["assetsScanned"]) + " assets whose software Qualys lists.")
         return create_response(
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
             additional_findings=[reason],
