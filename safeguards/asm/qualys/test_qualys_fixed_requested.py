@@ -113,9 +113,10 @@ def test_no_detections_and_no_echo_is_the_measured_hundred():
     assert run("patchcompliancepercentage", payload)[0] == "100"
 
 
-@pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical"])
+@pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical",
+                                  "criticalvulnerabilitycount", "is_patch_management_enabled"])
 def test_a_truncated_detection_reply_is_a_partial_read(name):
-    payload = detections(OPEN_CRITICAL, FIXED_LOW, request=echo(ALL_STATUSES))
+    payload = detections(OPEN_CRITICAL, request=echo(ALL_STATUSES))
     payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = [TRUNCATED]
     value, info = run(name, payload)
     assert value is None
@@ -156,6 +157,19 @@ def test_a_fixed_row_of_any_severity_proves_fixed_was_requested():
     assert value is None and info["dataCollection"]["errorCode"] == "no_data"
 
 
+def test_a_remediated_critical_with_no_dates_is_not_averaged_away():
+    undated = {"STATUS": "Fixed", "SEVERITY": "5"}
+    dated = dict(FIXED_LOW, SEVERITY="5")
+    value, info = run("meantimetoremediatecritical", detections(undated, dated, request=echo(ALL_STATUSES)))
+    assert value is None
+    assert_ours(info)
+
+
+def test_junk_detection_rows_do_not_lower_patch_compliance():
+    value, _ = run("patchcompliancepercentage", detections(FIXED_LOW, "junk", 3, request=echo(ALL_STATUSES)))
+    assert value == "100"
+
+
 def test_no_remediated_critical_without_fixed_requested_is_ours_to_fix():
     value, info = run("meantimetoremediatecritical", detections(OPEN_CRITICAL))
     assert value is None
@@ -182,6 +196,33 @@ def test_each_not_measured_path_is_coded(name, payload, code):
     assert value is None and info["dataCollection"]["errorCode"] == code
     text = json.dumps(info["evaluation"]).lower()
     assert "request" not in text
+
+
+# --- criticalVulnerabilityCount ------------------------------------------------------------------
+
+def test_every_spelling_of_an_open_status_is_counted():
+    rows = [dict(OPEN_CRITICAL, STATUS=status) for status in ("Active", "NEW", "Re-Opened", "REOPENED")]
+    assert run("criticalvulnerabilitycount", detections(*rows))[0] == 4
+
+
+@pytest.mark.parametrize("status", ["Fixed", "Active,Fixed"])
+def test_a_filter_missing_an_open_status_is_not_a_critical_count(status):
+    value, info = run("criticalvulnerabilitycount", detections(OPEN_CRITICAL, request=echo(status)))
+    assert value is None
+    assert_ours(info)
+
+
+# --- the shared detection block -------------------------------------------------------------------
+
+def test_the_detection_block_is_identical_in_every_reader():
+    names = ["patchcompliancepercentage", "meantimetoremediatecritical", "criticalvulnerabilitycount",
+             "is_patch_management_enabled"]
+    blocks = set()
+    for name in names:
+        text = path_of(name).read_text()
+        start = text.index("# --- Qualys detection reply")
+        blocks.add(text[start:text.index("# --- end Qualys detection reply", start)])
+    assert len(blocks) == 1
 
 
 # --- hasHardwareAssetInventory --------------------------------------------------------------------
@@ -232,7 +273,8 @@ def test_end_of_life_is_not_a_no_from_a_host_list():
 
 
 @pytest.mark.parametrize("lifecycle,expected", [("EOL", True), ("GA", False), ({"stage": "EOL/EOS"}, True),
-                                                ({"stage": "GA"}, False)])
+                                                ({"stage": "GA"}, False), ({"stage": "EOS"}, True),
+                                                ("Obsolete", True), ("End of Life", True)])
 def test_end_of_life_is_read_from_an_asset_inventory(lifecycle, expected):
     payload = {"assetListData": {"asset": [{"softwareListData": {"software": [{"lifecycle": lifecycle}]}}]}}
     assert run("endoflifesoftwaredetected", payload)[0] is expected
@@ -245,6 +287,21 @@ def test_assets_without_a_readable_software_lifecycle_are_not_a_no(assets):
     value, info = run("endoflifesoftwaredetected", {"assetListData": {"asset": assets}})
     assert value is None
     assert_ours(info)
+
+
+def test_an_unrecognised_lifecycle_stage_is_not_a_no():
+    payload = {"assetListData": {"asset": [{"softwareListData": {"software": [{"lifecycle": "GA"},
+                                                                             {"lifecycle": "Mystery"}]}}]}}
+    value, info = run("endoflifesoftwaredetected", payload)
+    assert value is None
+    assert_ours(info)
+
+
+def test_the_reason_counts_only_assets_whose_software_was_read():
+    payload = {"assetListData": {"asset": [{"id": 1}, {"softwareListData": {"software": [{"lifecycle": "GA"}]}}]}}
+    out = load("endoflifesoftwaredetected").transform(payload)
+    assert out["transformedResponse"]["assetsScanned"] == 1
+    assert "on the 1 assets" in json.dumps(out["additionalInfo"]["evaluation"])
 
 
 def test_patch_management_is_not_a_no_from_a_host_list():
@@ -263,11 +320,19 @@ def test_open_rows_only_are_not_patch_management():
     assert_ours(info)
 
 
-@pytest.mark.parametrize("payload", [detections(OPEN_CRITICAL, request=echo("Fixed")),
-                                     {"HOST_LIST_VM_DETECTION_OUTPUT": {"REQUEST": echo("Fixed"), "RESPONSE": {}}}])
-def test_no_fixed_row_when_fixed_was_requested_is_a_measured_no(payload):
-    value, info = run("is_patch_management_enabled", payload)
+def test_no_fixed_row_when_fixed_was_requested_is_a_measured_no():
+    value, info = run("is_patch_management_enabled", detections(OPEN_CRITICAL, "junk", request=echo("Fixed")))
     assert value is False and info["dataCollection"]["status"] == "success"
+
+
+def test_no_assessed_host_is_not_a_patch_management_no():
+    payload = {"HOST_LIST_VM_DETECTION_OUTPUT": {"REQUEST": echo("Fixed"), "RESPONSE": {}}}
+    value, info = run("is_patch_management_enabled", payload)
+    assert value is None and info["dataCollection"]["errorCode"] == "no_data"
+
+
+def test_a_junk_detection_row_does_not_undo_a_proven_yes():
+    assert run("is_patch_management_enabled", detections(FIXED_LOW, "junk"))[0] is True
 
 
 @pytest.mark.parametrize("payload", [{}, {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "1901", "TEXT": "x"}}},
