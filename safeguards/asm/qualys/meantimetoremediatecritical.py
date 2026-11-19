@@ -96,6 +96,29 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+def detection_rows(host):
+    """A host's detection records; none when DETECTION_LIST or DETECTION is empty.
+
+    Any other shape, or any row that is not a record, raises: grading the readable rows would grade an
+    unstated subset, so every reader treats an unreadable row the same way, as not measured.
+    """
+    if not isinstance(host, dict):
+        raise ValueError("unreadable host record")
+    detection_list = host.get('DETECTION_LIST')
+    if not detection_list:
+        return []
+    if not isinstance(detection_list, dict):
+        raise ValueError("unreadable detection list")
+    rows = detection_list.get('DETECTION')
+    if not rows:
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("unreadable detection row")
+    return rows
+
+
 def truncated(response):
     """True when Qualys stopped the host list at its record limit (WARNING code 1980)."""
     warning = response.get('WARNING')
@@ -119,28 +142,28 @@ def evaluate(data):
             hosts = [hosts]
         deltas = []
         any_fixed = False
-        undated = False
+        unusable = False
         for host in hosts:
-            detections = host.get('DETECTION_LIST', {}).get('DETECTION', [])
-            if isinstance(detections, dict):
-                detections = [detections]
+            detections = detection_rows(host)
             for d in detections:
-                is_fixed = isinstance(d, dict) and status_token(d.get('STATUS', '')) == 'fixed'
+                is_fixed = status_token(d.get('STATUS', '')) == 'fixed'
                 any_fixed = any_fixed or is_fixed
                 if is_fixed and int(d.get('SEVERITY', 0)) >= 4:
                     found = d.get('FIRST_FOUND_DATETIME', '')
                     fixed_dt = d.get('LAST_FIXED_DATETIME', '')
                     if not (found and fixed_dt):
-                        undated = True
+                        unusable = True
                     else:
                         t_found = datetime.fromisoformat(found.replace('Z', '+00:00'))
                         t_fixed = datetime.fromisoformat(fixed_dt.replace('Z', '+00:00'))
-                        if t_fixed >= t_found:  # a fix dated before the finding is not a remediation time
+                        if t_fixed < t_found:  # a fix dated before the finding is not a remediation time
+                            unusable = True
+                        else:
                             deltas.append((t_fixed - t_found).days)
-        if undated:
-            # A remediated critical with no dates leaves the average over an unstated subset, so none is graded.
+        if unusable:
+            # A remediated critical with no usable dates leaves the average over an unstated subset, so none is graded.
             return {"meanTimeToRemediateCritical": None, "sampleSize": 0, "errorCode": "not_measured",
-                    "notMeasured": "Spektrum's Qualys read does not yet include remediation dates, so mean "
+                    "notMeasured": "Spektrum's Qualys read does not yet include usable remediation dates, so mean "
                                    "time to remediate could not be measured."}
         if not deltas:
             # No remediated critical detection to average is not a 0-day remediation time.
