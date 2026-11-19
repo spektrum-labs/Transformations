@@ -96,6 +96,26 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+EMPTY = (None, '', [])  # xmltodict writes an empty element as None
+
+
+def detection_hosts(response):
+    """Host records in a detection RESPONSE; none when Qualys omits HOST_LIST, which means nothing assessed.
+
+    A HOST_LIST that is present but empty, or holds anything but host records, raises: that is our read
+    failing, not "nothing scanned", and grading the readable hosts would grade an unstated subset.
+    """
+    host_list = response.get('HOST_LIST')
+    if host_list is None:
+        return []
+    hosts = host_list.get('HOST') if isinstance(host_list, dict) else None
+    if isinstance(hosts, dict):
+        hosts = [hosts]
+    if not isinstance(hosts, list) or not hosts or any(not isinstance(host, dict) for host in hosts):
+        raise ValueError("unreadable host list")
+    return hosts
+
+
 def detection_rows(host):
     """A host's detection records; none when DETECTION_LIST or DETECTION is empty.
 
@@ -105,12 +125,12 @@ def detection_rows(host):
     if not isinstance(host, dict):
         raise ValueError("unreadable host record")
     detection_list = host.get('DETECTION_LIST')
-    if not detection_list:
+    if detection_list in EMPTY:
         return []
     if not isinstance(detection_list, dict):
         raise ValueError("unreadable detection list")
     rows = detection_list.get('DETECTION')
-    if not rows:
+    if rows in EMPTY:
         return []
     if isinstance(rows, dict):
         rows = [rows]
@@ -136,10 +156,7 @@ def evaluate(data):
         if truncated(response):
             return {"meanTimeToRemediateCritical": None, "errorCode": "partial_read",
                     "notMeasured": "Spektrum's Qualys read stopped at a page limit, so mean time to remediate is not graded."}
-        host_list = response.get('HOST_LIST')
-        hosts = host_list.get('HOST', []) if isinstance(host_list, dict) else []
-        if isinstance(hosts, dict):
-            hosts = [hosts]
+        hosts = detection_hosts(response)
         deltas = []
         any_fixed = False
         unusable = False
