@@ -1,5 +1,5 @@
 """SentinelOne (2bc425fa): isEDRDeployed from getEndpoints and the three vulnerability counts from the
-getApplicationRiskCounts workflow (five GET /web/api/v2.1/application-management/risks?countOnly=true steps).
+getApplicationRiskCounts workflow (six GET /web/api/v2.1/application-management/risks?countOnly=true steps).
 SYNTHETIC fixtures only.
 
 Shapes: the IS response for GET /agents ({"data": [...], "pagination": {"totalItems", "nextCursor"}}) and the
