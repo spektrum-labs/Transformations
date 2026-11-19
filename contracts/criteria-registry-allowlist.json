@@ -308,7 +308,6 @@
     "safeguards/asm/projectdiscovery/knownexploitedhighvulncount.py::knownExploitedHighVulnCount",
     "safeguards/asm/projectdiscovery/knownexploitedvulncount.py::knownExploitedVulnCount",
     "safeguards/asm/qualys/criticalvulnerabilitycount.py::criticalVulnerabilityCount",
-    "safeguards/asm/qualys/externalassetinventorycount.py::assetCount",
     "safeguards/asm/qualys/externalassetinventorycount.py::externalAssetInventoryCount",
     "safeguards/asm/qualys/hashardwareassetinventory.py::hardwareAssetCount",
     "safeguards/asm/qualys/hashardwareassetinventory.py::hasHardwareAssetInventory",
