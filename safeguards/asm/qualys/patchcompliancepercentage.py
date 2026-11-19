@@ -82,7 +82,13 @@ def evaluate(data):
             if isinstance(detections, dict):
                 detections = [detections]
             total += len(detections)
-            fixed += sum(1 for d in detections if d.get('STATUS') == 'Fixed')
+            fixed += sum(1 for d in detections if isinstance(d, dict) and str(d.get('STATUS', '')).lower() == 'fixed')
+        if total > 0 and fixed == 0:
+            # shortcut: cannot tell "nothing fixed" from "Fixed not requested"; getVulnerabilities
+            # sends no status filter, so Qualys returns open detections only. Grade 0 once it asks for Fixed.
+            return {"patchCompliancePercentage": None, "totalDetections": total, "fixedDetections": 0,
+                    "notMeasured": "The Qualys detection list holds open detections only, with no Fixed ones to "
+                                   "compare against, so patch compliance could not be measured."}
         compliance = int((fixed / total) * 100) if total > 0 else 100
         return {"patchCompliancePercentage": str(compliance), "totalDetections": total, "fixedDetections": fixed}
     except Exception as e:
@@ -104,6 +110,8 @@ def transform(input):
             return not_measured(criteriaKey, "Qualys returned no assessed hosts, so patch compliance could not be measured.",
                                 validation=validation)
         eval_result = evaluate(data)
+        if eval_result.get("notMeasured"):
+            return not_measured(criteriaKey, eval_result["notMeasured"], validation=validation)
         if "error" in eval_result or eval_result.get(criteriaKey) is None:
             return not_measured(criteriaKey, "The Qualys detection list could not be read, so patch compliance could not be measured.",
                                 validation=validation, transformation_errors=[eval_result.get("error", "no value")])

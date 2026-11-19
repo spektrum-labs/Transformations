@@ -1,7 +1,7 @@
 """
 Transformation: externalAssetInventoryCount
 Vendor: Qualys  |  Category: Attack Surface Management
-Evaluates: Returns count of externally-exposed assets from Qualys CSAM.
+Evaluates: Count of hosts in the Qualys host list; not measured when Qualys truncates the list.
 """
 import json
 from datetime import datetime
@@ -25,6 +25,9 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
+RECOMMENDATION = "Confirm the Qualys account can list hosts and that the host list request returned all of them."
+
+
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
@@ -42,13 +45,37 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def not_measured(criteria_key, reason, validation=None, transformation_errors=None, findings=None):
+    """criteria_key None plus a dataCollection error, so the evaluator records Not evaluated."""
+    return create_response(
+        result={criteria_key: None}, validation=validation,
+        api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
+        additional_findings=findings,
+        recommendations=[RECOMMENDATION])
+
+
 def evaluate(data):
-    """Core evaluation logic."""
+    """Hosts in the Qualys host list (HOST_LIST_OUTPUT), the reply getHostList returns."""
     try:
-        count = data.get('count', 0)
-        return {"externalAssetInventoryCount": str(count), "assetCount": count}
+        output = data.get('HOST_LIST_OUTPUT') if isinstance(data, dict) else None
+        response = output.get('RESPONSE') if isinstance(output, dict) else None
+        if not isinstance(response, dict):
+            return {"externalAssetInventoryCount": None,
+                    "notMeasured": "Qualys returned no host list, so the asset inventory could not be counted."}
+        host_list = response.get('HOST_LIST')
+        hosts = host_list.get('HOST', []) if isinstance(host_list, dict) else []
+        if isinstance(hosts, dict):
+            hosts = [hosts]
+        count = len(hosts) if isinstance(hosts, list) else 0
+        warning = response.get('WARNING')
+        if isinstance(warning, dict) and str(warning.get('CODE', '')).strip() == '1980':
+            # A truncated read is a lower bound, and a transform is never told the bar it is graded against.
+            return {"externalAssetInventoryCount": None, "sampleCount": count,
+                    "notMeasured": "Qualys stopped the host list at " + str(count) + " records (warning 1980), "
+                                   "so the asset inventory count is a lower bound and is not graded."}
+        return {"externalAssetInventoryCount": count, "assetCount": count}
     except Exception as e:
-        return {"externalAssetInventoryCount": "0", "error": str(e)}
+        return {"externalAssetInventoryCount": None, "error": str(e)}
 
 
 def transform(input):
@@ -60,27 +87,23 @@ def transform(input):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
         if validation.get("status") == "failed":
-            return create_response(result={criteriaKey: False}, validation=validation, fail_reasons=["Input validation failed"])
+            return not_measured(criteriaKey, "The Qualys response failed validation, so the asset inventory count could not be measured.",
+                                validation=validation)
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, False)
-        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-        if result_value:
-            pass_reasons.append(f"{criteriaKey} check passed")
-            for k, v in extra_fields.items():
-                pass_reasons.append(f"{k}: {v}")
-        else:
-            fail_reasons.append(f"{criteriaKey} check failed")
-            if "error" in eval_result:
-                fail_reasons.append(eval_result["error"])
-            recommendations.append(f"Review Qualys configuration for {criteriaKey}")
+        if eval_result.get("notMeasured"):
+            return not_measured(criteriaKey, eval_result["notMeasured"], validation=validation,
+                                findings=[f"{k}: {v}" for k, v in eval_result.items() if k not in (criteriaKey, "notMeasured")])
+        if "error" in eval_result or eval_result.get(criteriaKey) is None:
+            return not_measured(criteriaKey, "The Qualys response could not be read, so the asset inventory count could not be measured.",
+                                validation=validation, transformation_errors=[eval_result.get("error", "no value")])
+        result_value = eval_result[criteriaKey]
+        extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey}
+        summary = ["externalAssetInventoryCount: " + str(result_value)] + [f"{k}: {v}" for k, v in extra_fields.items()]
         return create_response(
             result={criteriaKey: result_value, **extra_fields}, validation=validation,
-            pass_reasons=pass_reasons, fail_reasons=fail_reasons, recommendations=recommendations,
+            additional_findings=summary,
             input_summary={criteriaKey: result_value, **extra_fields})
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False}, validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)], fail_reasons=[f"Transformation error: {str(e)}"])
+        return not_measured(criteriaKey, "The Qualys response could not be read, so the asset inventory count could not be measured.",
+                            validation={"status": "error", "errors": [], "warnings": []},
+                            transformation_errors=[str(e)])
