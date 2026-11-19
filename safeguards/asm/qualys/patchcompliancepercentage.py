@@ -117,6 +117,29 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+def detection_rows(host):
+    """A host's detection records; none when DETECTION_LIST or DETECTION is empty.
+
+    Any other shape, or any row that is not a record, raises: grading the readable rows would grade an
+    unstated subset, so every reader treats an unreadable row the same way, as not measured.
+    """
+    if not isinstance(host, dict):
+        raise ValueError("unreadable host record")
+    detection_list = host.get('DETECTION_LIST')
+    if not detection_list:
+        return []
+    if not isinstance(detection_list, dict):
+        raise ValueError("unreadable detection list")
+    rows = detection_list.get('DETECTION')
+    if not rows:
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("unreadable detection row")
+    return rows
+
+
 def truncated(response):
     """True when Qualys stopped the host list at its record limit (WARNING code 1980)."""
     warning = response.get('WARNING')
@@ -135,10 +158,7 @@ def evaluate(data):
         total = 0
         fixed = 0
         for host in hosts:
-            detections = host.get('DETECTION_LIST', {}).get('DETECTION', [])
-            if isinstance(detections, dict):
-                detections = [detections]
-            detections = [d for d in detections if isinstance(d, dict)]  # a junk row is no detection either way
+            detections = detection_rows(host)
             total += len(detections)
             fixed += sum(1 for d in detections if isinstance(d, dict) and status_token(d.get('STATUS', '')) == 'fixed')
         statuses = echoed_statuses(data)

@@ -3,17 +3,17 @@ Transformation: isPatchManagementEnabled
 Vendor: Qualys
 Category: Security / Attack Surface Management
 
-Evaluates whether patch management is enabled by querying the Qualys
-Host List VM Detection API filtered by is_patchable=1 and status=Fixed.
-If any hosts with Fixed (patched) detections are returned, patch
-management is considered enabled.
+Evaluates whether patch management is enabled from a Qualys Host List VM
+Detection reply. Any Fixed (patched) detection makes it enabled. No Fixed row
+is a No only when the reply's request echo (echo_request=1) shows status
+included Fixed; otherwise, and when no host was assessed, it is Not evaluated.
 
 Expected response structure:
 {
     "HOST_LIST_VM_DETECTION_OUTPUT": {
         "RESPONSE": {
             "DATETIME": "2026-03-19T16:53:03Z",
-            "HOST_LIST": {              # absent when no patched hosts
+            "HOST_LIST": {              # absent when nothing matched: Not evaluated (no_data)
                 "HOST": [               # single dict or list
                     {
                         "ID": "12345",
@@ -144,6 +144,29 @@ def echoed_statuses(data):
     return set(OPEN_STATUSES)
 
 
+def detection_rows(host):
+    """A host's detection records; none when DETECTION_LIST or DETECTION is empty.
+
+    Any other shape, or any row that is not a record, raises: grading the readable rows would grade an
+    unstated subset, so every reader treats an unreadable row the same way, as not measured.
+    """
+    if not isinstance(host, dict):
+        raise ValueError("unreadable host record")
+    detection_list = host.get('DETECTION_LIST')
+    if not detection_list:
+        return []
+    if not isinstance(detection_list, dict):
+        raise ValueError("unreadable detection list")
+    rows = detection_list.get('DETECTION')
+    if not rows:
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("unreadable detection row")
+    return rows
+
+
 def truncated(response):
     """True when Qualys stopped the host list at its record limit (WARNING code 1980)."""
     warning = response.get('WARNING')
@@ -157,12 +180,11 @@ def extract_hosts(response):
     host_list = response.get("HOST_LIST", None)
     if host_list is None:
         return [], response.get("DATETIME", "")
-
-    hosts = host_list.get("HOST", []) if isinstance(host_list, dict) else []
+    hosts = host_list.get("HOST") if isinstance(host_list, dict) else None
     if isinstance(hosts, dict):
         hosts = [hosts]
-    hosts = [h for h in hosts if isinstance(h, dict)] if isinstance(hosts, list) else []
-
+    if not isinstance(hosts, list) or not hosts or any(not isinstance(h, dict) for h in hosts):
+        raise ValueError("unreadable host list")  # present but unreadable is our read, not "nothing scanned"
     return hosts, response.get("DATETIME", "")
 
 
@@ -177,28 +199,24 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
         additional_findings=findings, recommendations=list(recommendations))
-    response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
+    if error_code:  # an error relayed from Integration-Service keeps its own reason code
+        response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
 
 
+NOT_SCANNED = "Confirm Qualys has scanned the hosts in scope."
 NOT_READ = ("Spektrum's Qualys read does not yet include patched detections, so patch management "
             "could not be checked.")
 
 
-def count_fixed(hosts):
-    """Fixed detections across all hosts: a host listed with only open rows proves no patching."""
-    total = 0
+def tally_statuses(hosts):
+    """Detections per status across all hosts, in one pass; a row that is not a record raises."""
+    tally = {}
     for host in hosts:
-        detection_list = host.get("DETECTION_LIST", {}) if isinstance(host, dict) else {}
-        if not isinstance(detection_list, dict):
-            continue
-        detections = detection_list.get("DETECTION", [])
-        if isinstance(detections, dict):
-            detections = [detections]
-        if not isinstance(detections, list):
-            continue
-        total = total + len([d for d in detections if isinstance(d, dict) and status_token(d.get("STATUS", "")) == "fixed"])
-    return total
+        for row in detection_rows(host):
+            status = status_token(row.get("STATUS", "unknown"))[:32]
+            tally[status] = tally.get(status, 0) + 1
+    return tally
 
 
 def transform(input):
@@ -217,14 +235,11 @@ def transform(input):
                                 "not_measured", validation=validation)
 
         # Check for integration execution errors
-        if isinstance(data, dict) and "error" in data and "message" in data:
-            if isinstance(data["message"], str) and data["message"].startswith("Integration execution error"):
-                return create_response(
-                    result={criteriaKey: False},
-                    validation=validation,
-                    fail_reasons=["Error communicating with Qualys API"],
-                    recommendations=["Verify the Qualys API credentials and base URL are correct"]
-                )
+        if isinstance(data, dict) and (data.get("error") or str(data.get("message", "")).startswith("Integration execution error")):
+            # The call failed, so nothing was measured. No errorCode here: Token-Service copies the relayed reason.
+            return not_measured(criteriaKey, "The Qualys call returned an error, so patch management could not be checked.",
+                                None, validation=validation,
+                                recommendations=("Verify the Qualys API credentials and base URL are correct",))
 
         response = detection_response(data)
         if response is None:
@@ -238,13 +253,14 @@ def transform(input):
 
         hosts, response_datetime = extract_hosts(response)
         host_count = len(hosts)
-        detection_count = count_fixed(hosts)
+        statuses = tally_statuses(hosts)
+        detection_count = statuses.get("fixed", 0)
 
         if host_count == 0:
             # No HOST_LIST is nothing assessed under ENG-1353, as in the asm/qualys siblings, not a measured No.
             return not_measured(criteriaKey, "Qualys returned no assessed hosts, so patch management could not be checked.",
                                 "no_data", validation=validation,
-                                recommendations=("Confirm Qualys has scanned the hosts in scope.",))
+                                recommendations=(NOT_SCANNED,))
         if detection_count == 0 and truncated(response):
             # One page with no Fixed row says nothing about the hosts Qualys cut off.
             return not_measured(criteriaKey, "Spektrum's Qualys read stopped at a page limit, so patch management "
@@ -267,29 +283,11 @@ def transform(input):
                 "Verify that Qualys VM/VMDR is configured and that patches are being deployed to remediate detected vulnerabilities"
             )
 
-        additional_findings = []
-        if host_count > 0:
-            statuses = {}
-            for host in hosts:
-                detection_list = host.get("DETECTION_LIST", {}) if isinstance(host, dict) else {}
-                if not isinstance(detection_list, dict):
-                    continue
-                detections = detection_list.get("DETECTION", [])
-                if isinstance(detections, dict):
-                    detections = [detections]
-                for det in detections if isinstance(detections, list) else []:
-                    if not isinstance(det, dict):
-                        continue
-                    status = str(det.get("STATUS", "Unknown"))[:32]
-                    count = statuses.get(status, 0)
-                    statuses[status] = count + 1
-
-            for status_name in statuses:
-                additional_findings.append({
-                    "metric": f"patchableDetections_{status_name}",
-                    "value": statuses[status_name],
-                    "reason": f"{statuses[status_name]} patchable detection(s) with status '{status_name}'"
-                })
+        additional_findings = [{
+            "metric": f"patchableDetections_{status_name}",
+            "value": statuses[status_name],
+            "reason": f"{statuses[status_name]} patchable detection(s) with status '{status_name}'"
+        } for status_name in statuses]
 
         return create_response(
             result={
@@ -305,8 +303,7 @@ def transform(input):
             input_summary={
                 "responseDateTime": response_datetime,
                 "hostCount": host_count,
-                "patchedDetectionCount": detection_count,
-                "hasHostList": host_count > 0
+                "patchedDetectionCount": detection_count
             }
         )
 

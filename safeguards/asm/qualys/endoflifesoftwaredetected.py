@@ -58,6 +58,7 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
 
 
 # Qualys CSAM lifecycle stages. Only a stage named here as current can answer "no end-of-life software".
+# A stage is split on "/" and "," and each part matched whole, so "EOL/EOS" is end of life and "Not EOL" is unread.
 END_OF_LIFE_TOKENS = ('eol', 'eos', 'obsolete', 'end of life', 'end-of-life', 'end of support', 'end-of-support')
 CURRENT_STAGES = ('ga', 'general availability', 'pre-ga', 'beta')
 
@@ -78,31 +79,36 @@ def evaluate(data):
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
         stages = []
+        unread = 0
         assets_read = 0
         for asset in assets:
             software_list = asset.get('softwareListData') if isinstance(asset, dict) else None
             software = software_list.get('software') if isinstance(software_list, dict) else None
             if isinstance(software, dict):
                 software = [software]
-            read_before = len(stages)
-            for sw in software if isinstance(software, list) else []:
+            if not isinstance(software, list) or not software:
+                continue
+            assets_read += 1
+            for sw in software:
                 lifecycle = sw.get('lifecycle') if isinstance(sw, dict) else None
                 stage = lifecycle.get('stage') if isinstance(lifecycle, dict) else lifecycle
-                if isinstance(stage, str) and stage.strip() and stage.strip().lower() != 'unknown':
-                    stages.append(stage.strip().lower())
-            if len(stages) > read_before:
-                assets_read += 1
+                parts = [p.strip() for p in str(stage).lower().replace(',', '/').split('/')] if isinstance(stage, str) else []
+                parts = [p for p in parts if p and p != 'unknown']
+                if parts:
+                    stages.append(parts)
+                else:
+                    unread += 1
+        if any(part in END_OF_LIFE_TOKENS for parts in stages for part in parts):
+            return {"endOfLifeSoftwareDetected": True, "assetsScanned": assets_read}
         if not stages:
             # Assets with no readable software lifecycle prove nothing about end-of-life software.
             return {"endOfLifeSoftwareDetected": None,
                     "notMeasured": "Spektrum's Qualys read does not yet include installed software, so "
                                    "end-of-life software could not be checked."}
-        if any(any(token in stage for token in END_OF_LIFE_TOKENS) for stage in stages):
-            return {"endOfLifeSoftwareDetected": True, "assetsScanned": assets_read}
-        if any(stage not in CURRENT_STAGES for stage in stages):
-            # A stage we do not recognise is not proof the software is current.
-            return {"endOfLifeSoftwareDetected": None,
-                    "notMeasured": "Qualys reported a software lifecycle stage Spektrum does not yet read, so "
+        if unread or any(part not in CURRENT_STAGES for parts in stages for part in parts):
+            # Software with an unknown or unrecognised stage is not proof the software is current.
+            return {"endOfLifeSoftwareDetected": None, "unreadLifecycles": unread,
+                    "notMeasured": "Qualys reported software whose lifecycle Spektrum could not read, so "
                                    "end-of-life software could not be checked."}
         return {"endOfLifeSoftwareDetected": False, "assetsScanned": assets_read}
     except Exception:
