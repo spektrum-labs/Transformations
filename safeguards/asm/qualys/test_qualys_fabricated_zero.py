@@ -108,8 +108,9 @@ def test_a_lowercase_fixed_status_still_counts():
     assert value == "10"
 
 
-def test_vendor_text_does_not_reach_the_errors():
-    out = load("meantimetoremediatecritical").transform(detections({"STATUS": "Fixed", "SEVERITY": "DO-NOT-ECHO"}))
+@pytest.mark.parametrize("name,status", [("meantimetoremediatecritical", "Fixed"), ("criticalvulnerabilitycount", "Active")])
+def test_vendor_text_does_not_reach_the_errors(name, status):
+    out = load(name).transform(detections({"STATUS": status, "SEVERITY": "DO-NOT-ECHO"}))
     assert "DO-NOT-ECHO" not in str(out)
 
 

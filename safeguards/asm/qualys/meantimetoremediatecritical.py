@@ -66,7 +66,7 @@ def evaluate(data):
             if isinstance(detections, dict):
                 detections = [detections]
             for d in detections:
-                if int(d.get('SEVERITY', 0)) >= 4 and str(d.get('STATUS', '')).lower() == 'fixed':
+                if isinstance(d, dict) and int(d.get('SEVERITY', 0)) >= 4 and str(d.get('STATUS', '')).lower() == 'fixed':
                     found = d.get('FIRST_FOUND_DATETIME', '')
                     fixed_dt = d.get('LAST_FIXED_DATETIME', '')
                     if found and fixed_dt:
