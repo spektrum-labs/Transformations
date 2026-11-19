@@ -46,7 +46,7 @@ def transform(input):
                 "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z",
                              "schemaVersion": "1.0", "transformationId": criteriaKey,
                              "vendor": "Check Point Harmony Email & Collaboration",
-                             "method": "queryOffice365Events"},
+                             "method": "queryOffice365MoveEvents"},
             },
         }
 
