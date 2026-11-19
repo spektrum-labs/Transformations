@@ -18,6 +18,7 @@ Input: the getApplicationRiskCounts workflow output, one block per step (IS merg
   high             severities=HIGH
   overdueCritical  severities=CRITICAL&detectionDate__lt={$utcNow-15d}
   overdueHigh      severities=HIGH&detectionDate__lt={$utcNow-30d}
+  beforeNow        detectionDate__lt={$utcNow} (date-filter control: every listed row was detected before now)
 (IS's {$utcNow-Nd} is the call time minus N days, RFC 3339 UTC.) One row is one CVE on one endpoint for one
 installed application, so a count is a number of those rows.
 
@@ -30,21 +31,24 @@ Status: the counts take every row SentinelOne lists for the severity. No status 
 for this endpoint), so a row the vendor still lists after a fix would be counted. That can only raise a count, never
 turn a failing tenant into a passing one.
 
-Fail closed: anything that is not five complete, consistent vendor counts returns all three keys as None with
+Fail closed: anything that is not six complete, consistent vendor counts returns all three keys as None with
 dataCollection "error" (Unevaluated): no envelope, an IS or vendor error (an unlicensed tenant or a role without the
 Application Management permission answers 403), a missing block, a block without a whole-number
 pagination.totalItems, an allRisks total of 0 (a tenant without the Vulnerability Management licence can answer an
 empty list, so zero rows is not a measured zero), or counts that disagree: critical + high above allRisks (a
-severity filter the vendor ignored), or an overdue count above its open count (a date filter that widened the set).
+severity filter the vendor ignored), an overdue count above its open count (a date filter that widened the set), or
+a beforeNow count of 0 (the vendor read the {$utcNow} timestamp form as a date before every detection, so the overdue
+cutoffs, written the same way, cannot be trusted to be non-zero). The severity values are SentinelOne's uppercase
+enum, confirmed against a live tenant: a misspelt value answers 0, which these checks cannot tell from a clean tenant.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "openCriticalVulnerabilitiesCount"
 KEY_CRITICAL = "openCriticalVulnerabilitiesCount"
 KEY_HIGH = "openHighSeverityVulnerabilitiesCount"
 KEY_OVERDUE = "overdueCriticalHighVulnerabilitiesCount"
-BLOCKS = ["allRisks", "critical", "high", "overdueCritical", "overdueHigh"]
+BLOCKS = ["allRisks", "critical", "high", "overdueCritical", "overdueHigh", "beforeNow"]
 WRAPPERS = ["data", "result", "response", "apiResponse", "api_response", "_response_data", "Output"]
 META = {"transformationId": KEY, "vendor": "SentinelOne", "category": "epp"}
 
@@ -61,11 +65,12 @@ def parse(value):
 def error_of(obj):
     """The error a wrapper or vendor body reports, or None."""
     error = obj.get("error")
-    if obj.get("errors") or error is True or obj.get("stepError") is True or (isinstance(error, str) and error.strip()):
+    error_set = error is True or (not isinstance(error, bool) and bool(error))  # True, a message, or an error object
+    if obj.get("errors") or error_set or obj.get("stepError") is True:
         inner = obj.get("apiResponse")
         inner_message = inner.get("errorMessage") if isinstance(inner, dict) else None
         return json.dumps(obj.get("errors") or obj.get("message") or obj.get("errorMessage")
-                          or (error if isinstance(error, str) else None) or inner_message or "error")[:300]
+                          or (error if not isinstance(error, bool) else None) or inner_message or "error")[:300]
     status = obj.get("statusCode") or obj.get("status_code")
     if isinstance(status, str) and status.strip().isdigit():
         status = int(status.strip())
@@ -155,6 +160,9 @@ def measure(raw):
                       + " high is more than the " + str(totals["allRisks"]) + " risks in scope; not scored.")
     if totals["overdueCritical"] > totals["critical"] or totals["overdueHigh"] > totals["high"]:
         return None, "SentinelOne counts disagree: an overdue count exceeds its open count; not scored."
+    if totals["beforeNow"] == 0:
+        return None, ("SentinelOne counts no risk detected before now although " + str(totals["allRisks"])
+                      + " are in scope: the detection-date filter was not read as intended; not scored.")
     return totals, None
 
 
@@ -182,7 +190,7 @@ def respond(result, problem=None, pass_reasons=None, fail_reasons=None, summary=
                     "15 days and high older than 30 days."],
                 "additionalFindings": [],
             },
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z", "schemaVersion": "2.0",
                          "transformationId": META["transformationId"], "vendor": META["vendor"],
                          "category": META["category"]},
         },
