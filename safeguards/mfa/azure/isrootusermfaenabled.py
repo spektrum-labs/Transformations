@@ -31,7 +31,9 @@ with the remote-access (entra_ca_mfa_coverage.py) and phishing-resistant
 An excluded location, AllTrusted included, skips MFA from there: named locations are not read, so the
 excluded one could be a wide range where Global Admin sign-ins are not asked for MFA. The policy does not count
 (as in entra_ca_authstrength_phishing_resistant.py) and the fail reason carries the count of excluded
-locations, never their ids. Excluded applications other than the admin surface do not change the verdict; they
+locations, never their ids. On AllTrusted this differs from the remote-access check
+(entra_ca_mfa_coverage.py), which lets it through: an admin MFA policy must reach every admin sign-in, so it
+follows the phishing-resistant rule (decision: review of PR #1381, 19 Nov 2026). Excluded applications other than the admin surface do not change the verdict; they
 are named in additionalFindings (narrowing_conditions).
 
 Break-glass (row 36B (c), decision 18 Oct 2026): a counting policy may exclude
