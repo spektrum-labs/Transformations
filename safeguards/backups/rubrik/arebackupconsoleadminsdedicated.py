@@ -334,15 +334,19 @@ def context_org(accounts):
     return unique[0] if len(unique) == 1 else None
 
 
+#: sub_org_roles result when the context organization is not derived. Truthy, so callers compare to it first.
+UNDECIDED = "undecided"
+
+
 def sub_org_roles(n, ctx):
-    """True / False, or None when allOrgs is missing: does a non-admin account hold roles in an organization
-    other than the context one? With no derived context (ctx None) any listed organization cannot be placed
-    and reads as "undecided"."""
+    """True (sub-org roles), False (none), None (allOrgs missing) or UNDECIDED: does a non-admin account hold
+    roles in an organization other than the context one? With no derived context (ctx None) any listed
+    organization cannot be placed, so the answer is UNDECIDED."""
     ids = org_ids(n)
     if ids is None:
         return None
     if ctx is None:
-        return "undecided" if len(ids) > 0 else False
+        return UNDECIDED if len(ids) > 0 else False
     for oid in ids:
         if oid != ctx:
             return True
@@ -444,7 +448,7 @@ def transform(input):
                 if sub is None:
                     return not_measured(validation, "A group entry carries no organization list, so roles held in "
                                         "sub-organizations cannot be read.")
-                if sub == "undecided":
+                if sub == UNDECIDED:
                     counts["subOrgUndecided"] = counts["subOrgUndecided"] + 1
                 elif sub:
                     counts["subOrgGroups"] = counts["subOrgGroups"] + 1
@@ -460,7 +464,7 @@ def transform(input):
                 if sub is None:
                     return not_measured(validation, "A user entry carries no organization list, so roles held in "
                                         "sub-organizations cannot be read.")
-                if sub == "undecided":
+                if sub == UNDECIDED:
                     counts["subOrgUndecided"] = counts["subOrgUndecided"] + 1
                 elif sub:
                     counts["subOrgUsers"] = counts["subOrgUsers"] + 1
