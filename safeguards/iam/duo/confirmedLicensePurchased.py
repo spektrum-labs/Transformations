@@ -98,8 +98,10 @@ def deep_refusal_of(value, depth=0):
     """A vendorErrorAsResponse marker at any nesting (capped at 4 levels), else None. Only read when no edition is
     readable, so a marker nested beside a valid summary never overrides it. Decodes JSON-string layers, as
     raw_refusal_of does; an empty {} marker counts at every depth, as it does at the top level."""
+    if depth > 4:
+        return None
     value = decoded(value)
-    if not isinstance(value, dict) or depth > 4:
+    if not isinstance(value, dict):
         return None
     marker = value.get("vendorErrorAsResponse")
     if isinstance(marker, dict):
@@ -144,8 +146,10 @@ def summary_of(value):
 
 def raw_refusal_of(value, depth=0):
     """A plain Duo FAIL body (code 40301 / 40101, int or string), up to 4 wrapper levels down, as a refusal marker, else None."""
+    if depth > 4:
+        return None
     value = decoded(value)
-    if not isinstance(value, dict) or depth > 4:
+    if not isinstance(value, dict):
         return None
     code = value.get("code")
     code = int(code) if isinstance(code, str) and code.strip().isascii() and code.strip().isdigit() else code

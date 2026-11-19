@@ -112,6 +112,13 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
             for out in self.each(body):
                 self.assert_not_evaluated(out, "scope_not_granted")
 
+    def test_marker_beyond_the_depth_cap_is_not_read(self):
+        body = json.dumps(FORBIDDEN)
+        for _ in range(6):
+            body = {"w": body}
+        for out in self.each(body):
+            self.assert_not_evaluated(out, "not_available")
+
     def test_empty_marker_is_a_refusal_at_every_depth(self):
         for body in [{"vendorErrorAsResponse": {}}, {"response": {"vendorErrorAsResponse": {}}},
                      {"response": {"result": {"vendorErrorAsResponse": {}}}},
