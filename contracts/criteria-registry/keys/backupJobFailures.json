@@ -1,0 +1,42 @@
+{
+  "name": "backupJobFailures",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of resources whose most recent backup job ended failed, aborted, expired or partial.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "every resource with a backup job in the job history read (35 days)",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "The backup job history; 0 only when it was read.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "compliant",
+  "allowedCategories": [
+    "Backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/backupjobfailures.py",
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/test_backup_inventory_transforms.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-18",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real account body replayed yet, so V0)."
+    }
+  ],
+  "domain": {
+    "min": 0
+  }
+}

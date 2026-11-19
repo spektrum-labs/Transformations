@@ -1,0 +1,43 @@
+{
+  "name": "missedScheduledBackups",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of scheduled backup runs in the last 48 hours that never started or whose job failed, from every backup plan rule's schedule evaluated against the job history for every resource the plan covers.",
+  "valueType": "integer",
+  "unit": "count",
+  "population": "every (plan rule, covered resource, scheduled time) in the 48 hours before the read, across every scanned region",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "The plan rules with their schedules and the backup job history for the same window; 0 only when both were read. Refused job or plan reads are Not evaluated.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "compliant",
+  "allowedCategories": [
+    "Backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/missedscheduledbackups.py",
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/test_backup_inventory_transforms.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-18",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real account body replayed yet, so V0)."
+    }
+  ],
+  "notes": "No plans means no runs were expected: 0, with a finding that says so. A restorable point from another mechanism does not excuse a missed run.",
+  "domain": {
+    "min": 0
+  }
+}
