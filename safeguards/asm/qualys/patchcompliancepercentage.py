@@ -62,47 +62,75 @@ def host_list(data):
     return hosts or None
 
 
-def fixed_requested(data):
-    """True when Qualys echoes a status filter that includes Fixed.
-
-    Qualys returns only New, Active and Re-Opened detections unless the request names Fixed. With
-    echo_request=1 it repeats the parameters it applied in HOST_LIST_VM_DETECTION_OUTPUT.REQUEST.
-    That echo is the only proof Fixed was asked for: a definition can name Fixed and still never
-    send it (inputParameters on a GET without parametersIn "query" travel as an ignored body).
-    """
-    try:
-        params = data['HOST_LIST_VM_DETECTION_OUTPUT']['REQUEST']['PARAM_LIST']['PARAM']
-    except Exception:
-        return False
-    if isinstance(params, dict):
-        params = [params]
-    if not isinstance(params, list):
-        return False
-    for param in params:
-        if isinstance(param, dict) and str(param.get('KEY', '')).strip().lower() == 'status':
-            return any(v.strip().lower() == 'fixed' for v in str(param.get('VALUE', '')).split(','))
-    return False
-
-
+NOT_SCANNED = "Confirm Qualys has scanned the hosts in scope."
 # The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
 NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
-NOT_SCANNED = "Confirm Qualys has scanned the hosts in scope."
 
 
-def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None,
-                 recommendation=NOT_OURS_TO_ASK):
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None,
+                 recommendations=(NOT_OURS_TO_ASK,)):
     """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
     response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
-        recommendations=[recommendation])
+        additional_findings=findings, recommendations=list(recommendations))
     response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
 
 
+# --- Qualys detection reply: byte-identical in patchcompliancepercentage.py and meantimetoremediatecritical.py
+OPEN_STATUSES = {'new', 'active', 'reopened'}
+
+
+def detection_response(data):
+    """HOST_LIST_VM_DETECTION_OUTPUT.RESPONSE, or None when the body is not a detection reply."""
+    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT') if isinstance(data, dict) else None
+    response = output.get('RESPONSE') if isinstance(output, dict) else None
+    return response if isinstance(response, dict) else None
+
+
+def status_token(value):
+    """One status spelling: Qualys writes Re-Opened, REOPENED and Fixed, FIXED for the same state."""
+    return str(value).strip().lower().replace('-', '').replace('_', '').replace(' ', '')
+
+
+def echoed_statuses(data):
+    """The detection statuses Qualys says it applied, or None when the reply carries no request echo.
+
+    Qualys returns only New, Active and Re-Opened detections unless status= names others. With
+    echo_request=1 it repeats the parameters it applied under HOST_LIST_VM_DETECTION_OUTPUT.REQUEST.
+    That echo is the only proof of the filter: a definition can name Fixed and never send it
+    (inputParameters on a GET without parametersIn "query" travel as an ignored body). An echo with
+    no status parameter means Qualys applied its default.
+    """
+    output = data.get('HOST_LIST_VM_DETECTION_OUTPUT') if isinstance(data, dict) else None
+    request = output.get('REQUEST') if isinstance(output, dict) else None
+    param_list = request.get('PARAM_LIST') if isinstance(request, dict) else None
+    params = param_list.get('PARAM') if isinstance(param_list, dict) else None
+    if isinstance(params, dict):
+        params = [params]
+    if not isinstance(params, list):
+        return None
+    for param in params:
+        if isinstance(param, dict) and str(param.get('KEY', '')).strip().lower() == 'status':
+            return {status_token(v) for v in str(param.get('VALUE', '')).split(',') if v.strip()}
+    return set(OPEN_STATUSES)
+
+
+def truncated(response):
+    """True when Qualys stopped the host list at its record limit (WARNING code 1980)."""
+    warning = response.get('WARNING')
+    warnings = warning if isinstance(warning, list) else [warning]
+    return any(isinstance(w, dict) and str(w.get('CODE', '')).strip() == '1980' for w in warnings)
+# --- end Qualys detection reply ----------------------------------------------------------------------------
+
+
 def evaluate(data):
-    """Core evaluation logic."""
+    """Fixed detections as a share of every detection, graded only when the reply proves its filter."""
     try:
+        if truncated(detection_response(data)):
+            return {"patchCompliancePercentage": None, "errorCode": "partial_read",
+                    "notMeasured": "Spektrum's Qualys read stopped at a page limit, so patch compliance is not graded."}
         hosts = host_list(data) or []
         total = 0
         fixed = 0
@@ -111,12 +139,16 @@ def evaluate(data):
             if isinstance(detections, dict):
                 detections = [detections]
             total += len(detections)
-            fixed += sum(1 for d in detections if isinstance(d, dict) and str(d.get('STATUS', '')).lower() == 'fixed')
-        if total > 0 and fixed == 0 and not fixed_requested(data):
-            # Open detections only, and nothing shows Fixed was asked for: "none fixed" is unproven.
-            return {"patchCompliancePercentage": None, "totalDetections": total, "fixedDetections": 0,
-                    "notMeasured": "Spektrum's Qualys read does not yet include fixed detections, so patch "
-                                   "compliance could not be measured."}
+            fixed += sum(1 for d in detections if isinstance(d, dict) and status_token(d.get('STATUS', '')) == 'fixed')
+        statuses = echoed_statuses(data)
+        if statuses is None and total == 0:
+            statuses = set(OPEN_STATUSES)  # no echo: Qualys applied its default, and no open detection is a measured 100
+        if statuses is None or not OPEN_STATUSES <= statuses or (total > 0 and 'fixed' not in statuses):
+            # The share needs open and fixed detections both, and only the echo proves both were asked for.
+            return {"patchCompliancePercentage": None, "totalDetections": total, "fixedDetections": fixed,
+                    "errorCode": "not_measured",
+                    "notMeasured": "Spektrum's Qualys read does not yet include both open and fixed detections, "
+                                   "so patch compliance could not be measured."}
         compliance = int((fixed / total) * 100) if total > 0 else 100
         return {"patchCompliancePercentage": str(compliance), "totalDetections": total, "fixedDetections": fixed}
     except Exception:
@@ -134,12 +166,17 @@ def transform(input):
         if validation.get("status") == "failed":
             return not_measured(criteriaKey, "The Qualys response failed validation, so patch compliance could not be measured.",
                                 "not_measured", validation=validation)
+        if detection_response(data) is None:
+            return not_measured(criteriaKey, "The Qualys response could not be read, so patch compliance could not be measured.",
+                                "not_measured", validation=validation)
         if host_list(data) is None:
             return not_measured(criteriaKey, "Qualys returned no assessed hosts, so patch compliance could not be measured.",
-                                "no_data", validation=validation, recommendation=NOT_SCANNED)
+                                "no_data", validation=validation, recommendations=(NOT_SCANNED,))
         eval_result = evaluate(data)
         if eval_result.get("notMeasured"):
-            return not_measured(criteriaKey, eval_result["notMeasured"], "not_measured", validation=validation)
+            return not_measured(criteriaKey, eval_result["notMeasured"], eval_result["errorCode"], validation=validation,
+                                findings=[f"{k}: {v}" for k, v in eval_result.items()
+                                          if k not in (criteriaKey, "notMeasured", "errorCode")])
         if "error" in eval_result or eval_result.get(criteriaKey) is None:
             return not_measured(criteriaKey, "The Qualys detection list could not be read, so patch compliance could not be measured.",
                                 "not_measured", validation=validation, transformation_errors=[eval_result.get("error", "no value")])

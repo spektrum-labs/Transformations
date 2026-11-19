@@ -84,10 +84,42 @@ def assert_ours(info, code="not_measured"):
 
 # --- patchCompliancePercentage --------------------------------------------------------------------
 
-@pytest.mark.parametrize("status", [ALL_STATUSES, "Fixed", "new, active ,FIXED"])
+@pytest.mark.parametrize("status", [ALL_STATUSES, "new, active ,re-opened,FIXED", "NEW,ACTIVE,REOPENED,FIXED"])
 def test_open_only_is_a_real_zero_once_fixed_was_requested(status):
     value, info = run("patchcompliancepercentage", detections(OPEN_CRITICAL, OPEN_CRITICAL, request=echo(status)))
     assert value == "0" and info["dataCollection"]["status"] == "success"
+
+
+def test_the_full_status_set_grades_a_real_percentage():
+    value, info = run("patchcompliancepercentage", detections(OPEN_CRITICAL, FIXED_LOW, request=echo(ALL_STATUSES)))
+    assert value == "50" and info["dataCollection"]["status"] == "success"
+
+
+@pytest.mark.parametrize("status", ["Fixed", "Active,Fixed", "New,Re-Opened,Fixed"])
+def test_a_filter_missing_an_open_status_is_not_graded(status):
+    value, info = run("patchcompliancepercentage", detections(FIXED_LOW, FIXED_LOW, request=echo(status)))
+    assert value is None
+    assert_ours(info)
+
+
+def test_fixed_rows_without_an_echo_are_not_graded():
+    value, info = run("patchcompliancepercentage", detections(OPEN_CRITICAL, FIXED_LOW))
+    assert value is None
+    assert_ours(info)
+
+
+def test_no_detections_and_no_echo_is_the_measured_hundred():
+    payload = {"HOST_LIST_VM_DETECTION_OUTPUT": {"RESPONSE": {"HOST_LIST": {"HOST": [{"ID": "1"}]}}}}
+    assert run("patchcompliancepercentage", payload)[0] == "100"
+
+
+@pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical"])
+def test_a_truncated_detection_reply_is_a_partial_read(name):
+    payload = detections(OPEN_CRITICAL, FIXED_LOW, request=echo(ALL_STATUSES))
+    payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = [TRUNCATED]
+    value, info = run(name, payload)
+    assert value is None
+    assert_ours(info, "partial_read")
 
 
 @pytest.mark.parametrize("request_echo", [None, echo(None), echo("New,Active,Re-Opened"), echo("Fixedish"),
@@ -101,7 +133,7 @@ def test_open_only_without_fixed_requested_is_ours_to_fix(request_echo):
 
 def test_a_single_echoed_param_is_read():
     request = echo(None)
-    request["PARAM_LIST"]["PARAM"] = {"KEY": "status", "VALUE": "Fixed"}
+    request["PARAM_LIST"]["PARAM"] = {"KEY": "status", "VALUE": ALL_STATUSES}
     assert run("patchcompliancepercentage", detections(OPEN_CRITICAL, request=request))[0] == "0"
 
 
@@ -134,7 +166,10 @@ def test_no_remediated_critical_without_fixed_requested_is_ours_to_fix():
 
 @pytest.mark.parametrize("name,payload,code", [
     ("patchcompliancepercentage", "not json", "not_measured"),
-    ("patchcompliancepercentage", {"HOST_LIST_VM_DETECTION_OUTPUT": "garbage"}, "no_data"),
+    ("patchcompliancepercentage", {"HOST_LIST_VM_DETECTION_OUTPUT": "garbage"}, "not_measured"),
+    ("patchcompliancepercentage", {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "1901", "TEXT": "x"}}}, "not_measured"),
+    ("criticalvulnerabilitycount", {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "1901", "TEXT": "x"}}}, "not_measured"),
+    ("meantimetoremediatecritical", {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "1901", "TEXT": "x"}}}, "not_measured"),
     ("meantimetoremediatecritical", {"HOST_LIST_VM_DETECTION_OUTPUT": "garbage"}, "not_measured"),
     ("criticalvulnerabilitycount", {"HOST_LIST_VM_DETECTION_OUTPUT": {"RESPONSE": {}}}, "no_data"),
     ("criticalvulnerabilitycount", "not json", "not_measured"),
@@ -196,10 +231,20 @@ def test_end_of_life_is_not_a_no_from_a_host_list():
     assert_ours(info)
 
 
-@pytest.mark.parametrize("lifecycle,expected", [("EOL", True), ("GA", False)])
+@pytest.mark.parametrize("lifecycle,expected", [("EOL", True), ("GA", False), ({"stage": "EOL/EOS"}, True),
+                                                ({"stage": "GA"}, False)])
 def test_end_of_life_is_read_from_an_asset_inventory(lifecycle, expected):
     payload = {"assetListData": {"asset": [{"softwareListData": {"software": [{"lifecycle": lifecycle}]}}]}}
     assert run("endoflifesoftwaredetected", payload)[0] is expected
+
+
+@pytest.mark.parametrize("assets", [[{"id": 1}, {"id": 2}], [{"softwareListData": {"software": []}}],
+                                    [{"softwareListData": {"software": [{"lifecycle": "Unknown"}]}}],
+                                    [{"softwareListData": {"software": [{"name": "x"}]}}]])
+def test_assets_without_a_readable_software_lifecycle_are_not_a_no(assets):
+    value, info = run("endoflifesoftwaredetected", {"assetListData": {"asset": assets}})
+    assert value is None
+    assert_ours(info)
 
 
 def test_patch_management_is_not_a_no_from_a_host_list():
@@ -210,6 +255,27 @@ def test_patch_management_is_not_a_no_from_a_host_list():
 
 def test_patch_management_still_reads_a_detection_list():
     assert run("is_patch_management_enabled", detections(FIXED_LOW))[0] is True
+
+
+def test_open_rows_only_are_not_patch_management():
+    value, info = run("is_patch_management_enabled", detections(OPEN_CRITICAL))
+    assert value is None
+    assert_ours(info)
+
+
+@pytest.mark.parametrize("payload", [detections(OPEN_CRITICAL, request=echo("Fixed")),
+                                     {"HOST_LIST_VM_DETECTION_OUTPUT": {"REQUEST": echo("Fixed"), "RESPONSE": {}}}])
+def test_no_fixed_row_when_fixed_was_requested_is_a_measured_no(payload):
+    value, info = run("is_patch_management_enabled", payload)
+    assert value is False and info["dataCollection"]["status"] == "success"
+
+
+@pytest.mark.parametrize("payload", [{}, {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "1901", "TEXT": "x"}}},
+                                     {"HOST_LIST_VM_DETECTION_OUTPUT": "garbage"}])
+def test_a_body_that_is_not_a_detection_reply_is_not_a_no(payload):
+    value, info = run("is_patch_management_enabled", payload)
+    assert value is None
+    assert_ours(info)
 
 
 # --- the production sandbox -----------------------------------------------------------------------

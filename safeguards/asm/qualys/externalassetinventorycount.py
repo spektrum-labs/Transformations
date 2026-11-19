@@ -25,11 +25,6 @@ def extract_input(input_data):
     return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
-NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
-NOT_LISTED = "Confirm the hosts in scope are in your Qualys host list."
-
-
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, transformation_errors=None,
                     api_errors=None, additional_findings=None):
@@ -47,13 +42,18 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None):
+NOT_LISTED = "Confirm the hosts in scope are in your Qualys host list."
+# The read is ours, so a gap in it is ours to fix: the customer is told so, and errorCode routes it to engineering.
+NOT_OURS_TO_ASK = "Nothing is needed from you; this is on Spektrum's side."
+
+
+def not_measured(criteria_key, reason, error_code, validation=None, transformation_errors=None, findings=None,
+                 recommendations=(NOT_OURS_TO_ASK,)):
     """criteria_key None plus a coded dataCollection error, so the evaluator records Not evaluated."""
     response = create_response(
         result={criteria_key: None}, validation=validation,
         api_errors=[reason], fail_reasons=[reason], transformation_errors=transformation_errors,
-        additional_findings=findings,
-        recommendations=[NOT_LISTED if error_code == "no_data" else NOT_OURS_TO_ASK])
+        additional_findings=findings, recommendations=list(recommendations))
     response["additionalInfo"]["dataCollection"]["errorCode"] = error_code
     return response
 
@@ -79,7 +79,9 @@ def evaluate(data):
                     "notMeasured": "Spektrum's Qualys read stopped at " + str(count) + " hosts, so the asset "
                                    "inventory count is a lower bound and is not graded."}
         if count == 0:
-            # An empty host list is nothing assessed, not a measured zero (as ENG-1353 for its siblings).
+            # An empty host list is nothing assessed, and a count of 0 would pass the inclusive "greaterThan 0"
+            # bar, so it is not graded (as ENG-1353 for its siblings). hasHardwareAssetInventory grades the
+            # same reply False instead: a False fails, so that answer cannot pass unearned.
             return {"externalAssetInventoryCount": None, "errorCode": "no_data",
                     "notMeasured": "Qualys lists no hosts, so the asset inventory count could not be graded."}
         return {"externalAssetInventoryCount": count}
@@ -102,7 +104,8 @@ def transform(input):
         if eval_result.get("notMeasured"):
             return not_measured(criteriaKey, eval_result["notMeasured"], eval_result["errorCode"], validation=validation,
                                 findings=[f"{k}: {v}" for k, v in eval_result.items()
-                                          if k not in (criteriaKey, "notMeasured", "errorCode")])
+                                          if k not in (criteriaKey, "notMeasured", "errorCode")],
+                                recommendations=(NOT_LISTED,) if eval_result["errorCode"] == "no_data" else (NOT_OURS_TO_ASK,))
         if "error" in eval_result or eval_result.get(criteriaKey) is None:
             return not_measured(criteriaKey, "The Qualys response could not be read, so the asset inventory count could not be measured.",
                                 "not_measured", validation=validation, transformation_errors=[eval_result.get("error", "no value")])
