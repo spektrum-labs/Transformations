@@ -170,6 +170,13 @@ def test_an_excluded_location_is_a_measured_fail_that_counts_locations(mode, exc
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_the_same_location_excluded_by_two_policies_is_counted_once(mode):
+    out = load(mode)(graph(with_locations([LOCATION_A]), with_locations([LOCATION_A, "AllTrusted"])))
+    assert pair(out) == (False, "success")
+    assert "exclude 2 location(s)" in " ".join(out["additionalInfo"]["evaluation"]["failReasons"])
+
+
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("exclude", [[], ["None"], ["none", ""]])
 def test_no_excluded_location_still_passes(mode, exclude):
     assert pair(load(mode)(graph(with_locations(exclude)))) == (True, "success")

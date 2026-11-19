@@ -206,8 +206,9 @@ def strict_narrowing(policy):
     include_locations = folded(listed(conditions.get("locations"), "includeLocations"))
     if include_locations and "all" not in include_locations:
         found.append("named locations only")
-    if excluded_locations(policy):
-        found.append(str(len(excluded_locations(policy))) + " excluded location(s)")
+    excluded = excluded_locations(policy)
+    if excluded:
+        found.append(str(len(excluded)) + " excluded location(s)")
     return found
 
 
@@ -324,7 +325,7 @@ def transform(input):
         narrowed_policies = []
         covered_ids = []
         narrowed_out = []
-        location_excluded = 0
+        location_excluded = []
         unproven_policies = []
         unproven_ids = []
         excluded_accounts = []
@@ -348,7 +349,9 @@ def transform(input):
             if state == "enabled":
                 strict = strict_narrowing(policy)
                 if strict:
-                    location_excluded += len(excluded_locations(policy))
+                    for location in excluded_locations(policy):
+                        if location not in location_excluded:
+                            location_excluded.append(location)
                     narrowed_out.append(name + " (" + "; ".join(strict) + ")")
                     continue
                 problems, named, groups = exclusion_problems(policy)
@@ -417,7 +420,7 @@ def transform(input):
             )
             if location_excluded:
                 fail_reasons.append(
-                    "MFA policies for Global Administrator exclude " + str(location_excluded) + " location(s), so "
+                    "MFA policies for Global Administrator exclude " + str(len(location_excluded)) + " location(s), so "
                     "MFA is skipped for sign-ins from them"
                 )
             recommendations.append(
