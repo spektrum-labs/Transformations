@@ -23,7 +23,7 @@ SCHEMA_PREFIX = "aws-backup-inventory/"
 
 def extract_input(input_data):
     data = input_data
-    if isinstance(data, (bytes, bytearray)):
+    if isinstance(data, bytes):
         data = data.decode("utf-8")
     if isinstance(data, str):
         try:
