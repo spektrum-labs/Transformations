@@ -310,11 +310,32 @@ def test_drift_past_tolerance_or_an_ignored_filter_stays_unevaluated():
     cases = {
         "split off by 0.2%": composite(57_688, 1_037_647, 1, 1, combined=1_093_100),
         "ignored severity filter at scale": composite(1_095_324, 1_037_647, 1, 1, combined=1_095_324),
-        "overdue widened past tolerance": composite(10_000, 900_000, 9_000, 902_000, combined=910_000),
         "small estate off by one": composite(400, 500, 1, 1, combined=901),
+        "999 off by one": composite(499, 500, 1, 1, combined=998),
+        "a 0 critical count hides a band within tolerance": composite(0, 1_000_000, 0, 1, combined=1_000_900),
+        "a 0 high count hides a band within tolerance": composite(1_000_000, 0, 1, 0, combined=1_000_900),
+    }
+    overdue_cases = {
+        "overdue critical widened past tolerance": composite(900_000, 10_000, 902_000, 9_000, combined=910_000),
+        "overdue high widened past tolerance": composite(10_000, 900_000, 9_000, 902_000, combined=910_000),
     }
     for k in KEYS:
-        for name, body in cases.items():
+        for name, body in {**cases, **overdue_cases}.items():
             v, status, out = run(k, body)
             assert v is None and status == "error", (k, name, v, status)
-            assert "disagree" in out["additionalInfo"]["dataCollection"]["errors"][0], (k, name)
+            msg = out["additionalInfo"]["dataCollection"]["errors"][0]
+            assert "disagree" in msg, (k, name)
+            assert ("overdue count exceeds" in msg) == (name in overdue_cases), (k, name, msg)
+
+
+def test_drift_boundaries():
+    # Exact below 1,000; at 1,000 a drift of 1 (0.1%) is allowed; a 0 against a non-zero count never is.
+    ok = {"1000 off by one": composite(499, 500, 1, 1, combined=1000),
+          "overdue critical 3 over on 900,000": composite(900_000, 10_000, 900_003, 9_000, combined=910_000),
+          "real-scale drift as stored strings": composite(57_688, 1_037_647, 50_000, 900_000, as_strings=True,
+                                                          combined=1_095_324)}
+    for k in KEYS:
+        for name, body in ok.items():
+            v, status, _ = run(k, body)
+            assert status == "success" and v is not None, (k, name, v, status)
+    assert MODS[VALID].within_drift(0, 0) and not MODS[VALID].within_drift(0, 1)
