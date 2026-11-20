@@ -1,0 +1,43 @@
+{
+  "name": "backupCoveragePercentage",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The percentage of backup-capable resources that have a restorable point no older than 7 days from any backup mechanism.",
+  "valueType": "number",
+  "unit": "percent",
+  "population": "every backup-capable resource found in the scanned regions (denominator); those with a restorable point from the last 7 days (numerator)",
+  "polarity": "higher_is_better",
+  "evidenceRequiredForTrue": "A per-resource list of the account's backup-capable resources with each one's newest restorable time.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Backup"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/backupcoveragepercentage.py",
+    "safeguards/4BC425FA-0638-4BF1-8194-19E7E4F2F43C/test_backup_inventory_transforms.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-18",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real account body replayed yet, so V0)."
+    }
+  ],
+  "domain": {
+    "min": 0,
+    "max": 100
+  }
+}
