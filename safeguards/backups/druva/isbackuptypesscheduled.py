@@ -2,7 +2,7 @@
 Transformation: isBackupTypesScheduled
 Vendor: Druva (Data Security Cloud, Enterprise Workloads)  |  Category: Backups
 Method: getBackupActivity -> POST /platform/reporting/v1/reports/ewBackupActivity
-Evaluates: True when at least one job in the Druva Backup Activity report (the read window the definition sets; Druva's default is the last 24 hours) ran under a backup policy and carries a scheduled time, i.e. policy-scheduled backups are running. False when the report lists jobs and none of them is policy-scheduled.
+Evaluates: True when at least one job in the Druva Backup Activity report (the read window the integration definition sets: lastUpdatedTime GTE utcNow-7d, so the last 7 days) ran under a backup policy and carries a scheduled time, i.e. policy-scheduled backups are running. False when the report lists jobs and none of them is policy-scheduled.
 Unevaluated (None, dataCollection.status "error"): zero jobs in the window, a missing, error or unrecognised body, failed input validation, a transformation error, or a partial read with no scheduled job on the pages read.
 """
 import json
@@ -92,7 +92,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 #
 # Why zero jobs is not a finding: the report only holds jobs that Druva's reporting store has
 # synced, and the store syncs about once a day. A read whose window starts after the last sync
-# (Druva's default window is the last 24 hours) is empty by construction, even when every backup
+# (the definition reads the last 7 days) is empty by construction, even when every backup
 # set is enabled and the last nightly run was all Successful. The backup-set count is a different
 # report (ewResourceStatus), so this read cannot tell "no jobs because nothing is protected" from
 # "no jobs because the report has not synced yet". Only a body that lists jobs is a measurement.

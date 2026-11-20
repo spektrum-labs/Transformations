@@ -64,8 +64,9 @@ class NothingScanned(unittest.TestCase):
 
     def test_hosts_with_no_detections_are_a_measured_clean_result(self):
         payload = reply([host(1, []), host(2, [])])
+        # No echo proves the status filter, so no detection is not yet a measured 100.
         self.assertEqual(self.run_case("patchcompliancepercentage", "patchCompliancePercentage", payload),
-                         ("100", "success"))
+                         (None, "error"))
         self.assertEqual(self.run_case("criticalvulnerabilitycount", "criticalVulnerabilityCount", payload),
                          (0, "success"))
 
@@ -74,6 +75,9 @@ class NothingScanned(unittest.TestCase):
                                   detection(5, "Fixed")])])
         self.assertEqual(self.run_case("criticalvulnerabilitycount", "criticalVulnerabilityCount", payload),
                          (2, "success"))
+        # A share of fixed detections is graded only when Qualys echoes a filter naming open and fixed.
+        payload["HOST_LIST_VM_DETECTION_OUTPUT"]["REQUEST"] = {"PARAM_LIST": {"PARAM": [
+            {"KEY": "status", "VALUE": "New,Active,Re-Opened,Fixed"}]}}
         self.assertEqual(self.run_case("patchcompliancepercentage", "patchCompliancePercentage", payload),
                          ("25", "success"))
 
