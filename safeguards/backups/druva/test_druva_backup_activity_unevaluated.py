@@ -222,12 +222,15 @@ def test_row_without_status_still_counts_as_failed(mode):
 
 # ---- latest finished job per backup set ----------------------------------------------------------
 
+MISSING = object()  # an `at()` field set to this is left out of the row
+
+
 def at(n, hour, status, **extra):
     """Job n of one backup set (same set descriptors), started at the given hour."""
     row = job(1, status=status)
     row.update({"jobID": 800000 + n, "started": "2026-01-10T%02d:00:00.000Z" % hour, "scheduled": "NA"})
     row.update(extra)
-    return row
+    return {k: v for k, v in row.items() if v is not MISSING}
 
 
 def both(rows, mode):
@@ -300,6 +303,112 @@ def test_reason_names_basis_and_window_never_24_hours(mode):
         assert "backup sets' latest finished job" in reason and "1 in-flight jobs excluded" in reason
         assert "1 earlier jobs superseded" in reason and "since 2026-01-09T12:00:00Z" in reason
         assert "24 hours" not in reason
+
+
+def both_orders(rows, mode):
+    """Result must not depend on input order."""
+    forward, backward = both(rows, mode), both(rows[::-1], mode)
+    assert forward == backward, (forward, backward)
+    return forward
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("winner", ["Failed", "Successful"])
+def test_jobid_breaks_a_time_tie_in_either_order(winner, mode):
+    # the higher jobID wins whatever its status and wherever it is listed
+    loser = "Successful" if winner == "Failed" else "Failed"
+    result = both_orders([at(1, 3, loser), at(2, 3, winner)], mode)
+    assert result == ((0.0, 1) if winner == "Failed" else (100.0, 0))
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("later", ["Failed", "Successful"])
+def test_time_beats_jobid(later, mode):
+    # the later start has the LOWER jobID: time is the primary order
+    earlier = "Successful" if later == "Failed" else "Failed"
+    result = both_orders([at(1, 9, later), at(2, 3, earlier)], mode)
+    assert result == ((0.0, 1) if later == "Failed" else (100.0, 0))
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_full_tie_is_deterministic_and_fails_safe(mode):
+    # same time, no usable jobID: a failing job beats a passing one in either order
+    failed, ok = at(1, 3, "Failed", jobID=MISSING), at(2, 3, "Successful", jobID=MISSING)
+    assert both_orders([failed, ok], mode) == (0.0, 1)
+    same_id = ({"jobID": 5}, {"jobID": 5})
+    assert both_orders([at(1, 3, "Failed", **same_id[0]), at(2, 3, "Successful", **same_id[1])], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_scheduled_orders_rows_without_a_start(mode):
+    # newest by `scheduled` is the Failed one although the Successful one has the higher jobID
+    rows = [at(1, 3, "Failed", started="NA", scheduled="2026-01-10T09:00:00Z"),
+            at(2, 3, "Successful", started="NA", scheduled="2026-01-10T03:00:00Z")]
+    assert both_orders(rows, mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_last_updated_time_orders_rows_with_no_start_or_schedule(mode):
+    rows = [at(1, 3, "Failed", started="NA", lastUpdatedTime="2026-01-10T09:00:00.000Z"),
+            at(2, 3, "Successful", started="NA", lastUpdatedTime="2026-01-10T03:00:00.000Z")]
+    assert both_orders(rows, mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("untimed_status", ["Failed", "Successful"])
+def test_row_with_no_parseable_time_sorts_oldest(untimed_status, mode):
+    # the untimed row has the higher jobID and still loses to any timed row
+    timed = "Successful" if untimed_status == "Failed" else "Failed"
+    rows = [at(1, 3, timed), at(2, 3, untimed_status, started="NA", lastUpdatedTime="NA")]
+    assert both_orders(rows, mode) == ((0.0, 1) if timed == "Failed" else (100.0, 0))
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("field", ["organization", "administrativeGroup", "vm", "resourceType", "configurationMode"])
+def test_each_identity_field_keeps_sets_apart(field, mode):
+    rows = [at(1, 3, "Failed", **{field: "synthetic-a"}), at(2, 9, "Successful", **{field: "synthetic-b"})]
+    assert both(rows, mode) == (50.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("status", ["Waiting", "In Progress", "WAITING", "in progress"])
+def test_waiting_and_in_progress_are_in_flight(status, mode):
+    rows = [job(1), job(2, status="Failed"), job(3, status=status)]
+    assert both(rows, mode) == (50.0, 1)
+    assert run("failedBackupJobsCount", rows, mode)[1]["transformedResponse"]["backupJobsInFlight"] == 1
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("job_id", [MISSING, None, "NA", "abc", "\u00b2", 12345678901234567890, "12345678901234567890"])
+def test_unparseable_jobid_still_evaluates(job_id, mode):
+    # the later Successful wins on time; a bad jobID on either row must not turn the read Unevaluated
+    for rows in ([at(1, 3, "Failed", jobID=job_id), at(2, 9, "Successful")],
+                 [at(1, 3, "Failed"), at(2, 9, "Successful", jobID=job_id)]):
+        assert both_orders(rows, mode) == (100.0, 0)
+        out = run("failedBackupJobsCount", rows, mode)[1]
+        assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_every_time_field_unparseable_does_not_raise(mode):
+    blank = {"started": "NA", "scheduled": "NA", "lastUpdatedTime": "NA", "jobID": MISSING}
+    assert both([at(1, 3, "Successful", **blank)], mode) == (100.0, 0)
+    assert both_orders([at(1, 3, "Failed", **blank), at(2, 3, "Successful", **blank)], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mixed_read_counts_add_up_and_leak_nothing(mode):
+    rows = [job(1), job(2, status="Failed"), job(3, status="Queued"), job(4, status="Waiting"),
+            job(5), at(1, 9, "Failed")]  # at(1, ...) is a later run of job(1)'s set, so it supersedes job(1)
+    for key in ("backupSuccessRatePercentage", "failedBackupJobsCount"):
+        value, out = run(key, rows, mode)
+        counts = out["transformedResponse"]
+        assert counts["backupJobsReported"] == 6
+        assert counts["backupJobsReported"] == (counts["backupJobsInFlight"] + counts["backupJobsSuperseded"]
+                                                + counts["backupSetsEvaluated"])
+        assert (counts["backupJobsInFlight"], counts["backupJobsSuperseded"], counts["backupSetsEvaluated"]) == (2, 1, 3)
+        assert value == (33.33 if key == "backupSuccessRatePercentage" else 2)
+        assert "synthetic-" not in json.dumps(out)
 
 
 # ---- partial reads ----------------------------------------------------------------------------
