@@ -9,8 +9,7 @@ API Source: listConsoleAdmins (POST https://<account>.my.rubrik.com/api/graphql,
         count pageInfo { hasNextPage endCursor }
         nodes { id domain status isAccountOwner roles { id name isOrgAdmin } allOrgs { id } } }
       groupsInCurrentAndDescendantOrganization(first: 200) {
-        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } allOrgs { id } } }
-      currentOrg { id } }
+        count pageInfo { hasNextPage endCursor } nodes { groupId roles { id name isOrgAdmin } allOrgs { id } } } }
 Schema: rubrikinc/rubrik-developer-center docs/Rubrik-Security-Cloud-API/schemas/20260914.graphql
     (type User: domain UserDomainEnum! = LOCAL | SSO | LDAP | CLIENT | PAT | SUPPORT; status UserStatus! =
     ACTIVE | DEACTIVATED | UNKNOWN; roles [Role!]! with isOrgAdmin. type Group: SSO or directory groups that
@@ -24,14 +23,18 @@ construction) and CLIENT, PAT and SUPPORT users are non-person accounts. An SSO 
 directory identity, and RSC does not show whether that identity is a separate admin account or the person's
 everyday one. Account names are not read: a naming convention cannot prove which it is.
 Roles are read in the context organization only (roles; allOrgs lists the organizations where the account has
-roles, currentOrg is the context organization). A non-admin user or group whose allOrgs holds any
-organization other than currentOrg holds roles in a sub-organization this read cannot see (possibly an
-administrator role), so the read is not evaluated. A non-admin account with no allOrgs list is not evaluated
-either.
+roles). The query does not ask for currentOrg: it fails with an internal error at some RSC tenants. The context
+organization is derived instead: an account with a non-empty roles list holds a role in the context
+organization, so the context organization is the one organization id that appears in allOrgs of every active
+account (user or group) with a non-empty roles list. A non-admin user or group whose allOrgs holds any
+other organization holds roles in a sub-organization this read cannot see (possibly an administrator role), so
+the read is not evaluated. When the context organization cannot be derived (no single common id), a non-admin
+account with a non-empty allOrgs cannot be placed either, so the read is not evaluated for that case only. A
+non-admin account with no allOrgs list is not evaluated.
 True: the user and group reads are complete, no group holds an administrator role, no account holds roles only
 in a sub-organization, and every administrator is a LOCAL console account or a non-person account.
 None (not evaluated): any administrator signs in with an SSO or LDAP identity, or with an unknown domain; a group
-holds an administrator role; a group or user holds roles only in a sub-organization; empty, error or partial input; a GraphQL error on either field; or no
+holds an administrator role; a group or user holds roles only in a sub-organization, or cannot be placed because the context organization is not derivable; empty, error or partial input; a GraphQL error on either field; or no
 administrator in the read.
 Rubrik never returns False: nothing in the RSC read shows that a directory identity is a person's everyday
 account (J.J.'s ruling of 6 Oct 2026 still holds).
@@ -298,15 +301,54 @@ def is_admin(node):
 
 
 
-def sub_org_roles(n, ctx):
-    """True / False, or None when allOrgs is missing: does a non-admin account hold roles in an organization
-    other than the context one (or, with no context id, in any organization)?"""
+def org_ids(n):
+    """Organization ids in n.allOrgs, or None when allOrgs is missing. An entry without an id is kept as
+    None, which never equals a real id."""
     orgs = n.get("allOrgs")
     if not isinstance(orgs, list):
         return None
-    for o in orgs:
-        oid = o.get("id") if isinstance(o, dict) else o
-        if oid is None or oid != ctx:
+    return [o.get("id") if isinstance(o, dict) else o for o in orgs]
+
+
+def context_org(accounts):
+    """The context organization id, or None when it cannot be derived. Roles are read in the context
+    organization, so every account with a non-empty roles list holds a role there and lists it in allOrgs: the
+    context organization is the one id common to all of them. No account with roles, or more than one common
+    id (every such account also holds roles in the same sub-organization), leaves it undecided."""
+    common = None
+    for a in accounts:
+        roles = a.get("roles")
+        ids = org_ids(a)
+        if not isinstance(roles, list) or len(roles) == 0 or ids is None:
+            continue
+        if common is None:
+            common = [i for i in ids if i is not None]
+        else:
+            common = [i for i in common if i in ids]
+    if common is None:
+        return None
+    unique = []
+    for i in common:
+        if i not in unique:
+            unique.append(i)
+    return unique[0] if len(unique) == 1 else None
+
+
+#: sub_org_roles result when the context organization is not derived. Truthy, so callers compare to it first.
+UNDECIDED = "undecided"
+
+
+def sub_org_roles(n, ctx):
+    """True (sub-org roles), False (none), None (allOrgs missing) or UNDECIDED: does a non-admin account hold
+    roles in an organization other than the context one? With no derived context (ctx None) any listed
+    organization cannot be placed, so the answer is UNDECIDED."""
+    ids = org_ids(n)
+    if ids is None:
+        return None
+    if ctx is None:
+        return UNDECIDED if len(ids) > 0 else False
+    for oid in ids:
+        if oid != ctx:
             return True
     return False
 
@@ -320,6 +362,12 @@ def verdict(validation, counts, summary):
                             "Every member of such a group can administer the console with the identity it signs in "
                             "with, and RSC does not list those members until they sign in, so a separate admin "
                             "identity per person cannot be shown.", RECOMMENDATION, summary)
+    if counts["subOrgUndecided"] > 0:
+        return not_measured(validation,
+                            str(counts["subOrgUndecided"]) + " non-administrator account(s) list organizations, but the "
+                            "context organization cannot be derived from the organization lists (no single "
+                            "organization is common to every account that holds a role), so whether they hold "
+                            "roles in a sub-organization cannot be shown.", RECOMMENDATION, summary)
     if counts["subOrgGroups"] > 0 or counts["subOrgUsers"] > 0:
         return not_measured(validation,
                             str(counts["subOrgGroups"]) + " group(s) and " + str(counts["subOrgUsers"]) + " user(s) "
@@ -384,11 +432,10 @@ def transform(input):
             return not_measured(validation, "Rubrik Security Cloud: " + why + ". Groups that hold an administrator "
                                 "role must be read to show who can administer the console.",
                                 "Grant the RSC service account read access to Groups and Roles.")
-        root = body.get("data") if isinstance(body.get("data"), dict) else body
-        cur = root.get("currentOrg")
-        ctx = cur.get("id") if isinstance(cur, dict) else None
+        active = [n for n in nodes if str(n.get("status") or "").upper() != "DEACTIVATED"]
+        ctx = context_org(groups + active)
         counts = {"separate": 0, "nonPerson": 0, "directory": 0, "unknown": 0, "adminGroups": 0,
-                  "subOrgGroups": 0, "subOrgUsers": 0}
+                  "subOrgGroups": 0, "subOrgUsers": 0, "subOrgUndecided": 0}
         for g in groups:
             admin = is_admin(g)
             if admin is None:
@@ -401,7 +448,9 @@ def transform(input):
                 if sub is None:
                     return not_measured(validation, "A group entry carries no organization list, so roles held in "
                                         "sub-organizations cannot be read.")
-                if sub:
+                if sub == UNDECIDED:
+                    counts["subOrgUndecided"] = counts["subOrgUndecided"] + 1
+                elif sub:
                     counts["subOrgGroups"] = counts["subOrgGroups"] + 1
         for n in nodes:
             if str(n.get("status") or "").upper() == "DEACTIVATED":
@@ -415,7 +464,9 @@ def transform(input):
                 if sub is None:
                     return not_measured(validation, "A user entry carries no organization list, so roles held in "
                                         "sub-organizations cannot be read.")
-                if sub:
+                if sub == UNDECIDED:
+                    counts["subOrgUndecided"] = counts["subOrgUndecided"] + 1
+                elif sub:
                     counts["subOrgUsers"] = counts["subOrgUsers"] + 1
                 continue
             domain = str(n.get("domain") or "").upper()
@@ -439,6 +490,7 @@ def transform(input):
             "adminGroups": counts["adminGroups"],
             "subOrgGroups": counts["subOrgGroups"],
             "subOrgUsers": counts["subOrgUsers"],
+            "subOrgUndecided": counts["subOrgUndecided"],
         }
         return verdict(validation, counts, summary)
     except Exception as e:

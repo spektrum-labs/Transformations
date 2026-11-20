@@ -73,10 +73,8 @@ def evaluate(data):
             is_in_fallback = bool(fallback_mode) or (status == "fallback")
 
             if is_in_fallback:
-                device_name = ep.get("deviceName", ep.get("emailId", "unknown"))
-                city = ep.get("cityName", "")
-                location_str = f" ({city})" if city else ""
-                fallback_endpoints.append(f"{device_name}{location_str}")
+                device_name = ep.get("deviceName") or "unnamed device"
+                fallback_endpoints.append(device_name)
 
         return {"isFallbackModeDisabled": len(fallback_endpoints) == 0, "fallbackEndpoints": fallback_endpoints[:20], "fallbackEndpointCount": len(fallback_endpoints), "totalEndpointCount": total}
     except Exception as e:

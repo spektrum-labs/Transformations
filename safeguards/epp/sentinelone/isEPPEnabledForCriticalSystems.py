@@ -195,7 +195,7 @@ def transform(input):
     critical_count = len(critical_systems)
     unprotected_critical = [a for a in critical_systems if not is_protected(a)]
     unprotected_names = [
-        a.get("computerName") or a.get("uuid") or "unknown" for a in unprotected_critical[:5]
+        str(a.get("uuid") or a.get("id") or "unknown") for a in unprotected_critical[:5]
     ]
 
     pass_reasons = []
@@ -273,7 +273,7 @@ def transform(input):
         is_pass = False
         fail_reasons.append(
             f"{len(unprotected_critical)} of {critical_count} critical systems are not "
-            f"protected by EPP (e.g. {', '.join(unprotected_names)})."
+            f"protected by EPP (e.g. agent id {', '.join(unprotected_names)})."
         )
         recommendations.append(
             "Verify EPP policy on identified servers. Set mitigationMode to 'protect' or 'detect' "
