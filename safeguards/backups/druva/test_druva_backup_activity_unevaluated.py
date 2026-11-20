@@ -289,6 +289,14 @@ def test_same_backupset_different_device_is_not_merged(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
+def test_host_less_rows_keep_hosts_apart_by_configuration_mode(mode):
+    # real rows carry deviceName and vm as "NA"; for VMs the host lives in configurationMode
+    rows = [at(1, 3, "Failed", deviceName="NA", vm="NA", configurationMode="synthetic-vc-a:DR1"),
+            at(2, 9, "Successful", deviceName="NA", vm="NA", configurationMode="synthetic-vc-b:DR1")]
+    assert both(rows, mode) == (50.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
 def test_completed_with_errors_fails_and_successful_with_errors_passes(mode):
     assert both([job(1, status="Completed with errors"), job(2, status="Successful with errors")], mode) == (50.0, 1)
     out = run("failedBackupJobsCount", [job(1, status="Completed with errors")], mode)[1]

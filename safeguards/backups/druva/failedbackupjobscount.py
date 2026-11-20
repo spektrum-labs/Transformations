@@ -184,7 +184,8 @@ PASSING = ("successful", "successful with errors")
 def set_key(row, index):
     """A backup set's identity. jobID sequences differ per workload, so a set is the tuple of its descriptors.
     A row with no real backupSet has no reliable identity, so it stands alone (keyed on its row index).
-    deviceName and vm are "NA" on real file-server and VM rows alike, so a host cannot be required; the host is in backupSet/configurationMode."""
+    deviceName and vm are "NA" on real file-server and VM rows alike, so a host cannot be required. The host is carried by backupSet (file-server sets, e.g. "<server>-data") and by
+    configurationMode for VMs (e.g. "<vcenter>:<datacenter>"). Two hosts sharing every descriptor would merge (accepted)."""
     backup_set = text(row.get("backupSet"))
     if backup_set == "" or backup_set.upper() == "NA":
         return ("unidentified", index)
