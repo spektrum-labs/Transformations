@@ -54,6 +54,12 @@ class BannerModeEnforcedTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertIsNone(self.t.transform(payload)["transformedResponse"][KEY])
 
+    def test_exchange_online_prepend_subject_action_counts(self):
+        """Get-TransportRule serializes a subject prefix as the PrependSubjectAction type name."""
+        r = {"Name": "Example banner", "State": "Enabled", "Mode": "Enforce",
+             "Actions": ["Microsoft.Exchange.MessagingPolicies.Rules.Tasks.PrependSubjectAction"]}
+        self.assertIs(self.t.transform({"Output": {"transportRules": [r]}})["transformedResponse"][KEY], True)
+
     def test_real_shape_passes(self):
         r = self.t.transform({"Output": {"transportRules": [rule()]}})
         self.assertIs(r["transformedResponse"][KEY], True)
