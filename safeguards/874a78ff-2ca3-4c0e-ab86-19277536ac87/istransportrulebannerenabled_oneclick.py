@@ -3,7 +3,7 @@ Transformation: isTransportRuleBannerEnabled (Microsoft One-Click)
 Vendor: Microsoft
 Category: Email Security / Transport Rules
 
-Evaluates if transport rule banner is enabled by checking for rules with Disclaimer or SubjectPrefix actions,
+Evaluates if transport rule banner is enabled by checking for rules with Disclaimer, SubjectPrefix or PrependSubject actions,
 and reports the Exchange-access prerequisite precisely for the Microsoft One-Click flow.
 """
 
@@ -187,7 +187,7 @@ def transform(input):
         for rule in transport_rules:
             actions = rule.get('Actions', [])
             if actions:
-                matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action)]
+                matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action or 'PrependSubject' in action)]
                 if matching_actions:
                     banner_rules.append({
                         'Name': rule.get('Name', 'Unknown'),
@@ -206,7 +206,7 @@ def transform(input):
             if len(banner_rules) > 0:
                 fail_reasons.append(f"Found {len(banner_rules)} banner rules but none are enabled")
             else:
-                fail_reasons.append("No transport rules with Disclaimer or SubjectPrefix actions found")
+                fail_reasons.append("No transport rules with Disclaimer, SubjectPrefix or PrependSubject actions found")
             recommendations.append("Enable transport rules with banner/disclaimer actions for external email warnings")
 
         return create_response(
