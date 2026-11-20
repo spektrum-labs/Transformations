@@ -121,8 +121,7 @@ ADMINS = {"data": {"usersInCurrentAndDescendantOrganization": {"count": 3, "page
     {"id": "a3", "username": "jdoe@example.com", "email": "jdoe@example.com", "domain": "SSO", "status": "ACTIVE",
      "isAccountOwner": False, "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}], "allOrgs": [{"id": "o1"}]}]},
     "groupsInCurrentAndDescendantOrganization": {"count": 1, "pageInfo": DONE, "nodes": [
-        {"groupId": "g1", "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}], "allOrgs": [{"id": "o1"}]}]},
-    "currentOrg": {"id": "o1"}}}
+        {"groupId": "g1", "roles": [{"id": "r2", "name": "Viewer", "isOrgAdmin": False}], "allOrgs": [{"id": "o1"}]}]}}}
 
 ROLES = {"data": {"getAllRolesInOrgConnection": {"count": 2, "pageInfo": DONE, "nodes": [
     {"id": "r1", "name": "Administrator", "isOrgAdmin": False, "isReadOnly": True,
