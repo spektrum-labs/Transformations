@@ -245,7 +245,7 @@ def transform(input):
         if mode in ("protect", "detect") and has_protection:
             enabled = enabled + 1
         else:
-            disabled_names.append(str(agent.get("computerName") or agent.get("uuid") or "unknown"))
+            disabled_names.append(str(agent.get("uuid") or agent.get("id") or "unknown"))
 
     pct = (enabled * 100) // sampled if sampled else 0
     is_enabled = sampled > 0 and enabled == sampled
@@ -261,7 +261,7 @@ def transform(input):
         pass_reasons.append(summary)
     else:
         fail_reasons.append(summary)
-        findings.append("Agents without protection: " + ", ".join(disabled_names[:5]) + ("..." if len(disabled_names) > 5 else ""))
+        findings.append("Agents without protection (agent id): " + ", ".join(disabled_names[:5]) + ("..." if len(disabled_names) > 5 else ""))
         recommendations.append("Set mitigationMode to protect (or detect) in the agent policy for every agent")
     if stale_count:
         findings.append(str(stale_count) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)
