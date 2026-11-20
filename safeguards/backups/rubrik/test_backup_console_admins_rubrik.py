@@ -92,8 +92,7 @@ def body(nodes, has_next=False, end=None, count=None, truncated=None, groups=Non
             "count": len(nodes) if count is None else count, "pageInfo": info, "nodes": nodes},
         "groupsInCurrentAndDescendantOrganization": {
             "count": len(groups), "pageInfo": {"hasNextPage": groups_next, "endCursor": "c9" if groups_next else None},
-            "nodes": groups},
-        "currentOrg": {"id": "o1"}}}
+            "nodes": groups}}}
 
 
 #: One person administers through a local console account and keeps an everyday SSO identity with no admin role.
@@ -337,7 +336,7 @@ def test_sso_viewer_with_admin_in_sub_org_not_evaluated():
 
 def test_group_viewer_with_sub_org_not_evaluated():
     g = group("g", roles=[VIEWER])
-    g["allOrgs"] = [{"id": "o2"}]
+    g["allOrgs"] = [{"id": "o1"}, {"id": "o2"}]
     out = run(body([user("owner@example.com", domain="LOCAL")], groups=[g]))
     assert out["transformedResponse"][KEY] is None
     assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgGroups"] == 1
@@ -354,7 +353,53 @@ def test_non_admin_only_in_context_org_still_passes():
                       groups=[group("g")])) is True
 
 
-def test_missing_current_org_fails_closed():
+def test_query_does_not_need_current_org():
     b = body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])])
-    del b["data"]["currentOrg"]
-    assert value(b) is None
+    assert "currentOrg" not in b["data"]
+    assert value(b) is True
+
+
+def test_stray_current_org_is_ignored():
+    b = body([user("owner@example.com", domain="LOCAL"), user("jane@example.com", roles=[VIEWER])])
+    b["data"]["currentOrg"] = {"id": "o9"}
+    assert value(b) is True
+
+
+def test_context_org_derived_when_an_admin_also_holds_a_sub_org_role():
+    owner = user("owner@example.com", domain="LOCAL")
+    owner["allOrgs"] = [{"id": "o2"}, {"id": "o1"}]
+    assert value(body([owner, user("jane@example.com", roles=[VIEWER])])) is True
+
+
+def test_context_org_underivable_fails_closed_for_sub_org_case_only():
+    # every role holder also holds roles in o2: o1 and o2 are both common, so which is the context is unknown
+    both = [{"id": "o1"}, {"id": "o2"}]
+    owner = user("owner@example.com", domain="LOCAL")
+    owner["allOrgs"] = both
+    viewer = user("jane@example.com", roles=[VIEWER])
+    viewer["allOrgs"] = both
+    out = run(body([owner, viewer]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUndecided"] == 1
+    assert "context organization cannot be derived" in out["additionalInfo"]["dataCollection"]["errors"][0]
+    # the same org lists with no non-admin account to place still pass
+    assert value(body([owner])) is True
+
+
+def test_context_org_underivable_when_role_holders_share_no_org():
+    other = user("jane@example.com", roles=[VIEWER])
+    other["allOrgs"] = [{"id": "o2"}]
+    out = run(body([user("owner@example.com", domain="LOCAL"), other]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["transformation"]["inputSummary"]["subOrgUndecided"] == 1
+
+
+def test_deactivated_account_does_not_decide_the_context_org():
+    gone = user("gone@example.com", status="DEACTIVATED")
+    gone["allOrgs"] = [{"id": "o7"}]
+    assert value(body([user("owner@example.com", domain="LOCAL"), gone])) is True
+
+
+def test_reasons_carry_no_email():
+    out = run(body([user("owner@example.com", domain="LOCAL"), user("jane.doe@example.com")]))
+    assert "example.com" not in json.dumps(out)
