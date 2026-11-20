@@ -284,3 +284,37 @@ def test_error_on_block_wrapper_is_unevaluated_not_a_pass():
     for k in KEYS:
         v, status, _ = run(k, body)
         assert v is None and status == "error", (k, v, status)
+
+
+# ---------------------------------------------------------------- drift between the five live counts
+
+def test_live_drift_between_counts_is_scored():
+    # Five calls on a live environment: 11 instances closed between the combined and split counts (synthetic, real scale).
+    body = composite(57_688, 1_037_647, 50_000, 900_000, combined=1_095_324)
+    for k in KEYS:
+        v, status, out = run(k, body)
+        assert status == "success" and v is not None, (k, v, status)
+        assert not satisfied(k, v)
+    assert run("openHighSeverityVulnerabilitiesCount", body)[0] == 1_037_647
+    assert run("openCriticalVulnerabilitiesCount", body)[0] == 57_688
+
+
+def test_overdue_drift_within_tolerance_is_scored():
+    # Overdue read after a few open instances closed: overdue high is 3 over open high on 900,000.
+    body = composite(10_000, 900_000, 9_000, 900_003, combined=910_000)
+    v, status, _ = run("overdueCriticalHighVulnerabilitiesCount", body)
+    assert (v, status) == (909_003, "success")
+
+
+def test_drift_past_tolerance_or_an_ignored_filter_stays_unevaluated():
+    cases = {
+        "split off by 0.2%": composite(57_688, 1_037_647, 1, 1, combined=1_093_100),
+        "ignored severity filter at scale": composite(1_095_324, 1_037_647, 1, 1, combined=1_095_324),
+        "overdue widened past tolerance": composite(10_000, 900_000, 9_000, 902_000, combined=910_000),
+        "small estate off by one": composite(400, 500, 1, 1, combined=901),
+    }
+    for k in KEYS:
+        for name, body in cases.items():
+            v, status, out = run(k, body)
+            assert v is None and status == "error", (k, name, v, status)
+            assert "disagree" in out["additionalInfo"]["dataCollection"]["errors"][0], (k, name)
