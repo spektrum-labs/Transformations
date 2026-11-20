@@ -2,8 +2,8 @@
 Transformation: backupSuccessRatePercentage
 Vendor: Druva (Data Security Cloud, Enterprise Workloads)  |  Category: Backups
 Method: getBackupActivity -> POST /platform/reporting/v1/reports/ewBackupActivity
-Evaluates: Percentage of jobs in the Druva Backup Activity report (the read window the definition sets; Druva's default is the last 24 hours) whose status is Successful.
-Unevaluated (None, dataCollection.status "error"): zero jobs in the window, a partial read, a missing, error or unrecognised body, failed input validation, or a transformation error.
+Evaluates: Percentage of Druva backup sets whose latest finished job in the Backup Activity report is Successful or Successful with errors. The read window is the one the integration definition sets (7 days today: lastUpdatedTime GTE utcNow-7d). Queued/Running jobs are excluded; earlier jobs superseded by a later run on the same set do not count.
+Unevaluated (None, dataCollection.status "error"): zero jobs in the window, only in-flight jobs, a partial read, a missing, error or unrecognised body, failed input validation, or a transformation error.
 """
 import json
 from datetime import datetime
@@ -92,7 +92,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 #
 # Why zero jobs is not a finding: the report only holds jobs that Druva's reporting store has
 # synced, and the store syncs about once a day. A read whose window starts after the last sync
-# (Druva's default window is the last 24 hours) is empty by construction, even when every backup
+# (the definition's read window, 7 days today) is empty by construction, even when every backup
 # set is enabled and the last nightly run was all Successful. The backup-set count is a different
 # report (ewResourceStatus), so this read cannot tell "no jobs because nothing is protected" from
 # "no jobs because the report has not synced yet". Only a body that lists jobs is a measurement.
@@ -176,6 +176,41 @@ def parse_time(value):
         return None
 
 
+# A job that has not finished yet is in neither the numerator nor the denominator.
+IN_FLIGHT = ("queued", "running", "waiting", "in progress")
+PASSING = ("successful", "successful with errors")
+
+
+def set_key(row, index):
+    """A backup set's identity. jobID sequences differ per workload, so a set is the tuple of its descriptors.
+    A row with no real backupSet has no reliable identity, so it stands alone (keyed on its row index).
+    deviceName and vm are "NA" on real file-server and VM rows alike, so a host cannot be required; the host is in backupSet/configurationMode."""
+    backup_set = text(row.get("backupSet"))
+    if backup_set == "" or backup_set.upper() == "NA":
+        return ("unidentified", index)
+    return tuple(text(row.get(f)) for f in ("organization", "administrativeGroup", "backupSet", "deviceName",
+                                             "vm", "resourceType", "configurationMode"))
+
+
+def latest_per_set(finished):
+    """Each backup set's newest finished job, so a failure a later retry fixed is not still counted.
+    Newest = latest of started/scheduled/lastUpdatedTime, jobID then failing-beats-passing as tiebreaks within a set; no parseable time sorts oldest."""
+    best = {}
+    for index, row in enumerate(finished):
+        when = (parse_time(row.get("started")) or parse_time(row.get("scheduled"))
+                or parse_time(row.get("lastUpdatedTime")) or datetime.min)
+        try:
+            job_num = int(text(row.get("jobID")))
+        except ValueError:  # missing, "NA", "abc", "²": no usable id
+            job_num = -1
+        # full tie: a failing job outranks a passing one, so the verdict does not depend on row order
+        rank = (when, job_num, 0 if text(row.get("status")).lower() in PASSING else 1)
+        key = set_key(row, index)
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, row)
+    return [pair[1] for pair in best.values()]
+
+
 def empty_read_problem(meta):
     reason = ("Druva Backup Activity report returned no jobs in its window. Zero jobs is not a measurement: "
               "the report holds only jobs Druva has synced, and the backup-set count is not part of this read, "
@@ -211,7 +246,7 @@ def transform(input):
             return unevaluated(
                 "None of the " + str(len(records)) + " rows is a Druva Backup Activity job (no status field); nothing was measured",
                 validation, input_summary={"rowsReported": len(records)})
-        value, summary, reasons = evaluate(records, meta["partial"])
+        value, summary, reasons = evaluate(jobs, meta["partial"], meta, len(records))
         if value is None:
             return unevaluated(reasons[0], validation, input_summary=summary)
         passed = value is not False
@@ -225,10 +260,23 @@ def transform(input):
         return unevaluated("Transformation error: " + str(e), None, transformation_errors=[str(e)])
 
 
-def evaluate(records, partial):
-    ok = [r for r in records if text(r.get("status")).lower() == "successful"]
-    summary = {"backupJobsReported": len(records), "backupJobsSuccessful": len(ok), "partialRead": partial}
+def evaluate(jobs, partial, meta, reported):
+    """Score each backup set by its latest finished job: Successful and Successful with errors pass, anything else fails."""
+    in_flight = [r for r in jobs if text(r.get("status")).lower() in IN_FLIGHT]
+    finished = [r for r in jobs if text(r.get("status")).lower() not in IN_FLIGHT]
+    latest = latest_per_set(finished)
+    summary = {"backupJobsReported": reported, "backupRowsIgnored": reported - len(jobs), "backupJobsInFlight": len(in_flight),
+               "backupJobsSuperseded": len(finished) - len(latest), "backupSetsEvaluated": len(latest)}
+    if meta.get("windowStart"):
+        summary["windowStart"] = meta["windowStart"]
+    summary["partialRead"] = partial
     if partial:
         return None, summary, ["The Druva Backup Activity read is partial (more pages were not read), so it cannot answer this; nothing was concluded"]
-    rate = round(len(ok) * 100.0 / len(records), 2)
-    return rate, summary, [str(len(ok)) + " of " + str(len(records)) + " Druva backup jobs Successful (" + str(rate) + "%)"]
+    if len(latest) == 0:
+        return None, summary, ["All " + str(len(jobs)) + " Druva backup jobs read are still in flight (queued or running), so no finished job was measured"]
+    tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(finished) - len(latest))
+            + " earlier jobs superseded by a later run" + (" (read since " + meta["windowStart"] + ")" if meta.get("windowStart") else ""))
+    ok = [r for r in latest if text(r.get("status")).lower() in PASSING]
+    summary["backupSetsSuccessful"] = len(ok)
+    rate = round(len(ok) * 100.0 / len(latest), 2)
+    return rate, summary, [str(len(ok)) + " of " + str(len(latest)) + " Druva backup sets' latest finished job was Successful (" + str(rate) + "%)" + tail]
