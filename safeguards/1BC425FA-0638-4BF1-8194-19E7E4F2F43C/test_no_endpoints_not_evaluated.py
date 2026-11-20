@@ -43,10 +43,12 @@ def test_no_endpoints_is_not_evaluated(name, keys, body):
 
 
 @pytest.mark.parametrize("name,keys", FILES)
-def test_populated_list_unchanged(name, keys):
+def test_populated_list_is_not_evidence(name, keys):
+    # An endpoint list says endpoints exist, not that this control is on: Not evaluated.
     out = run(name, POPULATED)
     for key in keys:
-        assert out["transformedResponse"][key] is True
+        assert out["transformedResponse"][key] is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 @pytest.mark.parametrize("name,keys", FILES)
