@@ -213,11 +213,12 @@ def test_measured_false_is_a_finding_with_reasons(mode):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_row_without_status_still_counts_as_failed(mode):
-    # unchanged semantics: once the read is recognisably job rows, a row with no status is not Successful
+def test_row_without_status_is_ignored_not_scored(mode):
+    # once the read is recognisably job rows, a row with no status is not a job: it is counted as read, never scored
     rows = [job(1), {"jobID": 1, "backupSet": "synthetic-set-x"}]
-    assert run("failedBackupJobsCount", rows, mode)[0] == 1
-    assert run("backupSuccessRatePercentage", rows, mode)[0] == 50.0
+    assert both(rows, mode) == (100.0, 0)
+    counts = run("failedBackupJobsCount", rows, mode)[1]["transformedResponse"]
+    assert (counts["backupJobsReported"], counts["backupRowsIgnored"], counts["backupSetsEvaluated"]) == (2, 1, 1)
 
 
 # ---- latest finished job per backup set ----------------------------------------------------------
@@ -244,6 +245,13 @@ def test_later_success_supersedes_earlier_failure(mode):
     out = run("failedBackupJobsCount", rows, mode)[1]
     assert out["transformedResponse"]["backupJobsSuperseded"] == 1
     assert out["transformedResponse"]["backupSetsEvaluated"] == 1
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_status_less_row_cannot_supersede_a_real_job(mode):
+    # same set descriptors, newer than the successful job, but no status: it must not turn the set into a failure
+    rows = [at(1, 3, "Successful"), {k: v for k, v in at(2, 9, "Successful").items() if k != "status"}]
+    assert both(rows, mode) == (100.0, 0)
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -405,7 +413,8 @@ def test_mixed_read_counts_add_up_and_leak_nothing(mode):
         counts = out["transformedResponse"]
         assert counts["backupJobsReported"] == 6
         assert counts["backupJobsReported"] == (counts["backupJobsInFlight"] + counts["backupJobsSuperseded"]
-                                                + counts["backupSetsEvaluated"])
+                                                + counts["backupSetsEvaluated"] + counts["backupRowsIgnored"])
+        assert counts["backupRowsIgnored"] == 0
         assert (counts["backupJobsInFlight"], counts["backupJobsSuperseded"], counts["backupSetsEvaluated"]) == (2, 1, 3)
         assert value == (33.33 if key == "backupSuccessRatePercentage" else 2)
         assert "synthetic-" not in json.dumps(out)

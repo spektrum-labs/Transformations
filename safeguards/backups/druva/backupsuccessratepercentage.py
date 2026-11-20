@@ -183,7 +183,8 @@ PASSING = ("successful", "successful with errors")
 
 def set_key(row, index):
     """A backup set's identity. jobID sequences differ per workload, so a set is the tuple of its descriptors.
-    A row with no real backupSet has no reliable identity, so it stands alone (keyed on its row index)."""
+    A row with no real backupSet has no reliable identity, so it stands alone (keyed on its row index).
+    deviceName and vm are "NA" on real file-server and VM rows alike, so a host cannot be required; the host is in backupSet/configurationMode."""
     backup_set = text(row.get("backupSet"))
     if backup_set == "" or backup_set.upper() == "NA":
         return ("unidentified", index)
@@ -245,7 +246,7 @@ def transform(input):
             return unevaluated(
                 "None of the " + str(len(records)) + " rows is a Druva Backup Activity job (no status field); nothing was measured",
                 validation, input_summary={"rowsReported": len(records)})
-        value, summary, reasons = evaluate(records, meta["partial"], meta)
+        value, summary, reasons = evaluate(jobs, meta["partial"], meta, len(records))
         if value is None:
             return unevaluated(reasons[0], validation, input_summary=summary)
         passed = value is not False
@@ -259,12 +260,12 @@ def transform(input):
         return unevaluated("Transformation error: " + str(e), None, transformation_errors=[str(e)])
 
 
-def evaluate(records, partial, meta):
+def evaluate(jobs, partial, meta, reported):
     """Score each backup set by its latest finished job: Successful and Successful with errors pass, anything else fails."""
-    in_flight = [r for r in records if text(r.get("status")).lower() in IN_FLIGHT]
-    finished = [r for r in records if text(r.get("status")).lower() not in IN_FLIGHT]
+    in_flight = [r for r in jobs if text(r.get("status")).lower() in IN_FLIGHT]
+    finished = [r for r in jobs if text(r.get("status")).lower() not in IN_FLIGHT]
     latest = latest_per_set(finished)
-    summary = {"backupJobsReported": len(records), "backupJobsInFlight": len(in_flight),
+    summary = {"backupJobsReported": reported, "backupRowsIgnored": reported - len(jobs), "backupJobsInFlight": len(in_flight),
                "backupJobsSuperseded": len(finished) - len(latest), "backupSetsEvaluated": len(latest)}
     if meta.get("windowStart"):
         summary["windowStart"] = meta["windowStart"]
@@ -272,7 +273,7 @@ def evaluate(records, partial, meta):
     if partial:
         return None, summary, ["The Druva Backup Activity read is partial (more pages were not read), so it cannot answer this; nothing was concluded"]
     if len(latest) == 0:
-        return None, summary, ["All " + str(len(records)) + " Druva backup jobs read are still in flight (queued or running), so no finished job was measured"]
+        return None, summary, ["All " + str(len(jobs)) + " Druva backup jobs read are still in flight (queued or running), so no finished job was measured"]
     tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(finished) - len(latest))
             + " earlier jobs superseded by a later run" + (" (read since " + meta["windowStart"] + ")" if meta.get("windowStart") else ""))
     ok = [r for r in latest if text(r.get("status")).lower() in PASSING]
