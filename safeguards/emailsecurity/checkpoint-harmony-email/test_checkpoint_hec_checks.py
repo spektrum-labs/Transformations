@@ -70,9 +70,9 @@ def no_quarantine(r):
     r["actions"] = [a for a in r["actions"] if "quarantine" not in a["actionType"]]
 
 
-def strip_create_time(r):
+def strip_all_move_fields(r):
     for a in r["actions"]:
-        if "quarantine" in a["actionType"]:
+        if any(w in a["actionType"] for w in ("quarantine", "restore", "delete", "move")):
             a["createTime"] = "None"
 
 
@@ -80,11 +80,10 @@ EVENT_CASES = [
     # (file, verdict on the real partial page, flip, flipped verdict on the partial page,
     #  flipped verdict once the page is complete)
     # A partial page cannot prove an absence: a flip that removes the match reads None there and
-    # False only on a complete page. messageMoveAuditTrailEnabled says "every move action is
-    # auditable", which a partial page cannot prove, but a move action seen without its audit
-    # fields is a negative the unread pages cannot undo.
+    # False only on a complete page. messageMoveAuditTrailEnabled is the same: it needs
+    # an audited move action, so a flip that leaves only gaps reads None on a partial page.
     ("isemailsecurityloggingenabled", True, drop_actions, None, False),
-    ("messagemoveaudittrailenabled", None, strip_create_time, False, False),
+    ("messagemoveaudittrailenabled", True, strip_all_move_fields, None, False),
     ("ispostdeliveryquarantineenabled", True, no_quarantine, None, False),
     ("isimposteremaildetectionenabled", True, ms_only, None, False),
 ]
@@ -125,6 +124,11 @@ def test_move_audit_ignores_non_move_actions():
         r["actions"] = [a for a in r["actions"] if a["actionType"].startswith("add_")]
     assert verdict("messagemoveaudittrailenabled", complete(events(headers_only))) is False
     assert verdict("messagemoveaudittrailenabled", events(headers_only)) is None
+
+
+def test_move_audit_metadata_names_the_move_method():
+    out = load("messagemoveaudittrailenabled").transform(events())
+    assert out["additionalInfo"]["metadata"]["method"] == "queryOffice365MoveEvents"
 
 
 def test_logging_needs_events_with_core_fields():
