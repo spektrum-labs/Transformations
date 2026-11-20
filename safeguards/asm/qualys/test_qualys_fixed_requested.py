@@ -512,13 +512,13 @@ def test_the_refusal_block_is_identical_in_every_reader():
     assert len(blocks) == 1
 
 
-def test_a_truncated_reply_with_open_criticals_fails_on_a_lower_bound():
+def test_a_truncated_reply_with_open_criticals_is_not_graded_but_keeps_the_lower_bound():
     payload = detections(OPEN_CRITICAL, OPEN_CRITICAL, request=echo(ALL_STATUSES))
     payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = TRUNCATED
-    out = load("criticalvulnerabilitycount").transform(payload)
-    assert out["transformedResponse"]["criticalVulnerabilityCount"] == 2
-    assert out["transformedResponse"]["countIsLowerBound"] is True
-    assert "criticalVulnerabilityCount: at least 2" in out["additionalInfo"]["evaluation"]["additionalFindings"]
+    value, info = run("criticalvulnerabilitycount", payload)
+    assert value is None
+    assert_ours(info, "partial_read")
+    assert info["evaluation"]["additionalFindings"] == ["open critical vulnerabilities on the pages read: at least 2"]
 
 
 def test_a_truncated_reply_with_no_open_critical_is_a_partial_read():
