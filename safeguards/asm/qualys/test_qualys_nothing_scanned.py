@@ -64,8 +64,9 @@ class NothingScanned(unittest.TestCase):
 
     def test_hosts_with_no_detections_are_a_measured_clean_result(self):
         payload = reply([host(1, []), host(2, [])])
+        # No echo proves the status filter, so no detection is not yet a measured 100.
         self.assertEqual(self.run_case("patchcompliancepercentage", "patchCompliancePercentage", payload),
-                         ("100", "success"))
+                         (None, "error"))
         self.assertEqual(self.run_case("criticalvulnerabilitycount", "criticalVulnerabilityCount", payload),
                          (0, "success"))
 
