@@ -54,11 +54,20 @@ class TransportRuleBannerEnforcedTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertIsNone(self.t.transform(payload)["transformedResponse"][KEY])
 
-    def test_exchange_online_prepend_subject_action_counts(self):
-        """Get-TransportRule serializes a subject prefix as the PrependSubjectAction type name."""
-        r = {"Name": "Example banner", "State": "Enabled", "Mode": "Enforce",
-             "Actions": ["Microsoft.Exchange.MessagingPolicies.Rules.Tasks.PrependSubjectAction"]}
-        self.assertIs(self.t.transform({"Output": {"transportRules": [r]}})["transformedResponse"][KEY], True)
+    def test_exchange_online_action_type_names(self):
+        """Get-TransportRule serializes Actions as .NET type names; a subject prefix counts only on external mail."""
+        tasks = "Microsoft.Exchange.MessagingPolicies.Rules.Tasks."
+        cases = (
+            ("PrependSubjectAction", "NotInOrganization", True),
+            ("PrependSubjectAction", None, False),
+            ("ApplyHtmlDisclaimerAction", None, True),
+            ("SetHeaderAction", "NotInOrganization", False),
+        )
+        for action, scope, expected in cases:
+            with self.subTest(action=action, scope=scope):
+                r = {"Name": "Example banner", "State": "Enabled", "Mode": "Enforce", "FromScope": scope,
+                     "Actions": [tasks + action]}
+                self.assertIs(self.t.transform({"Output": {"transportRules": [r]}})["transformedResponse"][KEY], expected)
 
     def test_real_shape_passes(self):
         r = self.t.transform({"Output": {"transportRules": [rule()]}})

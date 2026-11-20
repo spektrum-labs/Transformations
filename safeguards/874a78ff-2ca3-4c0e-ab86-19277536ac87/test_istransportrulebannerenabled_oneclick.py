@@ -140,9 +140,18 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
     def test_exchange_online_action_type_names(self):
         """Get-TransportRule serializes Actions as .NET type names; a subject prefix is PrependSubjectAction."""
         tasks = "Microsoft.Exchange.MessagingPolicies.Rules.Tasks."
-        for action, expected in (("PrependSubjectAction", True), ("ApplyHtmlDisclaimerAction", True), ("SetHeaderAction", False)):
-            with self.subTest(action=action):
-                input_data = {"Output": {"transportRules": [banner_rule(actions=[tasks + action])]}}
+        cases = (
+            ("PrependSubjectAction", "NotInOrganization", True),
+            ("PrependSubjectAction", None, False),  # e.g. a [SPAM] tag on all mail is not an external banner
+            ("PrependSubjectAction", "InOrganization", False),
+            ("ApplyHtmlDisclaimerAction", None, True),
+            ("SetHeaderAction", "NotInOrganization", False),
+        )
+        for action, scope, expected in cases:
+            with self.subTest(action=action, scope=scope):
+                rule = banner_rule(actions=[tasks + action])
+                rule["FromScope"] = scope
+                input_data = {"Output": {"transportRules": [rule]}}
                 self.assertIs(self.transformation.transform(input_data)["transformedResponse"][KEY], expected)
                 self.assertIs(self.legacy_transformation.transform(input_data)["transformedResponse"][KEY], expected)
 
@@ -167,7 +176,7 @@ class MicrosoftOneClickTransportRuleBannerTests(unittest.TestCase):
                 self.assertEqual(response["additionalInfo"]["dataCollection"]["errors"], [])
                 self.assertEqual(
                     response["additionalInfo"]["evaluation"]["failReasons"],
-                    ["No transport rules with Disclaimer, SubjectPrefix or PrependSubject actions found"],
+                    ["No transport rules with Disclaimer, SubjectPrefix or external PrependSubject actions found"],
                 )
 
     def test_missing_or_non_list_transport_rules_is_not_evaluated(self):
