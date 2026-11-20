@@ -3,11 +3,40 @@ Transformation: isUnifiedAuditLoggingEnabled
 Vendor: Microsoft
 Category: Security / Logging
 
-Evaluates if unified audit logging is enabled by checking for audit log entries.
+Input: the Microsoft Graph response to
+    GET https://graph.microsoft.com/beta/security/auditLog/queries?$top=1
+(Integration-Service ms365 definitions, method getUnifiedAuditLogging).
+
+What that endpoint returns: a list of auditLogQuery objects, the audit log SEARCHES that
+someone has created through the Purview Audit Search API. It does not return audit records,
+and it has no "unified audit logging is on/off" field. See
+https://learn.microsoft.com/en-us/graph/api/security-auditcoreroot-list-auditlogqueries?view=graph-rest-beta
+and https://learn.microsoft.com/en-us/graph/api/resources/security-auditlogquery?view=graph-rest-beta
+
+Verdict policy (ENG-1291):
+  * True  -- only when a listed search finished ("succeeded"), returned records
+             (approximateReturnedRecordCount > 0), and covered a window that ended in the
+             last RECENT_DAYS days. Records only exist when the tenant is recording.
+  * None  -- every other case, reported as Not evaluated with a plain reason:
+             an empty list (nobody has run a search, which says nothing about logging),
+             a Graph error or permission refusal, an unexpected body, or searches that
+             found nothing recent.
+  * False -- never. This endpoint cannot show that logging is off. The setting itself
+             (UnifiedAuditLogIngestionEnabled) is read by Exchange Online PowerShell
+             Get-AdminAuditLogConfig, which Graph does not expose.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+CRITERIA_KEY = "isUnifiedAuditLoggingEnabled"
+ALIAS_KEY = "isUnifiedAuditLogEnabled"
+RECENT_DAYS = 90
+PERMISSION_CODES = ["Authorization_RequestDenied", "Forbidden", "AccessDenied", "Unauthorized",
+                    "InvalidAuthenticationToken"]
+EVIDENCE_HINT = ("Upload evidence instead, for example Exchange Online PowerShell "
+                 "Get-AdminAuditLogConfig output showing UnifiedAuditLogIngestionEnabled = True.")
 
 
 def extract_input(input_data):
@@ -66,9 +95,70 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def transform(input):
-    criteriaKey = "isUnifiedAuditLoggingEnabled"
+def verdict(value):
+    return {CRITERIA_KEY: value, ALIAS_KEY: value}
 
+
+def not_evaluated(reason, validation=None, input_summary=None, transformation_errors=None):
+    """Criterion None plus an api_errors entry: the evaluator records it as Not evaluated."""
+    return create_response(
+        result=verdict(None),
+        validation=validation,
+        fail_reasons=[reason],
+        recommendations=[EVIDENCE_HINT],
+        input_summary=input_summary,
+        transformation_errors=transformation_errors,
+        api_errors=[reason]
+    )
+
+
+def as_int(value):
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
+def error_code(data):
+    """The Graph error code from an error body, or "" when the body is not an error."""
+    error_info = data.get("error")
+    if isinstance(error_info, dict):
+        return str(error_info.get("code") or "unknown")
+    if error_info:
+        return "unknown"
+    status = data.get("statusCode", data.get("status_code"))
+    if as_int(status) >= 400:
+        return "HTTP " + str(as_int(status))
+    return ""
+
+
+def recent_record_queries(queries, cutoff_day):
+    """Searches that finished, returned records, and covered a window ending on/after cutoff_day."""
+    found = []
+    for query in queries:
+        if not isinstance(query, dict):
+            continue
+        if str(query.get("status") or "").lower() != "succeeded":
+            continue
+        if as_int(query.get("approximateReturnedRecordCount")) <= 0:
+            continue
+        end_day = str(query.get("filterEndDateTime") or "")[:10]
+        if len(end_day) != 10 or end_day < cutoff_day:
+            continue
+        found.append({
+            "displayName": str(query.get("displayName") or ""),
+            "filterEndDate": end_day,
+            "approximateReturnedRecordCount": as_int(query.get("approximateReturnedRecordCount"))
+        })
+    return found
+
+
+def transform(input):
     try:
         if isinstance(input, str):
             input = json.loads(input)
@@ -78,59 +168,72 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            return create_response(
-                result={criteriaKey: False, "isUnifiedAuditLogEnabled": False},
-                validation=validation,
-                fail_reasons=["Input validation failed"]
+            return not_evaluated(
+                "The Microsoft response could not be validated, so Unified Audit Logging was not evaluated.",
+                validation=validation
             )
 
-        # Check for API error response
-        if 'error' in data:
-            error_info = data.get('error', {})
-            inner_error = error_info.get('innerError', {})
-            return create_response(
-                result={criteriaKey: False, "isUnifiedAuditLogEnabled": False},
-                validation={"status": "error", "errors": [error_info.get('message', 'API error')], "warnings": []},
-                fail_reasons=[f"Microsoft Graph API error: {error_info.get('code', 'unknown')}"],
-                input_summary={
-                    "errorCode": error_info.get('code'),
-                    "innerErrorCode": inner_error.get('code') if inner_error else None
-                }
+        if not isinstance(data, dict):
+            return not_evaluated(
+                "Microsoft returned no readable response, so Unified Audit Logging was not evaluated."
             )
 
-        pass_reasons = []
-        fail_reasons = []
-        recommendations = []
-
-        # Ensure value is type list, replace None if found
-        value = data.get('value', [])
-        if not isinstance(value, list):
-            if value is None:
-                value = []
+        code = error_code(data)
+        if code:
+            if code in PERMISSION_CODES or code in ["HTTP 401", "HTTP 403"]:
+                reason = ("Microsoft refused the audit log request (" + code + "). The app registration "
+                          "may be missing the AuditLogsQuery.Read.All permission or admin consent, so "
+                          "Unified Audit Logging was not evaluated.")
             else:
-                value = [data.get('value')]
+                reason = ("Microsoft returned an error (" + code + ") for the audit log request, so "
+                          "Unified Audit Logging was not evaluated.")
+            return not_evaluated(reason, input_summary={"errorCode": code})
 
-        is_enabled = len(value) > 0
+        if "value" not in data or not isinstance(data.get("value"), list):
+            return not_evaluated(
+                "The Microsoft response did not contain a list of audit log searches, so Unified "
+                "Audit Logging was not evaluated."
+            )
 
-        if is_enabled:
-            pass_reasons.append(f"Unified audit logging is enabled with {len(value)} audit log entries found")
-        else:
-            fail_reasons.append("Unified audit logging not enabled or no recent entries")
-            recommendations.append("Enable unified audit logging in Microsoft 365 compliance center")
+        queries = data.get("value")
+        summary = {"auditLogSearchesListed": len(queries)}
 
+        if len(queries) == 0:
+            return not_evaluated(
+                "Microsoft returned no saved audit log searches for this tenant. That list shows "
+                "searches someone has run, not whether Unified Audit Logging is on, so this check "
+                "can't tell either way.",
+                input_summary=summary
+            )
+
+        cutoff_day = (datetime.utcnow() - timedelta(days=RECENT_DAYS)).date().isoformat()
+        evidence = recent_record_queries(queries, cutoff_day)
+        summary["searchesWithRecentRecords"] = len(evidence)
+
+        if len(evidence) == 0:
+            return not_evaluated(
+                "Microsoft listed audit log searches, but none finished with records from the last "
+                + str(RECENT_DAYS) + " days, so Unified Audit Logging was not evaluated.",
+                input_summary=summary
+            )
+
+        best = evidence[0]
         return create_response(
-            result={criteriaKey: is_enabled, "isUnifiedAuditLogEnabled": is_enabled},
+            result=verdict(True),
             validation=validation,
-            pass_reasons=pass_reasons,
-            fail_reasons=fail_reasons,
-            recommendations=recommendations,
-            input_summary={"auditLogEntries": len(value)}
+            pass_reasons=[
+                "A Microsoft audit log search returned about "
+                + str(best["approximateReturnedRecordCount"])
+                + " records for a window ending " + best["filterEndDate"]
+                + ", so Unified Audit Logging is recording."
+            ],
+            input_summary=summary,
+            additional_findings=evidence
         )
 
     except Exception as e:
-        return create_response(
-            result={criteriaKey: False, "isUnifiedAuditLogEnabled": False},
+        return not_evaluated(
+            "The audit log response could not be read, so Unified Audit Logging was not evaluated.",
             validation={"status": "error", "errors": [], "warnings": []},
-            transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            transformation_errors=[str(e)]
         )
