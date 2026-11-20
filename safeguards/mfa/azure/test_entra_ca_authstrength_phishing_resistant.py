@@ -239,6 +239,8 @@ class CAAuthStrengthTests(unittest.TestCase):
                                                       name="Trial copy")))
         self.assertEqual((res["transformedResponse"][KEY], res["transformedResponse"][ADMIN]), (True, True))
         self.assertEqual(self.reasons(res), ([], []))
+        self.assertEqual(res["transformedResponse"]["policiesNotEnforced"], [])
+        self.assertEqual(res["additionalInfo"]["transformation"]["inputSummary"]["policiesNotEnforced"], [])
 
     def test_many_report_only_policies_are_capped(self):
         many = [pol(users=["All"], state="enabledForReportingButNotEnforced", name="RO " + str(i)) for i in range(7)]

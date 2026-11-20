@@ -407,6 +407,9 @@ def transform(input):
                       + ", ".join(missing_roles))
     if failed and not_enforced:
         failed.extend(not_enforced_reasons(not_enforced))
+    else:
+        # named only to explain a FAIL; a pass or an unproven result lists none
+        summary["policiesNotEnforced"] = result["policiesNotEnforced"] = []
     return create_response(result, validation, passed=passed, failed=failed, findings=findings, summary=summary,
                            recommendations=[] if all_users else (
                                [switch_on_recommendation(not_enforced)] if failed and not_enforced else []) + [
