@@ -7,7 +7,8 @@ Conditional Access, with at most break-glass accounts excluded.
 "Root user" is an AWS term. Microsoft has no root user; its equivalent is the Global Administrator role
 (product decision, 2026-11-16: map isRootUserMFAEnabled to Global Administrator / break-glass MFA). This is
 Azure AD's isMFAConfiguredForSecurityAdmins (safeguards/mfa/azure/ismfaconfiguredforsecurityadmins.py)
-narrowed to that one role: same policy rules, same break-glass limits, same None cases. Keep the two in step.
+narrowed to that one role: same policy rules, same break-glass limits, same None cases, the same rule for excluded
+locations (any excluded location disqualifies a policy). Keep the two in step.
 The per-account naming that file can add is left out: it would put user names in the reason.
 
 A role is covered by a policy that is enabled, requires MFA (via builtInControls
@@ -20,16 +21,20 @@ Reaching the administrative surface is not the same as reaching every admin
 sign-in. The Entra MFA review (overstated passes, decision 18 Oct 2026) aligns this check
 with the remote-access (entra_ca_mfa_coverage.py) and phishing-resistant
 (entra_ca_authstrength_phishing_resistant.py) checks:
-- a policy narrowed by client app types, platforms, a device filter, or named
-  locations only (strict_narrowing) does not count; a role covered by nothing
-  else is a measured gap (False);
+- a policy narrowed by client app types, platforms, a device filter, named
+  locations only, or any excluded location (strict_narrowing) does not count;
+  a role covered by nothing else is a measured gap (False);
 - a policy that excludes a group, a directory role, guests or external users, or
   more than MAX_BREAK_GLASS named accounts, or counting policies that exclude
   more than MAX_BREAK_GLASS named accounts in total, leave coverage unproven:
   None (not evaluated), not False, because group and role membership is not read.
-Excluded locations (all locations minus trusted ones, the remote-access rule)
-and excluded applications other than the admin surface do not change the
-verdict; they are named in additionalFindings (narrowing_conditions).
+An excluded location, AllTrusted included, skips MFA from there: named locations are not read, so the
+excluded one could be a wide range where Global Admin sign-ins are not asked for MFA. The policy does not count
+(as in entra_ca_authstrength_phishing_resistant.py) and the fail reason carries the count of excluded
+locations, never their ids. On AllTrusted this differs from the remote-access check
+(entra_ca_mfa_coverage.py), which lets it through: an admin MFA policy must reach every admin sign-in, so it
+follows the phishing-resistant rule (decision: review of PR #1381, 19 Nov 2026). Excluded applications other than the admin surface do not change the verdict; they
+are named in additionalFindings (narrowing_conditions).
 
 Break-glass (row 36B (c), decision 18 Oct 2026): a counting policy may exclude
 at most MAX_BREAK_GLASS named accounts or one group (MAX_BREAK_GLASS_GROUPS),
@@ -158,12 +163,10 @@ def narrowing_conditions(policy):
     platforms = folded(listed(conditions.get("platforms"), "includePlatforms"))
     if platforms and "all" not in platforms:
         found.append("platforms " + ", ".join(platforms))
-    locations = conditions.get("locations")
-    include_locations = folded(listed(locations, "includeLocations"))
+    include_locations = folded(listed(conditions.get("locations"), "includeLocations"))
     if include_locations and "all" not in include_locations:
         found.append("named locations only")
-    for block, name, label in [(locations, "excludeLocations", "location"),
-                               (conditions.get("applications"), "excludeApplications", "application"),
+    for block, name, label in [(conditions.get("applications"), "excludeApplications", "application"),
                                (conditions.get("users"), "excludeUsers", "user"),
                                (conditions.get("users"), "excludeGroups", "group")]:
         count = len(listed(block, name))
@@ -172,9 +175,20 @@ def narrowing_conditions(policy):
     return found
 
 
+def excluded_locations(policy):
+    """The locations this policy excludes, "none" aside. Fail closed: a value that is not a list counts as one."""
+    conditions = policy.get("conditions")
+    locations = conditions.get("locations") if isinstance(conditions, dict) else None
+    raw = locations.get("excludeLocations") if isinstance(locations, dict) else None
+    if isinstance(raw, list):
+        return [v for v in folded(raw) if v and v != "none"]
+    return [str(raw)] if raw else []
+
+
 def strict_narrowing(policy):
     """Conditions that keep a policy from every admin sign-in, judged as the remote-access and phishing-resistant
-    checks judge them: client app types, platforms, a device filter, or named locations only."""
+    checks judge them: client app types, platforms, a device filter, named locations only, or any excluded
+    location (named locations are not read, so an excluded one may be a range that skips MFA)."""
     conditions = policy.get("conditions")
     if not isinstance(conditions, dict):
         return []
@@ -194,6 +208,9 @@ def strict_narrowing(policy):
     include_locations = folded(listed(conditions.get("locations"), "includeLocations"))
     if include_locations and "all" not in include_locations:
         found.append("named locations only")
+    excluded = excluded_locations(policy)
+    if excluded:
+        found.append(str(len(excluded)) + " excluded location(s)")
     return found
 
 
@@ -261,7 +278,7 @@ def transform(input):
     """True only when Global Administrator is covered by an enabled Conditional Access policy that requires MFA
     (builtInControls "mfa" or an authenticationStrength) for every cloud app or the Microsoft Admin Portals, with
     neither the admin portals nor the Microsoft Azure Management app in excludeApplications, without excluding the
-    role and without being limited to risky sign-ins, excluding at most break-glass. False: enabled policies exist but none
+    role, without excluding a location and without being limited to risky sign-ins, excluding at most break-glass. False: enabled policies exist but none
     qualifies. None, with dataCollection.status "error": the policy list was not read, no policy is enabled (Security
     Defaults not read), a partial page (@odata.nextLink) leaves the
     role uncovered, exclusions go beyond break-glass, or the transformation failed.
@@ -310,6 +327,7 @@ def transform(input):
         narrowed_policies = []
         covered_ids = []
         narrowed_out = []
+        location_excluded = []
         unproven_policies = []
         unproven_ids = []
         excluded_accounts = []
@@ -333,6 +351,9 @@ def transform(input):
             if state == "enabled":
                 strict = strict_narrowing(policy)
                 if strict:
+                    for location in excluded_locations(policy):
+                        if location not in location_excluded:
+                            location_excluded.append(location)
                     narrowed_out.append(name + " (" + "; ".join(strict) + ")")
                     continue
                 problems, named, groups = exclusion_problems(policy)
@@ -399,9 +420,14 @@ def transform(input):
                 "No enabled Conditional Access policy requires MFA for Global Administrator, the tenant's "
                 "root-equivalent role"
             )
+            if location_excluded:
+                fail_reasons.append(
+                    "MFA policies for Global Administrator exclude " + str(len(location_excluded)) + " location(s), so "
+                    "MFA is skipped for sign-ins from them"
+                )
             recommendations.append(
                 "Enable a Conditional Access policy that requires MFA for all resources and targets Global "
-                "Administrator, excluding at most two emergency-access (break-glass) accounts"
+                "Administrator, excluding at most two emergency-access (break-glass) accounts and no locations"
             )
 
         if report_only_policies:
