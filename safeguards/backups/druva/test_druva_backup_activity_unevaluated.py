@@ -78,10 +78,10 @@ def assert_unevaluated(key, body, mode):
 
 
 def job(n, status="Successful", scheduled="2026-01-10T02:00:00Z", policy="Synthetic Nightly Policy"):
-    return {"jobID": 700000 + n, "backupset": "synthetic-set-%02d" % n, "resourceName": "synthetic-vm-%02d" % n,
+    return {"jobID": 700000 + n, "backupSet": "synthetic-set-%02d" % n, "deviceName": "synthetic-vm-%02d" % n,
             "status": status, "scheduled": scheduled, "backupPolicy": policy,
-            "startTime": "2026-01-10T02:00:00Z", "endTime": "2026-01-10T02:20:00Z",
-            "lastUpdatedTime": "2026-01-10T02:20:00Z", "organization": "Synthetic Org"}
+            "started": "2026-01-10T02:00:00.000Z", "ended": "2026-01-10T02:20:00.000Z",
+            "lastUpdatedTime": "2026-01-10T02:20:00.000Z", "organization": "Synthetic Org"}
 
 
 def envelope(rows, last_sync="2026-01-10T06:00:00Z", window_start="2026-01-09T12:00:00Z", next_token=""):
@@ -194,9 +194,9 @@ def test_measured_reads_answer(shape, mode):
     assert run("isBackupTypesScheduled", ok, mode)[0] is True
     assert run("isBackupTypesScheduled", unscheduled, mode)[0] is False
     assert run("backupSuccessRatePercentage", ok, mode)[0] == 100.0
-    assert run("backupSuccessRatePercentage", mixed, mode)[0] == 50.0
+    assert run("backupSuccessRatePercentage", mixed, mode)[0] == 75.0  # "Successful with errors" passes
     assert run("failedBackupJobsCount", ok, mode)[0] == 0
-    assert run("failedBackupJobsCount", mixed, mode)[0] == 2
+    assert run("failedBackupJobsCount", mixed, mode)[0] == 1
 
     for key, body in (("isBackupTypesScheduled", unscheduled), ("failedBackupJobsCount", mixed),
                       ("backupSuccessRatePercentage", mixed), ("isBackupTypesScheduled", ok)):
@@ -215,9 +215,91 @@ def test_measured_false_is_a_finding_with_reasons(mode):
 @pytest.mark.parametrize("mode", MODES)
 def test_row_without_status_still_counts_as_failed(mode):
     # unchanged semantics: once the read is recognisably job rows, a row with no status is not Successful
-    rows = [job(1), {"jobID": 1, "backupset": "synthetic-set-x"}]
+    rows = [job(1), {"jobID": 1, "backupSet": "synthetic-set-x"}]
     assert run("failedBackupJobsCount", rows, mode)[0] == 1
     assert run("backupSuccessRatePercentage", rows, mode)[0] == 50.0
+
+
+# ---- latest finished job per backup set ----------------------------------------------------------
+
+def at(n, hour, status, **extra):
+    """Job n of one backup set (same set descriptors), started at the given hour."""
+    row = job(1, status=status)
+    row.update({"jobID": 800000 + n, "started": "2026-01-10T%02d:00:00.000Z" % hour, "scheduled": "NA"})
+    row.update(extra)
+    return row
+
+
+def both(rows, mode):
+    return (run("backupSuccessRatePercentage", rows, mode)[0], run("failedBackupJobsCount", rows, mode)[0])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_later_success_supersedes_earlier_failure(mode):
+    rows = [at(2, 9, "Successful"), at(1, 3, "Failed")]  # newest listed first on purpose
+    assert both(rows, mode) == (100.0, 0)
+    out = run("failedBackupJobsCount", rows, mode)[1]
+    assert out["transformedResponse"]["backupJobsSuperseded"] == 1
+    assert out["transformedResponse"]["backupSetsEvaluated"] == 1
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_later_failure_supersedes_earlier_success(mode):
+    assert both([at(1, 3, "Successful"), at(2, 9, "Failed")], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_jobid_breaks_a_time_tie_within_a_set(mode):
+    assert both([at(2, 3, "Failed"), at(1, 3, "Successful")], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_in_flight_jobs_are_in_neither_side(mode):
+    rows = [job(1), job(2, status="Failed"), job(3, status="Queued"), job(4, status="RUNNING")]
+    assert both(rows, mode) == (50.0, 1)
+    out = run("backupSuccessRatePercentage", rows, mode)[1]
+    assert out["transformedResponse"]["backupJobsInFlight"] == 2
+    assert out["transformedResponse"]["backupSetsEvaluated"] == 2
+    # an in-flight retry does not hide the finished failure before it
+    assert both([at(1, 3, "Failed"), at(2, 9, "Running")], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("key", ["backupSuccessRatePercentage", "failedBackupJobsCount"])
+def test_all_in_flight_is_unevaluated(key, mode):
+    out = assert_unevaluated(key, [job(1, status="Queued"), job(2, status="Running")], mode)
+    assert "in flight" in out["additionalInfo"]["dataCollection"]["errors"][0]
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_same_backupset_different_device_is_not_merged(mode):
+    rows = [at(1, 3, "Failed", deviceName="synthetic-vm-a"), at(2, 9, "Successful", deviceName="synthetic-vm-b")]
+    assert both(rows, mode) == (50.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_completed_with_errors_fails_and_successful_with_errors_passes(mode):
+    assert both([job(1, status="Completed with errors"), job(2, status="Successful with errors")], mode) == (50.0, 1)
+    out = run("failedBackupJobsCount", [job(1, status="Completed with errors")], mode)[1]
+    assert out["transformedResponse"]["nonSuccessfulStatuses"] == {"Completed with errors": 1}
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("backup_set", ["NA", "", None])
+def test_rows_without_a_backupset_are_not_merged(backup_set, mode):
+    rows = [at(1, 3, "Failed", backupSet=backup_set), at(2, 9, "Successful", backupSet=backup_set)]
+    assert both(rows, mode) == (50.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_reason_names_basis_and_window_never_24_hours(mode):
+    rows = [at(1, 3, "Failed"), at(2, 9, "Successful"), job(5, status="Queued")]
+    for key in ("backupSuccessRatePercentage", "failedBackupJobsCount"):
+        out = run(key, envelope(rows), mode)[1]
+        reason = (out["additionalInfo"]["evaluation"]["passReasons"] + out["additionalInfo"]["evaluation"]["failReasons"])[0]
+        assert "backup sets' latest finished job" in reason and "1 in-flight jobs excluded" in reason
+        assert "1 earlier jobs superseded" in reason and "since 2026-01-09T12:00:00Z" in reason
+        assert "24 hours" not in reason
 
 
 # ---- partial reads ----------------------------------------------------------------------------
