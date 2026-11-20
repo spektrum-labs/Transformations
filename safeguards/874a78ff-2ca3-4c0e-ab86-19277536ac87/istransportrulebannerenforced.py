@@ -153,7 +153,8 @@ def transform(input):
             if rule.get('State') == 'Enabled':
                 actions = rule.get('Actions', [])
                 if actions:
-                    matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action or 'PrependSubject' in action)]
+                    # A subject prefix is a banner only on mail from outside the organization; [SPAM]-style tags are not.
+                    matching_actions = [action for action in actions if ('Disclaimer' in action or 'SubjectPrefix' in action or ('PrependSubject' in action and rule.get('FromScope') == 'NotInOrganization'))]
                     if matching_actions:
                         banner_rules.append({
                             'Name': rule.get('Name', 'Unknown'),
@@ -172,7 +173,7 @@ def transform(input):
             if len(banner_rules) > 0:
                 fail_reasons.append(f"Found {len(banner_rules)} enabled banner rules but none are in Enforce mode")
             else:
-                fail_reasons.append("No enabled transport rules with Disclaimer, SubjectPrefix or PrependSubject actions found")
+                fail_reasons.append("No enabled transport rules with Disclaimer, SubjectPrefix or external PrependSubject actions found")
             recommendations.append("Set transport rules with banner/disclaimer actions to Enforce mode")
 
         return create_response(
