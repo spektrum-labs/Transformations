@@ -507,6 +507,9 @@ def test_retry_and_paused_states_score_as_not_passing(status, mode):
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("stamp", ["0001-01-01T00:30:00+01:00", "9999-12-31T23:59:59-01:00"])
 def test_offset_overflow_makes_only_that_row_untimed(stamp, mode):
-    # an out-of-range offset must not make the whole read Not evaluated; the row just ranks as untimed
-    rows = [at(1, 3, "Successful"), at(2, 9, "Failed", started=stamp, lastUpdatedTime="NA")]
-    assert both_orders(rows, mode) == (100.0, 0)
+    # an out-of-range offset must not make the whole read Not evaluated; the row just ranks as untimed,
+    # so here the timed Failed job decides the set (the fixture does not rely on untimed-ranks-oldest to pass)
+    rows = [at(1, 3, "Failed"), at(2, 9, "Successful", started=stamp, lastUpdatedTime="NA")]
+    assert both_orders(rows, mode) == (0.0, 1)
+    out = run("failedBackupJobsCount", rows, mode)[1]
+    assert out["additionalInfo"]["dataCollection"]["status"] != "error"
