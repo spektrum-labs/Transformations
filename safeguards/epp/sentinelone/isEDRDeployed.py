@@ -218,14 +218,14 @@ def transform(input):
         if "edr" in modules:
             with_edr.append(a)
         else:
-            without.append(str(a.get("computerName") or a.get("uuid") or "unknown"))
+            without.append(str(a.get("uuid") or a.get("id") or "unknown"))
     pct = (len(with_edr) * 100) // len(installed)
     deployed = len(with_edr) > 0
     summary = (str(len(with_edr)) + " of " + str(len(installed)) + " installed agents (" + str(pct)
                + "%) report edr in activeProtection")
     findings = []
     if without:
-        findings.append("Agents without edr: " + ", ".join(without[:5]) + ("..." if len(without) > 5 else ""))
+        findings.append("Agents without edr (agent id): " + ", ".join(without[:5]) + ("..." if len(without) > 5 else ""))
     if stale_count:
         findings.append(str(stale_count) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)
                         + " days before the newest check-in and are not judged (staleAgentCount)")
