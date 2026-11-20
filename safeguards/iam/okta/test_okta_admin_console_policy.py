@@ -158,6 +158,37 @@ class AdminConsolePolicyTests(unittest.TestCase):
         data["result"]["accessRules"][0][1] = rule("Catch-all Rule", assurance(), access="DENY", system=True)
         self.check(data, None)
 
+    def test_hidden_admin_console_app_is_coded_not_available(self):
+        # An OAuth service app cannot see the Admin Console app: a list without it, or an empty filtered list.
+        data = copy.deepcopy(REAL)
+        data["result"]["applications"] = [a for a in data["result"]["applications"] if a["name"] != "saasure"]
+        for body in [data, {"applications": [], "accessPolicies": [], "accessRules": []}]:
+            for transform in self.runs:
+                out = transform(copy.deepcopy(body))
+                self.assertIsNone(out["transformedResponse"][KEY])
+                collection = out["additionalInfo"]["dataCollection"]
+                self.assertEqual(collection["status"], "error")
+                self.assertEqual(collection["errorCode"], "not_available")
+                self.assertTrue(collection["errors"][0].startswith("NOT-AVAILABLE:"))
+                self.assertIn("Okta hides the Admin Console app from an OAuth service app", collection["errors"][0])
+                self.assertNotIn("Classic Engine", collection["errors"][0])
+
+    def test_app_list_cut_short_is_not_available_free(self):
+        data = copy.deepcopy(REAL)
+        data["result"]["applications"] = [app("filler" + str(i), "rstDEFAULT") for i in range(200)]
+        for transform in self.runs:
+            collection = transform(copy.deepcopy(data))["additionalInfo"]["dataCollection"]
+            self.assertEqual(collection["status"], "error")
+            self.assertNotIn("errorCode", collection)
+            self.assertIn("cut short", collection["errors"][0])
+
+    def test_other_not_evaluated_paths_carry_no_error_code(self):
+        data = copy.deepcopy(REAL)
+        del data["result"]["applications"][1]["_links"]
+        for body in [data, {"applications": None}, {"errorCode": "E0000006", "errorSummary": "denied"}]:
+            for transform in self.runs:
+                self.assertNotIn("errorCode", transform(copy.deepcopy(body))["additionalInfo"]["dataCollection"])
+
     def test_empty_none_and_error_bodies_are_not_evaluated(self):
         for body in [{"applications": None, "accessPolicies": None},
                      {"applications": [], "accessPolicies": [], "accessRules": []},
