@@ -6,7 +6,7 @@ Evaluates: Percentage of Druva backup sets whose latest finished job in the Back
 Unevaluated (None, dataCollection.status "error"): zero jobs in the window, only in-flight jobs, a partial read, a missing, error or unrecognised body, failed input validation, or a transformation error.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 CRITERIA_KEY = "backupSuccessRatePercentage"
 RECOMMENDATION = "Investigate the Druva backup jobs that did not complete successfully."
@@ -166,19 +166,39 @@ def read_window(data):
 
 
 def parse_time(value):
-    """UTC timestamp to the second. strptime is not usable: it imports a module the sandbox refuses."""
-    value = text(value)[:19]
-    if len(value) != 19:
-        return None
+    """Timestamp to the second, in UTC: a trailing +hh:mm/-hh:mm (or +hhmm) offset is applied; Z, none or anything else is read as UTC.
+    strptime is not usable: it imports a module the sandbox refuses."""
+    value = text(value)
     try:
-        return datetime.fromisoformat(value)
+        when = datetime.fromisoformat(value[:19]) if len(value) >= 19 else None
     except ValueError:
         return None
+    if when is None:
+        return None
+    rest = value[19:]
+    if rest.startswith("."):
+        rest = rest.lstrip(".0123456789")
+    digits = rest[1:].replace(":", "")
+    if rest[:1] in ("+", "-") and len(digits) == 4 and digits.isdigit():
+        offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
+        when = when - offset if rest[0] == "+" else when + offset
+    return when
 
 
 # A job that has not finished yet is in neither the numerator nor the denominator.
-IN_FLIGHT = ("queued", "running", "waiting", "in progress")
+# Matched as prefixes, so variants such as "Waiting for retry" or "Resuming" also count as unfinished.
+IN_FLIGHT = ("queued", "running", "waiting", "in progress", "scheduled", "pending", "starting", "resum", "paus")
+# "Successful with errors" passes: the job finished and protected the set; Druva uses it when only some files were skipped.
 PASSING = ("successful", "successful with errors")
+TIME_FIELDS = ("started", "scheduled", "lastUpdatedTime")
+
+
+def status_of(row):
+    return text(row.get("status")).lower()
+
+
+def is_in_flight(row):
+    return status_of(row).startswith(IN_FLIGHT)
 
 
 def set_key(row, index):
@@ -195,21 +215,33 @@ def set_key(row, index):
 
 def latest_per_set(finished):
     """Each backup set's newest finished job, so a failure a later retry fixed is not still counted.
-    Newest = latest of started/scheduled/lastUpdatedTime, jobID then failing-beats-passing as tiebreaks within a set; no parseable time sorts oldest."""
-    best = {}
+    A set's timed rows are all ranked on one time field, the first of started/scheduled/lastUpdatedTime that every timed row carries,
+    so two kinds of time are never compared. A row with no parseable time ranks below every timed row. With no shared field, jobID
+    decides; on a full tie a failing job outranks a passing one."""
+    sets = {}
     for index, row in enumerate(finished):
-        when = (parse_time(row.get("started")) or parse_time(row.get("scheduled"))
-                or parse_time(row.get("lastUpdatedTime")) or datetime.min)
-        try:
-            job_num = int(text(row.get("jobID")))
-        except ValueError:  # missing, "NA", "abc", "²": no usable id
-            job_num = -1
-        # full tie: a failing job outranks a passing one, so the verdict does not depend on row order
-        rank = (when, job_num, 0 if text(row.get("status")).lower() in PASSING else 1)
-        key = set_key(row, index)
-        if key not in best or rank > best[key][0]:
-            best[key] = (rank, row)
-    return [pair[1] for pair in best.values()]
+        sets.setdefault(set_key(row, index), []).append(row)
+    latest = []
+    for rows in sets.values():
+        timed = [r for r in rows if any(parse_time(r.get(f)) for f in TIME_FIELDS)]
+        field = None
+        for candidate in TIME_FIELDS:
+            if timed and all(parse_time(r.get(candidate)) for r in timed):
+                field = candidate
+                break
+        best = None
+        for row in rows:
+            when = (parse_time(row.get(field)) if field else None) or datetime.min
+            try:
+                job_num = int(text(row.get("jobID")))
+            except ValueError:  # missing, "NA", "abc", "²": no usable id
+                job_num = -1
+            has_time = any(parse_time(row.get(f)) for f in TIME_FIELDS)
+            rank = (1 if has_time else 0, when, job_num, 0 if status_of(row) in PASSING else 1)
+            if best is None or rank > best[0]:
+                best = (rank, row)
+        latest.append(best[1])
+    return latest
 
 
 def empty_read_problem(meta):
@@ -263,8 +295,8 @@ def transform(input):
 
 def evaluate(jobs, partial, meta, reported):
     """Score each backup set by its latest finished job: Successful and Successful with errors pass, anything else fails."""
-    in_flight = [r for r in jobs if text(r.get("status")).lower() in IN_FLIGHT]
-    finished = [r for r in jobs if text(r.get("status")).lower() not in IN_FLIGHT]
+    in_flight = [r for r in jobs if is_in_flight(r)]
+    finished = [r for r in jobs if not is_in_flight(r)]
     latest = latest_per_set(finished)
     summary = {"backupJobsReported": reported, "backupRowsIgnored": reported - len(jobs), "backupJobsInFlight": len(in_flight),
                "backupJobsSuperseded": len(finished) - len(latest), "backupSetsEvaluated": len(latest)}
@@ -277,7 +309,7 @@ def evaluate(jobs, partial, meta, reported):
         return None, summary, ["All " + str(len(jobs)) + " Druva backup jobs read are still in flight (queued or running), so no finished job was measured"]
     tail = ("; " + str(len(in_flight)) + " in-flight jobs excluded, " + str(len(finished) - len(latest))
             + " earlier jobs superseded by a later run" + (" (read since " + meta["windowStart"] + ")" if meta.get("windowStart") else ""))
-    ok = [r for r in latest if text(r.get("status")).lower() in PASSING]
+    ok = [r for r in latest if status_of(r) in PASSING]
     summary["backupSetsSuccessful"] = len(ok)
     rate = round(len(ok) * 100.0 / len(latest), 2)
     return rate, summary, [str(len(ok)) + " of " + str(len(latest)) + " Druva backup sets' latest finished job was Successful (" + str(rate) + "%)" + tail]
