@@ -169,9 +169,10 @@ MAX_NAMED = 5
 
 
 def would_qualify(policy):
-    """True when a Report-only or off policy would count if it were switched on: a phishing-resistant strength for
-    every cloud app and sign-in, for all users or for at least one admin-template role. Exclusions are not judged
-    here; the enabled path judges them once it is on."""
+    """True when a Report-only or off policy would, switched on by itself, pass at least one result: a
+    phishing-resistant strength for every cloud app and sign-in, for all users or for every admin-template role,
+    within the same exclusion bounds the enabled path applies (at most two excluded user accounts; no excluded
+    group, role or guests/external users)."""
     if strength_state(policy.get("grantControls")) != "resistant":
         return False
     conditions = policy.get("conditions")
@@ -182,13 +183,19 @@ def would_qualify(policy):
         return False
     include_users = strings(users.get("includeUsers"))
     include_roles = strings(users.get("includeRoles"))
-    if include_users is None or include_roles is None:
+    exclude_users = strings(users.get("excludeUsers"))
+    exclude_groups = strings(users.get("excludeGroups"))
+    exclude_roles = strings(users.get("excludeRoles"))
+    if None in (include_users, include_roles, exclude_users, exclude_groups, exclude_roles):
         return False
-    return "all" in include_users or any(r in ADMIN_ROLES for r in include_roles)
+    if len(exclude_users) > MAX_EXCLUDED_USERS or exclude_groups or exclude_roles \
+            or users.get("excludeGuestsOrExternalUsers"):
+        return False
+    return "all" in include_users or all(r in include_roles for r in ADMIN_ROLES)
 
 
 def not_enforced_reasons(not_enforced):
-    """One reason per Report-only or off policy that would meet the check if switched on, so the customer sees which
+    """One reason per Report-only or off policy that would pass a result if switched on, so the customer sees which
     policy to switch on (ENG-1335). It never changes the result: such a policy enforces nothing."""
     reasons = ["Policy '" + name + "' requires a phishing-resistant authentication strength but "
                + OFF_STATE_WORDS[state] + ", so it does not enforce anything" for name, state in not_enforced[:MAX_NAMED]]

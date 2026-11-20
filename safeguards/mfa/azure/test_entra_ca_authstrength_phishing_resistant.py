@@ -255,7 +255,14 @@ class CAAuthStrengthTests(unittest.TestCase):
         ro = "enabledForReportingButNotEnforced"
         for p in (pol(groups=["22222222-0000-0000-0000-000000000009"], state=ro, name="Pilot group"),
                   pol(users=["All"], apps=["00000003-0000-0ff1-ce00-000000000000"], state=ro, name="One app"),
-                  pol(users=["All"], platforms={"includePlatforms": ["iOS"]}, state=ro, name="iOS only")):
+                  pol(users=["All"], platforms={"includePlatforms": ["iOS"]}, state=ro, name="iOS only"),
+                  pol(roles=ROLES[:1], state=ro, name="One admin role"),
+                  pol(users=["All"], exclude_groups=["33333333-0000-0000-0000-000000000001"], state=ro,
+                      name="Excludes a group"),
+                  pol(users=["All"], exclude_users=["a", "b", "c"], state=ro, name="Three excluded users"),
+                  pol(users=["All"], exclude_roles=ROLES[:1], state=ro, name="Excludes a role"),
+                  pol(users=["All"], guests_excluded={"guestOrExternalUserTypes": "b2bCollaborationGuest"}, state=ro,
+                      name="Excludes guests")):
             with self.subTest(name=p["displayName"]):
                 res = self.run_t(body(p))
                 self.assertFalse([r for r in self.reasons(res)[0] if r.startswith("Policy '")])
