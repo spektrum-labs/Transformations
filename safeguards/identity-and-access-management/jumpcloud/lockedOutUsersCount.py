@@ -87,12 +87,12 @@ def transform_evidence(input):
     locked_users = [u for u in users if isinstance(u, dict) and u.get("account_locked") is True]
     locked_count = len(locked_users)
 
-    locked_usernames = [u.get("username") or u.get("email") or u.get("_id") for u in locked_users][:10]
+    locked_ids = [u.get("_id") or u.get("id") or "unknown" for u in locked_users][:10]
 
     if users:
         if locked_count > 0:
             pass_reasons = [
-                f"Found {locked_count} locked-out user(s) out of {len(users)} system user records inspected (account_locked=true). Examples: {locked_usernames}"
+                f"Found {locked_count} locked-out user(s) out of {len(users)} system user records inspected (account_locked=true). Examples (user id): {locked_ids}"
             ]
             fail_reasons = []
             recommendations = [
