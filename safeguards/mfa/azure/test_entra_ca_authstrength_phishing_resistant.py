@@ -253,6 +253,16 @@ class CAAuthStrengthTests(unittest.TestCase):
         self.assertTrue(rec.endswith("which sign-ins they would block"))
         self.assertEqual(len(res["transformedResponse"]["policiesNotEnforced"]), 5)
 
+    def test_not_evaluated_result_lists_no_report_only_policy(self):
+        ro = pol(users=["All"], state="enabledForReportingButNotEnforced", name="RO")
+        for other in (pol(users=["All"], the_strength={"id": "x"}, name="odd"),
+                      pol(users=["All"], exclude_groups=["33333333-0000-0000-0000-000000000001"], name="Excl group")):
+            with self.subTest(name=other["displayName"]):
+                res = self.run_t(body(ro, other))
+                self.assertIsNone(res["transformedResponse"][KEY])
+                self.assertEqual(res["additionalInfo"]["transformation"]["inputSummary"].get("policiesNotEnforced", []), [])
+                self.assertEqual(res["transformedResponse"].get("policiesNotEnforced", []), [])
+
     def test_report_only_policy_that_would_not_qualify_is_not_named(self):
         ro = "enabledForReportingButNotEnforced"
         for p in (pol(groups=["22222222-0000-0000-0000-000000000009"], state=ro, name="Pilot group"),

@@ -368,7 +368,7 @@ def transform(input):
                "qualifyingAdminPolicies": admin_policies, "adminRolesNotCovered": [] if all_users else missing_roles,
                "excludedEmergencyAccessAccounts": sorted(e[:40] for e in admin_set) if (all_users or admins) else [],
                "unreadablePolicies": unknown,
-               "policiesNotEnforced": [n for n, _ in not_enforced[:MAX_NAMED]]}
+               "policiesNotEnforced": []}
     if unknown and not (all_users and admins):
         return not_evaluated("Enabled Conditional Access polic(ies) " + ", ".join(unknown[:5]) + " have a grant or "
                              "condition shape that cannot be read, so the absence of a phishing-resistant "
@@ -406,10 +406,9 @@ def transform(input):
         failed.append("Administrator roles without a required phishing-resistant authentication strength: "
                       + ", ".join(missing_roles))
     if failed and not_enforced:
+        # named only to explain a FAIL; a pass or a Not evaluated result lists none
         failed.extend(not_enforced_reasons(not_enforced))
-    else:
-        # named only to explain a FAIL; a pass or an unproven result lists none
-        summary["policiesNotEnforced"] = result["policiesNotEnforced"] = []
+        summary["policiesNotEnforced"] = result["policiesNotEnforced"] = [n for n, _ in not_enforced[:MAX_NAMED]]
     return create_response(result, validation, passed=passed, failed=failed, findings=findings, summary=summary,
                            recommendations=[] if all_users else (
                                [switch_on_recommendation(not_enforced)] if failed and not_enforced else []) + [
