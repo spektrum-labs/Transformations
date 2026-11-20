@@ -56,6 +56,22 @@ def usable_row(row, need_state):
     return state is not None and str(state).strip() != ""
 
 
+def http_error_status(code):
+    """The HTTP status as a number when it is an error (400 or more), else None.
+
+    A status sent as a string ("500", " 403 ") is an error exactly like the number. A boolean, an empty or
+    non-numeric string and anything below 400 are not an error status.
+    """
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, str):
+        code = code.strip()
+        code = int(code) if code.isdecimal() else None
+    if isinstance(code, int) and code >= 400:
+        return code
+    return None
+
+
 def body_problem(input_data, data):
     """A short reason when the reply is an error rather than a measurement, else None.
 
@@ -73,8 +89,8 @@ def body_problem(input_data, data):
         err = body.get("errors") or body.get("error")
         if err:
             return "NinjaOne returned an error instead of a measurement: " + str(err)[:200]
-        code = body.get("status_code") or body.get("statusCode") or body.get("status")
-        if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+        code = http_error_status(body.get("status_code") or body.get("statusCode") or body.get("status"))
+        if code is not None:
             return "NinjaOne returned HTTP " + str(code) + " instead of a measurement."
     return None
 
@@ -239,10 +255,21 @@ def transform(input):
                                api_errors=[nothing], fail_reasons=[nothing])
     reporting_records = [
         r for r in records
-        if isinstance(r, dict) and r.get("definitionStatus")
+        if isinstance(r, dict) and str(r.get("definitionStatus") or "").strip()
     ]
 
     total_reporting = len(reporting_records)
+    if not total_reporting:
+        # No device reports a definitionStatus. When a judged device has a named product, that product did not say
+        # whether its signatures are current: signature currency cannot be confirmed, which is Not evaluated, not a fail.
+        # A fleet where no device has a product at all (productName NONE) stays as before.
+        named = [r for r in records if isinstance(r, dict) and str(r.get("productName") or "").strip().upper() not in ("", "NONE")]
+        if named:
+            nothing = ("The antivirus products on the judged devices did not report a definition status, so signature "
+                       "currency cannot be confirmed and this is not evaluated here.")
+            return create_response(result=dict(scope, isSignatureUpToDate=None), validation=validation,
+                                   api_errors=[nothing], fail_reasons=[nothing],
+                                   recommendations=["Verify that the antivirus products report their definition status to NinjaOne."])
     out_of_date = [r for r in reporting_records if r.get("definitionStatus") == "Out-of-Date"]
     up_to_date = [r for r in reporting_records if r.get("definitionStatus") == "Up-to-Date"]
     unknown_status = [r for r in reporting_records if r.get("definitionStatus") not in ("Out-of-Date", "Up-to-Date")]
