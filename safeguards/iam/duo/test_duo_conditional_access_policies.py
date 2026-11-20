@@ -13,6 +13,7 @@ from pathlib import Path
 
 KEY = "isConditionalAccessEnabled"
 PCT = "conditionalAccessAppPercentage"
+INDET = "conditionalAccessAppsIndeterminate"
 HERE = Path(__file__).parent
 ROOT = HERE.parents[2]
 GLOBAL_KEY = "POGLOBALTENANTA00001"
@@ -387,6 +388,24 @@ class DuoConditionalAccessTests(unittest.TestCase):
         self.assertEqual(out["transformedResponse"][PCT], 0.0)
         self.assertIn("RDP Application", json.dumps(out["additionalInfo"]["evaluation"]["failReasons"]))
 
+    def test_dropped_os_value_on_one_chain_does_not_hide_a_firm_false_on_the_other(self):
+        # own chain clean and empty, group policy drops its only value: users outside the group are uncovered
+        group_os = {"operating_systems": {"block_os_list": ["plan9"]}}
+        value, out = self.value(self.rdp_body(global_sections=DEFAULTS, group_sections=group_os, covered_apps=0))
+        self.assertIs(value, False)
+        self.assertEqual(out["transformedResponse"][INDET], 0)
+        # own chain drops one value but still has a condition; group policy clears its sections and drops nothing
+        own_os = {"operating_systems": {"block_os_list": ["plan9", "android"]}}
+        value, out = self.value(self.rdp_body(global_sections=with_sections(DEFAULTS, **own_os),
+                                              group_sections=DEFAULTS, covered_apps=0))
+        self.assertIs(value, False)
+        self.assertEqual(out["transformedResponse"][INDET], 0)
+        # own chain drops its only value: users outside the group are undecidable
+        value, out = self.value(self.rdp_body(global_sections=with_sections(DEFAULTS, **group_os),
+                                              group_sections=GEO_BLOCK, covered_apps=0))
+        self.assertIsNone(value)
+        self.assertEqual(out["transformedResponse"][INDET], 1)
+
     def test_group_binding_on_a_custom_application_policy_uses_that_chain(self):
         customs = [(VPN_KEY, "VPN trusted only", {"trusted_endpoints": {"trusted_endpoint_checking": "require-trusted"}}),
                    (GROUP_KEY, "Group policy with no setting", {"remembered_devices": {}})]
@@ -495,8 +514,6 @@ class DuoConditionalAccessTests(unittest.TestCase):
             "policy_applies_to a string": lambda p: p[1].__setitem__("policy_applies_to", "all"),
             "policy_applies_to an object": lambda p: p[1].__setitem__("policy_applies_to", {"apply_type": "app"}),
             "policy_applies_to entry not an object": lambda p: p[1]["policy_applies_to"].append("DITENANTA"),
-            "apply_type missing": lambda p: p[1]["policy_applies_to"][0].pop("apply_type"),
-            "apply_type unknown": lambda p: p[1]["policy_applies_to"][0].__setitem__("apply_type", "everyone"),
             "summary entry not an object": lambda p: p.append("POEXAMPLE"),
             "summary lacks a policy": lambda p: p.pop(1),
         }
@@ -643,13 +660,75 @@ class DuoConditionalAccessTests(unittest.TestCase):
             with self.subTest(label):
                 self.assertUnevaluated(bodies(with_sections(DEFAULTS, **change)), "cannot be read")
 
+    def test_unknown_block_os_value_is_evidence_not_fatal(self):
+        # unknownos is a documented Duo value and counts as a condition
+        value, out = self.value(bodies(with_sections(DEFAULTS, operating_systems={"block_os_list": ["unknownos"]})))
+        self.assertIs(value, True)
+        self.assertIn("operating systems: unknownos blocked", json.dumps(out))
+        # only a genuinely unknown value: not a condition, and the app is indeterminate (the value may have been
+        # its condition), so the check is Not evaluated rather than a firm False
+        value, out = self.value(bodies(with_sections(DEFAULTS, operating_systems={"block_os_list": ["plan9"]})))
+        self.assertIsNone(value)
+        self.assertEqual(out["transformedResponse"][INDET], 1)
+        self.assertNotIn("Ignored 2", json.dumps(out))
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["plan9"])
+        # beside a known value: the known one counts, the unknown is recorded
+        mixed = {"operating_systems": {"block_os_list": ["plan9", "android"]}}
+        value, out = self.value(bodies(with_sections(DEFAULTS, **mixed)))
+        self.assertIs(value, True)
+        self.assertEqual(out["additionalInfo"]["transformation"]["inputSummary"]["unrecognisedBlockOsValues"], ["plan9"])
+        # other list fields stay strict
+        self.assertUnevaluated(bodies(with_sections(DEFAULTS, browsers={"blocked_browsers_list": ["lynx-ng"]})))
+
+    def test_documented_mobile_browser_values_count_as_a_condition(self):
+        for name in ("safari-mobile", "chrome-mobile", "edge-mobile", "firefox-mobile", "other-browsers"):
+            with self.subTest(name):
+                value, _ = self.value(bodies(with_sections(DEFAULTS, browsers={"blocked_browsers_list": [name]})))
+                self.assertIs(value, True)
+
+    def test_unknown_apply_type_makes_only_that_application_indeterminate(self):
+        for label, mutate in {"unknown": lambda e: e.__setitem__("apply_type", "everyone"),
+                              "missing": lambda e: e.pop("apply_type"),
+                              "none": lambda e: e.__setitem__("apply_type", None)}.items():
+            with self.subTest(label):
+                # covered everywhere but one application with an unresolvable binding: never True
+                b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+                mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
+                value, out = self.value(b)
+                self.assertIsNone(value)
+                self.assertEqual(out["transformedResponse"][INDET], 1)
+                self.assertLess(out["transformedResponse"][PCT], 100.0)
+                self.assertIn("unrecognised apply_type", json.dumps(out))
+                # an uncovered application still gives False, with the indeterminate one in the findings
+                b = bodies(DEFAULTS, customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+                mutate(b["summary"]["response"]["policies"][1]["policy_applies_to"][0])
+                value, out = self.value(b)
+                self.assertIs(value, False)
+                self.assertEqual(out["transformedResponse"][INDET], 1)
+                self.assertIn("unrecognised apply_type", json.dumps(out))
+        # an entry that names no application cannot be placed: the whole check is Not evaluated, as before
+        b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+        e = b["summary"]["response"]["policies"][1]["policy_applies_to"][0]
+        e.pop("app_integration_key")
+        e["apply_type"] = "everyone"
+        self.assertUnevaluated(b, "unrecognised apply_type")
+        # an entry whose key is blank or not in the applications list: Not evaluated, and the reason names apply_type
+        for key in ("", "   ", "no-such-app"):
+            b = bodies(with_sections(DEFAULTS, **GEO_BLOCK), customs=[(VPN_KEY, "Custom", GEO_BLOCK)], applied=[VPN_KEY])
+            e = b["summary"]["response"]["policies"][1]["policy_applies_to"][0]
+            e["app_integration_key"] = key
+            e["apply_type"] = "everyone"
+            value, out = self.value(b)
+            self.assertIsNone(value)
+            self.assertIn("unrecognised apply_type", json.dumps(out))
+            self.assertNotIn("application-group binding", json.dumps(out))
+
     def test_unknown_list_values_are_unevaluated_not_conditions(self):
         cases = {
             "platform": {"health_checks": {"requires_duo_desktop": ["toaster"]}},
             "desktop platform": {"duo_desktop": {"requires_duo_desktop": ["toaster"]}},
             "country": {"user_location": {"deny_access_countries_list": ["Narnia"]}},
             "network": {"authorized_networks": {"blocked": {"ip_list": ["everyone"]}}},
-            "os": {"operating_systems": {"block_os_list": ["plan9"]}},
             "browser": {"browsers": {"blocked_browsers_list": ["lynx-ng"]}},
             "malformed json list": {"health_checks": {"requires_duo_desktop": "[windows"}},
         }

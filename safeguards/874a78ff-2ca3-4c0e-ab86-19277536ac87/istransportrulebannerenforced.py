@@ -111,9 +111,11 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["Could not read the response: input validation failed"],
+                fail_reasons=["Input validation failed"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
             )
 
 
@@ -132,7 +134,19 @@ def transform(input):
         fail_reasons = []
         recommendations = []
 
-        transport_rules = data.get("transportRules", [])
+        transport_rules = data.get("transportRules") if isinstance(data, dict) else None
+        if isinstance(transport_rules, dict) and transport_rules:
+            transport_rules = [transport_rules]  # single rule serializes as an object
+        if not isinstance(transport_rules, list) or (transport_rules and not any(isinstance(x, dict) for x in transport_rules)):
+            # Missing or non-list: an error body or a failed read, not evidence of a missing control.
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["Could not read transport rules"],
+                fail_reasons=["Transport rules were not returned, so this check could not be evaluated"],
+                recommendations=["Re-evaluate this check once the Exchange Online read succeeds"]
+            )
+        transport_rules = [x for x in transport_rules if isinstance(x, dict)]  # skip unreadable entries
         banner_rules = []
 
         for rule in transport_rules:

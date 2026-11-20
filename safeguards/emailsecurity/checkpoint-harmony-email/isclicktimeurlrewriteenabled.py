@@ -88,6 +88,7 @@ def transform(input):
         Integration-Service wrappers until that shape is found. Returns (body, error): body is
         None when the shape is not found; error is a fixed reason when a wrapper around the body
         carries an error marker, in which case nothing inside it is trusted."""
+        cut = False  # a cut-off marker on an outer wrapper must survive the unwrap
         for attempt in range(4):
             if isinstance(data, str):
                 try:
@@ -97,7 +98,12 @@ def transform(input):
             if not isinstance(data, dict):
                 return None, None
             if isinstance(data.get("responseData"), list):
+                if cut:
+                    data = dict(data, paginationTruncated=True)
                 return data, None
+            for blk in (data, data.get("response_metadata"), data.get("metadata")):
+                if isinstance(blk, dict) and any(str(blk.get(k)).strip().lower() in ("true", "1", "yes") for k in ("truncated", "paginationTruncated")):
+                    cut = True
             err = marker_error(data)
             if err:
                 return None, err
@@ -154,11 +160,16 @@ def transform(input):
         verdict), left for a follow-up that changes every presence check together."""
         env = body.get("responseEnvelope")
         for holder in (env if isinstance(env, dict) else {}, body):
+            for mark in ("truncated", "paginationTruncated"):
+                if str(holder.get(mark)).strip().lower() in ("true", "1", "yes"):
+                    return "more"
             token = holder.get("scrollId")
             if token and str(token).strip().lower() not in ("", "none", "null"):
                 return "more"
         total = records_total(body)
-        if total is not None and total > len(body["responseData"]):
+        # HEC caps recordsNumber at 10000: a total at the cap means "at least 10000", never a complete read,
+        # whatever the row count (IS stops at the cap, so more rows than the cap is still a partial read).
+        if total is not None and (total >= 10000 or total > len(body["responseData"])):
             return "more"
         if total_unreadable(body):
             return "unknown"
