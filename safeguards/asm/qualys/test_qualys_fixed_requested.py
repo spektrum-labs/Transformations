@@ -108,13 +108,21 @@ def test_fixed_rows_without_an_echo_are_not_graded():
     assert_ours(info)
 
 
-def test_no_detections_and_no_echo_is_the_measured_hundred():
+def test_no_detections_and_no_echo_is_not_graded():
     payload = {"HOST_LIST_VM_DETECTION_OUTPUT": {"RESPONSE": {"HOST_LIST": {"HOST": [{"ID": "1"}]}}}}
+    value, info = run("patchcompliancepercentage", payload)
+    assert value is None
+    assert_ours(info)
+
+
+def test_no_detections_with_the_full_echo_is_the_measured_hundred():
+    payload = {"HOST_LIST_VM_DETECTION_OUTPUT": {"REQUEST": echo(ALL_STATUSES),
+                                                 "RESPONSE": {"HOST_LIST": {"HOST": [{"ID": "1"}]}}}}
     assert run("patchcompliancepercentage", payload)[0] == "100"
 
 
 @pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical",
-                                  "criticalvulnerabilitycount", "is_patch_management_enabled"])
+                                  "is_patch_management_enabled"])
 def test_a_truncated_detection_reply_is_a_partial_read(name):
     payload = detections(OPEN_CRITICAL, request=echo(ALL_STATUSES))
     payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = [TRUNCATED]
@@ -356,8 +364,7 @@ def test_a_body_that_is_not_a_detection_reply_is_not_a_no(payload):
 
 # --- review round 5 -------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical",
-                                  "criticalvulnerabilitycount"])
+@pytest.mark.parametrize("name", ["patchcompliancepercentage", "meantimetoremediatecritical"])
 def test_a_truncated_reply_with_a_fixed_row_is_still_a_partial_read(name):
     payload = detections(OPEN_CRITICAL, dict(FIXED_LOW, SEVERITY="5"), request=echo(ALL_STATUSES))
     payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = TRUNCATED
@@ -389,7 +396,7 @@ def test_a_fix_dated_before_its_finding_is_not_averaged_away():
 
 
 def test_an_integration_error_is_not_a_patch_management_no():
-    value, info = run("is_patch_management_enabled", {"error": True, "message": "Integration execution error: HTTP 401"})
+    value, info = run("is_patch_management_enabled", {"error": True, "message": "Integration execution error: HTTP 500"})
     assert value is None
     assert_ours(info)
 
@@ -469,3 +476,59 @@ def comparable(result):
 def test_each_transform_answers_the_same_in_the_sandbox(name, payload):
     boxed = sandboxed(name)(copy.deepcopy(payload))
     assert comparable(boxed) == comparable(load(name).transform(copy.deepcopy(payload)))
+
+
+# --- review round 7 -------------------------------------------------------------------------------
+
+EIGHT = ["patchcompliancepercentage", "meantimetoremediatecritical", "criticalvulnerabilitycount",
+         "is_patch_management_enabled", "endoflifesoftwaredetected", "externalassetinventorycount",
+         "hashardwareassetinventory", "knownexploitedvulncount"]
+REFUSALS = [{"error": True, "message": "Integration execution error: HTTP 401"},
+            {"message": "Integration execution error: HTTP 403"}, {"statusCode": 401, "error": "Unauthorized"},
+            {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "2000", "TEXT": "Bad Login/Password"}}}]
+
+
+@pytest.mark.parametrize("name", EIGHT)
+@pytest.mark.parametrize("payload", REFUSALS)
+def test_a_refused_credential_is_the_customers_to_fix(name, payload):
+    value, info = run(name, payload)
+    assert value is None and info["dataCollection"]["errorCode"] == "vendor_refusal"
+    assert info["evaluation"]["recommendations"] == [load(name).VERIFY_ACCESS]
+    assert "Spektrum's side" not in json.dumps(info)
+
+
+@pytest.mark.parametrize("name", EIGHT)
+def test_a_rejected_parameter_stays_ours(name):
+    value, info = run(name, {"SIMPLE_RETURN": {"RESPONSE": {"CODE": "1901", "TEXT": "Unrecognized parameter"}}})
+    assert value is None and info["dataCollection"]["errorCode"] != "vendor_refusal"
+
+
+def test_the_refusal_block_is_identical_in_every_reader():
+    blocks = set()
+    for name in EIGHT:
+        text = path_of(name).read_text()
+        start = text.index("# --- Qualys refusal")
+        blocks.add(text[start:text.index("# --- end Qualys refusal", start)])
+    assert len(blocks) == 1
+
+
+def test_a_truncated_reply_with_open_criticals_fails_on_a_lower_bound():
+    payload = detections(OPEN_CRITICAL, OPEN_CRITICAL, request=echo(ALL_STATUSES))
+    payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = TRUNCATED
+    out = load("criticalvulnerabilitycount").transform(payload)
+    assert out["transformedResponse"]["criticalVulnerabilityCount"] == 2
+    assert out["transformedResponse"]["countIsLowerBound"] is True
+    assert "criticalVulnerabilityCount: at least 2" in out["additionalInfo"]["evaluation"]["additionalFindings"]
+
+
+def test_a_truncated_reply_with_no_open_critical_is_a_partial_read():
+    payload = detections(dict(FIXED_LOW, SEVERITY="5"), request=echo(ALL_STATUSES))
+    payload["HOST_LIST_VM_DETECTION_OUTPUT"]["RESPONSE"]["WARNING"] = TRUNCATED
+    value, info = run("criticalvulnerabilitycount", payload)
+    assert value is None
+    assert_ours(info, "partial_read")
+
+
+@pytest.mark.parametrize("row", [{"SEVERITY": "5"}, {"SEVERITY": "4", "STATUS": ""}, {"SEVERITY": "5", "STATUS": "Ignored"}])
+def test_a_critical_with_no_known_status_counts_as_open(row):
+    assert run("criticalvulnerabilitycount", detections(row))[0] == 1

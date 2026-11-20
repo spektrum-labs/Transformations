@@ -58,6 +58,34 @@ def not_measured(criteria_key, reason, error_code, validation=None, transformati
     return response
 
 
+# --- Qualys refusal: byte-identical in every Qualys transform (a test compares the copies) -------------------
+VERIFY_ACCESS = "Verify the Qualys API credentials and the permissions of the Qualys user Spektrum connects as."
+# Qualys's login and account refusals: 2000 Bad Login/Password, 2002 account inactive, 2003 registration incomplete.
+QUALYS_LOGIN_CODES = {'2000', '2002', '2003'}
+
+
+def vendor_refusal(data):
+    """The reason when Qualys, or the relay in front of it, refused our credentials; None for any other reply.
+
+    A refusal is the customer's to fix, so it is coded vendor_refusal with text the diagnosis reads as an auth
+    failure. Every other error reply (a parameter Qualys rejected, a body we cannot read) stays ours.
+    """
+    if not isinstance(data, dict):
+        return None
+    simple = data.get('SIMPLE_RETURN')
+    reply = simple.get('RESPONSE') if isinstance(simple, dict) else None
+    if isinstance(reply, dict) and str(reply.get('CODE', '')).strip() in QUALYS_LOGIN_CODES:
+        return ("Qualys refused the API login (authentication failed, Qualys code %s), so this check could not "
+                "be evaluated." % str(reply.get('CODE')).strip())
+    status = str(data.get('statusCode', data.get('status_code', ''))).strip()
+    message = str(data.get('message', '')).upper()
+    for code in ('401', '403'):
+        if status == code or ('HTTP ' + code) in message:
+            return "Qualys refused Spektrum's request (HTTP %s), so this check could not be evaluated." % code
+    return None
+# --- end Qualys refusal -----------------------------------------------------------------------------------------
+
+
 # --- Qualys detection reply: byte-identical in every transform that reads it (a test compares the copies) ---
 OPEN_STATUSES = {'new', 'active', 'reopened'}
 
@@ -162,8 +190,6 @@ def evaluate(data):
             total += len(detections)
             fixed += sum(1 for d in detections if status_token(d.get('STATUS', '')) == 'fixed')
         statuses = echoed_statuses(data)
-        if statuses is None and total == 0:
-            statuses = set(OPEN_STATUSES)  # no echo: Qualys applied its default, and no open detection is a measured 100
         if statuses is None or not OPEN_STATUSES <= statuses or (total > 0 and 'fixed' not in statuses):
             # The share needs open and fixed detections both, and only the echo proves both were asked for.
             return {"patchCompliancePercentage": None, "totalDetections": total, "fixedDetections": fixed,
@@ -184,6 +210,10 @@ def transform(input):
         elif isinstance(input, bytes):
             input = json.loads(input.decode("utf-8"))
         data, validation = extract_input(input)
+        refusal = vendor_refusal(data)
+        if refusal:
+            return not_measured(criteriaKey, refusal, "vendor_refusal", validation=validation,
+                                recommendations=(VERIFY_ACCESS,))
         if validation.get("status") == "failed":
             return not_measured(criteriaKey, "The Qualys response failed validation, so patch compliance could not be measured.",
                                 "not_measured", validation=validation)
