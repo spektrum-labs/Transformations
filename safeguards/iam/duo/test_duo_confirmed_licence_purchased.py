@@ -82,12 +82,49 @@ class DuoConfirmedLicencePurchasedTests(unittest.TestCase):
                     self.assertIn("a trial", out["additionalInfo"]["evaluation"]["failReasons"][0])
 
     def test_forbidden_names_the_permission(self):
-        for body in [FORBIDDEN, {"response": FORBIDDEN}, {"response": {"result": FORBIDDEN}}, json.dumps(FORBIDDEN)]:
+        raw = {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}
+        strcode = dict(raw, code="40301")
+        deep = {"data": {"response": {"result": raw}}}
+        html = {"vendorErrorAsResponse": {"status": 403, "body": "<html>Forbidden</html>"}}
+        for body in [FORBIDDEN, {"response": FORBIDDEN}, json.dumps(FORBIDDEN), raw, {"response": raw}, json.dumps(raw),
+                     strcode, {"response": strcode}, deep, json.dumps(deep),
+                     {"response": {"result": FORBIDDEN}}, {"response": {"result": html}}]:
             for out in self.each(body):
                 self.assert_not_evaluated(out, "scope_not_granted")
                 collection = out["additionalInfo"]["dataCollection"]
                 self.assertEqual(collection["requiredScope"], "Grant read information")
                 self.assertIn("Grant read information", collection["errors"][0])
+
+    def test_nested_fail_does_not_override_a_valid_edition(self):
+        raw = {"stat": "FAIL", "code": 40301, "message": "Access forbidden"}
+        for body in [{"response": summary("Duo Premier"), "note": raw}, {"response": summary("Duo Premier"), "note": json.dumps(raw)}]:
+            for out in self.each(body):
+                self.assertIs(out["transformedResponse"][KEY], True)
+
+    def test_nested_marker_does_not_override_a_valid_edition(self):
+        for body in [{"response": summary("Duo Premier"), "note": {"result": FORBIDDEN}}]:
+            for out in self.each(body):
+                self.assertIs(out["transformedResponse"][KEY], True)
+
+    def test_marker_inside_a_json_string_wrapper_names_the_permission(self):
+        html = {"vendorErrorAsResponse": {"status": 403, "body": "<html>x</html>"}}
+        for body in [{"response": {"result": json.dumps(html)}}, {"response": json.dumps({"result": html})}]:
+            for out in self.each(body):
+                self.assert_not_evaluated(out, "scope_not_granted")
+
+    def test_marker_beyond_the_depth_cap_is_not_read(self):
+        body = json.dumps(FORBIDDEN)
+        for _ in range(6):
+            body = {"w": body}
+        for out in self.each(body):
+            self.assert_not_evaluated(out, "not_available")
+
+    def test_empty_marker_is_a_refusal_at_every_depth(self):
+        for body in [{"vendorErrorAsResponse": {}}, {"response": {"vendorErrorAsResponse": {}}},
+                     {"response": {"result": {"vendorErrorAsResponse": {}}}},
+                     {"response": {"result": json.dumps({"vendorErrorAsResponse": {}})}}]:
+            for out in self.each(body):
+                self.assert_not_evaluated(out, "vendor_refusal")
 
     def test_unauthorized_is_a_reconnect_not_a_permission(self):
         body = {"vendorErrorAsResponse": {"status": 401, "body": {"stat": "FAIL", "code": 40101,
