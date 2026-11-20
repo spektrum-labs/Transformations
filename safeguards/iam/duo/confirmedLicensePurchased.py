@@ -94,6 +94,25 @@ def refusal_of(value):
     return None
 
 
+def deep_refusal_of(value, depth=0):
+    """A vendorErrorAsResponse marker at any nesting (capped at 4 levels), else None. Only read when no edition is
+    readable, so a marker nested beside a valid summary never overrides it. Decodes JSON-string layers, as
+    raw_refusal_of does; an empty {} marker counts at every depth, as it does at the top level."""
+    if depth > 4:
+        return None
+    value = decoded(value)
+    if not isinstance(value, dict):
+        return None
+    marker = value.get("vendorErrorAsResponse")
+    if isinstance(marker, dict):
+        return marker
+    for k in value:
+        found = deep_refusal_of(value[k], depth + 1)
+        if found is not None:
+            return found
+    return None
+
+
 def is_error_body(value):
     if not isinstance(value, dict):
         return False
@@ -127,8 +146,10 @@ def summary_of(value):
 
 def raw_refusal_of(value, depth=0):
     """A plain Duo FAIL body (code 40301 / 40101, int or string), up to 4 wrapper levels down, as a refusal marker, else None."""
+    if depth > 4:
+        return None
     value = decoded(value)
-    if not isinstance(value, dict) or depth > 4:
+    if not isinstance(value, dict):
         return None
     code = value.get("code")
     code = int(code) if isinstance(code, str) and code.strip().isascii() and code.strip().isdigit() else code
@@ -136,7 +157,7 @@ def raw_refusal_of(value, depth=0):
         return {"status": 403 if code == 40301 else 401, "body": value}
     for k in value:
         found = raw_refusal_of(value[k], depth + 1)
-        if found:
+        if found is not None:
             return found
     return None
 
@@ -176,7 +197,9 @@ def transform(input):
         summary = summary_of(raw)
         if summary is None or not isinstance(summary.get("edition"), str):
             # Only when no edition is readable, so a nested FAIL dict never overrides a valid edition.
-            marker = raw_refusal_of(raw)
+            marker = deep_refusal_of(raw)
+            if marker is None:
+                marker = raw_refusal_of(raw)
             if marker is not None:
                 return refused(marker)
         if summary is None:
