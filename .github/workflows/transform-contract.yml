@@ -159,6 +159,18 @@ jobs:
       - name: Every transform must compile in the production sandbox
         run: python tools/check_sandbox_compile.py
 
+      # Compiling is not running. A builtin the sandbox does not provide (`bytearray`,
+      # `getattr`, `iter`, `map`, ...) compiles cleanly and raises NameError only when the
+      # line runs, and an `except Exception` around it turns that into a wrong answer. In
+      # November 2026 six AWS Backup inventory transforms did exactly this with
+      # `isinstance(data, (bytes, bytearray))` while every gate above was green. Static
+      # and repo-wide; the sandbox's builtins come from tools/restricted_sandbox.py.
+      - name: Sandbox-builtins checker self-test
+        run: python tools/check_sandbox_builtins.py --self-test
+
+      - name: No transform may name a builtin the production sandbox lacks
+        run: python tools/check_sandbox_builtins.py
+
   # WHY THIS JOB WAS ADDED. Measured 2026-09-22 on this branch: the repo contains
   # 9 pytest files holding 71 tests, and no workflow here ran a single one of them
   # -- `grep -rn "pytest\|unittest" .github/workflows/` returned nothing. All 71
