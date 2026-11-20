@@ -212,7 +212,7 @@ def transform(input):
     for agent in agents:
         agent = agent if isinstance(agent, dict) else {}
         mitigation_mode = agent.get("mitigationMode") or ""
-        computer_name = agent.get("computerName") or agent.get("uuid") or "unknown"
+        agent_ref = str(agent.get("uuid") or agent.get("id") or "unknown")
 
         if mitigation_mode == "protect":
             protect_count = protect_count + 1
@@ -220,7 +220,7 @@ def transform(input):
             detect_count = detect_count + 1
         elif mitigation_mode == "none":
             none_count = none_count + 1
-            unconfigured_names.append(computer_name)
+            unconfigured_names.append(agent_ref)
         else:
             # mitigationMode absent (e.g. truncated response) — fall back to activeProtection
             active_protection = agent.get("activeProtection") or []
@@ -229,7 +229,7 @@ def transform(input):
                 active_protection_only = active_protection_only + 1
             else:
                 # No mitigation mode and no activeProtection — treat as unconfigured signal
-                unconfigured_names.append(computer_name)
+                unconfigured_names.append(agent_ref)
 
     configured_count = 0
     for agent in agents:
@@ -256,7 +256,7 @@ def transform(input):
         fail_reasons.append(summary_line)
         if unconfigured_names:
             additional_findings.append(
-                f"Agents without mitigation: {', '.join(unconfigured_names[:5])}"
+                f"Agents without mitigation (agent id): {', '.join(unconfigured_names[:5])}"
                 f"{'...' if len(unconfigured_names) > 5 else ''}."
             )
         recommendations.append(
