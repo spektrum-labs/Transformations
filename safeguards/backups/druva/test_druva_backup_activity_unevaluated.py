@@ -471,7 +471,7 @@ def test_only_counts_leave_the_transform():
 # ---- review round: unfinished status variants, one time source per set, UTC offsets -------------
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("status", ["Scheduled", "Waiting for retry", "Resuming", "Pending", "Starting", "Paused", "In Progress"])
+@pytest.mark.parametrize("status", ["Scheduled", "Waiting", "Pending", "Starting", "In Progress", "Queued (2)", "Running - 40%"])
 def test_unfinished_status_variants_are_excluded_not_failed(status, mode):
     # a newer unfinished job must neither fail the set nor hide its last finished result
     rows = [at(1, 3, "Successful"), at(2, 9, status)]
@@ -494,4 +494,19 @@ def test_utc_offsets_are_applied_before_comparing(mode):
     # 08:00+07:00 is 01:00 UTC, so the Successful job at 03:00Z is the newer one
     rows = [at(1, 3, "Successful", jobID=800001),
             at(2, 8, "Failed", jobID=800002, started="2026-01-10T08:00:00.000+07:00")]
+    assert both_orders(rows, mode) == (100.0, 0)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("status", ["Waiting for retry", "Paused", "Resuming"])
+def test_retry_and_paused_states_score_as_not_passing(status, mode):
+    # these follow a failed or stopped attempt: an older Successful job must not decide the set (fail closed)
+    assert both_orders([at(1, 3, "Successful"), at(2, 9, status)], mode) == (0.0, 1)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("stamp", ["0001-01-01T00:30:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_offset_overflow_makes_only_that_row_untimed(stamp, mode):
+    # an out-of-range offset must not make the whole read Not evaluated; the row just ranks as untimed
+    rows = [at(1, 3, "Successful"), at(2, 9, "Failed", started=stamp, lastUpdatedTime="NA")]
     assert both_orders(rows, mode) == (100.0, 0)

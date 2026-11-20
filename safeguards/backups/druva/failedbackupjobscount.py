@@ -181,13 +181,18 @@ def parse_time(value):
     digits = rest[1:].replace(":", "")
     if rest[:1] in ("+", "-") and len(digits) == 4 and digits.isdigit():
         offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))
-        when = when - offset if rest[0] == "+" else when + offset
+        try:
+            when = when - offset if rest[0] == "+" else when + offset
+        except OverflowError:  # pushed past year 1 or 9999: this row is untimed, the read is not lost
+            return None
     return when
 
 
 # A job that has not finished yet is in neither the numerator nor the denominator.
-# Matched as prefixes, so variants such as "Waiting for retry" or "Resuming" also count as unfinished.
-IN_FLIGHT = ("queued", "running", "waiting", "in progress", "scheduled", "pending", "starting", "resum", "paus")
+# Not yet finished: excluded from both sides. Matched as prefixes ("Queued (2)", "Running - 40%"), with "waiting" exact.
+# Waiting for retry, Paused and Resuming are not here on purpose: they follow a failed or stopped attempt, so they
+# score as not passing rather than letting an older success decide the set.
+IN_FLIGHT = ("queued", "running", "in progress", "scheduled", "pending", "starting")
 # "Successful with errors" passes: the job finished and protected the set; Druva uses it when only some files were skipped.
 PASSING = ("successful", "successful with errors")
 TIME_FIELDS = ("started", "scheduled", "lastUpdatedTime")
@@ -198,7 +203,8 @@ def status_of(row):
 
 
 def is_in_flight(row):
-    return status_of(row).startswith(IN_FLIGHT)
+    status = status_of(row)
+    return status == "waiting" or status.startswith(IN_FLIGHT)
 
 
 def set_key(row, index):
