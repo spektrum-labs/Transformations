@@ -211,6 +211,11 @@ def transform(input):
                 validation,
                 "The machine inventory has more pages than were read (@odata.nextLink still present)")
 
+        # A list with no onboardingStatus on any record is not a machine inventory (an alert list read
+        # as one scored 0 on a wrong source), so coverage is Not evaluated rather than a measured 0.
+        if machine_data and not any(isinstance(m, dict) and "onboardingStatus" in m for m in machine_data):
+            return not_evaluated(validation, "No machine record carries onboardingStatus, so onboarding cannot be read")
+
         # Exclude devices marked as excluded
         non_excluded = [m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true"]
 

@@ -1,151 +1,183 @@
+# certificatesHaveValidityPeriod.py
+# Azure Key Vault - DP-7.1: Certificate Management - Maximum Validity Period
+# Azure Policy: 0a075868-4c26-42ef-914c-5bc007359560
 """
-Transformation: certificatesHaveValidityPeriod
-Vendor: Microsoft Azure Key Vault  |  Category: Encryption
+certificatesHaveValidityPeriod
 
-Criterion: every certificate is valid for at most 397 days (Azure Policy 0a075868-4c26-42ef-914c-5bc007359560).
+Criterion: no certificate in the vault is valid for more than 397 days.
 
-Data source:
-    getCertificates -- GET https://{vaultName}.vault.azure.net/certificates?api-version=7.4, token
-    scope https://vault.azure.net/.default
-    (https://learn.microsoft.com/en-us/rest/api/keyvault/certificates/get-certificates)
+Data source: getCertificates -- GET https://{vaultName}.vault.azure.net/certificates?api-version=7.4,
+token scope https://vault.azure.net/.default
+(https://learn.microsoft.com/en-us/rest/api/keyvault/certificates/get-certificates/get-certificates?view=rest-keyvault-certificates-7.4).
+Each CertificateItem carries attributes.nbf ("Not before date in UTC") and attributes.exp ("Expiry
+date in UTC"), both unixtime. The list is paged at up to 25 by default with nextLink, which the
+definition does not follow.
 
-  certificatesHaveValidityPeriod = true when the `value` list is present and every certificate's
-  attributes.exp - attributes.nbf is at most 397 days (an empty list is a vault with no
-  certificates, which the policy counts as compliant); false when any certificate exceeds it or
-  lacks nbf/exp. A body with no `value` list was never a certificate listing and is not evaluated.
-  The data-plane list is paged (25 items a page by default). When the body still carries a
-  nextLink, the unread pages could hold a non-compliant item, so an all-clear page is not
-  evaluated; a non-compliant item on the page read is still a measured false.
+  false = a certificate read is valid for more than 397 days (definite, whatever is unread)
+  true  = every certificate read has nbf and exp within 397 days, and there is no nextLink
+  None  = an empty vault (no certificates: nothing to evaluate, not a pass), a certificate whose
+          validity cannot be read, a further page unread, no value list, an Azure error, or an
+          exception
 
-Not evaluated (None, dataCollection status "error"): an ARM or Key Vault error envelope at the
-top level or inside a response/result/apiResponse wrapper, a body of the wrong shape, or this
-transform's own exception. An error is not a failed control, so it is never a measured False.
+Every unmeasured path returns None, and respond() derives dataCollection.status from that value,
+so an error body, an empty body or this file's own exception is Not evaluated, never a
+measured false.
 """
 import json
 import ast
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "certificatesHaveValidityPeriod"
 VENDOR = "Microsoft Azure Key Vault"
 CATEGORY = "Encryption"
+METHOD = "getCertificates"
 
-WRAPPER_KEYS = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data"]
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        # "data" last: the {"data": ..., "validation": ...} pair is handled above, so this only
+        # catches a bare {"data": {...}} wrapper. Every one of these files unwrapped that on main
+        # and nothing has confirmed which shape Integration-Service actually sends, because these
+        # checks have never run live. Dropping it would silently turn a verdict into Not evaluated.
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse",
+                        "data"]
+        for i in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
+MAX_VALIDITY_DAYS = 397  # CA/Browser Forum maximum for publicly trusted TLS certificates
+SECONDS_PER_DAY = 86400
 
 
-def parse_input(input):
+
+def load(input):
     if isinstance(input, bytes):
         input = input.decode("utf-8")
     if isinstance(input, str):
-        text = input.strip()
-        if not text:
-            return None
-        try:
-            return json.loads(text)
-        except ValueError:
-            return ast.literal_eval(text)
-    return input
+        if not input.strip():
+            input = None
+        else:
+            try:
+                input = json.loads(input)
+            except Exception:
+                input = ast.literal_eval(input)
+    return extract_input(input)
 
 
-def error_message(body):
-    """The error an ARM or Key Vault error envelope carries, or None for any other body."""
-    if not isinstance(body, dict):
-        return None
-    error = body.get("error") or body.get("errors")
-    if isinstance(error, dict):
-        parts = [str(error.get(name)) for name in ("code", "message") if error.get(name)]
-        return (": ".join(parts) or "error")[:300]
-    if isinstance(error, str):
-        return error[:300]
-    if error:
-        return str(body.get("errorType") or body.get("message") or "error")[:300]
-    status = body.get("statusCode") or body.get("status_code") or body.get("status")
-    if isinstance(status, str) and status.strip().isdigit():
-        status = int(status.strip())
-    if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-        return ("HTTP " + str(status) + " " + str(body.get("message") or "")).strip()
-    return None
-
-
-def unwrap(data):
-    """Peel the integration's wrappers. Returns (body, error); an error at any level wins."""
-    for i in range(5):
-        message = error_message(data)
-        if message:
-            return data, message
-        if not isinstance(data, dict):
-            return data, None
-        inner = None
-        for name in WRAPPER_KEYS:
-            if isinstance(data.get(name), dict):
-                inner = data[name]
-                break
-        if inner is None:
-            return data, None
-        data = inner
-    return data, error_message(data)
-
-
-def create_response(result, pass_reasons=None, fail_reasons=None, recommendations=None,
-                    input_summary=None, api_errors=None, transformation_errors=None):
+def respond(value, reason, validation=None, extra=None, recommendations=None, transformation_errors=None):
+    """The one exit. Whether the criterion was measured is read off the value: None, and
+    only None, is not measured, and that alone sets dataCollection.status to "error", which
+    is what Token-Service reads to grade a criterion Not evaluated."""
+    result = {KEY: value}
+    for name in (extra or {}):
+        result[name] = extra[name]
+    measured = value is not None
+    passed = value is True
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
-            "validation": {"status": "unknown", "errors": [], "warnings": []},
-            "transformation": {"status": "error" if (transformation_errors or []) else "success",
-                               "errors": transformation_errors or [], "inputSummary": input_summary or {}},
-            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
-                           "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
-                         "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []),
+                           "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if transformation_errors else "success",
+                               "errors": transformation_errors or [], "inputSummary": extra or {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [] if passed else (recommendations or []), "additionalFindings": []},
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0",
+                         "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY, "method": METHOD},
         },
     }
 
 
-def not_measured(reason, input_summary=None):
-    return create_response(result={KEY: None}, api_errors=[reason], fail_reasons=[reason],
-                           input_summary=input_summary)
+def error_reason(data):
+    """Why this body is not an Azure answer, or None. Azure Resource Manager and the Key Vault
+    data plane both fail with {"error": {"code": ..., "message": ...}}."""
+    if not isinstance(data, dict):
+        return "the response is not a JSON object"
+    err = data.get("error")
+    if err:
+        if isinstance(err, dict):
+            return "Azure returned an error: " + str(err.get("code") or "") + " " + str(err.get("message") or "")[:200]
+        return "Azure returned an error: " + str(err)[:200]
+    if data.get("errors") or data.get("vendorErrorAsResponse"):
+        return "the response is an error envelope"
+    status = data.get("statusCode") or data.get("status_code")
+    if isinstance(status, int) and status >= 400:
+        return "the response carries HTTP status " + str(status)
+    return None
 
 
-def measured(passed, line, recommendation, input_summary=None):
-    if passed:
-        return create_response(result={KEY: True}, pass_reasons=[line], input_summary=input_summary)
-    return create_response(result={KEY: False}, fail_reasons=[line], recommendations=[recommendation],
-                           input_summary=input_summary)
+def listing(data, what):
+    """(items, None) or (None, reason). A list response is {"value": [...], "nextLink": ...};
+    only an explicit value list proves the listing ran."""
+    items = data.get("value")
+    if not isinstance(items, list):
+        return None, "no value list in the response: the " + what + " were never listed"
+    for item in items:
+        if not isinstance(item, dict):
+            return None, "an entry in the " + what + " list is not an object"
+    return items, None
 
-MAX_VALIDITY_DAYS = 397  # CA/Browser Forum baseline requirement
-SECONDS_PER_DAY = 86400
+
+def next_link(data):
+    link = data.get("nextLink") or data.get("@odata.nextLink")
+    return link if isinstance(link, str) and link.strip() else None
+
+
+def evaluate(data, validation):
+    items, why = listing(data, "certificates")
+    if why:
+        return respond(None, why, validation)
+    too_long = []
+    unreadable = []
+    for item in items:
+        name = str(item.get("id") or "?").split("/")[-1]
+        attributes = item.get("attributes")
+        nbf = attributes.get("nbf") if isinstance(attributes, dict) else None
+        exp = attributes.get("exp") if isinstance(attributes, dict) else None
+        if isinstance(nbf, bool) or isinstance(exp, bool) or not isinstance(nbf, (int, float)) \
+                or not isinstance(exp, (int, float)):
+            unreadable.append(name)
+            continue
+        if (exp - nbf) / SECONDS_PER_DAY > MAX_VALIDITY_DAYS:
+            too_long.append(name + " (" + str(int((exp - nbf) / SECONDS_PER_DAY)) + " days)")
+    extra = {"certificatesRead": len(items), "certificatesOverMaximum": len(too_long),
+             "maxValidityDays": MAX_VALIDITY_DAYS}
+    if too_long:
+        return respond(False, str(len(too_long)) + " of " + str(len(items)) + " certificate(s) read are valid "
+                       "for more than " + str(MAX_VALIDITY_DAYS) + " days: " + ", ".join(too_long[:10]),
+                       validation, extra, ["Reissue certificates with a validity period of at most 397 days"])
+    if unreadable:
+        return respond(None, "The validity period of " + str(len(unreadable)) + " certificate(s) cannot be read "
+                       "(no numeric nbf/exp): " + ", ".join(unreadable[:10]), validation, extra)
+    if next_link(data):
+        return respond(None, "All " + str(len(items)) + " certificate(s) on the first page are within "
+                       + str(MAX_VALIDITY_DAYS) + " days, but further pages were not read", validation, extra)
+    if len(items) == 0:
+        return respond(None, "The vault holds no certificates, so there is no validity period to evaluate",
+                       validation, extra)
+    return respond(True, "All " + str(len(items)) + " certificate(s) are valid for at most "
+                   + str(MAX_VALIDITY_DAYS) + " days", validation, extra)
 
 
 def transform(input):
     try:
-        data, error = unwrap(parse_input(input))
-        if error:
-            return not_measured("The Azure API returned an error: " + error)
-        certificates = data.get("value") if isinstance(data, dict) else None
-        if not isinstance(certificates, list):
-            return not_measured("No `value` list in the Key Vault list-certificates response, so the "
-                                "certificates were never listed")
-        too_long = 0
-        for cert in certificates:
-            if not isinstance(cert, dict):
-                return not_measured("Unexpected item in the Key Vault list-certificates response")
-            attributes = cert.get("attributes")
-            nbf = attributes.get("nbf") if isinstance(attributes, dict) else None
-            exp = attributes.get("exp") if isinstance(attributes, dict) else None
-            if nbf is None or exp is None or (exp - nbf) / SECONDS_PER_DAY > MAX_VALIDITY_DAYS:
-                too_long = too_long + 1
-        summary = {"certificateCount": len(certificates), "certificatesOverMaxValidity": too_long}
-        if too_long > 0:
-            return measured(False, str(too_long) + " of " + str(len(certificates)) + " certificate(s) have no "
-                            "validity period or one longer than " + str(MAX_VALIDITY_DAYS) + " days",
-                            "Reissue those certificates with a validity period of at most "
-                            + str(MAX_VALIDITY_DAYS) + " days", summary)
-        if data.get("nextLink"):
-            return not_measured("The certificate listing has further pages that were not read", summary)
-        return measured(True, "All " + str(len(certificates)) + " certificate(s) are valid for at most "
-                        + str(MAX_VALIDITY_DAYS) + " days", None, summary)
+        data, validation = load(input)
+        why = error_reason(data)
+        if why:
+            return respond(None, why, validation)
+        return evaluate(data, validation)
     except Exception as e:
-        return create_response(result={KEY: None}, transformation_errors=[str(e)],
-                               api_errors=["Transformation error: " + str(e)],
-                               fail_reasons=["Transformation error: " + str(e)])
+        return respond(None, "Transformation error: " + str(e)[:300], None, {"error": str(e)[:300]},
+                       transformation_errors=[str(e)[:300]])

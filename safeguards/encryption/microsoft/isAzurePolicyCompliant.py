@@ -1,136 +1,147 @@
+# isAzurePolicyCompliant.py
+# Azure Key Vault - AM-2.1: Approved Services - Azure Policy Compliance
 """
-Transformation: isAzurePolicyCompliant
-Vendor: Microsoft Azure Key Vault  |  Category: Encryption
+isAzurePolicyCompliant
 
 Criterion: no Azure Policy assignment reports the vault non-compliant.
 
-Data source:
-    getPolicyStates -- POST https://management.azure.com/{vaultResourceId}/providers/
-    Microsoft.PolicyInsights/policyStates/latest/queryResults?api-version=2019-10-01
-    &$filter=complianceState eq 'NonCompliant'
-    (https://learn.microsoft.com/en-us/rest/api/policyinsights/policy-states/list-query-results-for-resource)
+Data source: getPolicyStates -- POST https://management.azure.com/{vaultResourceId}/providers
+/Microsoft.PolicyInsights/policyStates/latest/queryResults?api-version=2019-10-01
+&$filter=complianceState eq 'NonCompliant'
+(https://learn.microsoft.com/en-us/rest/api/policyinsights/policy-states/list-query-results-for-resource?view=rest-policyinsights-2019-10-01).
+The query is filtered to NonCompliant, so value lists only non-compliant states and an empty
+value array is the vendor saying there are none. @odata.count is the total.
 
-  isAzurePolicyCompliant = true when the filtered `value` list is present and empty (and
-  @odata.count, when present, is 0); false when any non-compliant state is listed. A body with no
-  `value` list is not a policy-states response and is not evaluated.
+  true  = value is an empty list and @odata.count is absent or zero
+  false = value lists a non-compliant state, or @odata.count is above zero
+  None  = no value list, an Azure error, or an exception
 
-Not evaluated (None, dataCollection status "error"): an ARM or Key Vault error envelope at the
-top level or inside a response/result/apiResponse wrapper, a body of the wrong shape, or this
-transform's own exception. An error is not a failed control, so it is never a measured False.
+Every unmeasured path returns None, and respond() derives dataCollection.status from that value,
+so an error body, an empty body or this file's own exception is Not evaluated, never a
+measured false.
 """
 import json
 import ast
-from datetime import datetime
+from datetime import datetime, timezone
 
 KEY = "isAzurePolicyCompliant"
 VENDOR = "Microsoft Azure Key Vault"
 CATEGORY = "Encryption"
+METHOD = "getPolicyStates"
 
-WRAPPER_KEYS = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse", "data"]
+
+def extract_input(input_data):
+    if isinstance(input_data, dict) and "data" in input_data and "validation" in input_data:
+        return input_data["data"], input_data["validation"]
+    data = input_data
+    if isinstance(data, dict):
+        # "data" last: the {"data": ..., "validation": ...} pair is handled above, so this only
+        # catches a bare {"data": {...}} wrapper. Every one of these files unwrapped that on main
+        # and nothing has confirmed which shape Integration-Service actually sends, because these
+        # checks have never run live. Dropping it would silently turn a verdict into Not evaluated.
+        wrapper_keys = ["api_response", "response", "result", "apiResponse", "Output", "rawResponse",
+                        "data"]
+        for i in range(3):
+            unwrapped = False
+            for key in wrapper_keys:
+                if key in data and isinstance(data.get(key), dict):
+                    data = data[key]
+                    unwrapped = True
+                    break
+            if not unwrapped:
+                break
+    return data, {"status": "unknown", "errors": [], "warnings": ["Legacy input format"]}
 
 
-def parse_input(input):
+def load(input):
     if isinstance(input, bytes):
         input = input.decode("utf-8")
     if isinstance(input, str):
-        text = input.strip()
-        if not text:
-            return None
-        try:
-            return json.loads(text)
-        except ValueError:
-            return ast.literal_eval(text)
-    return input
+        if not input.strip():
+            input = None
+        else:
+            try:
+                input = json.loads(input)
+            except Exception:
+                input = ast.literal_eval(input)
+    return extract_input(input)
 
 
-def error_message(body):
-    """The error an ARM or Key Vault error envelope carries, or None for any other body."""
-    if not isinstance(body, dict):
-        return None
-    error = body.get("error") or body.get("errors")
-    if isinstance(error, dict):
-        parts = [str(error.get(name)) for name in ("code", "message") if error.get(name)]
-        return (": ".join(parts) or "error")[:300]
-    if isinstance(error, str):
-        return error[:300]
-    if error:
-        return str(body.get("errorType") or body.get("message") or "error")[:300]
-    status = body.get("statusCode") or body.get("status_code") or body.get("status")
-    if isinstance(status, str) and status.strip().isdigit():
-        status = int(status.strip())
-    if isinstance(status, int) and not isinstance(status, bool) and status >= 400:
-        return ("HTTP " + str(status) + " " + str(body.get("message") or "")).strip()
-    return None
-
-
-def unwrap(data):
-    """Peel the integration's wrappers. Returns (body, error); an error at any level wins."""
-    for i in range(5):
-        message = error_message(data)
-        if message:
-            return data, message
-        if not isinstance(data, dict):
-            return data, None
-        inner = None
-        for name in WRAPPER_KEYS:
-            if isinstance(data.get(name), dict):
-                inner = data[name]
-                break
-        if inner is None:
-            return data, None
-        data = inner
-    return data, error_message(data)
-
-
-def create_response(result, pass_reasons=None, fail_reasons=None, recommendations=None,
-                    input_summary=None, api_errors=None, transformation_errors=None):
+def respond(value, reason, validation=None, extra=None, recommendations=None, transformation_errors=None):
+    """The one exit. Whether the criterion was measured is read off the value: None, and
+    only None, is not measured, and that alone sets dataCollection.status to "error", which
+    is what Token-Service reads to grade a criterion Not evaluated."""
+    result = {KEY: value}
+    for name in (extra or {}):
+        result[name] = extra[name]
+    measured = value is not None
+    passed = value is True
+    if validation is None:
+        validation = {"status": "unknown", "errors": [], "warnings": []}
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if (api_errors or []) else "success", "errors": api_errors or []},
-            "validation": {"status": "unknown", "errors": [], "warnings": []},
-            "transformation": {"status": "error" if (transformation_errors or []) else "success",
-                               "errors": transformation_errors or [], "inputSummary": input_summary or {}},
-            "evaluation": {"passReasons": pass_reasons or [], "failReasons": fail_reasons or [],
-                           "recommendations": recommendations or [], "additionalFindings": []},
-            "metadata": {"evaluatedAt": datetime.utcnow().isoformat() + "Z", "schemaVersion": "2.0",
-                         "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY},
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": validation.get("status", "unknown"), "errors": validation.get("errors", []),
+                           "warnings": validation.get("warnings", [])},
+            "transformation": {"status": "error" if transformation_errors else "success",
+                               "errors": transformation_errors or [], "inputSummary": extra or {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [] if passed else (recommendations or []), "additionalFindings": []},
+            "metadata": {"evaluatedAt": datetime.now(timezone.utc).isoformat(), "schemaVersion": "2.0",
+                         "transformationId": KEY, "vendor": VENDOR, "category": CATEGORY, "method": METHOD},
         },
     }
 
 
-def not_measured(reason, input_summary=None):
-    return create_response(result={KEY: None}, api_errors=[reason], fail_reasons=[reason],
-                           input_summary=input_summary)
+def error_reason(data):
+    """Why this body is not an Azure answer, or None. Azure Resource Manager and the Key Vault
+    data plane both fail with {"error": {"code": ..., "message": ...}}."""
+    if not isinstance(data, dict):
+        return "the response is not a JSON object"
+    err = data.get("error")
+    if err:
+        if isinstance(err, dict):
+            return "Azure returned an error: " + str(err.get("code") or "") + " " + str(err.get("message") or "")[:200]
+        return "Azure returned an error: " + str(err)[:200]
+    if data.get("errors") or data.get("vendorErrorAsResponse"):
+        return "the response is an error envelope"
+    status = data.get("statusCode") or data.get("status_code")
+    if isinstance(status, int) and status >= 400:
+        return "the response carries HTTP status " + str(status)
+    return None
 
 
-def measured(passed, line, recommendation, input_summary=None):
-    if passed:
-        return create_response(result={KEY: True}, pass_reasons=[line], input_summary=input_summary)
-    return create_response(result={KEY: False}, fail_reasons=[line], recommendations=[recommendation],
-                           input_summary=input_summary)
+def evaluate(data, validation):
+    if "value" not in data:
+        return respond(None, "No policy compliance data returned", validation)
+    states = data.get("value")
+    if not isinstance(states, list):
+        return respond(None, "Unexpected value shape in the policy states response", validation)
+    count = data.get("@odata.count")
+    total = count if isinstance(count, int) and not isinstance(count, bool) else 0
+    for row in states:
+        if not isinstance(row, dict):
+            return respond(None, "A policy state row is not an object", validation)
+    # The query is filtered to NonCompliant, so every listed row is non-compliant by definition
+    # and @odata.count is the total; a row's own complianceState can only turn a fail into a pass.
+    noncompliant = max(total, len(states))
+    extra = {"nonCompliantPolicyStates": noncompliant}
+    if noncompliant > 0:
+        return respond(False, str(noncompliant) + " non-compliant policy state(s) for the vault",
+                       validation, extra, ["Remediate the non-compliant Azure Policy assignments on the vault"])
+    if data.get("@odata.nextLink"):
+        return respond(None, "The policy states response has a next page that was not read", validation, extra)
+    return respond(True, "No Azure Policy assignment reports the vault non-compliant", validation, extra)
 
 
 def transform(input):
     try:
-        data, error = unwrap(parse_input(input))
-        if error:
-            return not_measured("The Azure API returned an error: " + error)
-        states = data.get("value") if isinstance(data, dict) else None
-        if not isinstance(states, list):
-            return not_measured("No `value` list in the policy states response, so compliance was never "
-                                "queried")
-        count = data.get("@odata.count")
-        if isinstance(count, bool) or not isinstance(count, (int, float)):
-            count = None
-        non_compliant = max(len(states), int(count) if count is not None else 0)
-        summary = {"nonCompliantStates": non_compliant}
-        if non_compliant == 0:
-            return measured(True, "No non-compliant policy states for the vault", None, summary)
-        return measured(False, str(non_compliant) + " non-compliant policy state(s) for the vault",
-                        "Remediate the vault against the policy assignments that report it non-compliant",
-                        summary)
+        data, validation = load(input)
+        why = error_reason(data)
+        if why:
+            return respond(None, why, validation)
+        return evaluate(data, validation)
     except Exception as e:
-        return create_response(result={KEY: None}, transformation_errors=[str(e)],
-                               api_errors=["Transformation error: " + str(e)],
-                               fail_reasons=["Transformation error: " + str(e)])
+        return respond(None, "Transformation error: " + str(e)[:300], None, {"error": str(e)[:300]},
+                       transformation_errors=[str(e)[:300]])
