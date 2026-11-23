@@ -267,3 +267,84 @@ def test_inputs_are_not_mutated():
     lbefore = copy.deepcopy(lb)
     lic(lb)
     assert lb == lbefore
+
+
+# --- isBackupEnabledForCriticalSystems / isBackupEnabled (platform-standard Backup keys) -------
+
+CRITICAL = load("isbackupenabledforcriticalsystems")
+ENABLED = load("isbackupenabled")
+
+
+def crit(body):
+    out = CRITICAL(body)
+    return out["transformedResponse"]["isBackupEnabledForCriticalSystems"], out
+
+
+def ena(body):
+    out = ENABLED(body)
+    return out["transformedResponse"]["isBackupEnabled"], out
+
+
+PARTIAL = {"cursors": {"after": "next-page"}}
+
+STANDARD_CASES = [
+    # body, isBackupEnabledForCriticalSystems, isBackupEnabled
+    (statuses([machine("ws-01"), machine("srv-01", 6)]), True, True),
+    (ts_wrap(statuses([machine("ws-01")])), True, True),
+    (statuses([machine("ws-01"), machine("ws-02", backup=False)]), False, True),
+    (statuses([machine("ws-01"), machine("ws-02", 30)]), False, True),
+    (statuses([machine("ws-01", 30), machine("ws-02", None)]), False, False),
+    (statuses([machine("ws-01", backup=False, status="not_protected")]), False, False),
+    (statuses([machine("ws-01", 30), machine("ws-02", last_success="yesterday-ish")]), False, None),
+    (statuses([machine("ws-01")], paging=PARTIAL), None, True),
+    (statuses([machine("ws-01", 30)], paging=PARTIAL), None, None),
+    (statuses([machine("mbx-01", rtype="resource.mailbox")]), None, None),
+    (statuses([]), None, None),
+    (statuses([machine("ws-01", last_success=iso(-5))]), None, None),
+    (statuses(["junk"]), None, None),
+    ({"machineStatuses": {"items": None}}, None, None),
+    ({"machineStatuses": {"error": {"code": 403, "message": "Forbidden"}}}, None, None),
+    ({"machineStatuses": {"items": [machine("ws-01")]}, "paginationTruncated": True}, None, None),
+    ({"other": {}}, None, None),
+    (None, None, None),
+    ({}, None, None),
+    ("", None, None),
+    ("{}", None, None),
+    ([], None, None),
+    (CONSOLE_HTML, None, None),
+    (CONSOLE_HTML.decode(), None, None),
+    ({"apiResponse": CONSOLE_HTML}, None, None),
+    ({"error": True, "errorType": "authentication", "statusCode": 401, "status": "Error"}, None, None),
+]
+
+
+@pytest.mark.parametrize("body,want_crit,want_enabled", STANDARD_CASES)
+def test_standard_backup_keys(body, want_crit, want_enabled):
+    got_crit, out_crit = crit(body)
+    got_enabled, out_enabled = ena(body)
+    assert got_crit is want_crit
+    assert got_enabled is want_enabled
+    for value, out in ((got_crit, out_crit), (got_enabled, out_enabled)):
+        if value is None:
+            assert_not_measured(out)
+        else:
+            assert out["additionalInfo"]["dataCollection"]["status"] == "success"
+
+
+def test_critical_key_matches_the_aggregate_key():
+    for body, _, _ in STANDARD_CASES:
+        assert crit(body)[0] is bak(body)[0]
+
+
+def test_standard_keys_only_answer_their_own_key():
+    assert set(crit(statuses([machine("ws-01")]))[1]["transformedResponse"]) >= {"isBackupEnabledForCriticalSystems"}
+    assert "areBackupsEnabledForCriticalSystems" not in crit(statuses([machine("ws-01")]))[1]["transformedResponse"]
+    assert "isBackupEnabledForCriticalSystems" not in ena(statuses([machine("ws-01")]))[1]["transformedResponse"]
+
+
+def test_standard_keys_do_not_mutate_input():
+    body = statuses([machine("ws-01"), machine("ws-02", 30)], paging=PARTIAL)
+    before = copy.deepcopy(body)
+    crit(body)
+    ena(body)
+    assert body == before
