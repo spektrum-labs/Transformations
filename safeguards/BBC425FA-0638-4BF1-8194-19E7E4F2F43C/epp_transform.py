@@ -1,28 +1,20 @@
 """
 Transformation: epp_transform
-Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
+Vendor: Halcyon (Endpoint Security)
 Category: Endpoint Security
 
 NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
 -- never Passed, never Failed.
 
-The Arctic Wolf - EDR Endpoint Security definition routes these keys to the
-`checkInstalled` method, which has no request defined in that definition (no url, no HTTP
-method), so no vendor body ever reaches this file.
-
-The parse this file carried was written for Sophos Central: it counted `assignedProducts`
-codes (endpointProtection, mtr, interceptX) and `health.services.serviceDetails`. The Aurora
-Device API (Get devices extended, GET /devices/v2) returns `products`, `policy`, `state` and
-`agent_version` per device and none of those Sophos fields, so an Aurora body would have
-read 0% coverage. `isEPPConfigured` was answered from a field of its own name. The keys are
+Halcyon's definition does not route a vendor body that answers these keys; not measured.
+In the definition, `isEDRDeployed`, `isEPPDeployed` and `isEPPConfigured` are wired to the
+`checkInstalled` method; this file does not read that response to answer them. The keys are
 Unevaluated together because the evaluator reads one dataCollection status per response.
 
 What this file did before:
-Sophos-shaped coverage arithmetic, plus `isEPPConfigured` answered from
-`data["isEPPConfigured"]` or a non-empty-collection fallback.
-
-Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
-(retrieved 2026-10-07).
+coverage arithmetic over `items[*].assignedProducts` and `health.services.serviceDetails`,
+plus `isEPPConfigured` answered from `data["isEPPConfigured"]` or a non-empty-collection
+fallback. Nothing in Halcyon's definition shows that its body carries those fields.
 """
 
 from datetime import datetime
@@ -31,8 +23,7 @@ KEYS = ("isEPPEnabled", "isEPPDeployed", "isEPPLoggingEnabled", "isEPPEnabledFor
         "isEDRDeployed", "isEndpointSecurityEnabled", "isMDREnabled", "isMDRLoggingEnabled",
         "requiredCoveragePercentage", "requiredConfigurationPercentage", "isEPPConfigured")
 
-REASON = ("Not measured: this integration's checkInstalled method calls no Aurora endpoint, and the "
-          "former parse read Sophos fields no Aurora API returns")
+REASON = "Not measured: Halcyon's definition does not route a vendor body that answers this key"
 
 
 def create_response(result, api_errors, input_summary=None):
@@ -55,7 +46,7 @@ def create_response(result, api_errors, input_summary=None):
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "epp_transform",
-                "vendor": "Arctic Wolf",
+                "vendor": "Halcyon",
                 "category": "Endpoint Security"
             }
         }
