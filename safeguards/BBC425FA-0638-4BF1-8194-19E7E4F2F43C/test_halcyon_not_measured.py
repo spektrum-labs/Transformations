@@ -1,10 +1,9 @@
-"""Arctic Wolf - EDR Endpoint Security: keys no wired Aurora endpoint can answer read Unevaluated.
+"""Halcyon (Endpoint Security): keys no routed vendor body answers read Unevaluated.
 
-These files answered each criterion from a field of its own name (`data.get('<key>', ...)`), and
-epp_transform.py parsed Sophos Central fields. The definition's checkInstalled and
-getIdentityProvider methods define no request, so no vendor body reaches them. Every key must be
-None with dataCollection.status "error" on every body, including one that used to pass.
-Synthetic data only.
+These files answered each criterion from a field of its own name (`data.get('<key>', ...)`).
+Halcyon's definition does not route a vendor body that answers them. Every key must be None with
+dataCollection.status "error" on every body, including one that used to pass, and the reason must
+name Halcyon. Synthetic data only.
 """
 import importlib.util
 import os
@@ -14,16 +13,18 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 FILES = {
-    "epp_transform": ("isEPPConfigured", "isEDRDeployed", "isEPPDeployed"),
+    "epp_transform": ("isEPPEnabled", "isEPPDeployed", "isEPPLoggingEnabled", "isEPPEnabledForCriticalSystems",
+                      "isEDRDeployed", "isEndpointSecurityEnabled", "isMDREnabled", "isMDRLoggingEnabled",
+                      "requiredCoveragePercentage", "requiredConfigurationPercentage", "isEPPConfigured"),
     "isbehavioralmonitoringvalid": ("isBehavioralMonitoringValid",),
-    "isidpenabled": ("isSSOEnabled",),
+    "isidpenabled": ("isSSOEnabled", "isSSOEnabledMDR"),
     "ispatchmanagementenabled": ("isPatchManagementEnabled", "isPatchManagementValid"),
     "isremovablemediacontrolled": ("isRemovableMediaControlled",),
 }
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location("arcticwolf_edr_" + name, os.path.join(HERE, name + ".py"))
+    spec = importlib.util.spec_from_file_location("halcyon_" + name, os.path.join(HERE, name + ".py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -44,12 +45,8 @@ class Poisoned(dict):
         return 1
 
 
-AURORA_DEVICES = {"page_number": 1, "page_size": 200, "total_pages": 1, "total_number_of_items": 1,
-                  "page_items": [{"id": "00000000-0000-0000-0000-00000000000a", "name": "WS-SYNTH-01",
-                                  "state": "Online", "agent_version": "3.0.0",
-                                  "policy": {"id": "pol-1", "name": "Default"},
-                                  "products": [{"name": "protect", "version": "3.0.0", "status": "Online"}],
-                                  "background_detection": True, "is_safe": True}]}
+DEVICES = {"count": 1, "items": [{"id": "00000000-0000-0000-0000-00000000000a", "name": "WS-SYNTH-01",
+                                   "state": "Online"}]}
 
 BODIES = {
     "empty": lambda: {},
@@ -57,7 +54,7 @@ BODIES = {
     # every one of these read True before: a non-empty collection, or the key itself
     "items": lambda: {"items": [{"id": 1}]},
     "self-answer": lambda: {key: True for keys in FILES.values() for key in keys},
-    "aurora-devices": lambda: AURORA_DEVICES,
+    "devices": lambda: DEVICES,
     "poisoned": lambda: Poisoned(),
 }
 
@@ -72,3 +69,7 @@ def test_every_key_is_unevaluated(name, case):
     for key in FILES[name]:
         assert key in out["transformedResponse"]
         assert out["transformedResponse"][key] is None
+    for text in collection["errors"]:
+        assert "Halcyon" in text
+        assert "Arctic" not in text and "Aurora" not in text
+    assert out["additionalInfo"]["metadata"]["vendor"] == "Halcyon"
