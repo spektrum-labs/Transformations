@@ -1,35 +1,25 @@
 """
 Transformation: isBehavioralMonitoringValid
-Vendor: Arctic Wolf - EDR Endpoint Security (Aurora Endpoint Defense API)
+Vendor: Halcyon (Endpoint Security)
 Category: Endpoint Security
 
 NOT MEASURED. Every key below returns None with a dataCollection error, so it reads Unevaluated
 -- never Passed, never Failed.
 
-Not measured by this integration. The Arctic Wolf - EDR Endpoint Security definition routes these keys to the
-`checkInstalled` method, which has no request defined in that definition (no url, no HTTP
-method), so no vendor body ever reaches this file.
-
-The Aurora Device API's `background_detection` (Get devices extended, GET /devices/v2) is
-not a substitute: the vendor defines it as true when "the agent is currently running a
-background threat detection scan", a moment-in-time activity, not a monitoring setting.
-Behavioural protection settings (memory protection, script control) live in the Aurora
-Policy API, which this integration does not call.
+Halcyon's definition does not route a vendor body that answers this key; not measured.
+In the definition the key is wired to the `checkInstalled` method; this file does not read
+that response to answer it.
 
 What this file did before:
-`data.get('isBehavioralMonitoringValid', affirmative_signal(data))` -- a field no
-Arctic Wolf API sends.
-
-Docs: Aurora Endpoint Defense API, https://docs.arcticwolf.com/en/developer-and-oem/aurora-endpoint-defense-api
-(retrieved 2026-10-07).
+`data.get('isBehavioralMonitoringValid', affirmative_signal(data))`, a self-answer from the
+body it was judging.
 """
 
 from datetime import datetime
 
 KEYS = ("isBehavioralMonitoringValid",)
 
-REASON = ("Not measured: this integration calls no Aurora endpoint that reports behavioural "
-          "monitoring settings (they live in the Policy API)")
+REASON = "Not measured: Halcyon's definition does not route a vendor body that answers this key"
 
 
 def create_response(result, api_errors, input_summary=None):
@@ -52,7 +42,7 @@ def create_response(result, api_errors, input_summary=None):
                 "evaluatedAt": datetime.utcnow().isoformat() + "Z",
                 "schemaVersion": "1.0",
                 "transformationId": "isBehavioralMonitoringValid",
-                "vendor": "Arctic Wolf",
+                "vendor": "Halcyon",
                 "category": "Endpoint Security"
             }
         }
