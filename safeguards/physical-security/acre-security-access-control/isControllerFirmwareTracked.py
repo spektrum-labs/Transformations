@@ -174,7 +174,7 @@ def evaluate(data):
         )
         if len(versions) > 1:
             recs.append(
-                "The estate runs %d distinct firmware versions. A mixed estate means a "
+                "The environment runs %d distinct firmware versions. A mixed environment means a "
                 "patched vulnerability is only patched on part of it." % len(versions)
             )
     else:

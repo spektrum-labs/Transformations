@@ -72,8 +72,15 @@ def transform(input):
     data = data if isinstance(data, dict) else {}
 
     enforce_idle_timeout = data.get("enforceIdleTimeout")
+    api_errors = []
     if not isinstance(enforce_idle_timeout, bool):
-        enforce_idle_timeout = False
+        # Empty body, vendor error body or field absent: nothing was measured (None plus a
+        # dataCollection error), never a fail.
+        api_errors.append(
+            "Response did not include a boolean 'enforceIdleTimeout' field, so the admin idle "
+            "timeout could not be confirmed."
+        )
+        enforce_idle_timeout = None
 
     idle_timeout_minutes_raw = data.get("idleTimeoutMinutes")
     idle_timeout_minutes = None
@@ -81,14 +88,16 @@ def transform(input):
         idle_timeout_minutes = idle_timeout_minutes_raw
 
     transformation_errors = []
-    if not data:
-        transformation_errors.append("Empty or missing loginSecurity response payload.")
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if enforce_idle_timeout:
+    if api_errors:
+        recommendations.append(
+            "Verify connectivity to the organization loginSecurity endpoint and confirm the API key has organization-read permissions."
+        )
+    elif enforce_idle_timeout:
         if idle_timeout_minutes is not None:
             pass_reasons.append(
                 f"Organization login security setting enforceIdleTimeout=true with idleTimeoutMinutes={idle_timeout_minutes}, "
@@ -128,6 +137,7 @@ def transform(input):
         recommendations=recommendations,
         input_summary=input_summary,
         transformation_errors=transformation_errors,
+        api_errors=api_errors,
         metadata={
             "transformationId": "isAdminIdleTimeoutEnforced",
             "vendor": "Cisco Meraki MX",

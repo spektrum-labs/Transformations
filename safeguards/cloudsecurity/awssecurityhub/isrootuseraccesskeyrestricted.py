@@ -21,9 +21,11 @@ RULE. True only when a body that reads the root user's keys shows none active:
      Compliance.Status is FAILED still counts as FAILED: Security Hub keeps re-evaluating
      suppressed findings, so it still means a root key exists, and suppressing it must not make
      the check pass. A SUPPRESSED PASSED finding is not counted. Any judged FAILED -> False;
-     every judged finding PASSED -> True. A body carrying a non-empty NextToken has
-     more findings on a later page, so it is not evaluated unless a FAILED finding was already
-     seen. This needs no permission beyond the Security Hub read the connection already holds.
+     every judged finding PASSED -> True. A body carrying a next-page token (any truthy
+     NextToken or nextToken, on the findings page or on any wrapper around it) has more findings
+     on a later page, so it is not evaluated unless a FAILED finding was already seen. A list entry
+     that is not an object, or a finding whose Compliance entry is not an object, cannot be read:
+     with no FAILED finding seen, it is not evaluated either. This needs no permission beyond the Security Hub read the connection already holds.
      https://docs.aws.amazon.com/securityhub/latest/userguide/iam-controls.html#iam-4
 
 When more than one source is present the first in that order decides.
@@ -32,7 +34,7 @@ FAIL CLOSED. An empty body, an AWS or Integration-Service error, a report with n
 root row missing either key column or holding any other value, a report whose GeneratedTime is
 missing, unparsable, more than 24 hours old or more than 1 hour in the future, a summary
 without the key, a findings list with no active FAILED or active, unsuppressed PASSED IAM.4 finding, and
-a paged findings list (NextToken) with no FAILED finding seen all return None with
+a paged findings list (NextToken) or one with an unreadable entry, with no FAILED finding seen, all return None with
 additionalInfo.dataCollection.status "error" (not evaluated). None of them is a pass.
 
 Integration-Service parses the IAM Query API's XML, so the report arrives as
@@ -100,22 +102,20 @@ def parse(value):
 
 
 def error_reason(data):
-    """A reason when the body is an AWS or Integration-Service error, else None."""
+    """A fixed reason when the body is an AWS or Integration-Service error, else None. The vendor's own
+    error text is never copied into the result."""
     if not isinstance(data, dict):
         return None
     if data.get("error") is True:
-        return "Integration-Service returned an error: " + str(data.get("message") or "")[:200]
+        return "Integration-Service returned an error"
     if data.get("__type"):
-        return "AWS error " + str(data.get("__type"))[:200]
-    err = data.get("ErrorResponse")
-    if isinstance(err, dict):
-        inner = err.get("Error")
-        code = inner.get("Code") if isinstance(inner, dict) else inner
-        return "AWS error " + str(code)[:200]
+        return "AWS returned an error"
+    if isinstance(data.get("ErrorResponse"), dict):
+        return "AWS returned an error"
     if isinstance(data.get("Error"), dict) and data["Error"].get("Code"):
-        return "AWS error " + str(data["Error"].get("Code"))[:200]
+        return "AWS returned an error"
     if isinstance(data.get("error"), (dict, str)) and data.get("error"):
-        return "error body: " + json.dumps(data.get("error"))[:200]
+        return "the body carries an error"
     for key in ("statusCode", "status_code", "httpStatus"):
         code = data.get(key)
         if isinstance(code, int) and code >= 400:
@@ -220,13 +220,29 @@ def summary_value(holder, name):
     return None
 
 
+def page_token_of(data, depth):
+    """The first truthy NextToken or nextToken found on a dict or on the dicts nested inside it (not inside lists)."""
+    if depth < 0 or not isinstance(data, dict):
+        return None
+    token = data.get("NextToken") or data.get("nextToken")
+    if token:
+        return token
+    for value in data.values():
+        if isinstance(value, dict):
+            token = page_token_of(value, depth - 1)
+            if token:
+                return token
+    return None
+
+
 def findings_list(data):
-    """(findings list, next_token) or (None, None)."""
+    """(findings list, next_token) or (None, None). The token is the first truthy NextToken or nextToken on the
+    findings page or on any dict around it."""
     holder = find_key(data, "Findings", 6)
     if holder is not None and isinstance(holder.get("Findings"), list):
-        token = holder.get("NextToken")
+        token = holder.get("NextToken") or holder.get("nextToken")
         if not token and isinstance(data, dict):
-            token = data.get("NextToken")
+            token = page_token_of(data, 6)
         return holder["Findings"], token
     if isinstance(data, list) and data and isinstance(data[0], dict) and "Compliance" in data[0]:
         return data, None
@@ -319,10 +335,16 @@ def evaluate_findings(findings, next_token=None):
     statuses = []
     skipped = 0
     suppressed_failed = 0
+    unreadable = 0
     for f in findings:
         if not isinstance(f, dict):
+            unreadable = unreadable + 1
             continue
-        comp = f.get("Compliance") if isinstance(f.get("Compliance"), dict) else {}
+        raw_comp = f.get("Compliance")
+        if raw_comp is not None and not isinstance(raw_comp, dict):
+            unreadable = unreadable + 1
+            continue
+        comp = raw_comp if isinstance(raw_comp, dict) else {}
         if comp.get("SecurityControlId") != SH_CONTROL:
             continue
         if str(f.get("RecordState") or "ACTIVE").strip().upper() != "ACTIVE":
@@ -339,16 +361,19 @@ def evaluate_findings(findings, next_token=None):
             continue
         if status in ("PASSED", "FAILED"):
             statuses.append(status)
-    paged = isinstance(next_token, str) and next_token.strip() != ""
+    paged = bool(next_token)
     summary = {"source": "securityHub", "control": SH_CONTROL, "findings": len(statuses),
                "failed": len([s for s in statuses if s == "FAILED"]),
                "suppressedFailed": suppressed_failed,
-               "archivedOrSuppressedSkipped": skipped, "morePages": paged}
+               "archivedOrSuppressedSkipped": skipped, "morePages": paged, "unreadableEntries": unreadable}
     if "FAILED" in statuses:
         return False, None, summary
     if paged:
         return None, ("the Security Hub findings list has more pages (NextToken) and no FAILED "
                       + SH_CONTROL + " finding was seen on this one"), summary
+    if unreadable:
+        return None, ("a Security Hub finding in the list could not be read and no FAILED " + SH_CONTROL
+                      + " finding was seen, so a pass cannot be shown"), summary
     if not statuses:
         if skipped:
             return None, ("only archived or suppressed Security Hub findings exist for control "

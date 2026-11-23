@@ -13,6 +13,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isJobExecutionLogAccessible = true when the job history for the last 7 days was read in full and every
@@ -130,11 +151,11 @@ def transform(input):
     try:
         rows, problem = read_jobs(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         c = classify(rows)
         finished = c["success"] + c["failure"] + c["unknown"]
         if len(finished) == 0:
-            return {key: False, "reason": "No backup job finished in the last 7 days, so no execution record could be read"}
+            return respond(key, None, "No backup job finished in the last 7 days, so no execution record could be read")
         missing = []
         for s in finished:
             start = as_int(s.get("jobStartTime"))
@@ -144,7 +165,7 @@ def transform(input):
             if s.get("jobId") in (None, "") or not str(s.get("status") or "").strip() or not start or not end:
                 missing.append(label(s))
         if missing:
-            return {key: False, "reason": str(len(missing)) + " finished jobs lack an id, status, start or end time", "incompleteRecords": missing[:25]}
-        return {key: True, "reason": "All " + str(len(finished)) + " finished backup jobs in the last 7 days carry id, status, start and end time"}
+            return respond(key, False, str(len(missing)) + " finished jobs lack an id, status, start or end time", {"incompleteRecords": missing[:25]})
+        return respond(key, True, "All " + str(len(finished)) + " finished backup jobs in the last 7 days carry id, status, start and end time")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

@@ -44,7 +44,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
                     recommendations=None, input_summary=None, metadata=None,
                     transformation_errors=None, api_errors=None, additional_findings=None):
     """Create the standardized 5-section transformation response."""
-    if validation is None:
+    if not isinstance(validation, dict):
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
     transform_err_list = transformation_errors or []
@@ -86,18 +86,24 @@ def find_agent_list(obj):
     """(agents, pagination, error) from the getEndpoints response, whatever wrapper Token-Service hands over."""
     cur = obj
     for depth in range(6):
+        if isinstance(cur, bytes):
+            cur = cur.decode("utf-8", "replace")
         if isinstance(cur, str):
+            if not cur.strip():
+                return None, None, "The SentinelOne agent list is empty (no body was returned), so it cannot be read."
             try:
                 cur = json.loads(cur)
             except Exception:
-                return None, None, None
+                # A body cut off in transit arrives as text that stops mid-JSON (IS, Nov 2026).
+                return None, None, ("The SentinelOne agent list is not valid JSON (" + str(len(cur))
+                                    + " characters; it may have been cut off in transit), so it cannot be read.")
         if isinstance(cur, list):
             return cur, None, None
         if not isinstance(cur, dict):
             return None, None, None
         if cur.get("errors") or cur.get("error") is True:
             detail = cur.get("errors") or cur.get("message") or cur.get("errorMessage") or "error"
-            return None, None, json.dumps(detail)[:300]
+            return None, None, "SentinelOne returned an error instead of an agent list: " + json.dumps(detail)[:300]
         if isinstance(cur.get("data"), list):
             pagination = cur.get("pagination")
             return cur["data"], (pagination if isinstance(pagination, dict) else None), None
@@ -121,7 +127,7 @@ def complete_agent_read(raw):
     """
     agents, pagination, error = find_agent_list(raw)
     if error is not None:
-        return None, "SentinelOne returned an error instead of an agent list: " + error
+        return None, error
     if agents is None:
         return None, "No SentinelOne agent list in the response; nothing to evaluate."
     if pagination is None:
@@ -212,14 +218,14 @@ def transform(input):
         if "edr" in modules:
             with_edr.append(a)
         else:
-            without.append(str(a.get("computerName") or a.get("uuid") or "unknown"))
+            without.append(str(a.get("uuid") or a.get("id") or "unknown"))
     pct = (len(with_edr) * 100) // len(installed)
     deployed = len(with_edr) > 0
     summary = (str(len(with_edr)) + " of " + str(len(installed)) + " installed agents (" + str(pct)
                + "%) report edr in activeProtection")
     findings = []
     if without:
-        findings.append("Agents without edr: " + ", ".join(without[:5]) + ("..." if len(without) > 5 else ""))
+        findings.append("Agents without edr (agent id): " + ", ".join(without[:5]) + ("..." if len(without) > 5 else ""))
     if stale_count:
         findings.append(str(stale_count) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)
                         + " days before the newest check-in and are not judged (staleAgentCount)")

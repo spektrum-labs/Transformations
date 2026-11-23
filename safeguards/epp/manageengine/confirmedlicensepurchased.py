@@ -91,7 +91,7 @@ def evaluate(data):
     Cloud's serverproperties returns only tenant structure -- branch_offices,
     domains, custom_groups. The licence fields the on-premise edition exposes
     (product_name, license_type, license_expiry) are absent, so the proof here
-    is that an authenticated call returns a provisioned estate: a tenant that
+    is that an authenticated call returns a provisioned environment: a tenant that
     serves branch offices and domains is a live, paid subscription.
     """
     try:
@@ -118,7 +118,7 @@ def evaluate(data):
         fail_reasons = []
         recommendations = []
         if is_active:
-            pass_reasons.append("Endpoint Central Cloud tenant responded with a provisioned estate")
+            pass_reasons.append("Endpoint Central Cloud tenant responded with a provisioned environment")
             pass_reasons.append(str(branch_count) + " branch offices, " + str(domain_count)
                                 + " domains, " + str(group_count) + " custom groups")
         else:

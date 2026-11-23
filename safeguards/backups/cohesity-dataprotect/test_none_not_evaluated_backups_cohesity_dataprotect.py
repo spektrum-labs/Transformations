@@ -2,7 +2,7 @@
 
 Token-Service grades a None criterion as FAILED unless additionalInfo.dataCollection.status is
 "error" (which create_response sets only from a non-empty api_errors). Each body below proves
-nothing about the estate, so each transform must answer None AND say so. Synthetic data only.
+nothing about the environment, so each transform must answer None AND say so. Synthetic data only.
 """
 import importlib.util
 import os
@@ -34,6 +34,8 @@ class Poisoned(dict):
 
 
 CASES = [
+    ('isbackupenabled', ('isBackupEnabled',), 'empty_dict', lambda: {}),
+    ('isbackupenabled', ('isBackupEnabled',), 'poisoned', lambda: Poisoned()),
     ('backupslacomplianceratepercentage', ('backupSlaComplianceRatePercentage',), 'empty_dict', lambda: {}),
     ('backupslacomplianceratepercentage', ('backupSlaComplianceRatePercentage',), 'poisoned', lambda: Poisoned()),
     ('backupsuccessratepercentage', ('backupSuccessRatePercentage',), 'empty_dict', lambda: {}),

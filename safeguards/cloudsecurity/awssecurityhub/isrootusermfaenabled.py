@@ -100,22 +100,20 @@ def parse(value):
 
 
 def error_reason(data):
-    """A reason when the body is an AWS or Integration-Service error, else None."""
+    """A fixed reason when the body is an AWS or Integration-Service error, else None. The vendor's own
+    error text is never copied into the result."""
     if not isinstance(data, dict):
         return None
     if data.get("error") is True:
-        return "Integration-Service returned an error: " + str(data.get("message") or "")[:200]
+        return "Integration-Service returned an error"
     if data.get("__type"):
-        return "AWS error " + str(data.get("__type"))[:200]
-    err = data.get("ErrorResponse")
-    if isinstance(err, dict):
-        inner = err.get("Error")
-        code = inner.get("Code") if isinstance(inner, dict) else inner
-        return "AWS error " + str(code)[:200]
+        return "AWS returned an error"
+    if isinstance(data.get("ErrorResponse"), dict):
+        return "AWS returned an error"
     if isinstance(data.get("Error"), dict) and data["Error"].get("Code"):
-        return "AWS error " + str(data["Error"].get("Code"))[:200]
+        return "AWS returned an error"
     if isinstance(data.get("error"), (dict, str)) and data.get("error"):
-        return "error body: " + json.dumps(data.get("error"))[:200]
+        return "the body carries an error"
     for key in ("statusCode", "status_code", "httpStatus"):
         code = data.get(key)
         if isinstance(code, int) and code >= 400:

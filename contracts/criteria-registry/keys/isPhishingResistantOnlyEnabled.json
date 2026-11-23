@@ -1,0 +1,94 @@
+{
+  "name": "isPhishingResistantOnlyEnabled",
+  "revision": 1,
+  "status": "active",
+  "definition": "The identity provider permits only phishing-resistant authenticators (FIDO2/WebAuthn, U2F, smart card or certificate-based authentication in multi-factor mode) for the whole organisation: at least one is enabled and no phishable method is.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "Every authenticator or authentication method the organisation has enabled for its members, read from the tenant-wide catalogue (Okta GET /api/v1/org/factors; Entra authenticationMethodsPolicy). Guest-only methods are judged as Entra's implementation documents. Not administrators specifically -- that is isAdminMFAPhishingResistant.",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A COMPLETE, single-page read of the tenant's method catalogue showing at least one phishing-resistant method enabled and every enabled method phishing-resistant. A method enabled with no targets is not enabled for anyone (Entra, Tx #995). Okta FastPass alone never yields true: it is phishing-resistant only under an authentication-policy rule the catalogue cannot show.",
+  "evidenceClass": "configured",
+  "notMeasured": {"value": null, "envelope": "additionalInfo.dataCollection.status == \"error\""},
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": ["Identity and Access Management", "Multifactor Authentication"],
+  "integrationPolicy": "listed",
+  "allowedIntegrations": [
+    {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta", "note": "The SSWS definition, which the origin report calls Okta Adaptive MFA. Wired today, pinned 47f9fd36 (byte-identical to main for this file)."},
+    {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD", "note": "Wired today, pinned 7016c59d, which predates Tx #995."},
+    {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)", "note": "Wired today, same pin as Azure AD."}
+  ],
+  "aliases": [],
+  "owner": "unknown",
+  "openDecisions": [
+    {
+      "owner": "J.J.",
+      "status": "open",
+      "question": "May Okta - Application (f799acf0-d748-420b-8799-21fa7dde5f5d) answer this key? allowedIntegrations above records the rule as reported (Okta 3bc425fa only, not Okta - Application), which is also exactly today's wiring. The evidence below points the other way and has not been reconciled.",
+      "positions": [
+        "As reported in the origin of the G1 ask: the key is valid only on the Okta definition (3bc425fa), not on Okta - Application (f799acf0). Encoded above; Integration-Service would reject an f799acf0 RTA row for this key.",
+        "QC F-iam-mfa-05 recommends the opposite: ADD the row to Okta - Application, method listOrgFactors, which is already in its workflow and succeeds today against a Spektrum-owned Okta org (spektrum-labs-cli reports/qc-2026-10-06/findings/iam-mfa.md, F-iam-mfa-05 and the listOrgFactors validation block).",
+        "The transform's own header names both: 'Vendor: Okta (also Okta - Application)' (safeguards/iam/okta/isPhishingResistantOnlyEnabled.py:3).",
+        "A third reading questions the SOURCE rather than the integration: on Okta Identity Engine, enforcement lives in authentication policies, and a factor ACTIVE in the org catalogue says nothing about whether a policy permits it ('same source, same doubt'; spektrum-labs-cli docs/okta-mfa-check-set-defects.md:47, :125-135). If that holds, neither Okta definition should answer from /api/v1/org/factors, and the fix is a policy read, not an allowlist."
+      ]
+    }
+  ],
+  "validation": {
+    "level": "V1",
+    "implementations": [
+      {
+        "integration": {"srn": "3bc425fa-0638-4bf1-8194-19e7e4f2f43c", "name": "Okta"},
+        "transform": "safeguards/iam/okta/isPhishingResistantOnlyEnabled.py @ 47f9fd36 (byte-identical to main)",
+        "level": "V2",
+        "meaning": "Org factor catalogue: true when a phishing-resistant factor is ACTIVE and no phishable factor is; mixed reads false; FastPass-only, partial or paged reads are not measured.",
+        "api": {
+          "endpoint": "GET /api/v1/org/factors (listOrgFactors)",
+          "documentation": {"url": "https://raw.githubusercontent.com/okta/okta-sdk-java/master/src/swagger/api.yaml", "retrieved": "2026-10-07"},
+          "fields": [
+            {"path": "[].factorType", "type": "string", "meaning": "Okta FactorType; the live body also returns smart_card, which the published enum omits"},
+            {"path": "[].status", "type": "string", "meaning": "ACTIVE | INACTIVE | NOT_SETUP | PENDING_ACTIVATION"}
+          ],
+          "pagination": "none observed (one array); the transform refuses a body carrying a next-page marker (:88-90)",
+          "scope": "already granted for both Okta definitions"
+        },
+        "notMeasuredConformance": {
+          "paths": {"refusal": "pass", "emptyBody": "pass", "poisoned": "pass"},
+          "evidence": "Replayed 2026-10-07 on main through tools/restricted_sandbox.py: {} , an Okta E0000011 error envelope, and a body whose every read raises each returned null with dataCollection.status \"error\"."
+        },
+        "evidence": [
+          "V2 not V3: a live 17-factor body captured 2026-10-07 confirms the completeness and paging guards (iam-mfa.md F-iam-mfa-05), but the pass/fail replays on record are for the sibling isAdminMFAPhishingResistant, not this key."
+        ]
+      },
+      {
+        "integration": {"srn": "d9b6f27a-2e67-4b55-a09e-0784c5de9abd", "name": "Azure AD"},
+        "transform": "safeguards/mfa/azure/entra_phishing_resistant_only.py @ 7016c59d (main differs by 4+/1- lines, Tx #995)",
+        "level": "V1",
+        "meaning": "Entra authenticationMethodsPolicy: true only when policyMigrationState is migrationComplete and every enabled member method is phishing-resistant.",
+        "notMeasuredConformance": {
+          "paths": {"refusal": "pass", "emptyBody": "pass", "poisoned": "pass"},
+          "evidence": "Replayed 2026-10-07 on MAIN, not on the 7016c59d pin production runs: {}, a Graph Authorization_RequestDenied envelope and a poisoned body each returned null with dataCollection.status \"error\"."
+        },
+        "evidence": ["iam-mfa.md F-iam-mfa-17: V1 candidate; no stored Graph authenticationMethodsPolicy body."]
+      },
+      {
+        "integration": {"srn": "cde89168-aae5-4c6a-a39f-fada7eb3db9e", "name": "Azure AD (One-Click)"},
+        "transform": "safeguards/mfa/azure/entra_phishing_resistant_only.py @ 7016c59d",
+        "level": "V1",
+        "notMeasuredConformance": {
+          "paths": {"refusal": "pass", "emptyBody": "pass", "poisoned": "pass"},
+          "evidence": "Same file and replay as Azure AD; replayed on main, not on the pin."
+        }
+      }
+    ]
+  },
+  "citations": [
+    "spektrum-labs-cli reports/qc-2026-10-06/wiring.json: rows for this key are exactly 3bc425fa (pin 47f9fd36), d9b6f27a and cde89168 (pin 7016c59d); no f799acf0 row",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/iam-mfa.md: F-iam-mfa-05, F-iam-mfa-06, F-iam-mfa-17",
+    "spektrum-labs-cli reports/qc-2026-10-06/findings/key-census.csv: 3 integrations, 2 files, asked by 5 requirements under Identity and Access Management and Multifactor Authentication",
+    "safeguards/iam/okta/isPhishingResistantOnlyEnabled.py:1-30 (contract), :88-96 (paging and completeness guards), :103 (PHISH_RESISTANT_TYPES)"
+  ],
+  "changeLog": [
+    {"revision": 1, "date": "2026-10-07", "change": "Seeded from the 2026-10-06 integration QC. Records today's wiring as the allowed set and leaves the Okta - Application question open."}
+  ],
+  "notes": "This is the key that started G1. The meaning is not contested: both vendors' implementations read a tenant-wide method catalogue and agree on type. What is contested is WHO may answer it, which is exactly what integrationPolicy: listed makes enforceable at Integration-Service's definition write path."
+}

@@ -256,6 +256,19 @@ def tag_map(text, separator):
     return tags, order
 
 
+def another_protocols_record(text, own_prefix):
+    """True when the text is plainly the record of a different protocol (or a DKIM key record)
+    sitting under this key: the body is mis-keyed, so nothing is known, which is not the same
+    as this protocol publishing nothing."""
+    low = text.strip().lower()
+    for prefix in RECORD_PREFIXES:
+        if prefix != own_prefix and low.startswith(prefix):
+            return True
+    tags = dkim_tag_list(text)
+    # a DMARC record that lost its v tag is also "p=...;" pairs, so only an SPF key is checked for a DKIM tag list
+    return own_prefix == "v=spf1" and tags is not None and "p" in tags and "v" not in tags
+
+
 def spf_verdict(body):
     """isSPFConfigured: (verdict, reasons, detail). RFC 7208."""
     kind, text = record_text(body, "spf")
@@ -270,6 +283,8 @@ def spf_verdict(body):
     # the record, and a record whose version section is "v=spf10" "does not match and is
     # discarded". startswith("v=spf1") accepts v=spf10, which the RFC names as the
     # example of what must not be accepted.
+    if another_protocols_record(text, "v=spf1"):
+        return None, ["The SPF answer is the record of another protocol, so SPF was not measured"], {}
     terms = text.split()
     if not terms or terms[0].lower() != "v=spf1":
         return False, ["The TXT record found does not begin with a version section of exactly "
@@ -343,6 +358,8 @@ def dmarc_verdict(body):
                       "its p= policy cannot be read and enforcement was not measured"], {}
     if kind == "missing":
         return False, ["No DMARC record is published for the email domain"], {"dmarcRecord": "none"}
+    if another_protocols_record(text, "v=dmarc1"):
+        return None, ["The DMARC answer is the record of another protocol, so DMARC was not measured"], {}
     tags, order = tag_map(text, ";")
     if tags.get("v", "").lower() != "dmarc1":
         return False, ["The TXT record found carries no v=DMARC1 tag; RFC 7489 s6.3 requires the "
@@ -385,6 +402,22 @@ def dmarc_verdict(body):
     return True, [], detail
 
 
+def dkim_tag_list(text):
+    """tag=value pairs of a DKIM key record (lowercased names), or None when the text is not a
+    tag list: a segment with no equals sign, or a tag name that is not a plain word."""
+    tags = {}
+    for segment in text.split(";"):
+        segment = segment.strip()
+        if not segment:
+            continue
+        name, separator, value = segment.partition("=")
+        name = name.strip()
+        if not separator or not name or not name.replace("_", "").isalnum():
+            return None
+        tags[name.lower()] = value.strip()
+    return tags
+
+
 def dkim_verdict(body):
     """isDKIMConfigured: (verdict, reasons, detail). RFC 6376.
 
@@ -401,14 +434,21 @@ def dkim_verdict(body):
         return True, [], {"dkimRecord": "present",
                           "dkimEvidence": "the probe reported a selector without returning the "
                                           "record, so the key could not be checked for revocation"}
-    if "v=dkim1" in text.lower():
-        tags, order = tag_map(text, ";")
-        if not tags.get("p", "").strip():
+    tags = dkim_tag_list(text)
+    if tags is not None:
+        # A key record is a tag list (RFC 6376 s3.6.1): p is required, v is optional and names
+        # DKIM1 when present, and the tags come in any order ("k=rsa; t=s; p=..."). The record
+        # of another protocol, or a list with no p tag, says nothing about a DKIM key.
+        if tags.get("v", "dkim1").lower() != "dkim1" or "p" not in tags:
+            return None, ["The DKIM answer is not a DKIM key record (no p tag, or a v tag naming "
+                          "another protocol), so DKIM was not measured"], \
+                {"dkimRecord": text, "dkimEvidence": "unreadable -- not a DKIM key record"}
+        if not tags["p"].replace(" ", ""):
             return False, ["The published DKIM key is revoked: RFC 6376 s6.1.2 step 7 says an "
                            "empty p= tag means the key has been revoked and a verifier MUST treat "
-                           "it as a failed signature check"],                 {"dkimRecord": text, "dkimEvidence": "v=DKIM1 record with an empty p= tag"}
-        return True, [], {"dkimRecord": text,
-                          "dkimEvidence": "v=DKIM1 record with a public key"}
+                           "it as a failed signature check"], \
+                {"dkimRecord": text, "dkimEvidence": "DKIM record with an empty p= tag"}
+        return True, [], {"dkimRecord": text, "dkimEvidence": "DKIM record with a public key"}
     if dkim_selector_target(text):
         return True, [], {"dkimRecord": text,
                           "dkimEvidence": "presence only -- the probe returned a selector target "

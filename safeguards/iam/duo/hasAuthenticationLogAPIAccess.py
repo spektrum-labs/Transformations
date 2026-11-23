@@ -69,8 +69,9 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 #   403 {"code": 40301, "message": "Access forbidden", "stat": "FAIL"}
 # when the Admin API application is not granted "Grant read log" (Duo Admin API
 # docs: 403 = "This integration is not authorized for this endpoint"). A revoked
-# or invalid key is a 401, not this. So this 403 is the answer to the question
-# "does the API credential have authentication log access": no.
+# or invalid key is a 401, not this. The refusal means the log was never read, so the check
+# cannot say whether the tenant's log is reachable once the permission is granted: it is
+# Unevaluated (value None, data-collection error naming the permission), never False.
 # Integration-Service hands that one refusal over as data only when the method
 # opts in (vendorErrorAsResponse), nested as
 #   {"vendorErrorAsResponse": {"status": 403, "bodyContains": ..., "body": <vendor body>}}
@@ -90,31 +91,96 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 # True, including an EMPTY list (a quiet window: v2 reads the last 30 days only) -- but an empty
 # list passes only when the body proves success (success_proven: Duo's "stat": "OK" envelope or
 # the getAuthLogs returnSpec's authlogs + metadata). An empty list without that proof, an
-# error-marked body or a failed enriched validation is Not evaluated. False only
-# for Duo's 403 / 40301 refusal or records missing timestamp/factor/result/username. A body
-# with no log list at all (an error envelope, a bare error body, None, non-JSON) is Not
-# evaluated: value None with a data-collection error.
+# error-marked body, a failed enriched validation, Duo's 403 / 40301 refusal, any other
+# handed-over vendor error and a body with no log list at all (an error envelope, a bare error
+# body, None, non-JSON) are Not evaluated: every key None with a data-collection error. False
+# only when records came back and some lack timestamp/factor/result/username (positive evidence).
+META = {"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"}
 ACCESS_FORBIDDEN_CODE = 40301
 V1_ENDPOINT = "/admin/v1/logs/authentication"
 V2_ENDPOINT = "/admin/v2/logs/authentication"
 
 
-def duo_access_forbidden(data):
-    """True only for Integration-Service's marked 403 / 40301 "Access forbidden" refusal."""
-    if not isinstance(data, dict):
-        return False
-    marker = data.get("vendorErrorAsResponse")
-    if not isinstance(marker, dict) or marker.get("status") != 403:
-        return False
-    body = marker.get("body")
+PERMISSION_NOT_GRANTED = "permission_not_granted"
+VENDOR_REFUSAL = "vendor_refusal"
+REQUIRED_PERMISSION = "Grant read log"
+REFUSAL_KEYS = ["hasAuthenticationLogAPIAccess", "totalRecords"]
+REFUSAL_ENDPOINT = "the Duo authentication log endpoint (" + V1_ENDPOINT + " or " + V2_ENDPOINT + ")"
+
+
+def refusal_decoded(body):
+    """A vendor body or whole input as an object: dicts as they are, JSON text or bytes parsed, else None."""
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8")
+        except Exception:
+            return None
     if isinstance(body, str):
         try:
-            body = json.loads(body)
-        except ValueError:
-            return False
-    if not isinstance(body, dict):
-        return False
-    return body.get("code") == ACCESS_FORBIDDEN_CODE and body.get("message") == "Access forbidden"
+            return json.loads(body)
+        except Exception:
+            return None
+    return body
+
+
+def refusal_envelope(value):
+    """The dict carrying vendorErrorAsResponse: the input itself or one level inside it, else None."""
+    value = refusal_decoded(value)
+    if not isinstance(value, dict):
+        return None
+    if "vendorErrorAsResponse" in value:
+        return value
+    for k in value:
+        inner = value[k]
+        if isinstance(inner, dict) and "vendorErrorAsResponse" in inner:
+            return inner
+    return None
+
+
+def refusal_unevaluated(envelope, validation=None):
+    """Duo's refusal (or any other handed-over vendor error) as Unevaluated: every key None, never False."""
+    marker = envelope.get("vendorErrorAsResponse")
+    status = marker.get("status") if isinstance(marker, dict) else None
+    body = refusal_decoded(marker.get("body")) if isinstance(marker, dict) else None
+    forbidden = (status == 403 and isinstance(body, dict)
+                 and body.get("code") == ACCESS_FORBIDDEN_CODE and body.get("message") == "Access forbidden")
+    result = {}
+    for k in REFUSAL_KEYS:
+        result[k] = None
+    if forbidden:
+        problem = ("PERMISSION-NOT-GRANTED: Duo refused the call to " + REFUSAL_ENDPOINT + " with HTTP 403 code 40301 "
+                   "(Access forbidden) because the Admin API application lacks the \"" + REQUIRED_PERMISSION
+                   + "\" permission. Nothing was measured; this is not a posture result.")
+        recommendation = ("In the Duo Admin Panel, open the Admin API application used for Spektrum and enable the \""
+                          + REQUIRED_PERMISSION + "\" permission; the integration key and secret do not change.")
+    else:
+        problem = ("Duo refused the call to " + REFUSAL_ENDPOINT + " (HTTP " + str(status)[:10]
+                   + "); nothing was measured.")
+        recommendation = "Confirm the Duo Admin API credentials are valid and the Admin API application is enabled."
+    out = create_response(
+        result=result, validation=validation, fail_reasons=[problem], api_errors=[problem],
+        recommendations=[recommendation],
+        input_summary={"vendorStatus": status if isinstance(status, int) else None,
+                       "vendorCode": body.get("code") if isinstance(body, dict) else None},
+        metadata=META,
+    )
+    collection = out["additionalInfo"]["dataCollection"]
+    if forbidden:
+        collection["errorCode"] = PERMISSION_NOT_GRANTED
+        collection["requiredPermission"] = REQUIRED_PERMISSION
+    else:
+        collection["errorCode"] = VENDOR_REFUSAL
+    return out
+
+
+def unreadable(message, validation=None):
+    """Nothing was read: every key None with a data-collection error, never False."""
+    return create_response(
+        result={"hasAuthenticationLogAPIAccess": None, "totalRecords": None},
+        validation=validation,
+        api_errors=[message],
+        metadata=META,
+    )
 
 
 def read_auth_logs(data):
@@ -251,47 +317,30 @@ def success_proven(raw):
 
 
 def transform(input):
+    try:
+        return evaluate(input)
+    except Exception:
+        return unreadable("The authentication log response could not be processed.")
+
+
+def evaluate(input):
+    refusal = refusal_envelope(input)
     if isinstance(input, (str, bytes)):
         try:
             input = json.loads(input)
         except ValueError:
             input = {}
     data, validation = extract_input(input)
+    if refusal is None:
+        refusal = refusal_envelope(data)
     if not isinstance(validation, dict):
         validation = None  # create_response substitutes its default
+    if refusal is not None:
+        # Duo's 403 / 40301 refusal and any other handed-over vendor error are not log data:
+        # report them as Unevaluated (the permission named for 40301 only), never judge on them.
+        return refusal_unevaluated(refusal, validation)
     if isinstance(validation, dict) and validation.get("status") == "failed":
-        return create_response(
-            result={"hasAuthenticationLogAPIAccess": None, "totalRecords": None},
-            validation=validation,
-            api_errors=["Input validation failed; the authentication log body is not evidence"],
-            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
-        )
-    if duo_access_forbidden(data):
-        # A measured FAIL, not an error: Duo answered the question.
-        return create_response(
-            result={"hasAuthenticationLogAPIAccess": False, "totalRecords": 0},
-            validation=validation,
-            fail_reasons=[
-                "Duo refused the Admin API authentication logs endpoint with HTTP 403, code 40301 "
-                "\"Access forbidden\": the Admin API application is not granted read access to "
-                "authentication logs."
-            ],
-            recommendations=[
-                "In the Duo Admin Panel, open the Admin API application used for Spektrum and enable the "
-                "\"Grant read log\" permission."
-            ],
-            input_summary={"vendorStatus": 403, "vendorCode": ACCESS_FORBIDDEN_CODE},
-            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
-        )
-    if isinstance(data, dict) and "vendorErrorAsResponse" in data:
-        # Any other handed-over vendor error is not log data: report it, do not judge on it.
-        return create_response(
-            result={"hasAuthenticationLogAPIAccess": False, "totalRecords": 0},
-            validation=validation,
-            api_errors=["Duo returned an error instead of authentication log data: %s"
-                        % str(data.get("vendorErrorAsResponse"))[:300]],
-            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
-        )
+        return unreadable("Input validation failed; the authentication log body is not evidence", validation)
 
     endpoint, records, log_metadata = read_auth_logs(data)
     if endpoint is not None and (error_marked(data) or error_marked(input)
@@ -302,13 +351,8 @@ def transform(input):
     if endpoint is None:
         # No authentication log list at all (an Integration-Service error envelope, a bare Duo
         # error body, None, non-JSON): nothing was read, so nothing is judged.
-        return create_response(
-            result={"hasAuthenticationLogAPIAccess": None, "totalRecords": None},
-            validation=validation,
-            api_errors=["The response holds no authentication log list (expected the v1 \"response\" "
-                        "list or the v2 \"authlogs\" list): %s" % str(data)[:300]],
-            metadata={"transformationId": "hasAuthenticationLogAPIAccess", "vendor": "Duo", "category": "iam"},
-        )
+        return unreadable("The response holds no authentication log list (expected the v1 \"response\" "
+                          "list or the v2 \"authlogs\" list): %s" % str(data)[:300], validation)
     endpoint_text = endpoint
     total_records = len(records)
 
