@@ -26,8 +26,8 @@ DEFENDER_SERVICE_PLANS = {
     # Defender for Endpoint only. This transformation proves the Endpoint Security
     # safeguard, whose checks call the Defender for Endpoint API. Defender for
     # Office 365 (ATP_ENTERPRISE, THREAT_INTELLIGENCE), Identity (ATA), Cloud Apps
-    # (ADALLOM_*) and TVM add-ons do not provision an MDE tenant: Carlex and
-    # Twin Rivers passed this check on those plans while every MDE call returned
+    # (ADALLOM_*) and TVM add-ons do not provision an MDE tenant: two live
+    # connections passed this check on those plans while every MDE call returned
     # 403 "Account mode is inactive" (2026-09-24).
     "WINDEFATP",
     "MDE_LITE",

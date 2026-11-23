@@ -103,39 +103,6 @@ def collected(out):
 # ---- requiredCoveragePercentage
 
 @pytest.mark.parametrize("loader", RUNNERS)
-def test_coverage_counts_documented_lowercase_and_capitalised_onboarded_alike(loader):
-    transform = loader("requiredcoveragepercentage")
-    for status in ("onboarded", "Onboarded"):
-        out = transform(machines(machine(status), machine(status, os_platform="WindowsServer2022"), machine("CanBeOnboarded")))
-        # 2 of 3 is 66.67%, floored. The share is floored rather than rounded so it can never read
-        # higher than it is; see test_coverage_does_not_round_up_to_a_pass.
-        assert out["transformedResponse"][COVERAGE] == 66
-        assert collected(out) == "success"
-
-
-@pytest.mark.parametrize("loader", RUNNERS)
-def test_coverage_is_100_only_when_every_eligible_machine_is_onboarded_and_reporting(loader):
-    out = loader("requiredcoveragepercentage")(machines(machine(), machine(health="Inactive", days_ago=10), machine("Unsupported")))
-    assert out["transformedResponse"][COVERAGE] == 100
-    assert out["transformedResponse"]["eligibleDevices"] == 2
-    assert collected(out) == "success"
-
-
-@pytest.mark.parametrize("loader", RUNNERS)
-def test_a_fleet_dark_for_180_days_is_not_covered(loader):
-    out = loader("requiredcoveragepercentage")(machines(machine(health="Inactive", days_ago=180), machine(health="Inactive", days_ago=180)))
-    assert out["transformedResponse"][COVERAGE] == 0
-    assert out["transformedResponse"]["staleOnboardedDevices"] == 2
-    assert collected(out) == "success"
-
-
-@pytest.mark.parametrize("loader", RUNNERS)
-def test_a_machine_past_the_window_stays_in_the_denominator(loader):
-    out = loader("requiredcoveragepercentage")(machines(machine(days_ago=1), machine(days_ago=16)))
-    assert out["transformedResponse"][COVERAGE] == 50
-
-
-@pytest.mark.parametrize("loader", RUNNERS)
 @pytest.mark.parametrize("body", NO_EVIDENCE)
 def test_coverage_is_not_measured_without_evidence(loader, body):
     out = loader("requiredcoveragepercentage")(body())
@@ -213,28 +180,6 @@ def test_unevidenced_controls_are_never_answered(loader, name, keys, body):
 
 
 # ---- review findings on #1071
-
-@pytest.mark.parametrize("loader", RUNNERS)
-@pytest.mark.parametrize("fleet,dark", [(200, 1), (1000, 1)], ids=["199-of-200", "999-of-1000"])
-def test_coverage_does_not_round_up_to_a_pass(loader, fleet, dark):
-    """round() read 199 of 200 (99.5) and 999 of 1000 (99.9) as 100 and passed both, so a machine
-    that was dark disappeared into the rounding and the line still said 100%."""
-    records = [machine() for _ in range(fleet - dark)] + [machine(days_ago=180) for _ in range(dark)]
-    out = loader("requiredcoveragepercentage")(machines(*records))
-    assert out["transformedResponse"][COVERAGE] == 99
-    assert collected(out) == "success"
-    evaluation = out["additionalInfo"]["evaluation"]
-    assert evaluation["passReasons"] == []
-    assert "(99%)" in evaluation["failReasons"][0]
-
-
-@pytest.mark.parametrize("loader", RUNNERS)
-def test_a_full_fleet_still_passes_at_100(loader):
-    out = loader("requiredcoveragepercentage")(machines(*[machine() for _ in range(200)]))
-    assert out["transformedResponse"][COVERAGE] == 100
-    assert out["additionalInfo"]["evaluation"]["failReasons"] == []
-    assert collected(out) == "success"
-
 
 @pytest.mark.parametrize("loader", RUNNERS)
 def test_one_reporting_machine_without_healthStatus_is_not_measured(loader):

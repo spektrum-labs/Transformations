@@ -1,4 +1,5 @@
-"""isPhishingResistantOnlyEnabled reads GET /api/v1/org/factors (listOrgFactors).
+"""isPhishingResistantOnlyEnabled reads GET /api/v1/org/factors (listOrgFactors), or the Identity Engine
+authenticators (getAuthenticatorPosture) when the input carries them.
 
 REAL mirrors a customer tenant read of 2026-09-30 12:53 ET (factorType/provider/status only, nothing else
 kept): a YubiKey OTP token, Okta Verify push, a security question, TOTP and SMS are ACTIVE; every
@@ -158,10 +159,129 @@ class PhishResistantOnlyTests(unittest.TestCase):
                 self.assert_unevaluated(body)
 
 
+def auth(key, typ, name, status, allowed=None):
+    a = {"id": "aut" + key, "key": key, "type": typ, "name": name, "status": status}
+    if allowed:
+        a["settings"] = {"allowedFor": allowed}
+    return a
+
+
+def m(typ, status):
+    return {"type": typ, "status": status}
+
+
+def posture(verify=("push:INACTIVE", "totp:ACTIVE", "signed_nonce:ACTIVE"), email="recovery", phone="INACTIVE"):
+    """Synthetic getAuthenticatorPosture body: Identity Engine org whose Classic factor list still shows SMS ACTIVE."""
+    return {
+        "authenticators": [
+            auth("okta_email", "email", "Email", "ACTIVE", email),
+            auth("okta_password", "password", "Password", "ACTIVE"),
+            auth("okta_verify", "app", "Okta Verify", "ACTIVE"),
+            auth("phone_number", "phone", "Phone", phone),
+            auth("webauthn", "security_key", "Passkey", "ACTIVE"),
+            auth("security_question", "security_question", "Security Question", "INACTIVE", "recovery"),
+        ],
+        "authenticatorMethods": [
+            [m("email", "ACTIVE")], [m("password", "ACTIVE")],
+            [m(x.split(":")[0], x.split(":")[1]) for x in verify],
+            [m("sms", phone), m("voice", "INACTIVE")], [m("webauthn", "ACTIVE")], [m("security_question", "INACTIVE")],
+        ],
+    }
+
+
+class AuthenticatorPostureTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.t = load()
+
+    def run_(self, body):
+        res = self.t.transform(body)
+        return res, res["transformedResponse"], res["additionalInfo"]["evaluation"]["failReasons"]
+
+    def test_verify_totp_fails_with_totp_reason_not_sms(self):
+        res, out, fails = self.run_(posture())
+        self.assertIs(out[KEY], False)
+        self.assertEqual(out["activePhishableFactors"], ["Okta Verify one-time code"])
+        self.assertTrue(fails[0].startswith("Okta Verify one-time code is enabled"))
+        self.assertNotIn("sms", json.dumps(out).lower())
+        self.assertEqual(res["additionalInfo"]["dataCollection"]["status"], "success")
+
+    def test_wrapped_and_unredacted_key_read_the_same(self):
+        body = posture()
+        for a in body["authenticators"]:
+            a["key"] = "<redacted>"
+        for wrapped in ({"apiResponse": posture()}, {"data": posture(), "validation": {"status": "unknown"}},
+                        json.dumps(posture()), body):
+            with self.subTest(body=str(wrapped)[:40]):
+                self.assertEqual(self.t.transform(wrapped)["transformedResponse"]["activePhishableFactors"],
+                                 ["Okta Verify one-time code"])
+
+    def test_passkey_plus_fastpass_only_is_not_evaluated(self):
+        res, out, fails = self.run_(posture(verify=("push:INACTIVE", "totp:INACTIVE", "signed_nonce:ACTIVE")))
+        self.assertIsNone(out[KEY])
+        self.assertIn("FastPass", fails[0])
+
+    def test_passkey_only_passes(self):
+        res, out, fails = self.run_(posture(verify=("push:INACTIVE", "totp:INACTIVE", "signed_nonce:INACTIVE")))
+        self.assertIs(out[KEY], True)
+        self.assertEqual(out["activePhishResistantFactors"], ["Passkey"])
+
+    def test_email_recovery_only_is_not_counted_but_sign_in_fails(self):
+        quiet = ("push:INACTIVE", "totp:INACTIVE", "signed_nonce:INACTIVE")
+        self.assertIs(self.run_(posture(verify=quiet, email="recovery"))[1][KEY], True)
+        for allowed in ("any", "authentication"):
+            with self.subTest(allowed=allowed):
+                res, out, fails = self.run_(posture(verify=quiet, email=allowed))
+                self.assertIs(out[KEY], False)
+                self.assertTrue(fails[0].startswith("Email sign-in is enabled"))
+
+    def test_phone_push_and_otp_are_phishable(self):
+        quiet = ("push:INACTIVE", "totp:INACTIVE", "signed_nonce:INACTIVE")
+        self.assertEqual(self.run_(posture(verify=quiet, phone="ACTIVE"))[1]["activePhishableFactors"],
+                         ["Phone (SMS or voice)"])
+        self.assertEqual(self.run_(posture(verify=("push:ACTIVE",)))[1]["activePhishableFactors"], ["Okta Verify push"])
+        for key, name in (("google_otp", "Google Authenticator"), ("yubikey_token", "YubiKey"), ("x", "Duo Security")):
+            with self.subTest(name=name):
+                body = posture(verify=quiet)
+                body["authenticators"].append(auth(key, "app", name, "ACTIVE"))
+                body["authenticatorMethods"].append([])
+                self.assertEqual(self.run_(body)[1]["activePhishableFactors"], [name])
+
+    def test_errors_and_empty_are_not_evaluated(self):
+        unreadable = posture()
+        unreadable["authenticatorMethods"][2] = {"apiResponse": {"errorCode": "E0000006", "errorSummary": "forbidden"}}
+        short = posture()
+        short["authenticatorMethods"] = short["authenticatorMethods"][:2]
+        odd = posture(verify=("totp:INACTIVE",))
+        odd["authenticators"].append(auth("custom_thing", "other", "Something new", "ACTIVE"))
+        odd["authenticatorMethods"].append([])
+        for body in ({"authenticators": []}, {"authenticators": None}, {"authenticators": {"errorCode": "E0000006"}},
+                     {"apiResponse": {"authenticators": [], "authenticatorMethods": []}}, unreadable, short, odd,
+                     {"authenticators": [auth("okta_verify", "app", "Okta Verify", "ACTIVE")]}):
+            with self.subTest(body=str(body)[:60]):
+                res = self.t.transform(body)
+                self.assertIsNone(res["transformedResponse"][KEY])
+                self.assertEqual(res["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_classic_fallback_is_unchanged(self):
+        res = self.t.transform(REAL)
+        self.assertIs(res["transformedResponse"][KEY], False)
+        self.assertEqual(res["additionalInfo"]["evaluation"]["failReasons"],
+                         ["No phishing-resistant factor (FIDO2/WebAuthn, FIDO U2F, Okta FastPass, smart card) is ACTIVE; "
+                          "active factors: token:hardware/YUBICO, token:software:totp/OKTA, sms/OKTA, question/OKTA, "
+                          "push/OKTA."])
+        self.assertNotIn("source", res["additionalInfo"]["transformation"]["inputSummary"])
+
+
 try:
     import RestrictedPython  # noqa: F401
 
     class PhishResistantOnlySandboxTests(PhishResistantOnlyTests):
+        @classmethod
+        def setUpClass(cls):
+            cls.t = SandboxModule()
+
+    class AuthenticatorPostureSandboxTests(AuthenticatorPostureTests):
         @classmethod
         def setUpClass(cls):
             cls.t = SandboxModule()

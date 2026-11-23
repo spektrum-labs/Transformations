@@ -1,6 +1,6 @@
 """Okta isMFAEnforcedForUsers (MFA_ENROLL policy read): the finding names active users with no MFA factor (#101).
 
-The verdict comes from the policy list (today's getEstateMfaStatus read) and never changes. When the
+The verdict comes from the policy list (today's MFA status read) and never changes. When the
 isMFAEnforcedForUsersAccounts workflow merges that list as `policies` with the active users (`users`) and, per
 user, the factor list (`userFactors`), the verdict is judged on `policies` exactly as the bare read is, and the
 first reason names the active users with no ACTIVE factor: at most 20, then "and N more".

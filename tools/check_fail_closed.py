@@ -1,7 +1,7 @@
 """INVARIANT: no transformation asserts a control is satisfied from a body that proves nothing.
 
 THE RULE. Every `transform()` in safeguards/ is handed the NO_EVIDENCE battery below --
-bodies that contain no evidence about any customer's estate -- and NO boolean it returns may
+bodies that contain no evidence about any customer's environment -- and NO boolean it returns may
 assert the safe answer for any of them: no key may come back `true`, and no INVERTED key may
 come back `false`.
 
@@ -100,7 +100,7 @@ INVERTED = frozenset({
     "hasIdentifiedServiceAccountsMFAGap",
 })
 
-#: bodies that contain no evidence about any estate
+#: bodies that contain no evidence about any environment
 NO_EVIDENCE = {
     "empty_dict": {},
     "auth_error": {"error": {"type": "authentication_error", "message": "invalid credentials"}},

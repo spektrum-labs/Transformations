@@ -127,6 +127,55 @@ class Vulnerabilities(unittest.TestCase):
         del nosev["vulnerabilitySeverityLevel"]
         self.assert_unevaluated(body([nosev]))
 
+    def test_a_few_records_without_severity_are_skipped_and_counted(self):
+        nosev = rec(DEV_B, "CVE-2026-1002", "High", 1)
+        del nosev["vulnerabilitySeverityLevel"]
+        lows = [rec(DEV_B, "CVE-2026-20%02d" % n, "Low", 1) for n in range(18)]
+        out = self.run_t(body([rec(DEV_A, "CVE-2026-1001", "Critical", 3), nosev] + lows))  # 1 of 20 (5%)
+        got = out["transformedResponse"]
+        self.assertEqual(got["openCriticalVulnerabilitiesCount"], 1)
+        self.assertEqual(got["openHighSeverityVulnerabilitiesCount"], 0)
+        self.assertEqual(got["recordsWithoutSeverity"], 1)
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "success")
+        self.assertIn("1 unrated record(s) not counted",
+                      " ".join(out["additionalInfo"]["evaluation"]["passReasons"]))
+
+    def test_too_many_records_without_severity_is_unevaluated(self):
+        nosev = rec(DEV_B, "CVE-2026-1002", "High", 1)
+        del nosev["vulnerabilitySeverityLevel"]
+        blank = rec(DEV_B, "CVE-2026-1003", "High", 1)
+        blank["vulnerabilitySeverityLevel"] = "  "
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Low", 3), nosev, blank]))  # 2 of 3
+
+    def test_none_null_and_unknown_severity_count_as_unrated(self):
+        odd = [rec(DEV_B, "CVE-2026-30%02d" % n, v, 1) for n, v in enumerate(["None", "null", "Unknown"] * 3 + ["None"])]
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Low", 3)] + odd))  # 10 of 11
+
+    def test_none_severity_unevaluated_in_restricted_sandbox(self):
+        spec = importlib.util.spec_from_file_location("restricted_sandbox_vulns", Path(__file__).parents[2] / "tools" / "restricted_sandbox.py")
+        sb = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sb)
+        run = sb.load(Path(m.__file__).read_text(), "<transformation>")["transform"]
+        odd = [rec(DEV_B, "CVE-2026-40%02d" % n, "None", 1) for n in range(10)]
+        out = run(json.dumps(body([rec(DEV_A, "CVE-2026-1001", "Low", 3)] + odd)))
+        for k in KEYS:
+            self.assertIsNone(out["transformedResponse"][k])
+        self.assertEqual(out["additionalInfo"]["dataCollection"]["status"], "error")
+
+    def test_overdue_finding_with_zero_sibling_is_unevaluated_when_too_many_unrated(self):
+        nosev = rec(DEV_B, "CVE-2026-1002", "High", 1)
+        del nosev["vulnerabilitySeverityLevel"]
+        lows = [rec(DEV_B, "CVE-2026-50%02d" % n, "Low", 1) for n in range(5)]
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), nosev] + lows))  # 1 of 7, openHigh 0
+
+    def test_unrated_criticals_hide_behind_overdue_high_is_unevaluated(self):
+        hidden = [rec(DEV_B, "CVE-2026-60%02d" % n, "None", 60) for n in range(9)]
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "High", 40)] + hidden))  # openCritical 0, 9 of 10
+
+    def test_all_counts_nonzero_are_still_unevaluated_when_too_many_unrated(self):
+        hidden = [rec(DEV_B, "CVE-2026-70%02d" % n, "None", 60) for n in range(2)]
+        self.assert_unevaluated(body([rec(DEV_A, "CVE-2026-1001", "Critical", 40), rec(DEV_A, "CVE-2026-1002", "High", 40)] + hidden))
+
     def test_exception_path_is_unevaluated_not_failed(self):
         # A body whose every read raises drives transform() into its except path. Token-Service grades a
         # None as Failed unless dataCollection.status is "error", so that path must carry api_errors.

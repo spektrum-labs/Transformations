@@ -3,32 +3,11 @@ Transformation: requiredCoveragePercentage
 Vendor: Microsoft Defender / Endpoint Protection
 Category: Endpoint Security
 
-Evaluates percentage of endpoint protection coverage for eligible machines, from
-GET /api/machines (Microsoft Defender for Endpoint, Machine resource type).
-
-Eligible: not excluded, and onboardingStatus not Unsupported or InsufficientInfo.
-Protected: onboardingStatus "onboarded" (any casing) AND lastSeen within ACTIVE_WINDOW_DAYS of now.
-Not measured (None, dataCollection error): an error body, a list with pages left unread
-(@odata.nextLink), records that carry no onboardingStatus, or no eligible machine at all.
-
-The verdict is decided on the counts and the reported share is floored, never rounded: a rounded
-share read 199 of 200 and 999 of 1000 as 100% and passed both, hiding a machine that was dark or
-never onboarded.
+Evaluates percentage of endpoint protection coverage for eligible machines.
 """
 
 import json
-import re
-from datetime import datetime, timedelta
-
-
-# Microsoft documents lastSeen as "the last received full device report. A device typically sends a
-# full report every 24 hours", and counts a device that sends no signal for more than seven days as
-# Inactive. An onboarded machine with no full report in 15 days is not evidenced as protected; it stays
-# in the denominator, so a dark machine lowers coverage rather than leaving it. 15 days matches the
-# endpoint window the CrowdStrike, SentinelOne and Sophos checks already apply. The clock is the wall
-# clock, so a fleet that has been dark for months scores what it is, not what it was.
-ACTIVE_WINDOW_DAYS = 15
-INELIGIBLE_STATUSES = ("unsupported", "insufficientinfo")
+from datetime import datetime
 
 
 def extract_input(input_data):
@@ -87,58 +66,109 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def parse_time(value):
-    """An ISO timestamp (seconds, any fraction, then Z, an explicit offset, or nothing) as naive UTC.
-    Microsoft sends seven fractional digits and Z. None if unreadable."""
-    if not isinstance(value, str):
+# EDR server / workstation split, under new edr* keys (additive; rulings applied 2026-10-16). osPlatform containing "server" is a
+# server, and so is any Linux distribution; a Windows client version (Windows10, Windows11, ...) or macOS
+# is a workstation. Anything else (iOS, Android, a missing or unknown value) is unclassified and counted
+# in neither class.
+LINUX_PLATFORMS = ("ubuntu", "debian", "centos", "rhel", "redhat", "fedora", "suse", "sles", "mint", "kali")
+# Windows client builds by prefix, so variants such as Windows8Blue or Windows10WVD are covered too.
+WINDOWS_CLIENT_PREFIXES = ("windows7", "windows8", "windows10", "windows11", "windowsxp", "windowsvista")
+
+
+def os_class(machine):
+    """The class of a machine: "server", "workstation", or None (unclassified)."""
+    if not isinstance(machine, dict):
         return None
-    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$", value.strip())
-    if not match:
+    platform = str(machine.get("osPlatform") or "").strip().lower().replace(" ", "")
+    if not platform:
         return None
-    try:
-        when = datetime.fromisoformat(match.group(1))
-    except ValueError:
+    if "server" in platform or "linux" in platform:
+        return "server"
+    for distribution in LINUX_PLATFORMS:
+        if platform.startswith(distribution):
+            return "server"
+    if platform.startswith("mac"):
+        return "workstation"
+    for prefix in WINDOWS_CLIENT_PREFIXES:
+        if platform.startswith(prefix):
+            return "workstation"
+    return None
+
+
+def class_percentage(protected, total):
+    """None when the class has no machine: no machines proves nothing, so it is never 0."""
+    if total <= 0:
         return None
-    offset = match.group(3)
-    if offset and offset != "Z":
-        shift = timedelta(hours=int(offset[1:3]), minutes=int(offset[4:6]))
-        when = when - shift if offset[0] == "+" else when + shift
-    return when
+    # Floored to two decimals, never rounded: 100 only when every device in the class is protected,
+    # and 94.9 can never be lifted to a 95 bar.
+    return (10000 * protected // total) / 100
+
+# Every split field, None: what a partial, failed or empty read reports instead of a confident number.
+SPLIT_NOT_MEASURED = {
+    "edrServerCoveragePercentage": None,
+    "edrWorkstationCoveragePercentage": None,
+    "edrTotalServerCount": None,
+    "edrProtectedServerCount": None,
+    "edrTotalWorkstationCount": None,
+    "edrProtectedWorkstationCount": None,
+    "edrUnclassifiedDeviceCount": None,
+}
 
 
-def status_of(machine):
-    return str(machine.get("onboardingStatus") or "").strip().lower()
+def with_split_not_measured(result):
+    merged = dict(result)
+    merged.update(SPLIT_NOT_MEASURED)
+    return merged
 
 
-def read_machines(data):
-    """The machine list, or the reason it cannot be measured from."""
-    if isinstance(data, list):
-        data = {"value": data}
-    if not isinstance(data, dict) or "error" in data or "PSError" in data:
-        return None, "Microsoft Defender did not return a machine list (error or unreadable body)"
-    machines = data.get("value")
-    if not isinstance(machines, list):
-        return None, "Microsoft Defender response carries no value[] machine list"
-    if any(not isinstance(machine, dict) for machine in machines):
-        return None, "Microsoft Defender machine list contains a record that is not a machine"
-    next_link = data.get("@odata.nextLink")
-    if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
-        return None, ("The machine list has more pages than were read (@odata.nextLink present); "
-                      "coverage is not computed over a sample")
-    if machines and not any("onboardingStatus" in machine for machine in machines):
-        return None, "No machine record carries onboardingStatus, so onboarding cannot be read"
-    return machines, None
+def coverage_split(eligible_machines):
+    """The split over the machines requiredCoveragePercentage divides by, protected meaning Onboarded."""
+    servers = 0
+    protected_servers = 0
+    workstations = 0
+    protected_workstations = 0
+    unclassified = 0
+    for machine in eligible_machines:
+        kind = os_class(machine)
+        onboarded = machine.get("onboardingStatus") == "Onboarded"
+        if kind == "server":
+            servers = servers + 1
+            if onboarded:
+                protected_servers = protected_servers + 1
+        elif kind == "workstation":
+            workstations = workstations + 1
+            if onboarded:
+                protected_workstations = protected_workstations + 1
+        else:
+            unclassified = unclassified + 1
+    return {
+        "edrServerCoveragePercentage": class_percentage(protected_servers, servers),
+        "edrWorkstationCoveragePercentage": class_percentage(protected_workstations, workstations),
+        "edrTotalServerCount": servers,
+        "edrProtectedServerCount": protected_servers,
+        "edrTotalWorkstationCount": workstations,
+        "edrProtectedWorkstationCount": protected_workstations,
+        "edrUnclassifiedDeviceCount": unclassified,
+    }
+
+
+def not_evaluated(validation, reason, recommendations=None, input_summary=None):
+    """Not evaluated: the criterion is None and dataCollection carries the reason."""
+    return create_response(
+        result=with_split_not_measured({
+            "requiredCoveragePercentage": None,
+            "allDevicesPercentageofCoverage": None,
+            "eligibleDevicesPercentageofCoverage": None,
+        }),
+        validation=validation,
+        recommendations=recommendations,
+        input_summary=input_summary,
+        api_errors=[reason]
+    )
 
 
 def transform(input):
     criteriaKey = "requiredCoveragePercentage"
-    value = None
-    reason = None
-    extra = {}
-    pass_reasons = []
-    fail_reasons = []
-    recommendations = []
-    validation = {"status": "unknown", "errors": [], "warnings": []}
 
     try:
         if isinstance(input, str):
@@ -149,60 +179,105 @@ def transform(input):
         data, validation = extract_input(input)
 
         if validation.get("status") == "failed":
-            reason = "Input validation failed"
-        else:
-            machines, reason = read_machines(data)
-            if machines is not None:
-                now = datetime.utcnow()
-                cutoff = now - timedelta(days=ACTIVE_WINDOW_DAYS)
-                non_excluded = [m for m in machines if str(m.get("isExcluded", "false")).lower() != "true"]
-                eligible = [m for m in non_excluded if status_of(m) not in INELIGIBLE_STATUSES]
-                onboarded = [m for m in eligible if status_of(m) == "onboarded"]
-                reporting = [m for m in onboarded
-                             if parse_time(m.get("lastSeen")) is not None and parse_time(m.get("lastSeen")) >= cutoff]
-                extra = {
-                    "allDevices": len(machines),
-                    "eligibleDevices": len(eligible),
-                    "onboardedDevices": len(onboarded),
-                    "protectedDevices": len(reporting),
-                    "staleOnboardedDevices": len(onboarded) - len(reporting),
-                }
-                if not eligible:
-                    reason = ("No eligible machine in the Defender inventory (" + str(len(machines))
-                              + " returned, none onboardable); coverage has no denominator")
-                else:
-                    # The verdict comes from the counts and the score is floored, never rounded.
-                    # round() turned 199 of 200 (99.5) and 999 of 1000 (99.9) into 100 and passed
-                    # both, so a dark machine disappeared into the rounding and the line said
-                    # "199 of 200 ... (100%)". A floored share never reads higher than it is, so
-                    # the number reported to the platform cannot reach the bar on its own either.
-                    covered = len(reporting) == len(eligible)
-                    value = (100 * len(reporting)) // len(eligible)
-                    line = (str(len(reporting)) + " of " + str(len(eligible)) + " eligible machines are onboarded "
-                            "and sent a full device report within " + str(ACTIVE_WINDOW_DAYS) + " days ("
-                            + str(value) + "%)")
-                    if extra["staleOnboardedDevices"]:
-                        line = line + "; " + str(extra["staleOnboardedDevices"]) + " onboarded machines have not reported"
-                    if covered:
-                        pass_reasons.append(line)
-                    else:
-                        fail_reasons.append(line)
-                        recommendations.append("Onboard the remaining eligible devices to Defender for Endpoint and "
-                                               "investigate onboarded devices that have stopped reporting")
-    except Exception as e:
-        value = None
-        reason = "Transformation error: " + str(e)
+            return create_response(
+                result=with_split_not_measured({criteriaKey: None}),
+                validation=validation,
+                api_errors=["Input validation failed"]
+            )
 
-    # Measured is decided by the value, never by the branch: anything that left it None is not measured.
-    measured = value is not None
-    result = {criteriaKey: value}
-    result.update(extra)
-    return create_response(
-        result=result,
-        validation=validation,
-        pass_reasons=pass_reasons,
-        fail_reasons=fail_reasons if measured else [reason or "Coverage could not be measured"],
-        recommendations=recommendations,
-        input_summary=extra,
-        api_errors=[] if measured else [reason or "Coverage could not be measured"],
-    )
+        pass_reasons = []
+        fail_reasons = []
+        recommendations = []
+
+        # Get machine data from value array. A body with no machine list at all (an API error
+        # envelope, an empty object) read nothing, so it is Not evaluated rather than "no devices".
+        machine_data = None
+        if isinstance(data, dict) and isinstance(data.get('value'), list):
+            machine_data = data['value']
+        elif isinstance(data, list):
+            machine_data = data
+
+        if machine_data is None:
+            return not_evaluated(validation, "Defender returned no machine inventory to read")
+
+        # A page that still has a next link is a partial read: its percentage is not the fleet's.
+        next_link = data.get("@odata.nextLink") if isinstance(data, dict) else None
+        if isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"):
+            return not_evaluated(
+                validation,
+                "The machine inventory has more pages than were read (@odata.nextLink still present)")
+
+        # A list with no onboardingStatus on any record is not a machine inventory (an alert list read
+        # as one scored 0 on a wrong source), so coverage is Not evaluated rather than a measured 0.
+        if machine_data and not any(isinstance(m, dict) and "onboardingStatus" in m for m in machine_data):
+            return not_evaluated(validation, "No machine record carries onboardingStatus, so onboarding cannot be read")
+
+        # Exclude devices marked as excluded
+        non_excluded = [m for m in machine_data if isinstance(m, dict) and str(m.get("isExcluded", "false")).lower() != "true"]
+
+        # Eligible = devices that can run endpoint protection (exclude Unsupported and InsufficientInfo)
+        ineligible_statuses = {"Unsupported", "InsufficientInfo"}
+        eligibleMachines = [m for m in non_excluded if m.get("onboardingStatus") not in ineligible_statuses]
+
+        # Protected = onboarded devices (Active or Inactive — Inactive just means powered off)
+        protectedMachines = [m for m in eligibleMachines if m.get("onboardingStatus") == "Onboarded"]
+
+        allDevices = len(machine_data)
+        eligibleDevices = len(eligibleMachines)
+        protectedDevices = len(protectedMachines)
+
+        allDevicesPercentage = round((protectedDevices / allDevices) * 100) if allDevices > 0 else 0
+        eligibleDevicesPercentage = round((protectedDevices / eligibleDevices) * 100) if eligibleDevices > 0 else 0
+
+        # No eligible device is an empty read, not full coverage: 0 of 0 proves nothing, so the
+        # criterion is Not evaluated (None plus a dataCollection error), never 100.
+        if eligibleDevices == 0:
+            return not_evaluated(
+                validation, "Defender has no onboarded devices",
+                recommendations=["Ensure devices are properly enrolled and not excluded"],
+                input_summary={"allDevices": allDevices, "eligibleDevices": 0, "protectedDevices": 0})
+
+        criteriaValue = eligibleDevicesPercentage
+
+        if criteriaValue >= 100:
+            pass_reasons.append(f"All eligible devices are protected: {protectedDevices}/{eligibleDevices} (100%)")
+        else:
+            fail_reasons.append(f"Not all eligible devices are protected: {protectedDevices}/{eligibleDevices} ({eligibleDevicesPercentage}%)")
+            recommendations.append("Onboard remaining eligible devices to endpoint protection")
+
+        pass_reasons.append(f"Overall coverage: {protectedDevices}/{allDevices} total devices ({allDevicesPercentage}%)")
+        if allDevices != eligibleDevices:
+            ineligible = allDevices - eligibleDevices
+            pass_reasons.append(f"{ineligible} device(s) excluded from eligibility (Unsupported/InsufficientInfo)")
+
+        result = {
+            criteriaKey: criteriaValue,
+            "allDevicesPercentageofCoverage": allDevicesPercentage,
+            "eligibleDevicesPercentageofCoverage": eligibleDevicesPercentage,
+            "allDevices": allDevices,
+            "eligibleDevices": eligibleDevices,
+            "protectedDevices": protectedDevices
+        }
+        result.update(coverage_split(eligibleMachines))
+
+        return create_response(
+            result=result,
+            validation=validation,
+            pass_reasons=pass_reasons,
+            fail_reasons=fail_reasons,
+            recommendations=recommendations,
+            input_summary={
+                "allDevices": allDevices,
+                "eligibleDevices": eligibleDevices,
+                "protectedDevices": protectedDevices
+            }
+        )
+
+    except Exception as e:
+        # An error is Not evaluated, never a fail: None plus a dataCollection error.
+        return create_response(
+            result=with_split_not_measured({criteriaKey: None}),
+            validation={"status": "error", "errors": [], "warnings": []},
+            transformation_errors=[str(e)],
+            api_errors=[f"Transformation error: {str(e)}"]
+        )

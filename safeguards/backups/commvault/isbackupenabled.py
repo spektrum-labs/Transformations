@@ -13,6 +13,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isBackupEnabled = true when at least one backup job ended Completed (or Completed w/ one or more
@@ -130,10 +151,10 @@ def transform(input):
     try:
         rows, problem = read_jobs(input)
         if rows is None:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         c = classify(rows)
         if len(c["success"]) == 0:
-            return {key: False, "reason": "No backup job completed in the last 7 days (" + str(len(rows)) + " finished jobs read)"}
-        return {key: True, "reason": str(len(c["success"])) + " backup jobs completed in the last 7 days"}
+            return respond(key, False, "No backup job completed in the last 7 days (" + str(len(rows)) + " finished jobs read)")
+        return respond(key, True, str(len(c["success"])) + " backup jobs completed in the last 7 days")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

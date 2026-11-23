@@ -1,0 +1,41 @@
+{
+  "name": "sensorOutOfDateCount",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The number of endpoint agents in scope that the vendor reports as running an out-of-date agent version (needing an agent update).",
+  "valueType": "integer",
+  "unit": "count",
+  "domain": {
+    "min": 0
+  },
+  "population": "the agents registered to the connected endpoint-protection tenant; every agent the read lists, or the vendor's own total for the tenant",
+  "polarity": "lower_is_better",
+  "evidenceRequiredForTrue": "A complete, successful read of the tenant's agent population that states how many need an agent update (0 when none). A response that does not carry the figure, an error or refused answer, or a tenant with no agents cannot show 0 and is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/epp/halcyon/sensorOutOfDateCount.py (Halcyon public OpenAPI, GET /search/devices/metrics, DeviceMetrics.need_updates; the vendor does not publish what version it measures against, so the figure is the vendor's as given)",
+    "safeguards/epp/sentinelone/sensorOutOfDateCount.py (existing implementation; counts agents inside a 15-day window whose isUpToDate is not true; not reviewed for this entry)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-12",
+      "change": "Registered so the Halcyon transform can emit it. The meaning is the key name made precise; the other implementations of this name were not reviewed for this entry, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Vendor-defined: the version an agent is compared against is the vendor's own rule."
+}

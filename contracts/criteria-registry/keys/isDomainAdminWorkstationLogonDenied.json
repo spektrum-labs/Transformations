@@ -1,0 +1,38 @@
+{
+  "name": "isDomainAdminWorkstationLogonDenied",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every enabled workstation is covered by an enabled, unfiltered GPO that denies Domain Admins both local logon and Remote Desktop Services logon.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "enabled workstation computer accounts of one AD domain (domain controllers and servers excluded); denominator = enabled workstations",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete GPO read plus the workstation OU inheritance picture showing 100% of enabled workstations covered by a GPO denying <domainSid>-512 SeDenyInteractiveLogonRight and SeDenyRemoteInteractiveLogonRight.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [
+    "Identity and Access Management"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/iam/microsoft-active-directory/isdomainadminworkstationlogondenied.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-08",
+      "change": "Registered with its first implementation (synthetic-fixture tests only; no real-tenant body replayed yet, so V0)."
+    }
+  ]
+}

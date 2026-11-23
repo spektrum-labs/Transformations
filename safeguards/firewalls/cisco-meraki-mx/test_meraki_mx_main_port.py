@@ -53,7 +53,10 @@ def test_firewall_enabled_counts_unsupported_network_as_unprotected():
 
 
 def test_firewall_enabled_empty_body_is_not_a_pass():
-    assert value(FW.transform({}), "isFirewallEnabled") is False
+    # Nothing was read, so it is Not evaluated (None with a dataCollection error), never a pass or a fail.
+    out = FW.transform({})
+    assert value(out, "isFirewallEnabled") is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
 
 
 # ---------------------------------------------------------------- isIDSEnabled / isIPSEnabled
@@ -78,14 +81,18 @@ def test_intrusion_unsupported_network_fails(mod, key):
 @pytest.mark.parametrize("mod,key", [(IDS, "isIDSEnabled"), (IPS, "isIPSEnabled")])
 def test_intrusion_unreachable_body_is_not_a_pass(mod, key):
     out = mod.transform({"unrelated": True})
-    assert value(out, key) is False
+    assert value(out, key) is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert out["transformedResponse"]["endpointReached"] is False
 
 
 @pytest.mark.parametrize("mod,key", [(IDS, "isIDSEnabled"), (IPS, "isIPSEnabled")])
 def test_intrusion_unreadable_network_blocks_a_pass(mod, key):
+    # The read network passes but the other could not be read: a pass cannot be proven, and nothing
+    # failed, so the answer is Not evaluated.
     out = mod.transform({"networks": NETS, "items": [{"mode": "prevention"}, {"noMode": 1}]})
-    assert value(out, key) is False
+    assert value(out, key) is None
+    assert out["additionalInfo"]["dataCollection"]["status"] == "error"
     assert out["transformedResponse"]["networksNotMeasured"] == ["Branch"]
 
 

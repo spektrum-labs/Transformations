@@ -40,12 +40,17 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
 
+    # Value-keyed: the verdict is measured only when the criterion carries a value. None means
+    # the body proved nothing (empty, refusal, missing field, transform raised) and must not be graded.
+    value = result.get("lastSuccessfulBackupAge") if isinstance(result, dict) else None
+    measured = value is not None
+    not_measured_reasons = api_errors or transformation_errors or fail_reasons or ["lastSuccessfulBackupAge could not be measured from the response"]
     return {
         "transformedResponse": result,
         "additionalInfo": {
             "dataCollection": {
-                "status": "error" if (api_errors or []) else "success",
-                "errors": api_errors or []
+                "status": "success" if measured else "error",
+                "errors": [] if measured else not_measured_reasons
             },
             "validation": {
                 "status": validation.get("status", "unknown"),
@@ -113,7 +118,9 @@ def evaluate(data):
         items = extract_protected_items(data)
 
         if not items:
-            return {"lastSuccessfulBackupAge": "999", "error": "No protected items"}
+            # No protected items in the response: there is no backup whose age could be
+            # measured. Unmeasured (None), not a "999 hours" sentinel that grades as stale.
+            return {"lastSuccessfulBackupAge": None, "error": "No protected items"}
 
         def parse_last_backup_time(backup_time_str):
             # Handles timestamps with/without fractions/with/without Z or +00:00 at end
@@ -154,7 +161,7 @@ def evaluate(data):
         hours_ago = int((datetime.now(timezone.utc) - most_recent).total_seconds() / 3600)
         return {"lastSuccessfulBackupAge": str(hours_ago), "hoursSinceLastBackup": hours_ago}
     except Exception as e:
-        return {"lastSuccessfulBackupAge": "999", "error": str(e)}
+        return {"lastSuccessfulBackupAge": None, "error": str(e)}
 
 
 def transform(input):
@@ -169,19 +176,19 @@ def transform(input):
         data, validation = extract_input(input)
 
         eval_result = evaluate(data)
-        result_value = eval_result.get(criteriaKey, "999")
+        result_value = eval_result.get(criteriaKey)
         extra_fields = {k: v for k, v in eval_result.items() if k != criteriaKey and k != "error"}
 
         pass_reasons = []
         fail_reasons = []
         recommendations = []
 
-        if result_value != "999":
+        if result_value is not None:
             pass_reasons.append(f"{criteriaKey} check passed")
             for k, v in extra_fields.items():
                 pass_reasons.append(f"{k}: {v}")
         else:
-            fail_reasons.append(f"{criteriaKey} check failed")
+            fail_reasons.append(f"{criteriaKey} not evaluated")
             if "error" in eval_result:
                 fail_reasons.append(eval_result["error"])
             recommendations.append(f"Review Azure Recovery Services configuration for {criteriaKey}")
@@ -196,7 +203,7 @@ def transform(input):
         )
     except Exception as e:
         return create_response(
-            result={criteriaKey: "999"},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
             fail_reasons=[f"Transformation error: {str(e)}"]
