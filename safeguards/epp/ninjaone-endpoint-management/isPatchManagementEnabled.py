@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def extract_input(input_data):
@@ -147,6 +147,63 @@ def policy_patch_enabled(policy):
     return False, False, "none"
 
 
+# NinjaOne's /v2/policies list returns a policy summary only (id, name, nodeClass, parentPolicyId,
+# description): the OS patching toggle is not in the public API, so policy records alone can never show
+# patching is on. The workflow also hands over /v2/queries/os-patch-installs as "osPatchInstalls"; an
+# INSTALLED record on an in-scope OS device within this window is direct evidence that patching runs.
+INSTALL_WINDOW_DAYS = 30
+FUTURE_SLACK_SECONDS = 86400  # a stamp more than a day ahead of now is a fault, not an install
+
+
+def device_key(value):
+    """A device ID as a string, or None when it is not a usable ID.
+
+    Only a non-bool int or a non-empty string counts. The workflow projection fills a missing field with [],
+    which is unhashable and must not match anything: a None key is skipped on both sides, so two junk IDs
+    can never pair up as a match and an install on an unidentifiable device is no evidence."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def recent_installs(data, devices):
+    """(count, problem): INSTALLED patch records in the window on in-scope OS devices, or why none can be read.
+
+    No "osPatchInstalls" part (older workflow) or an unreadable one returns (0, problem) and never a pass."""
+    part = data.get("osPatchInstalls") if isinstance(data, dict) else None
+    if part is None:
+        return 0, None
+    records = part.get("results") if isinstance(part, dict) else part
+    if not isinstance(records, list):
+        return 0, "the patch install read carries no record list"
+    os_device_ids = None
+    if devices is not None:
+        os_device_ids = set()
+        for d in devices:
+            key = device_key(d.get("id"))
+            if key is not None and isinstance(d.get("nodeClass"), str) and d.get("nodeClass") in OS_NODE_CLASSES:
+                os_device_ids.add(key)
+    # installedAt is epoch seconds. A stamp beyond now + FUTURE_SLACK_SECONDS (clock skew, corrupt data, or
+    # epoch milliseconds) cannot be a real install, so it counts as no evidence, never as a recent install.
+    now = datetime.now(timezone.utc).timestamp()
+    cutoff = now - INSTALL_WINDOW_DAYS * 86400
+    ceiling = now + FUTURE_SLACK_SECONDS
+    count = 0
+    for rec in records:
+        if not isinstance(rec, dict) or rec.get("status") != "INSTALLED":
+            continue
+        if os_device_ids is not None and device_key(rec.get("deviceId")) not in os_device_ids:
+            continue
+        at = rec.get("installedAt")
+        if isinstance(at, (int, float)) and not isinstance(at, bool) and cutoff <= at <= ceiling:
+            count += 1
+    return count, None
+
+
 def transform(input):
     data, validation = extract_input(input)
     data = data if isinstance(data, (dict, list)) else []
@@ -183,7 +240,8 @@ def transform(input):
         else:
             disabled_names.append(f"{label} ({source})")
 
-    is_patch_management_enabled = len(enabled_names) > 0
+    installs, installs_problem = recent_installs(data, devices)
+    is_patch_management_enabled = len(enabled_names) > 0 or installs > 0
 
     total_os_policies = len(os_policies)
     input_summary = {
@@ -192,18 +250,26 @@ def transform(input):
         "policiesWithPatchEnabled": len(enabled_names),
         "policiesWithPatchDisabled": len(disabled_names),
         "policiesWithNoEvidence": len(no_evidence_names),
+        "recentPatchInstalls": installs,
     }
 
     pass_reasons = []
     fail_reasons = []
     recommendations = []
 
-    if is_patch_management_enabled:
+    if enabled_names:
         pass_reasons.append(
             f"{len(enabled_names)} of {total_os_policies} OS-targeting policies report an active patch "
             f"management configuration: {', '.join(enabled_names[:5])}."
         )
-    else:
+    if installs > 0:
+        pass_reasons.append(
+            f"NinjaOne installed {installs} OS patch(es) on in-scope Windows/Mac/Linux devices in the last "
+            f"{INSTALL_WINDOW_DAYS} days, so OS patch management is running."
+        )
+    if not is_patch_management_enabled:
+        if installs_problem:
+            fail_reasons.append(f"Patch install history could not be read: {installs_problem}.")
         if total_os_policies == 0:
             fail_reasons.append(
                 "No OS-targeting policies (Windows/Mac/Linux server or workstation nodeClass) were returned "
@@ -232,6 +298,7 @@ def transform(input):
         "totalOsPolicies": total_os_policies,
         "policiesWithPatchEnabled": len(enabled_names),
         "policiesOutOfScope": policies_out_of_scope,
+        "recentPatchInstalls": installs,
     }
 
     return create_response(
