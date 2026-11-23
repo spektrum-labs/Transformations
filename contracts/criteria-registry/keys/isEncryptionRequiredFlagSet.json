@@ -1,0 +1,39 @@
+{
+  "name": "isEncryptionRequiredFlagSet",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "The IDrive client configuration requires encryption: the decoded configuration_id token carries encryptionRequired true, so newly enrolled devices are provisioned with mandatory encryption.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the one client configuration token returned by getConfigurationId",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "configuration_id present, decodes to JSON, encryptionRequired is true",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [
+    "Backups"
+  ],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/backups/idrive/isEncryptionRequiredFlagSet.py (the file's own docstring and rule)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-23",
+      "change": "Registered at V0 so the key stops being grandfathered by the allowlist; proposed, single emitter, definition taken from the emitting transform."
+    }
+  ],
+  "notes": "The file returns False, not null, when the token is missing or cannot be decoded. It reads the default client configuration, not each device's actual encryption."
+}
