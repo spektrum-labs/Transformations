@@ -584,7 +584,7 @@ def test_age_is_measured_from_the_report_sync_time_not_the_clock(mode):
 @pytest.mark.parametrize("mode", MODES)
 def test_without_a_sync_time_age_runs_to_the_newest_timestamp_in_the_data(mode):
     # bare row list: the newest started stamp (the fresh Successful job) is the report's "now"
-    fresh = job(7, started=ago(0))
+    fresh = dict(job(7), started=ago(0), lastUpdatedTime=ago(0))
     assert both_orders(stale_mix(ago(30), ago(26)) + [fresh], mode) == (50.0, 2)
     assert both_orders(stale_mix(ago(20), ago(1)) + [fresh], mode) == (66.67, 1)
 
