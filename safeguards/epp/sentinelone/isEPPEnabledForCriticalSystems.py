@@ -195,7 +195,7 @@ def transform(input):
     critical_count = len(critical_systems)
     unprotected_critical = [a for a in critical_systems if not is_protected(a)]
     unprotected_names = [
-        a.get("computerName") or a.get("uuid") or "unknown" for a in unprotected_critical[:5]
+        str(a.get("uuid") or a.get("id") or "unknown") for a in unprotected_critical[:5]
     ]
 
     pass_reasons = []
@@ -227,18 +227,43 @@ def transform(input):
         )
 
     if critical_count == 0:
-        # No servers in the fleet; pass with a finding so reviewers understand the scope.
-        additional_findings.append(
-            f"No critical systems (machineType='server') were identified in the fleet of "
-            f"{total} agents. Either no servers are managed by SentinelOne, or critical "
-            f"classification needs a different heuristic (e.g. tag or groupName)."
+        # No servers in the fleet is not proof that critical systems are protected: a fleet of
+        # unprotected workstations used to pass here. With nothing in scope the criterion has
+        # no answer, so it is Not evaluated with the reason (ENG-1354).
+        reason = (
+            f"No critical systems (machineType='server') were found among the {total} SentinelOne "
+            f"agents, so EPP on critical systems could not be measured."
         )
-        pass_reasons.append(
-            "No critical systems identified — vacuously passes. EPP coverage on endpoints "
-            "is evaluated separately by isEPPEnabled / isEPPDeployed."
+        return create_response(
+            result={
+                "isEPPEnabledForCriticalSystems": None,
+                "criticalSystemsTotal": 0,
+                "criticalSystemsProtected": 0,
+                "criticalSystemsUnprotected": 0,
+                "fleetTotal": total,
+            },
+            validation=validation,
+            api_errors=[reason],
+            fail_reasons=[reason],
+            recommendations=[
+                "Confirm SentinelOne manages the organisation's servers. If critical systems are "
+                "identified some other way (a tag or group), upload evidence that they are protected."
+            ],
+            additional_findings=[
+                "Critical systems are identified by machineType='server'. Either no servers are "
+                "managed by SentinelOne, or critical systems need a different identifier (for "
+                "example a tag or group name). EPP coverage on all endpoints is evaluated "
+                "separately by isEPPEnabled / isEPPDeployed."
+            ],
+            input_summary={"fleetTotal": total, "criticalSystemsTotal": 0},
+            metadata={
+                "transformationId": "isEPPEnabledForCriticalSystems",
+                "vendor": "SentinelOne",
+                "category": "epp",
+            },
         )
-        is_pass = True
-    elif len(unprotected_critical) == 0:
+
+    if len(unprotected_critical) == 0:
         is_pass = True
         pass_reasons.append(
             f"All {critical_count} critical system(s) (machineType='server') have EPP "
@@ -248,7 +273,7 @@ def transform(input):
         is_pass = False
         fail_reasons.append(
             f"{len(unprotected_critical)} of {critical_count} critical systems are not "
-            f"protected by EPP (e.g. {', '.join(unprotected_names)})."
+            f"protected by EPP (e.g. agent id {', '.join(unprotected_names)})."
         )
         recommendations.append(
             "Verify EPP policy on identified servers. Set mitigationMode to 'protect' or 'detect' "

@@ -243,7 +243,7 @@ def transform(input):
         if "edr" in modules:
             with_edr = with_edr + 1
         else:
-            missing_names.append(str(agent.get("computerName") or agent.get("uuid") or "unknown"))
+            missing_names.append(str(agent.get("uuid") or agent.get("id") or "unknown"))
 
     pct = (with_edr * 100) // sampled if sampled else 0
     is_enabled = sampled > 0 and with_edr == sampled
@@ -256,7 +256,7 @@ def transform(input):
         pass_reasons.append(summary)
     else:
         fail_reasons.append(summary)
-        findings.append("Agents without edr: " + ", ".join(missing_names[:5]) + ("..." if len(missing_names) > 5 else ""))
+        findings.append("Agents without edr (agent id): " + ", ".join(missing_names[:5]) + ("..." if len(missing_names) > 5 else ""))
         recommendations.append("Enable EDR telemetry in the SentinelOne policy applied to every agent")
     if stale_count:
         findings.append(str(stale_count) + " agent(s) last checked in more than " + str(ACTIVE_WINDOW_DAYS)

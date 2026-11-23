@@ -203,7 +203,7 @@ def transform(input):
     for agent in items:
         if not isinstance(agent, dict):
             continue
-        name = agent.get("computerName") or agent.get("uuid") or "unknown"
+        name = str(agent.get("uuid") or agent.get("id") or "unknown")
         mitigation = agent.get("mitigationMode") or ""
         active_protection = agent.get("activeProtection") or []
         if not isinstance(active_protection, list):
@@ -251,17 +251,17 @@ def transform(input):
         if not_configured_reasons["badMitigation"] > 0:
             additional_findings.append(
                 f"{not_configured_reasons['badMitigation']} agents have mitigationMode "
-                f"not in protect/detect (e.g. {', '.join(examples['badMitigation'])})."
+                f"not in protect/detect (e.g. agent id {', '.join(examples['badMitigation'])})."
             )
         if not_configured_reasons["noActiveProtection"] > 0:
             additional_findings.append(
                 f"{not_configured_reasons['noActiveProtection']} agents have empty activeProtection "
-                f"(e.g. {', '.join(examples['noActiveProtection'])})."
+                f"(e.g. agent id {', '.join(examples['noActiveProtection'])})."
             )
         if not_configured_reasons["outOfDate"] > 0:
             additional_findings.append(
                 f"{not_configured_reasons['outOfDate']} agents are not up-to-date "
-                f"(e.g. {', '.join(examples['outOfDate'])})."
+                f"(e.g. agent id {', '.join(examples['outOfDate'])})."
             )
         recommendations.append(
             "Review agent policies in the SentinelOne console: ensure mitigationMode is set to "
