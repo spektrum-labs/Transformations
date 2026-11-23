@@ -133,12 +133,15 @@ def envelope_error(obj):
 
 def create_response(result, validation=None, pass_reasons=None, fail_reasons=None,
                     recommendations=None, input_summary=None, metadata=None,
-                    transformation_errors=None, api_errors=None, additional_findings=None):
+                    transformation_errors=None, api_errors=None, additional_findings=None, error_code=None):
     """Standardized transformation response (CONTRIBUTING.md)."""
     if validation is None:
         validation = {"status": "unknown", "errors": [], "warnings": []}
     api_err_list = api_errors or []
     transform_err_list = transformation_errors or []
+    collection = {"status": "error" if api_err_list else "success", "errors": api_err_list}
+    if error_code:
+        collection["errorCode"] = error_code
     response_metadata = {
         "evaluatedAt": datetime.now(timezone.utc).isoformat(),
         "schemaVersion": "2.0",
@@ -152,7 +155,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     return {
         "transformedResponse": result,
         "additionalInfo": {
-            "dataCollection": {"status": "error" if api_err_list else "success", "errors": api_err_list},
+            "dataCollection": collection,
             "validation": {
                 "status": validation.get("status", "unknown"),
                 "errors": validation.get("errors", []),
@@ -174,7 +177,7 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
-def not_measured(validation, reason, recommendation=None, summary=None):
+def not_measured(validation, reason, recommendation=None, summary=None, error_code=None):
     """None with dataCollection status "error", so Token-Service records Not evaluated, not Failed."""
     return create_response(
         result={KEY: None},
@@ -183,6 +186,7 @@ def not_measured(validation, reason, recommendation=None, summary=None):
         recommendations=[recommendation] if recommendation else [],
         input_summary=summary or {},
         api_errors=[reason],
+        error_code=error_code,
     )
 
 
@@ -361,7 +365,7 @@ def verdict(validation, counts, summary):
                             str(counts["adminGroups"]) + " SSO or directory group(s) hold an RSC administrator role. "
                             "Every member of such a group can administer the console with the identity it signs in "
                             "with, and RSC does not list those members until they sign in, so a separate admin "
-                            "identity per person cannot be shown.", RECOMMENDATION, summary)
+                            "identity per person cannot be shown.", RECOMMENDATION, summary, "not_available")
     if counts["subOrgUndecided"] > 0:
         return not_measured(validation,
                             str(counts["subOrgUndecided"]) + " non-administrator account(s) list organizations, but the "
