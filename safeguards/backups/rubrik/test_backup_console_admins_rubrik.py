@@ -403,3 +403,25 @@ def test_deactivated_account_does_not_decide_the_context_org():
 def test_reasons_carry_no_email():
     out = run(body([user("owner@example.com", domain="LOCAL"), user("jane.doe@example.com")]))
     assert "example.com" not in json.dumps(out)
+
+
+def code_of(payload):
+    return run(payload)["additionalInfo"]["dataCollection"].get("errorCode")
+
+
+def test_admin_group_is_coded_not_available():
+    # Rubrik does not expose the members of an SSO or directory group: a vendor limit, so product decides.
+    out = run(body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1", roles=[ADMIN])]))
+    assert out["transformedResponse"][KEY] is None
+    assert out["additionalInfo"]["dataCollection"]["errorCode"] == "not_available"
+
+
+@pytest.mark.parametrize("payload", [
+    body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1")]),
+    body([user("jdoe@example.com", domain="LOCAL")], groups=[group("g1", roles=[{"id": "r-c", "name": "Custom", "isOrgAdmin": False}])]),
+    body([user("jdoe@example.com")], groups=[group("g1")]),
+    {},
+    {"data": {"errors": [{"message": "boom"}]}},
+])
+def test_other_unmeasured_paths_carry_no_code(payload):
+    assert code_of(payload) is None
