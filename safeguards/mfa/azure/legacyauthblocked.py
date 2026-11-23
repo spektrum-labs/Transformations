@@ -4,7 +4,27 @@ Vendor: Microsoft Entra ID  |  Category: Multifactor Authentication
 Evaluates: Whether legacy authentication protocols are blocked
 
 Legacy clients are the Conditional Access clientAppTypes exchangeActiveSync and other (POP, IMAP, SMTP AUTH and
-other basic-auth protocols). The verdict is unchanged: True when at least one enabled policy blocks them.
+other basic-auth protocols). True when at least one enabled policy blocks them.
+
+Input: GET /v1.0/identity/conditionalAccess/policies. The Azure MFA workflow may merge
+GET /v1.0/policies/identitySecurityDefaultsEnforcementPolicy into the same body under "securityDefaults" (the policy
+list stays at the top, so a transform that does not know the key reads the same list). The keyed shape
+{"conditionalAccessPolicies": ..., "securityDefaults": ...} is read too.
+
+Security Defaults (Entra MFA review): when that read shows isEnabled true, Microsoft blocks legacy authentication for
+every account, so the key is True whatever the policy list holds (Conditional Access cannot be enabled alongside
+Security Defaults). A Security Defaults read that is absent, refused or unreadable changes nothing.
+
+Not evaluated (value None, dataCollection.status "error"; Entra MFA review, decision 16 Oct 2026): a policy list that was
+not read is not evidence that nothing blocks legacy clients, so these never read False:
+- an error envelope, a refused read (vendorErrorAsResponse), a workflow step error, input validation failure, or a
+  body with no policy list;
+- an empty list: a tenant with no Conditional Access policy may block legacy authentication through Security
+  Defaults (not read, or read as off) or Exchange Online authentication policies (not read);
+- a policy that is not an object;
+- a partial list (@odata.nextLink still present or paginationTruncated) with no blocking policy on the pages read.
+False stays only when the whole list was read, holds at least one policy, and no enabled policy blocks legacy
+clients.
 
 Named evidence (#101): the reasons name the accounts the block does not reach, capped at 20 plus "and N more":
 every user, group and directory role named in an enabled blocking policy that no blocking policy covers (a policy
@@ -12,6 +32,27 @@ covers a principal when it includes it, directly or through All users, and does 
 group or role scope when no blocking policy targets all users. Coverage is computed on the ids as the policies
 list them; group and role membership is not expanded. Microsoft Graph returns object ids, not names, so the
 reasons carry ids prefixed with their kind.
+
+Coverage (Entra MFA review, overstated passes, decision 18 Oct 2026): a block counts only when the blocking policies
+together reach all users. That needs a blocking policy that includes All users and does not exclude everyone, and,
+after crediting every principal another blocking policy includes, at most MAX_BREAK_GLASS named accounts or one group
+left outside (the break-glass limit, see below), no directory role left outside, and guests not excluded by every
+All-users block. Otherwise:
+- blocks that reach only named users (no All users, no group or role): False, the block misses everyone else;
+- blocks whose reach depends on group or role membership (scoped to groups or roles, or leaving a group, a role,
+  guests or more than MAX_BREAK_GLASS accounts outside): not evaluated (value None, dataCollection.status
+  "error"). Membership is not read here, so coverage cannot be confirmed either way.
+Break-glass (row 36B (c), decision 18 Oct 2026): instead of at most MAX_BREAK_GLASS named accounts, one group
+(MAX_BREAK_GLASS_GROUPS) may be left outside, with no named account and no role; the pass reason names it. Two
+All-users blocks that exclude different groups credit each other only by principal, and a member of both groups is
+outside both, so more than one distinct group excluded by All-users blocks and included by no block also reads not
+evaluated.
+
+Names from the payload (tracker row 61, no extra call): a directory role is a role TEMPLATE id that is the same in
+every tenant, so a built-in role is shown with its name (ROLE_NAMES, from Microsoft's "Microsoft Entra built-in
+roles" reference). Each named exemption also says which blocking policy excludes it, by the policy's displayName.
+User and group names are not in the Conditional Access payload and are not looked up. The id lists in
+inputSummary are unchanged.
 """
 import json
 from datetime import datetime
@@ -53,11 +94,47 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
 
 
 MAX_NAMED = 20
+MAX_BREAK_GLASS = 2
+MAX_BREAK_GLASS_GROUPS = 1
 LEGACY_CLIENTS = ['exchangeActiveSync', 'other']
 EXCLUDE_FIELDS = [('excludeUsers', 'user'), ('excludeGroups', 'group'), ('excludeRoles', 'role')]
 INCLUDE_FIELDS = [('includeUsers', 'user'), ('includeGroups', 'group'), ('includeRoles', 'role')]
 # Graph keywords, not principals.
 SPECIAL_PRINCIPALS = {'user:All', 'user:None', 'user:GuestsOrExternalUsers', 'group:All', 'role:All'}
+MAX_POLICY_NAME = 60
+# Built-in directory role template ids (the same in every tenant), from
+# https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/permissions-reference
+ROLE_NAMES = {
+    '62e90394-69f5-4237-9190-012177145e10': 'Global Administrator',
+    'e8611ab8-c189-46e8-94e1-60213ab1f814': 'Privileged Role Administrator',
+    '7be44c8a-adaf-4e2a-84d6-ab2649e08a13': 'Privileged Authentication Administrator',
+    '29232cdf-9323-42fd-ade2-1d097af3e4de': 'Exchange Administrator',
+    '31392ffb-586c-42d1-9346-e59415a2cc4e': 'Exchange Recipient Administrator',
+    'f28a1f50-f6e7-4571-818b-6a12f2af6b6c': 'SharePoint Administrator',
+    'fe930be7-5e62-47db-91af-98c3a49a38b1': 'User Administrator',
+    '9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3': 'Application Administrator',
+    '158c047a-c907-4556-b7ef-446551a6b5f7': 'Cloud Application Administrator',
+    '194ae4cb-b126-40b2-bd5b-6091b380977d': 'Security Administrator',
+    '5d6b6bb7-de71-4623-b4af-96380a352509': 'Security Reader',
+    '5f2222b1-57c3-48ba-8ad5-d4759f1fde6f': 'Security Operator',
+    'b1be1c3e-b65d-4f19-8427-f6fa0d97feb9': 'Conditional Access Administrator',
+    'f2ef992c-3afb-46b9-b7cf-a126ee74c451': 'Global Reader',
+    '729827e3-9c14-49f7-bb1b-9608f156bbb8': 'Helpdesk Administrator',
+    '966707d0-3269-4727-9be2-8c3a10f19b9d': 'Password Administrator',
+    'c4e39bd9-1100-46d3-8c65-fb160da0071f': 'Authentication Administrator',
+    'b0f54661-2d74-4c50-afa3-1ec803f12efe': 'Billing Administrator',
+    '3a2c62db-5318-420d-8d74-23affee5d9d5': 'Intune Administrator',
+    '69091246-20e8-4a56-aa4d-066075b2a7a8': 'Teams Administrator',
+    '17315797-102d-40b4-93e0-432062caca18': 'Compliance Administrator',
+    '8ac3fc64-6eca-42ea-9e69-59f4c7b60eb2': 'Hybrid Identity Administrator',
+    'fdd7a751-b60b-444a-984c-02652fe8fa1c': 'Groups Administrator',
+    'd29b2b05-8046-44ba-8758-1e26182fcf32': 'Directory Synchronization Accounts',
+    '88d8e3e3-8f55-4a1e-953a-9b9898b8876b': 'Directory Readers',
+    '4a5d8f65-41da-4de4-8968-e035b65339cf': 'Reports Reader',
+    '95e79109-95c0-4d8e-aee3-d01accf2d47b': 'Guest Inviter',
+    '7698a772-787b-4ac8-901f-60d6b08affd2': 'Cloud Device Administrator',
+    '9f06204d-73c1-4d4c-880a-6edb90606fd8': 'Microsoft Entra Joined Device Local Administrator',
+}
 
 
 def name_list(items):
@@ -66,6 +143,25 @@ def name_list(items):
     if len(items) > MAX_NAMED:
         shown = shown + " and " + str(len(items) - MAX_NAMED) + " more"
     return shown
+
+
+def label(principal, excluded_by=None):
+    """'kind:id' plus what the payload already says about it: a built-in role's name and the blocking policies that
+    exclude it. Nothing is looked up."""
+    notes = []
+    if principal.startswith('role:'):
+        role = ROLE_NAMES.get(principal[5:].lower())
+        if role:
+            notes.append(role)
+    names = (excluded_by or {}).get(principal) or []
+    if names:
+        shown = ", ".join(names[:2])
+        if len(names) > 2:
+            shown = shown + " and " + str(len(names) - 2) + " more"
+        notes.append("excluded by " + shown)
+    if notes:
+        return principal + " (" + "; ".join(notes) + ")"
+    return principal
 
 
 def principals(users, fields):
@@ -78,6 +174,109 @@ def principals(users, fields):
             if isinstance(value, str) and value.strip():
                 found.append(kind + ":" + value.strip()[:64])
     return found
+
+
+def as_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def unread_body(body):
+    """True when a Graph body is an error, a refusal or a workflow step error rather than data."""
+    return (not isinstance(body, dict) or "error" in body or "vendorErrorAsResponse" in body
+            or body.get("stepError") is True)
+
+
+def security_defaults_enabled(data):
+    """True only when the merged Security Defaults read shows isEnabled true; anything else is no evidence."""
+    defaults = data.get("securityDefaults") if isinstance(data, dict) else None
+    if unread_body(defaults):
+        return False
+    enabled = defaults.get("isEnabled")
+    if isinstance(enabled, str) and enabled.strip().lower() in ("true", "false"):
+        enabled = enabled.strip().lower() == "true"
+    return enabled is True
+
+
+def policy_list(data):
+    """(policies, partial, reason). policies is None with a reason when the list was not read."""
+    if not isinstance(data, dict):
+        return None, False, "the Conditional Access policy list was not read (no response body)"
+    body = data.get("conditionalAccessPolicies") if "conditionalAccessPolicies" in data else data
+    if unread_body(body):
+        return None, False, "the Conditional Access policy list was not read (Microsoft Graph returned an error or refused the read)"
+    policies = body.get("value")
+    if not isinstance(policies, list):
+        return None, False, "the Conditional Access policy list was not read (no policy list in the response)"
+    for p in policies:
+        if not isinstance(p, dict):
+            return None, False, "the Conditional Access policy list was not read whole (an entry is not a policy)"
+    next_link = body.get("@odata.nextLink")
+    partial = body.get("paginationTruncated") is True or (
+        isinstance(next_link, str) and next_link.strip() not in ("", "None", "null"))
+    return policies, partial, ""
+
+
+def lowered(values):
+    return [str(v).strip().lower() for v in values] if isinstance(values, list) else []
+
+
+def block_coverage(legacy_block, all_users, scoped, exempt):
+    """("all", ""), ("named", reason) or ("unproven", reason) for the blocking policies together (see the header)."""
+    if not all_users:
+        if [x for x in scoped if x.startswith("group:") or x.startswith("role:")]:
+            return "unproven", ("the blocking policies target groups or directory roles, not all users, and their "
+                                "membership is not read")
+        return "named", "the blocking policies target named accounts only, not all users"
+    everyone_excluded = True
+    guests_inside = False
+    for p in legacy_block:
+        users = p.get('conditions', {}).get('users', {})
+        if not isinstance(users, dict) or "all" not in lowered(users.get('includeUsers')):
+            continue
+        excluded = lowered(users.get('excludeUsers'))
+        if "all" in excluded:
+            continue
+        everyone_excluded = False
+        if "guestsorexternalusers" not in excluded and not users.get('excludeGuestsOrExternalUsers'):
+            guests_inside = True
+    if everyone_excluded:
+        return "named", "every All-users blocking policy also excludes all users"
+    outside = []
+    if not guests_inside:
+        outside.append("guests or external users")
+    groups = [x for x in exempt if x.startswith("group:")]
+    roles = [x for x in exempt if x.startswith("role:")]
+    accounts = [x for x in exempt if x.startswith("user:")]
+    # A member of several excluded groups is outside every All-users block when each block excludes one of them and
+    # no block includes those groups: more than one such group is not break-glass.
+    included = set()
+    for p in legacy_block:
+        included = included | set(principals(as_dict(as_dict(p.get('conditions')).get('users')), INCLUDE_FIELDS))
+    uncredited = set()
+    for p in legacy_block:
+        users = as_dict(as_dict(p.get('conditions')).get('users'))
+        if "all" not in lowered(users.get('includeUsers')) or "all" in lowered(users.get('excludeUsers')):
+            continue
+        out_here = set(principals(users, [('excludeGroups', 'group')])) - included
+        if not out_here:
+            uncredited = set()
+            break
+        uncredited = uncredited | out_here
+    if len(groups) > MAX_BREAK_GLASS_GROUPS or (groups and accounts):
+        outside.append(str(len(groups)) + " group(s)" + (" and named accounts" if accounts else "")
+                       + " (break-glass is at most " + str(MAX_BREAK_GLASS) + " accounts or "
+                       + str(MAX_BREAK_GLASS_GROUPS) + " group)")
+    elif len(uncredited) > MAX_BREAK_GLASS_GROUPS:
+        outside.append("members of " + str(len(uncredited)) + " groups excluded by different All-users blocks "
+                       "(a member of more than one is outside every block)")
+    if roles:
+        outside.append(str(len(roles)) + " directory role(s)")
+    if len(accounts) > MAX_BREAK_GLASS:
+        outside.append(str(len(accounts)) + " named accounts (more than " + str(MAX_BREAK_GLASS)
+                       + " emergency-access accounts)")
+    if outside:
+        return "unproven", "the block leaves " + ", ".join(outside) + " outside every blocking policy"
+    return "all", ""
 
 
 def evaluate(data):
@@ -106,9 +305,16 @@ def evaluate(data):
             scoped = []
             rules = []
             candidates = []
+            excluded_by = {}
             for p in legacy_block:
                 users = p.get('conditions', {}).get('users', {})
                 excluded = set(principals(users, EXCLUDE_FIELDS))
+                policy_name = str(p.get('displayName') or p.get('id') or 'an unnamed policy').strip()[:MAX_POLICY_NAME]
+                for x in sorted(excluded):
+                    if x not in excluded_by:
+                        excluded_by[x] = []
+                    if policy_name not in excluded_by[x]:
+                        excluded_by[x].append(policy_name)
                 included = principals(users, INCLUDE_FIELDS)
                 includes_all = "user:All" in included
                 if includes_all:
@@ -127,8 +333,11 @@ def evaluate(data):
             )
             result["exemptPrincipals"] = len(exempt)
             result["exemptPrincipalIds"] = exempt
+            result["exemptPrincipalLabels"] = [label(x, excluded_by) for x in exempt]
             if not all_users:
                 result["blockScope"] = sorted(scoped)
+                result["blockScopeLabels"] = [label(x) for x in sorted(scoped)]
+            result["coverage"] = block_coverage(legacy_block, all_users, scoped, exempt)
         return result
     except Exception as e:
         return {"legacyAuthBlocked": False, "error": str(e)}
@@ -146,17 +355,81 @@ def transform(input):
 
         if validation.get("status") == "failed":
             return create_response(
-                result={criteriaKey: False},
+                result={criteriaKey: None},
                 validation=validation,
-                fail_reasons=["Input validation failed"]
+                api_errors=["Input validation failed: the Conditional Access policy list was not read"]
             )
 
-        eval_result = evaluate(data)
+        if security_defaults_enabled(data):
+            return create_response(
+                result={criteriaKey: True, "securityDefaultsEnabled": True},
+                validation=validation,
+                pass_reasons=[f"{criteriaKey} check passed: Security Defaults are enabled, so Microsoft Entra ID blocks "
+                              "legacy authentication protocols (POP, IMAP, SMTP AUTH, Exchange ActiveSync) for every "
+                              "account"],
+                input_summary={criteriaKey: True, "securityDefaultsEnabled": True}
+            )
+
+        policies, partial, unread = policy_list(data)
+        if policies is None:
+            return create_response(result={criteriaKey: None}, validation=validation, api_errors=[unread])
+        if not policies:
+            return create_response(
+                result={criteriaKey: None, "blockingPolicies": 0},
+                validation=validation,
+                api_errors=["Microsoft Graph returned no Conditional Access policies. Legacy authentication may still "
+                            "be blocked by Security Defaults (not read, or read as off) or by Exchange Online "
+                            "authentication policies (not read), so an empty list is not evidence either way"]
+            )
+
+        eval_result = evaluate({"value": policies})
+        if "error" in eval_result:
+            return create_response(
+                result={criteriaKey: None},
+                validation=validation,
+                api_errors=["The Conditional Access policy list could not be evaluated: " + str(eval_result["error"])[:200]]
+            )
+        if partial and not eval_result.get(criteriaKey):
+            return create_response(
+                result={criteriaKey: None, "blockingPolicies": 0},
+                validation=validation,
+                api_errors=["The Conditional Access policy list is partial (a next page was not read) and no policy "
+                            "on the pages read blocks legacy clients, so a blocking policy may be on a page not read"]
+            )
         result_value = eval_result.get(criteriaKey, False)
         exempt = eval_result.get("exemptPrincipalIds") or []
+        exempt_labels = eval_result.get("exemptPrincipalLabels") or exempt
         scope = eval_result.get("blockScope")
+        scope_labels = eval_result.get("blockScopeLabels") or scope
         extra_fields = {k: v for k, v in eval_result.items()
-                        if k not in [criteriaKey, "error", "exemptPrincipalIds", "blockScope"]}
+                        if k not in [criteriaKey, "error", "exemptPrincipalIds", "blockScope",
+                                     "exemptPrincipalLabels", "blockScopeLabels", "coverage"]}
+        coverage, coverage_why = eval_result.get("coverage") or ("all", "")
+        if result_value and coverage != "all":
+            summary = {criteriaKey: None if coverage == "unproven" else False, **extra_fields,
+                       "exemptPrincipalIds": exempt[:MAX_NAMED]}
+            if scope is not None:
+                summary["blockScope"] = scope[:MAX_NAMED]
+            named = ""
+            if exempt or scope is not None:
+                named = "; named: " + (name_list(exempt_labels) if exempt else name_list(scope_labels or []) or "no one")
+            if coverage == "unproven":
+                return create_response(
+                    result={criteriaKey: None, **extra_fields},
+                    validation=validation,
+                    api_errors=["Legacy clients are blocked by " + str(extra_fields.get("blockingPolicies", 0))
+                                + " enabled Conditional Access policy(ies), but coverage of all users cannot be "
+                                "confirmed: " + coverage_why + named],
+                    input_summary=summary)
+            return create_response(
+                result={criteriaKey: False, **extra_fields},
+                validation=validation,
+                fail_reasons=[f"{criteriaKey} check failed: no enabled Conditional Access policy blocks legacy "
+                              "clients (POP, IMAP, SMTP AUTH, Exchange ActiveSync) for all users: " + coverage_why
+                              + named + ", so every other account can still use them"],
+                recommendations=["Target the legacy-authentication block at All users, excluding at most "
+                                 + str(MAX_BREAK_GLASS) + " documented break-glass accounts"],
+                input_summary=summary)
         summary = {criteriaKey: result_value, **extra_fields}
         if exempt:
             summary["exemptPrincipalIds"] = exempt[:MAX_NAMED]
@@ -172,10 +445,10 @@ def transform(input):
                       "Access policy(ies) block legacy clients (POP, IMAP, SMTP AUTH, Exchange ActiveSync)")
             if exempt:
                 reason = (reason + "; " + str(len(exempt)) + " account(s), group(s) or role(s) not covered by any "
-                          "blocking policy can still use them: " + name_list(exempt))
+                          "blocking policy can still use them: " + name_list(exempt_labels))
             if scope is not None:
                 reason = (reason + "; no blocking policy targets all users, the block reaches only: "
-                          + (name_list(scope) if scope else "no one named"))
+                          + (name_list(scope_labels) if scope else "no one named"))
             pass_reasons.append(reason)
             for k, v in extra_fields.items():
                 pass_reasons.append(f"{k}: {v}")
@@ -203,8 +476,8 @@ def transform(input):
 
     except Exception as e:
         return create_response(
-            result={criteriaKey: False},
+            result={criteriaKey: None},
             validation={"status": "error", "errors": [], "warnings": []},
             transformation_errors=[str(e)],
-            fail_reasons=[f"Transformation error: {str(e)}"]
+            api_errors=[f"Transformation error: {str(e)}"]
         )

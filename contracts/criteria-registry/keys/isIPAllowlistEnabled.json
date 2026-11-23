@@ -1,0 +1,38 @@
+{
+  "name": "isIPAllowlistEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the tool restricts account access to a list of trusted network addresses and the list holds at least one address. False when the list is empty, which means any address can reach the account.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the allowed-address entries of one tool account's IP access management; only the count is kept",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the account's IP allow list showing at least one entry; an error, 401/403 or unrecognised read is Not evaluated. An empty list is a real read of no restriction and is False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "Existing implementation of isIPAllowlistEnabled in artificial-intelligence/anthropic (allowlisted, not reviewed against this meaning)",
+    "SendGrid API reference, IP Access Management (twilio.com/docs/sendgrid/api-reference/ip-access-management): GET /v3/access_settings/whitelist"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written to be vendor-neutral from the public SendGrid API reference and one read of a real account (read-only); allowedCategories left empty because the key is already emitted in another category (Anthropic, Artificial Intelligence) and that implementation was not reviewed against it. No replay-backed validation yet, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Account-level access control, not mail delivery. Registered with the SendGrid transform; the Anthropic transform emits the same name for an organisation IP allow list and was not reviewed against this meaning, so the key stays proposed, V0 and has no category limit until it is. An entry with no address does not count and the read is Not evaluated."
+}

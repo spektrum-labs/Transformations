@@ -76,6 +76,29 @@ def transform(input):
 
     transformation_errors = []
 
+    if not isinstance(enforce_strong, bool):
+        # No usable enforceStrongPasswords value (empty body, vendor error body, field absent):
+        # nothing was measured, so the criterion is None with a dataCollection error, never a fail.
+        problem = (
+            "The Meraki login security response did not contain a boolean enforceStrongPasswords "
+            "field; nothing to measure."
+        )
+        return create_response(
+            result={"isStrongPasswordPolicyEnforced": None},
+            validation=validation,
+            fail_reasons=[problem],
+            recommendations=[
+                "Verify the organization login security settings are readable with this key "
+                "(Organization > Settings > Login security)."
+            ],
+            api_errors=[problem],
+            metadata={
+                "transformationId": "isStrongPasswordPolicyEnforced",
+                "vendor": "Cisco Meraki MX",
+                "category": "firewalls",
+            },
+        )
+
     is_bool_enforced = enforce_strong is True
 
     min_length_ok = False

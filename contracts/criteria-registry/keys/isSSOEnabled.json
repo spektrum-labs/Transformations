@@ -1,0 +1,38 @@
+{
+  "name": "isSSOEnabled",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when single sign-on through the company identity provider is configured, finished and switched on for the tool or account, so people can sign in through it. It does not prove password sign-in is switched off.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the single sign-on integrations configured in one tool account; denominator = every integration the read lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A successful read of the tool's SSO configuration showing at least one integration that is complete and enabled; an error, 401/403 or unrecognised read is Not evaluated. A read that lists no integration is a real read of no SSO and is False.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "non_compliant",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "Existing implementations of isSSOEnabled in other categories (allowlisted, not reviewed)",
+    "SendGrid API reference, Single Sign-On Settings (twilio.com/docs/sendgrid/api-reference/single-sign-on-settings): GET /v3/sso/integrations returns enabled and completed_integration per integration (one implementation of this meaning)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered so the SendGrid email-security transformations can emit it. Meaning written to be vendor-neutral from the public SendGrid API reference and one read of a real account (read-only); allowedCategories left empty because about thirty implementations in other categories already emit the key and were not reviewed against it. No replay-backed validation yet, so the key stays proposed and V0."
+    }
+  ],
+  "notes": "Registered with the SendGrid transform (safeguards/emailsecurity/sendgrid). About thirty existing implementations in other categories emit this name and were not reviewed against this meaning, so the key stays proposed, V0 and has no category limit until they are. Some of them may answer a different question (for example, whether a provider is the SSO source for other apps); that review is open. Whether every user actually signs in with SSO is a separate key, isSSOEnforcedForAllUsers."
+}

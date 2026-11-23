@@ -1,0 +1,38 @@
+{
+  "name": "areAllCriticalGapsTriaged",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every gap with severity level critical or high carries an Exploit Path Verification verdict that a person accepted and that reached a conclusion.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "gaps in the collection whose severity.level is critical or high",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "At least one critical or high gap, and every one of them with an accepted verdict other than indeterminate. No critical or high gap is not evidence that criticals were triaged.",
+  "evidenceClass": "unknown",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/exploitpathverification/spektrum/epv_transform.py",
+    "safeguards/exploitpathverification/spektrum/areallcriticalgapstriaged.py"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-16",
+      "change": "Registered with the Exploit Path Verification transforms; proposed, no requirement reads it yet."
+    }
+  ],
+  "notes": "Input is Spektrum's own Exploit Path Verification output (verdicts on gap tokens, Integration-Service src/schemas/epv.py), not a vendor response. An accepted verdict is an analyst's attestation over an analysis Spektrum computed, so the transform reports proofLevel 1: the party that produced the analysis cannot also certify it. Only verdicts with reviewState accepted count; pending, rejected, superseded and accepted-indeterminate verdicts settle nothing. allowedCategories is empty because gap verdicts are cross-category evidence (a passport's gaps span every safeguard category); no integration answers these keys today, so no RTA row maps them yet."
+}

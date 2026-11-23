@@ -1,0 +1,37 @@
+{
+  "name": "isControllerOnline",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when every enabled controller (access panel) of the connected access-control instance reports online with the vendor's communication service.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the enabled controllers the connected access-control instance lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "A complete read of the controller list holding at least one enabled controller in which every enabled controller reports an online status. One offline enabled controller is False. An error or refused answer, no enabled controller, a partial read, or an unreadable status behind an otherwise clean read is not measured.",
+  "evidenceClass": "measured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/physical-security/acre-security-access-control/isControllerOnline.py (acre Access Control API, GET /api/f/{instanceKey}/controllers, Status.IsOnline and IsDisabled: https://apidocs.acresecurity.cloud/object-model/controllerinfo/)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-10-18",
+      "change": "Registered so the acre transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}

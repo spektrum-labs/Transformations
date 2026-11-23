@@ -110,7 +110,7 @@ def evaluate(data):
         outdated = []
         for ep in endpoints:
             agent_version = ep.get("agentVersion", "")
-            device_name = ep.get("deviceName", ep.get("emailId", "unknown"))
+            device_name = ep.get("deviceName") or "unnamed device"
             if not agent_version:
                 # Unknown version — treat as outdated
                 outdated.append(f"{device_name} (version=unknown)")

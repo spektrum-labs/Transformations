@@ -67,29 +67,71 @@ def create_response(result, validation=None, pass_reasons=None, fail_reasons=Non
     }
 
 
+def not_measured(problem, validation):
+    """Nothing usable was read: the criterion is None with a dataCollection error, never a fail."""
+    return create_response(
+        result={"vpnTunnelEstablished": None},
+        validation=validation,
+        fail_reasons=[problem],
+        recommendations=[
+            "Verify the Meraki site-to-site VPN status is readable with this key "
+            "(getOrganizationApplianceVpnStatuses)."
+        ],
+        api_errors=[problem],
+        metadata={"transformationId": "vpnTunnelEstablished", "vendor": "Cisco Meraki MX", "category": "firewalls"},
+    )
+
+
+def network_status_objects(data):
+    """The per-network VPN status objects in the body, or [] when the body is not that list.
+
+    An empty body, an error body and text are not a read. A network status object carries its
+    network id or name and its peer lists."""
+    networks = None
+    if isinstance(data, list):
+        networks = data
+    elif isinstance(data, dict):
+        networks = data.get("apiResponse")
+        if networks is None:
+            networks = data.get("data")
+    if not isinstance(networks, list):
+        return []
+    keys = ("networkId", "networkName", "merakiVpnPeers", "thirdPartyVpnPeers")
+    return [n for n in networks if isinstance(n, dict) and any(k in n for k in keys)]
+
+
+def peer_list(value):
+    """(peers, readable): a peer list is a list. Absent or null is no peers; anything else is unreadable."""
+    if value is None:
+        return [], True
+    if isinstance(value, list):
+        return value, True
+    return [], False
+
+
 def transform(input):
     data, validation = extract_input(input)
-    if not isinstance(data, dict):
-        data = {}
-
-    networks = data.get("apiResponse")
-    if networks is None:
-        networks = data.get("data")
-    if not isinstance(networks, list):
-        networks = []
+    networks = network_status_objects(data)
+    if not networks:
+        return not_measured(
+            "No per-network VPN status was returned by Meraki; nothing to measure.", validation
+        )
 
     total_peers = 0
     reachable_peers = 0
     unreachable_names = []
     reachable_names = []
     networks_with_peers = 0
+    unreadable = []
 
     for net in networks:
         if not isinstance(net, dict):
             continue
         network_name = net.get("networkName") or net.get("networkId") or "unknown-network"
-        meraki_peers = net.get("merakiVpnPeers") or []
-        third_peers = net.get("thirdPartyVpnPeers") or []
+        meraki_peers, meraki_ok = peer_list(net.get("merakiVpnPeers"))
+        third_peers, third_ok = peer_list(net.get("thirdPartyVpnPeers"))
+        if not (meraki_ok and third_ok):
+            unreadable.append(str(network_name))
         peers = list(meraki_peers) + list(third_peers)
         if peers:
             networks_with_peers = networks_with_peers + 1
@@ -106,6 +148,16 @@ def transform(input):
                 unreachable_names.append(f"{network_name}:{peer_name}:{reachability}")
 
     vpn_tunnel_established = reachable_peers > 0
+
+    if unreadable and not vpn_tunnel_established:
+        # A reachable peer proves a tunnel whatever else is in the body; without one, the network
+        # whose peer list could not be read might hold it, so "no tunnel" is not proven.
+        return not_measured(
+            "The VPN peer list of %d of %d network(s) could not be read (%s), and no reachable peer "
+            "was found in the others, so it cannot be confirmed that no tunnel is established."
+            % (len(unreadable), len(networks), ", ".join(unreadable[:10])),
+            validation,
+        )
 
     input_summary = {
         "networksEvaluated": len(networks),

@@ -7,9 +7,10 @@ endpoint the records came from and the real time span of the records read.
 
 When the Admin API application lacks "Grant read log", Duo answers
 403 {"code": 40301, "message": "Access forbidden", "stat": "FAIL"}. Integration-Service hands that
-one refusal over as data (method opt-in vendorErrorAsResponse), and this transform reports it as a
-measured FAIL: the credential has no authentication log access. Any other handed-over error stays a
-data-collection error (Unevaluated), never a PASS.
+one refusal over as data (method opt-in vendorErrorAsResponse). The log was never read, so this
+transform reports Not evaluated (every value None, a data-collection error naming the permission),
+never a FAIL. Any other handed-over error is Not evaluated too, never a PASS. A FAIL needs records
+that came back with required fields missing.
 """
 import importlib.util
 import json
@@ -108,55 +109,81 @@ class DuoAuthenticationLogAccessTests(unittest.TestCase):
                 self.assertEqual(self.collection(response)["status"], "error")
                 self.assertEqual(response["additionalInfo"]["evaluation"]["passReasons"], [])
 
-    # --- 403 / 40301 Access forbidden: a measured FAIL ---------------------------
+    # --- 403 / 40301 Access forbidden: Not evaluated, naming the permission -------
 
-    def assert_forbidden_fail(self, response):
-        self.assertIs(response["transformedResponse"][KEY], False)
-        self.assertEqual(self.collection(response)["status"], "success")
-        self.assertEqual(self.collection(response)["errors"], [])
-        reasons = response["additionalInfo"]["evaluation"]["failReasons"]
-        self.assertEqual(len(reasons), 1)
-        self.assertIn("40301", reasons[0])
+    def assert_all_none(self, response):
+        result = response["transformedResponse"]
+        self.assertIn(KEY, result)
+        for k in result:
+            self.assertIsNone(result[k], k)
+        self.assertEqual(response["additionalInfo"]["evaluation"]["passReasons"], [])
+
+    def assert_forbidden_unevaluated(self, response):
+        self.assert_all_none(response)
+        collection = self.collection(response)
+        self.assertEqual(collection["status"], "error")
+        self.assertEqual(collection["errorCode"], "permission_not_granted")
+        self.assertEqual(collection["requiredPermission"], "Grant read log")
+        text = " ".join(collection["errors"])
+        self.assertIn("40301", text)
+        self.assertIn("403", text)
+        self.assertIn('"Grant read log"', text)
         self.assertIn("Grant read log", response["additionalInfo"]["evaluation"]["recommendations"][0])
         self.assertEqual(response["additionalInfo"]["transformation"]["inputSummary"]["vendorStatus"], 403)
 
-    def test_access_forbidden_is_a_fail(self):
-        self.assert_forbidden_fail(self.run_transform(FORBIDDEN_MARKED))
+    def test_access_forbidden_is_not_evaluated(self):
+        self.assert_forbidden_unevaluated(self.run_transform(FORBIDDEN_MARKED))
 
-    def test_access_forbidden_as_json_string(self):
-        self.assert_forbidden_fail(self.run_transform(json.dumps(FORBIDDEN_MARKED)))
+    def test_access_forbidden_as_json_string_and_bytes(self):
+        text = json.dumps(FORBIDDEN_MARKED)
+        self.assert_forbidden_unevaluated(self.run_transform(text))
+        self.assert_forbidden_unevaluated(self.run_transform(text.encode("utf-8")))
 
     def test_access_forbidden_body_as_string(self):
         marked = {"vendorErrorAsResponse": dict(FORBIDDEN_MARKED["vendorErrorAsResponse"],
                                                 body=json.dumps(FORBIDDEN_BODY))}
-        self.assert_forbidden_fail(self.run_transform(marked))
+        self.assert_forbidden_unevaluated(self.run_transform(marked))
 
     def test_access_forbidden_in_enriched_input(self):
-        self.assert_forbidden_fail(self.run_transform(
+        self.assert_forbidden_unevaluated(self.run_transform(
             {"data": FORBIDDEN_MARKED, "validation": {"status": "valid", "errors": [], "warnings": []}}))
 
     def test_access_forbidden_under_api_response_wrapper(self):
-        self.assert_forbidden_fail(self.run_transform({"apiResponse": FORBIDDEN_MARKED}))
+        self.assert_forbidden_unevaluated(self.run_transform({"apiResponse": FORBIDDEN_MARKED}))
 
-    # --- anything else handed over is an error, never judged -------------------
+    def test_access_forbidden_is_never_a_false(self):
+        for payload in (FORBIDDEN_MARKED, json.dumps(FORBIDDEN_MARKED), {"apiResponse": FORBIDDEN_MARKED},
+                        {"data": FORBIDDEN_MARKED, "validation": {"status": "valid", "errors": [], "warnings": []}}):
+            with self.subTest(payload=str(payload)[:40]):
+                result = self.run_transform(payload)["transformedResponse"]
+                self.assertNotIn(False, list(result.values()))
+                self.assertEqual(result["totalRecords"], None)
 
-    def assert_data_collection_error(self, response):
-        self.assertIs(response["transformedResponse"][KEY], False)
-        self.assertEqual(self.collection(response)["status"], "error")
-        self.assertEqual(response["additionalInfo"]["evaluation"]["failReasons"], [])
+    # --- anything else handed over is Not evaluated, never judged ---------------
 
-    def test_other_403_code_is_an_error_not_a_fail(self):
+    def assert_vendor_refusal(self, response):
+        self.assert_all_none(response)
+        collection = self.collection(response)
+        self.assertEqual(collection["status"], "error")
+        self.assertEqual(collection["errorCode"], "vendor_refusal")
+        self.assertNotIn("requiredPermission", collection)
+        self.assertNotIn("Grant ", " ".join(collection["errors"]))
+
+    def test_other_403_code_is_not_evaluated_without_a_permission(self):
         other = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Access forbidden",
                                            "body": {"code": 40300, "message": "Access forbidden", "stat": "FAIL"}}}
-        self.assert_data_collection_error(self.run_transform(other))
+        self.assert_vendor_refusal(self.run_transform(other))
 
-    def test_401_with_same_body_is_an_error_not_a_fail(self):
+    def test_401_with_same_body_is_not_evaluated_without_a_permission(self):
         wrong = {"vendorErrorAsResponse": {"status": 401, "bodyContains": "Access forbidden", "body": FORBIDDEN_BODY}}
-        self.assert_data_collection_error(self.run_transform(wrong))
+        self.assert_vendor_refusal(self.run_transform(wrong))
 
-    def test_unparseable_body_is_an_error(self):
+    def test_unparseable_body_is_not_evaluated_without_a_permission(self):
         bad = {"vendorErrorAsResponse": {"status": 403, "bodyContains": "Access forbidden", "body": "Access forbidden"}}
-        self.assert_data_collection_error(self.run_transform(bad))
+        self.assert_vendor_refusal(self.run_transform(bad))
+
+    def test_marker_without_a_status_is_not_evaluated_without_a_permission(self):
+        self.assert_vendor_refusal(self.run_transform({"vendorErrorAsResponse": "boom"}))
 
     def test_bare_body_without_marker_is_not_treated_as_forbidden(self):
         # Only Integration-Service's marked shape counts; a bare error body holds no log list,
@@ -247,10 +274,12 @@ class DuoAuthenticationLogShapesTests(unittest.TestCase):
                 self.assertIn("/admin/v2/logs/authentication", reason)
                 self.assertIn("read OK with an empty window", reason)
 
-    def test_forbidden_marker_is_the_same_fail_for_either_method(self):
+    def test_forbidden_marker_is_the_same_unevaluated_for_either_method(self):
         response = self.t.transform(FORBIDDEN_MARKED)
-        self.assertIs(response["transformedResponse"][KEY], False)
+        self.assertIsNone(response["transformedResponse"][KEY])
+        self.assertIsNone(response["transformedResponse"]["totalRecords"])
         self.assertIn("40301", self.evaluation(response)["failReasons"][0])
+        self.assertEqual(response["additionalInfo"]["dataCollection"]["status"], "error")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,27 @@
 import json
 
 
+def respond(key, value, reason, extra=None):
+    """The full response envelope. dataCollection.status follows the value: None is not measured."""
+    result = {key: value}
+    if extra:
+        for k in extra:
+            result[k] = extra[k]
+    measured = value is not None
+    passed = value is True
+    return {
+        "transformedResponse": result,
+        "additionalInfo": {
+            "dataCollection": {"status": "success" if measured else "error", "errors": [] if measured else [reason]},
+            "validation": {"status": "unknown", "errors": [], "warnings": []},
+            "transformation": {"status": "success", "errors": [], "inputSummary": {}},
+            "evaluation": {"passReasons": [reason] if passed else [], "failReasons": [] if passed else [reason],
+                           "recommendations": [], "additionalFindings": []},
+            "metadata": {"transformationId": key, "vendor": "Commvault", "category": "Backups", "schemaVersion": "1.0"},
+        },
+    }
+
+
 def transform(input):
     """
     isAuditLogForwardingEnabled = true when syslog forwarding is enabled, has a hostname, and forwards the
@@ -75,16 +96,16 @@ def transform(input):
         data = unwrap(parse_input(input), "enabled")
         problem = vendor_error(data)
         if problem:
-            return {key: False, "reason": problem}
+            return respond(key, None, problem)
         if "enabled" not in data:
-            return {key: False, "reason": "Response has no syslog enabled flag"}
+            return respond(key, None, "Response has no syslog enabled flag")
         fwd = data.get("forwardToSyslog") if isinstance(data.get("forwardToSyslog"), dict) else {}
         if data.get("enabled") is not True:
-            return {key: False, "reason": "Syslog forwarding is disabled"}
+            return respond(key, False, "Syslog forwarding is disabled")
         if not str(data.get("hostname") or "").strip():
-            return {key: False, "reason": "Syslog forwarding has no hostname"}
+            return respond(key, False, "Syslog forwarding has no hostname")
         if fwd.get("audit") is not True:
-            return {key: False, "reason": "Syslog is enabled but the audit trail is not forwarded"}
-        return {key: True, "reason": "Audit trail is forwarded to syslog (TLS " + ("on" if data.get("secureMessaging") is True else "off") + ")"}
+            return respond(key, False, "Syslog is enabled but the audit trail is not forwarded")
+        return respond(key, True, "Audit trail is forwarded to syslog (TLS " + ("on" if data.get("secureMessaging") is True else "off") + ")")
     except Exception as e:
-        return {key: False, "error": str(e)}
+        return respond(key, None, "The transform raised: " + str(e), {"error": str(e)})

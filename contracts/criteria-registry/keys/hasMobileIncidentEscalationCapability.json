@@ -1,0 +1,37 @@
+{
+  "name": "hasMobileIncidentEscalationCapability",
+  "revision": 1,
+  "status": "proposed",
+  "definition": "True when the vendor's own escalation configuration shows at least one escalation group that pages at least one subscribed member by a mobile method (SMS, MMS, phone, voice or push), not email alone.",
+  "valueType": "boolean",
+  "unit": "none",
+  "population": "the escalation groups the connected managed-detection tenant lists",
+  "polarity": "good_when_true",
+  "evidenceRequiredForTrue": "At least one escalation group whose delivery methods include a mobile method and that has at least one subscriber (proof even on a partial read), or a complete read of at least one group none of which does (False): a mobile method on a group with no subscribers pages nobody. A method is mobile by whole-word match (sms, mms, phone, voice, push) or a known whole value (text_message, phone_call, mobile_push, with or without the underscore); a method that names email is never mobile. No group, an error or refused answer, a partial read with no such group, or a mobile method only on groups whose subscriptions are not in the body is not measured.",
+  "evidenceClass": "configured",
+  "notMeasured": {
+    "value": null,
+    "envelope": "additionalInfo.dataCollection.status == \"error\""
+  },
+  "emptyPopulationMeans": "not_measured",
+  "allowedCategories": [],
+  "integrationPolicy": "any",
+  "allowedIntegrations": [],
+  "aliases": [],
+  "owner": "unknown",
+  "validation": {
+    "level": "V0",
+    "implementations": []
+  },
+  "citations": [
+    "safeguards/mdr/critical-start/hasMobileIncidentEscalationCapability.py (Critical Start ZTAP, GET /api/1.5/groups/, Group.delivery_methods; vendor client: github.com/demisto/content Packs/ZeroTrustAnalyticsPlatform)"
+  ],
+  "changeLog": [
+    {
+      "revision": 1,
+      "date": "2026-11-05",
+      "change": "Registered so the Critical Start transform can emit it."
+    }
+  ],
+  "notes": "Registered so the transform named in citations can emit it. Other vendors that use the same name were not reviewed, so the key stays proposed and V0."
+}
